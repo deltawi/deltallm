@@ -133,7 +133,7 @@ class _FakeRouteGroupRepository:
         self.groups[group_key] = record
         return record
 
-    async def list_groups(self, *, search=None, limit=1000, offset=0):  # noqa: ANN001, ANN201
+    async def list_groups(self, *, search=None, limit=1000, offset=0, **list_options):  # noqa: ANN001, ANN201
         del search
         items = list(self.groups.values())[offset : offset + limit]
         return items, len(self.groups)

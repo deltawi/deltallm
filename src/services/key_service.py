@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+
 from datetime import UTC, datetime
 from typing import Any
+from redis.exceptions import RedisError
 
+from src.metrics.key_auth_cache import KeyAuthCacheFailureReason, record_key_auth_cache_failure
+from src.services.key_auth_cache import KeyAuthCache, KeyCacheLookup
+
+from src.db.identity.key_repository import KeyTokenScope, read_key_tokens_for_scope
+from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.db.identity.key_repository import KeyRepository
-from src.models.errors import AuthenticationError, AuthenticationUnavailableError
+from src.models.errors import (
+    AuthenticationError,
+    AuthenticationUnavailableError,
+    ServiceUnavailableError,
+)
 from src.metrics.admission import auth_events
 from src.services.auth_fallback import AuthFallback, AuthFallbackLimits, AuthLookup
 from src.models.responses import UserAPIKeyAuth
@@ -42,6 +53,11 @@ class KeyService:
         self.auth_cache_ttl_seconds = max(1, int(auth_cache_ttl_seconds))
         self.lifecycle_authorizer = lifecycle_authorizer
         self.fallback = AuthFallback(fallback_limits or AuthFallbackLimits())
+        self.auth_cache = (
+            KeyAuthCache(redis_client, max_bytes=self.fallback.limits.cache_max_bytes)
+            if redis_client is not None
+            else None
+        )
 
     def hash_key(self, raw_key: str) -> str:
         return hashlib.sha256(f"{self.salt}:{raw_key}".encode("utf-8")).hexdigest()
@@ -58,50 +74,42 @@ class KeyService:
         if self.fallback.closed:
             raise AuthenticationUnavailableError()
         cached = await self._read_cache(token_hash)
-        if cached is not None:
-            return cached
+        if cached is not None and cached.auth is not None:
+            return self._mark_cache_source(cached.auth, "redis")
         auth = await self.fallback.run(
-            token_hash, lambda lookup: self._load_auth(token_hash, lookup)
+            token_hash, lambda lookup: self._load_auth(token_hash, lookup, cached)
         )
         self._require_unexpired(auth)
         return auth
 
-    async def _read_cache(self, token_hash: str) -> UserAPIKeyAuth | None:
-        if self.redis is None:
+    async def _read_cache(self, token_hash: str) -> KeyCacheLookup | None:
+        if self.auth_cache is None:
             return None
         try:
             async with asyncio.timeout(self.fallback.limits.cache_timeout_seconds):
-                cached = await self.redis.get(self._cache_key(token_hash))
-            if not cached:
+                cached = await self.auth_cache.lookup(token_hash)
+            if cached.auth is None:
                 auth_events.labels("cache_read", "miss").inc()
-                return None
-            if (
-                not isinstance(cached, (str, bytes))
-                or len(cached) > self.fallback.limits.cache_max_bytes
-            ):
-                raise ValueError("oversized auth cache entry")
-            if (
-                isinstance(cached, str)
-                and len(cached.encode("utf-8")) > self.fallback.limits.cache_max_bytes
-            ):
-                raise ValueError("oversized auth cache entry")
-            auth = UserAPIKeyAuth.model_validate_json(cached)
-            if not UserAPIKeyAuth.model_fields.keys() <= auth.model_fields_set:
-                raise ValueError("incomplete auth cache entry")
-            if auth.api_key != token_hash:
-                raise ValueError("auth cache identity mismatch")
-            self._require_unexpired(auth)
+                return cached
+            self._require_unexpired(cached.auth)
         except AuthenticationError:
             raise
+        except (RedisError, OSError, TimeoutError):
+            record_key_auth_cache_failure(KeyAuthCacheFailureReason.READ_UNAVAILABLE)
+            auth_events.labels("cache_read", "unavailable_or_invalid").inc()
+            return None
         except Exception:
             # A cache is fallible/untrusted. SQL fallback has a separate bound;
             # malformed cache entries never authorize or fail otherwise valid auth.
             auth_events.labels("cache_read", "unavailable_or_invalid").inc()
+            record_key_auth_cache_failure(KeyAuthCacheFailureReason.INVALID_PAYLOAD)
             return None
         auth_events.labels("cache_read", "hit").inc()
-        return self._mark_cache_source(auth, "redis")
+        return cached
 
-    async def _load_auth(self, token_hash: str, lookup: AuthLookup) -> UserAPIKeyAuth:
+    async def _load_auth(
+        self, token_hash: str, lookup: AuthLookup, cached: KeyCacheLookup | None
+    ) -> UserAPIKeyAuth:
         try:
             record = await self.repository.get_by_token(token_hash)
             lookup.check()
@@ -111,13 +119,17 @@ class KeyService:
             self._require_unexpired(auth)
             await self._validate_organization(record)
             lookup.check()
-            await self._write_cache(token_hash, auth, lookup)
+            auth = await self._write_cache(token_hash, auth, lookup, cached)
             lookup.check()
             self._require_unexpired(auth)
             return auth
+        except DatabaseUnavailableError:
+            auth_events.labels("lookup", "unavailable").inc()
+            raise AuthenticationUnavailableError() from None
         except (
             AuthenticationError,
             AuthenticationUnavailableError,
+            ServiceUnavailableError,
             OrganizationLifecycleUnavailable,
         ):
             raise
@@ -125,20 +137,26 @@ class KeyService:
             auth_events.labels("lookup", "unavailable").inc()
             raise AuthenticationUnavailableError() from None
 
-    async def _write_cache(self, token_hash: str, auth: UserAPIKeyAuth, lookup: AuthLookup) -> None:
-        if self.redis is None:
-            return
+    async def _write_cache(
+        self,
+        token_hash: str,
+        auth: UserAPIKeyAuth,
+        lookup: AuthLookup,
+        cached: KeyCacheLookup | None,
+    ) -> UserAPIKeyAuth:
+        if self.auth_cache is None or cached is None:
+            return auth
         try:
             payload = auth.model_dump_json()
             if len(payload.encode("utf-8")) > self.fallback.limits.cache_max_bytes:
                 auth_events.labels("cache_write", "oversized").inc()
-                return
+                return auth
             ttl = self.auth_cache_ttl_seconds
             if auth.expires is not None:
                 expires = datetime.fromisoformat(auth.expires.replace("Z", "+00:00"))
                 ttl = min(ttl, int((expires - datetime.now(tz=UTC)).total_seconds()))
             if ttl <= 0:
-                return
+                return auth
             lookup.check()
             async with asyncio.timeout(
                 min(
@@ -146,13 +164,17 @@ class KeyService:
                     max(0.001, (lookup.deadline - asyncio.get_running_loop().time()) / 2),
                 )
             ):
-                await self.redis.setex(self._cache_key(token_hash), ttl, payload)
-        except AuthenticationUnavailableError:
+                auth = await self.auth_cache.fill(
+                    token_hash, auth, ttl_seconds=ttl, deadline_ms=cached.fill_deadline_ms
+                )
+        except (AuthenticationError, AuthenticationUnavailableError, ServiceUnavailableError):
             raise
         except Exception:
             auth_events.labels("cache_write", "unavailable").inc()
-            return
+            record_key_auth_cache_failure(KeyAuthCacheFailureReason.WRITE_UNAVAILABLE)
+            return auth
         auth_events.labels("cache_write", "stored").inc()
+        return auth
 
     @staticmethod
     def _require_unexpired(auth: UserAPIKeyAuth) -> None:
@@ -167,12 +189,19 @@ class KeyService:
     async def close(self) -> None:
         await self.fallback.close()
 
+    async def mark_key_revoked_by_hash(self, token_hash: str) -> None:
+        if self.auth_cache is None:
+            raise CacheInvalidationBackendUnavailable("redis unavailable")
+        await self.auth_cache.revoke(token_hash, ttl_seconds=self.auth_cache_ttl_seconds)
+
     async def invalidate_key_cache_by_hash(self, token_hash: str) -> None:
         self.fallback.invalidate(token_hash)
         if self.redis is None:
             return
         cache_key = self._cache_key(token_hash)
-        await self.redis.delete(cache_key)
+        await self.auth_cache.invalidate(
+            [cache_key, *(f"key:v{version}:{token_hash}" for version in (4, 5, 6))]
+        )
 
     async def invalidate_keys_for_team(self, team_id: str) -> int:
         return await self._invalidate_keys_by_scope("team_id", team_id)
@@ -193,40 +222,17 @@ class KeyService:
         ):
             raise CacheInvalidationBackendUnavailable("database unavailable")
 
-    async def _invalidate_keys_by_scope(self, scope_column: str, scope_value: str) -> int:
+    async def _invalidate_keys_by_scope(self, scope_column: KeyTokenScope, scope_value: str) -> int:
         self.fallback.invalidate()
         prisma = getattr(self.invalidation_repository, "prisma", None)
         if self.redis is None or prisma is None:
             return 0
-        if scope_column == "organization_id":
-            rows = await prisma.query_raw(
-                """
-                SELECT v.token FROM deltallm_verificationtoken v
-                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
-                LEFT JOIN deltallm_teamtable t ON t.team_id = COALESCE(v.team_id, u.team_id)
-                WHERE t.organization_id = $1
-                """,
-                scope_value,
-            )
-        elif scope_column == "team_id":
-            rows = await prisma.query_raw(
-                """
-                SELECT v.token FROM deltallm_verificationtoken v
-                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
-                WHERE COALESCE(v.team_id, u.team_id) = $1
-                """,
-                scope_value,
-            )
-        else:
-            rows = await prisma.query_raw(
-                f"SELECT token FROM deltallm_verificationtoken WHERE {scope_column} = $1",
-                scope_value,
-            )
-        cache_keys: list[str] = []
-        for row in rows or []:
-            token_hash = row.get("token")
-            if token_hash:
-                cache_keys.append(self._cache_key(token_hash))
+        token_hashes = await read_key_tokens_for_scope(
+            prisma, scope=scope_column, identity=scope_value
+        )
+        cache_keys = [self._cache_key(token_hash) for token_hash in token_hashes]
+        legacy_keys = [f"key:v{version}:{token}" for version in (4, 5, 6) for token in token_hashes]
+        await self._delete_cache_keys(legacy_keys)
         return await self._delete_cache_keys(cache_keys)
 
     async def _delete_cache_keys(self, cache_keys: list[str]) -> int:
@@ -235,7 +241,7 @@ class KeyService:
         count = 0
         for start in range(0, len(cache_keys), _CACHE_DELETE_BATCH_SIZE):
             batch = cache_keys[start : start + _CACHE_DELETE_BATCH_SIZE]
-            await self.redis.delete(*batch)
+            await self.auth_cache.invalidate(batch)
             count += len(batch)
         return count
 
@@ -243,7 +249,7 @@ class KeyService:
     def _cache_key(token_hash: str) -> str:
         # Version the serialized auth contract so entries without lifecycle
         # state cannot silently authenticate an inactive organization.
-        return f"key:v4:{token_hash}"
+        return KeyAuthCache.key(token_hash)
 
     def _auth_from_record(self, record: Any) -> UserAPIKeyAuth:
         auth = UserAPIKeyAuth(
@@ -259,12 +265,18 @@ class KeyService:
             tpm_limit=record.tpm_limit,
             rpm_limit=record.rpm_limit,
             key_tpm_limit=record.tpm_limit,
+            key_output_tpm_limit=record.output_tpm_limit,
+            key_model_output_tpm_limit=record.model_output_tpm_limit,
             key_rpm_limit=record.rpm_limit,
             user_tpm_limit=record.user_tpm_limit,
+            user_output_tpm_limit=record.user_output_tpm_limit,
             user_rpm_limit=record.user_rpm_limit,
             team_tpm_limit=record.team_tpm_limit,
+            team_output_tpm_limit=record.team_output_tpm_limit,
+            team_model_output_tpm_limit=record.team_model_output_tpm_limit,
             team_rpm_limit=record.team_rpm_limit,
             org_tpm_limit=record.org_tpm_limit,
+            org_output_tpm_limit=record.org_output_tpm_limit,
             org_rpm_limit=record.org_rpm_limit,
             team_model_rpm_limit=record.team_model_rpm_limit,
             team_model_tpm_limit=record.team_model_tpm_limit,

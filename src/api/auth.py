@@ -18,16 +18,15 @@ from src.db.email.email_feedback import EmailFeedbackRepository
 from src.middleware.platform_auth import (
     SESSION_COOKIE_NAME,
     get_configured_master_key,
-    get_master_session_status,
     get_platform_auth_context,
+    requires_mfa_verification,
 )
 from src.models.errors import RateLimitError
-from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole, TeamRole
+from src.auth.roles import PlatformRole, TeamRole
 from src.auth.sso_identity import SSOIdentityAssertion, SSOIdentityOwnershipError
 from src.db.identity.email_tokens import EmailTokenRepository
 from src.models.platform_auth import (
     ChangePasswordRequest,
-    CurrentSessionResponse,
     ForgotPasswordRequest,
     InternalLoginRequest,
     InternalLoginResponse,
@@ -41,15 +40,18 @@ from src.models.platform_auth import (
     ResetPasswordTokenResponse,
 )
 from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
-from src.services.ui_authorization import build_ui_access, effective_permissions_for_context
+from src.api.auth_sessions import (
+    auth_me as auth_me,
+    router as session_router,
+)  # Compatibility export.
 from src.services.sso_state_store import SSOStateStoreError
 from src.services.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
-    MasterSessionStatus,
     MasterSessionStoreUnavailable,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+router.include_router(session_router, prefix="")
 logger = logging.getLogger(__name__)
 _AUTH_INTERNAL_LOGIN_IP_LIMIT_PER_MINUTE = 20
 _AUTH_INTERNAL_LOGIN_EMAIL_LIMIT_PER_MINUTE = 10
@@ -144,6 +146,17 @@ def _safe_return_to(value: str | None) -> str:
 
 
 def _client_ip(request: Request) -> str:
+    context = get_platform_auth_context(request)
+    if context is not None and context.external_workspace is not None:
+        runtime = getattr(request.app.state, "external_auth_runtime", None)
+        if runtime is None or request.client is None:
+            raise HTTPException(status_code=503, detail="Auth service unavailable")
+        try:
+            return runtime.client_resolver.resolve(
+                request.client.host, request.headers.get("x-forwarded-for")
+            ).address
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid forwarding data") from exc
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
         first_hop = forwarded_for.split(",", 1)[0].strip()
@@ -734,68 +747,6 @@ async def internal_logout(request: Request) -> Response:
         raise
 
 
-@router.get("/me", response_model=CurrentSessionResponse)
-async def auth_me(request: Request, response: Response) -> CurrentSessionResponse:
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["Vary"] = "Cookie"
-    master_session_status = get_master_session_status(request)
-    if master_session_status == MasterSessionStatus.INVALID:
-        response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
-    if master_session_status == MasterSessionStatus.ACTIVE:
-        effective_permissions = sorted(PLATFORM_ROLE_PERMISSIONS.get(PlatformRole.ADMIN, set()))
-        return CurrentSessionResponse(
-            authenticated=True,
-            auth_mode="master_key",
-            role=PlatformRole.ADMIN,
-            effective_permissions=effective_permissions,
-            ui_access=build_ui_access(
-                authenticated=True,
-                effective_permissions=effective_permissions,
-                organization_memberships=[],
-            ),
-        )
-
-    context = get_platform_auth_context(request)
-    if context is None:
-        if master_session_status == MasterSessionStatus.UNAVAILABLE:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Authentication service unavailable",
-                headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
-            )
-        return CurrentSessionResponse(authenticated=False)
-
-    effective_permissions = effective_permissions_for_context(context)
-    organization_memberships = [dict(item) for item in (context.organization_memberships or [])]
-    team_memberships = [dict(item) for item in (context.team_memberships or [])]
-    general_settings = getattr(
-        getattr(request.app.state, "app_config", None), "general_settings", None
-    )
-    spend_reporting_v2_enabled = bool(
-        getattr(general_settings, "spend_reporting_v2_enabled", False)
-    )
-    return CurrentSessionResponse(
-        authenticated=True,
-        auth_mode="session",
-        account_id=context.account_id,
-        email=context.email,
-        role=context.role,
-        effective_permissions=effective_permissions,
-        ui_access=build_ui_access(
-            authenticated=True,
-            effective_permissions=effective_permissions,
-            organization_memberships=organization_memberships,
-            spend_reporting_v2_enabled=spend_reporting_v2_enabled,
-        ),
-        organization_memberships=organization_memberships,
-        team_memberships=team_memberships,
-        mfa_enabled=context.mfa_enabled,
-        mfa_verified=context.mfa_verified,
-        mfa_prompt=not context.mfa_enabled,
-        force_password_change=context.force_password_change,
-    )
-
-
 @router.post("/mfa/enroll/start", response_model=MFAStartResponse)
 async def mfa_enroll_start(request: Request) -> MFAStartResponse:
     request_start = perf_counter()
@@ -805,6 +756,9 @@ async def mfa_enroll_start(request: Request) -> MFAStartResponse:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
             )
+
+        if context.external_workspace is not None:
+            raise HTTPException(status_code=403, detail="MFA enrollment is managed by the Console")
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
@@ -853,6 +807,9 @@ async def mfa_enroll_confirm(request: Request, payload: MFAVerifyRequest) -> dic
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
             )
+
+        if context.external_workspace is not None:
+            raise HTTPException(status_code=403, detail="MFA enrollment is managed by the Console")
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
@@ -968,6 +925,8 @@ async def internal_change_password(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
             )
+        if context.external_workspace is not None and requires_mfa_verification(context):
+            raise HTTPException(status_code=403, detail="MFA verification required")
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
@@ -983,6 +942,7 @@ async def internal_change_password(
             account_id=context.account_id,
             current_password=payload.current_password,
             new_password=payload.new_password,
+            require_existing_password=context.external_workspace is not None,
         )
         if not ok:
             raise HTTPException(

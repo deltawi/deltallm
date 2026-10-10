@@ -250,9 +250,10 @@ def test_startup_heap_is_collected_before_it_is_frozen(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_prometheus_snapshot_encoding_runs_outside_event_loop() -> None:
+    loop = asyncio.get_running_loop()
     event_loop_thread = threading.get_ident()
     encoder_threads: list[int] = []
-    second_started = threading.Event()
+    second_started = asyncio.Event()
     release_second = threading.Event()
 
     def encode(registry: CollectorRegistry) -> bytes:
@@ -260,7 +261,7 @@ async def test_prometheus_snapshot_encoding_runs_outside_event_loop() -> None:
         encoder_threads.append(threading.get_ident())
         if len(encoder_threads) == 1:
             return b"initial"
-        second_started.set()
+        loop.call_soon_threadsafe(second_started.set)
         assert release_second.wait(timeout=1)
         return b"refreshed"
 
@@ -272,16 +273,12 @@ async def test_prometheus_snapshot_encoding_runs_outside_event_loop() -> None:
     await service.start(periodic=False)
     refresh = asyncio.create_task(service.refresh())
     try:
-        for _ in range(100):
-            if second_started.is_set():
-                break
-            await asyncio.sleep(0)
-        assert second_started.is_set()
+        await asyncio.wait_for(second_started.wait(), timeout=1)
         assert service.snapshot.content == b"initial"
         assert encoder_threads == [encoder_threads[0], encoder_threads[0]]
         assert encoder_threads[0] != event_loop_thread
         event_loop_progressed = asyncio.Event()
-        asyncio.get_running_loop().call_soon(event_loop_progressed.set)
+        loop.call_soon(event_loop_progressed.set)
         await asyncio.wait_for(event_loop_progressed.wait(), timeout=0.1)
         release_second.set()
         assert (await refresh).content == b"refreshed"

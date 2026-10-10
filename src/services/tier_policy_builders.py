@@ -44,6 +44,7 @@ def compile_model_policy(
         limits=TierPolicyLimits(
             rpm_limit=policy.rpm_limit,
             tpm_limit=policy.tpm_limit,
+            output_tpm_limit=policy.output_tpm_limit,
             rph_limit=policy.rph_limit,
             rpd_limit=policy.rpd_limit,
             tpd_limit=policy.tpd_limit,

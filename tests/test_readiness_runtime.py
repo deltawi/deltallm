@@ -14,6 +14,15 @@ def runtime(probes, *, workers=lambda: ({}, {}), clock=None, **settings):
     return ReadinessRuntime(lifecycle=lifecycle, probes=probes, workers=workers, **kwargs)
 
 
+def test_dependency_inventory_remains_finite_with_external_auth():
+    async def check():
+        return True
+
+    assert len(runtime({str(i): check for i in range(7)}).probes) == 7
+    with pytest.raises(ValueError, match="readiness allocation"):
+        runtime({str(i): check for i in range(8)})
+
+
 async def test_concurrent_readers_share_probes_and_cached_success_expires():
     now = [0.0]
     entered = asyncio.Event()

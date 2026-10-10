@@ -151,7 +151,11 @@ async def handle_chat_like_request(
         request_context,
         RequestTokenDemand(
             input_tokens=preflight.token_estimate,
-            requested_output_tokens=payload.max_tokens,
+            requested_output_tokens=(
+                payload.max_completion_tokens
+                if payload.max_completion_tokens is not None
+                else payload.max_tokens
+            ),
         ),
     )
     selector_deadline = bind_selector_operation(
@@ -286,6 +290,11 @@ async def handle_chat_like_request(
                             line_info.is_usage_only_chunk
                             and not opened_stream.client_stream_usage_requested
                         ):
+                            if (
+                                not opened_stream.client_stream_usage_requested
+                                and line_info.without_usage is not None
+                            ):
+                                initial = line_info.without_usage
                             out_line = (
                                 stream_line_transform(initial)
                                 if stream_line_transform is not None
@@ -328,6 +337,11 @@ async def handle_chat_like_request(
                         ):
                             continue
 
+                        if (
+                            not opened_stream.client_stream_usage_requested
+                            and line_info.without_usage is not None
+                        ):
+                            line = line_info.without_usage
                         out_line = (
                             stream_line_transform(line)
                             if stream_line_transform is not None
@@ -336,6 +350,8 @@ async def handle_chat_like_request(
                         if out_line is None:
                             continue
                         yield f"{out_line}\n\n"
+                    if opened_stream.output_context is not None:
+                        await opened_stream.output_context.finish()
                     resolved_usage = stream_usage.resolve(payload)
                 except asyncio.CancelledError as exc:
                     failure_exc = exc
@@ -346,6 +362,8 @@ async def handle_chat_like_request(
                     )
                     failure_exc = stream_error
                 finally:
+                    if opened_stream.output_context is not None:
+                        await opened_stream.output_context.finish()
                     if (
                         stream_id is not None
                         and stream_handler is not None

@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import json
+
 from dataclasses import dataclass
+
 from datetime import UTC, datetime
+
 from typing import Any
+
 from uuid import uuid4
+
 
 from src.db.json_fields import _parse_metadata
 
+
 AUDIT_METADATA_RETENTION_DAYS_KEY = "audit_metadata_retention_days"
+
+
 AUDIT_PAYLOAD_RETENTION_DAYS_KEY = "audit_payload_retention_days"
 
 

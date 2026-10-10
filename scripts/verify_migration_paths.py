@@ -22,6 +22,9 @@ import uuid
 from pathlib import Path
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
+from src.prisma_bootstrap import run_prisma_bootstrap
+from src.migration_process import run_migration_process
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CURRENT_SCHEMA = REPO_ROOT / "prisma" / "schema.prisma"
@@ -48,6 +51,8 @@ ROLLING_PROMPT_TEMPLATE_ID = "migration-rolling-prompt-template"
 STABLE_RELEASE_TAG_PATTERN = re.compile(r"\Av\d+\.\d+\.\d+\Z")
 SHARED_ROUTE_POLICY_MIGRATION_REF = "3372602bf7bff6107ee9595217b7f2fd75da61cd"
 SELECTOR_VALIDATION_MIGRATION = "20260910000100_batch_selector_checkpoint_validation"
+MODEL_IDENTITY_BASE_REF = "v0.1.47"
+MODEL_IDENTITY_MIGRATION = "20260927150000_model_api_identity"
 
 
 def database_url_for(base_url: str, database_name: str) -> str:
@@ -133,6 +138,32 @@ asyncio.run(verify())
         ],
         env=_database_env(database_url),
     )
+
+
+def _migrate_expect_failure(
+    prisma: str,
+    *,
+    schema: Path,
+    database_url: str,
+    expected_markers: tuple[str, ...],
+) -> None:
+    result = subprocess.run(
+        [prisma, "migrate", "deploy", "--schema", str(schema)],
+        cwd=REPO_ROOT,
+        env=_database_env(database_url),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    if result.returncode == 0:
+        raise RuntimeError("migration unexpectedly succeeded while verifying a recovery path")
+    missing_markers = [marker for marker in expected_markers if marker not in combined_output]
+    if missing_markers:
+        raise RuntimeError(
+            "migration failed for an unexpected reason; missing output markers: "
+            + ", ".join(missing_markers)
+        )
 
 
 def _extract_prisma_at_ref(base_ref: str, destination: Path) -> Path:
@@ -1138,22 +1169,141 @@ def _verify_accounting_native_reporting(prisma: str, database_url: str) -> None:
     )
 
 
+def _stage_before_model_identity_migration(destination: Path) -> Path:
+    later_migrations = tuple(
+        path.name
+        for path in (CURRENT_SCHEMA.parent / "migrations").iterdir()
+        if path.is_dir() and path.name >= MODEL_IDENTITY_MIGRATION
+    )
+    shutil.copytree(
+        CURRENT_SCHEMA.parent,
+        destination,
+        ignore=shutil.ignore_patterns(*later_migrations),
+    )
+    return destination / "schema.prisma"
+
+
+def _verify_model_identity_recovery_path(
+    prisma: str,
+    *,
+    database_url: str,
+    temp_root: Path,
+) -> None:
+    base_schema = _extract_prisma_at_ref(MODEL_IDENTITY_BASE_REF, temp_root / "model-identity-base")
+    _migrate(prisma, schema=base_schema, database_url=database_url)
+    _db_execute(
+        prisma,
+        schema=base_schema,
+        database_url=database_url,
+        sql="""
+INSERT INTO deltallm_modeldeployment
+  (deployment_id, model_name, deltallm_params)
+VALUES
+  ('model-identity-recovery-deployment', 'model-identity-recovery', '{}'::jsonb);
+""",
+    )
+    # Apply prerequisites before removing the extension needed by this fixture.
+    staged_schema = _stage_before_model_identity_migration(
+        temp_root / "model-identity-prerequisites"
+    )
+    _migrate(prisma, schema=staged_schema, database_url=database_url)
+    _db_execute(
+        prisma,
+        schema=staged_schema,
+        database_url=database_url,
+        sql="DROP EXTENSION pgcrypto;",
+    )
+    _migrate_expect_failure(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        expected_markers=(
+            MODEL_IDENTITY_MIGRATION,
+            "function digest(text, unknown) does not exist",
+        ),
+    )
+
+    def database_runner(
+        command: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        return run_migration_process([prisma, *command[1:]], **kwargs)
+
+    run_prisma_bootstrap(
+        schema_path=str(CURRENT_SCHEMA),
+        max_attempts=1,
+        sleep_seconds=0,
+        runner=database_runner,
+        environment=_database_env(database_url),
+        recover_model_api_identity=True,
+    )
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=f"""
+DO $model_identity_recovery_verify$
+BEGIN
+  IF to_regprocedure('digest(text,text)') IS NULL THEN
+    RAISE EXCEPTION 'model identity recovery did not restore pgcrypto.digest';
+  END IF;
+  IF to_regclass('public.deltallm_platformaccount_api_namespace_ci_key') IS NULL THEN
+    RAISE EXCEPTION 'model identity recovery did not create the namespace index';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'deltallm_model'
+      AND column_name = 'display_name'
+  ) THEN
+    RAISE EXCEPTION 'model identity recovery did not create the display name column';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM deltallm_model
+    WHERE model_name = 'model-identity-recovery'
+      AND display_name = 'model-identity-recovery'
+  ) THEN
+    RAISE EXCEPTION 'model identity recovery did not backfill the display name';
+  END IF;
+  IF (
+    SELECT count(*)
+    FROM "_prisma_migrations"
+    WHERE migration_name = '{MODEL_IDENTITY_MIGRATION}'
+      AND rolled_back_at IS NOT NULL
+  ) <> 1 OR (
+    SELECT count(*)
+    FROM "_prisma_migrations"
+    WHERE migration_name = '{MODEL_IDENTITY_MIGRATION}'
+      AND finished_at IS NOT NULL
+  ) <> 1 THEN
+    RAISE EXCEPTION 'model identity recovery did not preserve Prisma migration history';
+  END IF;
+END
+$model_identity_recovery_verify$;
+""",
+    )
+
+
 def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> None:
     suffix = uuid.uuid4().hex[:12]
     fresh_name = f"deltallm_migration_verify_{suffix}_fresh"
     upgrade_name = f"deltallm_migration_verify_{suffix}_upgrade"
     shared_name = f"deltallm_migration_verify_{suffix}_shared"
+    model_identity_recovery_name = f"deltallm_migration_verify_{suffix}_identity_recovery"
     created: list[str] = []
 
     print(f"Verifying fresh install and upgrade from {base_ref}...")
     try:
-        for name in (fresh_name, upgrade_name, shared_name):
+        for name in (fresh_name, upgrade_name, shared_name, model_identity_recovery_name):
             _create_database(prisma, admin_url, name)
             created.append(name)
 
         fresh_url = database_url_for(admin_url, fresh_name)
         upgrade_url = database_url_for(admin_url, upgrade_name)
         shared_url = database_url_for(admin_url, shared_name)
+        model_identity_recovery_url = database_url_for(admin_url, model_identity_recovery_name)
         _migrate(prisma, schema=CURRENT_SCHEMA, database_url=fresh_url)
         _verify_fresh_database(prisma, fresh_url)
         _verify_operation_reservations(prisma, fresh_url)
@@ -1204,6 +1354,11 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             _seed_pr5_budgets(prisma, shared_url, shared_schema)
             _pr6_fixture(prisma, shared_url, shared_schema, "seed")
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
+            _verify_model_identity_recovery_path(
+                prisma,
+                database_url=model_identity_recovery_url,
+                temp_root=temp_root,
+            )
         _verify_upgrade_database(prisma, upgrade_url)
         _db_execute(
             prisma,
@@ -1234,7 +1389,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             )
         _pr6_fixture(prisma, upgrade_url, CURRENT_SCHEMA, "verify")
         _pr6_fixture(prisma, shared_url, CURRENT_SCHEMA, "verify")
-        for database_url in (fresh_url, upgrade_url, shared_url):
+        for database_url in (fresh_url, upgrade_url, shared_url, model_identity_recovery_url):
             _verify_image_history(database_url)
     finally:
         primary_error = sys.exc_info()[1]
@@ -1247,7 +1402,10 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         if cleanup_errors and primary_error is None:
             raise cleanup_errors[0]
 
-    print("Fresh-install, last-release, and shared-feature migration checks passed.")
+    print(
+        "Fresh-install, last-release, shared-feature, and model-identity recovery "
+        "migration checks passed."
+    )
 
 
 def main() -> None:

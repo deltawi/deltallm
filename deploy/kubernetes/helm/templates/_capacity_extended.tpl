@@ -27,6 +27,9 @@
 {{- end -}}
 {{- end -}}
 {{- $engines := 2 -}}
+{{- if (default (dict) (get $g "external_auth")).enabled -}}
+{{- $engines = add $engines 1 -}}
+{{- end -}}
 {{- $telemetry := or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") (and $g.accounting_protocol_enabled (not $native)) -}}
 {{- $spendWorker := and (eq $g.spend_ingestion_mode "outbox") $g.spend_ingestion_worker_enabled -}}
 {{- $auditWorker := and $g.audit_enabled (eq $g.audit_ingestion_mode "outbox") $g.audit_ingestion_worker_enabled -}}

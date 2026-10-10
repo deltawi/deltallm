@@ -1,3 +1,4 @@
+import { OUTPUT_TPM_HELP, parseOutputTpm } from '../lib/outputTpm';
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import {
@@ -43,7 +44,7 @@ import {
   organizationUsesTier,
 } from '../lib/organizationPolicy';
 
-type HardCapField = 'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit';
+type HardCapField = 'output_tpm_limit' | 'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit';
 
 const HARD_CAPS: Array<{
   field: HardCapField;
@@ -65,6 +66,13 @@ const HARD_CAPS: Array<{
     unit: 'TPM',
     placeholder: '500,000',
     help: 'A global minute-level token ceiling across input and output tokens. It is evaluated in addition to each model limit in the service tier.',
+  },
+  {
+    field: 'output_tpm_limit',
+    label: 'Output tokens per minute',
+    unit: 'Output TPM',
+    placeholder: '100,000',
+    help: OUTPUT_TPM_HELP,
   },
   {
     field: 'rph_limit',
@@ -345,6 +353,7 @@ export default function OrganizationCreate() {
   const [hardCaps, setHardCaps] = useState<Record<HardCapField, string>>({
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '',
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -482,8 +491,12 @@ export default function OrganizationCreate() {
         payload.budget_reset_at = resetAtIso;
       }
       for (const { field } of HARD_CAPS) {
-        const value = optionalNumber(hardCaps[field]);
-        if (value !== undefined) payload[field] = value;
+        if (field === "output_tpm_limit") {
+          payload.output_tpm_limit = parseOutputTpm(hardCaps[field]);
+        } else {
+          const value = optionalNumber(hardCaps[field]);
+          if (value !== undefined) payload[field] = value;
+        }
       }
 
       const created = await organizations.create(payload);

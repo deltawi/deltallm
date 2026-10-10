@@ -6,6 +6,7 @@ annotated-types==0.7.0
     # via pydantic
 anyio==4.12.1
     # via
+    #   httpcore2
     #   httpx
     #   starlette
     #   watchfiles
@@ -42,9 +43,12 @@ fastapi==0.129.0
 h11==0.16.0
     # via
     #   httpcore
+    #   httpcore2
     #   uvicorn
 httpcore==1.0.9
     # via httpx
+httpcore2==2.13.1
+    # via deltallm-core-api
 httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
@@ -110,6 +114,8 @@ starlette==0.52.1
     # via fastapi
 tomlkit==0.14.0
     # via prisma
+truststore==0.10.4
+    # via httpcore2
 typing-extensions==4.15.0
     # via
     #   anyio

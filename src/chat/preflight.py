@@ -13,6 +13,7 @@ from src.models.errors import InvalidRequestError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
 from src.rate_limit_policy import estimate_tokens
+from src.services.output_admission import prepare_output_policy
 from src.middleware.rate_limit import (
     _release_rate_limits,
     acquire_parallel_limits_for_payload,
@@ -216,6 +217,14 @@ async def run_text_preflight(
         response_kind=_response_kind(transformed_payload),
     )
 
+    output = prepare_output_policy(
+        auth,
+        model=transformed_payload.model,
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
+    )
+
     from src.routers.utils import enforce_budget_if_configured
 
     parallel_started = perf_counter()
@@ -268,6 +277,7 @@ async def run_text_preflight(
             model=transformed_payload.model,
             payload=transformed_data,
             token_estimate=token_estimate,
+            **({"output": output} if output is not None else {}),
         )
     except Exception:
         _observe_preflight_phase(

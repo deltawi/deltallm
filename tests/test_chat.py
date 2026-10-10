@@ -145,6 +145,9 @@ class _TierPricingService:
         self.mode = "enforce"
         self.snapshot_stale = snapshot_stale
 
+    def get_model_policy(self, organization_id: str, model_key: str):
+        return None
+
     def get_pricing_policy(self, organization_id: str, callable_key: str, *, mode: str = "sync"):
         if organization_id != "org-default" or callable_key != "gpt-4o-mini" or mode != "sync":
             return None

@@ -1,3 +1,5 @@
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
@@ -245,6 +247,7 @@ export default function OrganizationDetail() {
     soft_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '',
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -321,6 +324,7 @@ export default function OrganizationDetail() {
       soft_budget: org.soft_budget != null ? String(org.soft_budget) : '',
       rpm_limit: org.rpm_limit != null ? String(org.rpm_limit) : '',
       tpm_limit: org.tpm_limit != null ? String(org.tpm_limit) : '',
+      output_tpm_limit: org.output_tpm_limit != null ? String(org.output_tpm_limit) : '',
       rph_limit: org.rph_limit != null ? String(org.rph_limit) : '',
       rpd_limit: org.rpd_limit != null ? String(org.rpd_limit) : '',
       tpd_limit: org.tpd_limit != null ? String(org.tpd_limit) : '',
@@ -377,6 +381,7 @@ export default function OrganizationDetail() {
         soft_budget: form.soft_budget ? Number(form.soft_budget) : null,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : null,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : null,
+        output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : null,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : null,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : null,
@@ -1078,6 +1083,7 @@ export default function OrganizationDetail() {
                           placeholder="Unlimited"
                         />
                       </div>
+              <OutputTpmField value={form.output_tpm_limit} onChange={(value) => setForm({ ...form, output_tpm_limit: value })} />
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">Org RPH</label>
                         <input

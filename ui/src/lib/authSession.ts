@@ -1,3 +1,6 @@
+import type { SessionInfo } from './authTypes';
+import { uiMount } from './uiMount';
+
 export type SessionFailureKind = 'anonymous' | 'retryable' | 'fatal';
 
 export type SessionFailure =
@@ -10,15 +13,21 @@ type ErrorWithStatus = Error & {
   retryAfterSeconds?: unknown;
 };
 
-export function isValidSessionPayload(value: unknown): value is {
-  authenticated: boolean;
-  auth_mode?: 'session' | 'master_key' | null;
-} {
+export function isValidSessionPayload(value: unknown): value is SessionInfo {
   if (!value || typeof value !== 'object') return false;
-  const candidate = value as { authenticated?: unknown; auth_mode?: unknown };
+  const candidate = value as Record<string, unknown>;
   if (typeof candidate.authenticated !== 'boolean') return false;
   if (!candidate.authenticated) return true;
-  return candidate.auth_mode === 'session' || candidate.auth_mode === 'master_key';
+  if (candidate.auth_mode !== 'session' && candidate.auth_mode !== 'master_key') return false;
+  if (!uiMount().external_console && candidate.session_source !== 'external_customer') return true;
+  if (candidate.auth_mode !== 'session' || candidate.session_source !== 'external_customer') return false;
+  if (typeof candidate.account_id !== 'string' || !candidate.account_id) return false;
+  if (typeof candidate.expires_at !== 'string' || !Number.isFinite(Date.parse(candidate.expires_at))) return false;
+  const workspace = candidate.workspace;
+  if (!workspace || typeof workspace !== 'object') return false;
+  const fields = workspace as Record<string, unknown>;
+  return ['integration_id', 'binding_id', 'organization_id', 'team_id', 'inference_user_id']
+    .every((key) => typeof fields[key] === 'string' && !!fields[key]);
 }
 
 export function classifySessionCheckError(error: unknown): SessionFailure {

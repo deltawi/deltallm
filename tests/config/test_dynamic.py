@@ -136,13 +136,15 @@ class FakeDB:
     def tx(self) -> FakeTransaction:
         return FakeTransaction(self)
 
-    async def query_raw(self, query: str, name: str):
-        del name
+    async def query_raw(self, query: str, *params: object):
+        del params
         self.queries.append(query)
         if self.fail_query:
             raise RuntimeError("db read unavailable")
         if "pg_advisory_xact_lock" in query:
             return [{"locked": None}]
+        if "AS key_enabled" in query:
+            return [{"key_enabled": False, "shared_enabled": False, "tier_enabled": False}]
         return [{"config_value": json.dumps(self.config_value)}]
 
     async def execute_raw(self, query: str, name: str, payload: str, updated_by: str):

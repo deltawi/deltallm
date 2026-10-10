@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import sys
 import tomllib
 
 from scripts.check_container_contract import railway_dockerfile
@@ -8,6 +10,18 @@ from scripts.check_lifecycle_image import (
     MIGRATION_CHECK,
     image_smoke_checks,
 )
+
+
+def test_generated_runtime_dependencies_match_the_frozen_lock():
+    result = subprocess.run(
+        [sys.executable, "scripts/check_container_contract.py"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_runtime_async_detector_is_locked_and_checked_in_the_actual_image():

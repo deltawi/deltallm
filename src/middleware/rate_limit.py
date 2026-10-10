@@ -25,6 +25,8 @@ from src.rate_limit_policy import (
     estimate_tokens,
     release_rate_limit_controls,
 )
+from src.services.output_limit_types import OutputPolicy
+from src.services.output_limit_redis import OutputUsageUnknownError
 from src.services.limit_counter import LimitCounter, RateLimitCheck
 from src.services.model_visibility import (
     get_tier_capacity_fair_share_active_ttl_seconds_from_app,
@@ -144,6 +146,15 @@ def _build_429_state(
 
     now = time.time()
     for check in checks:
+        if check.dimension == "output_tokens":
+            if check.scope == violated_scope:
+                state.output_tpm_limit = check.limit
+                state.output_tpm_remaining = max(
+                    0, check.limit - int(getattr(exc, "rate_limit_current", check.limit))
+                )
+                state.output_tpm_reset = getattr(exc, "output_reset_at", window_reset_at)
+                state.output_tpm_scope = check.scope
+            continue
         is_rpm = (
             check.scope.endswith("_rpm")
             or check.scope.endswith("_rph")
@@ -206,6 +217,13 @@ def build_rate_limit_headers(state: RateLimitState) -> dict[str, str]:
         if scope_parts:
             headers["x-deltallm-ratelimit-scope"] = ",".join(scope_parts)
 
+    if state.output_tpm_limit > 0:
+        headers["x-ratelimit-limit-output-tokens"] = str(state.output_tpm_limit)
+        if state.output_tpm_remaining is not None:
+            headers["x-ratelimit-remaining-output-tokens"] = str(state.output_tpm_remaining)
+        headers["x-ratelimit-reset-output-tokens"] = str(state.output_tpm_reset)
+        headers["x-deltallm-ratelimit-output-scope"] = state.output_tpm_scope
+
     if state.warning:
         headers["x-ratelimit-warning"] = state.warning
 
@@ -258,6 +276,7 @@ async def check_and_acquire_rate_limits_for_payload(
     model: str | None,
     payload: Any,
     token_estimate: int | None = None,
+    output: OutputPolicy | None = None,
 ) -> None:
     """Admit a validated final payload without rereading the original body."""
 
@@ -268,6 +287,7 @@ async def check_and_acquire_rate_limits_for_payload(
         request,
         model=_normalize_model(model),
         tokens=normalized_token_estimate,
+        output=output,
         admission_fingerprint=_rate_limit_admission_fingerprint(
             model=model,
             payload=payload,
@@ -329,6 +349,7 @@ async def _acquire_rate_limits_for_values(
     model: str | None,
     tokens: int,
     admission_fingerprint: str,
+    output: OutputPolicy | None = None,
 ) -> None:
     if bool(getattr(request.state, "_rate_limit_checked", False)):
         existing_fingerprint = getattr(request.state, "_rate_limit_admission_fingerprint", None)
@@ -374,6 +395,7 @@ async def _acquire_rate_limits_for_values(
             tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
             tier_capacity_fair_share_active_ttl_seconds=tier_capacity_fair_share_active_ttl_seconds,
             preacquired_parallel_lease=preacquired_lease,
+            **({"output": output} if output is not None else {}),
         )
         request.state._rate_limit_state = rate_limit_state
     except RateLimitError as exc:
@@ -401,9 +423,20 @@ async def _acquire_rate_limits_for_values(
         await _release_rate_limits(request)
         raise
 
+    except OutputUsageUnknownError as exc:
+        request.state._rate_limit_state = RateLimitState(
+            output_tpm_limit=exc.limit,
+            output_tpm_remaining=None,
+            output_tpm_reset=exc.reset_at,
+            output_tpm_scope=exc.param or "",
+        )
+        await _release_rate_limits(request)
+        raise
+
     request.state._rate_limit_checked = True
     request.state._rate_limit_admission_fingerprint = admission_fingerprint
     request.state._rate_limit_lease = lease
+    request.state.output_token_context = lease.output_context
     if getattr(request.state, "_rate_limit_lease_refresher", None) is None:
         refresher = RateLimitLeaseRefresher(limiter=limiter, lease=lease)
         if refresher.start():

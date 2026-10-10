@@ -596,6 +596,8 @@ class _FakeTierRepository:
         rpm_limit: int | None,
         update_tpm_limit: bool,
         tpm_limit: int | None,
+        update_output_tpm_limit: bool = False,
+        output_tpm_limit: int | None = None,
         tier_model_policy_ids: tuple[str, ...] | None,
         search: str | None,
         enabled: bool | None,
@@ -633,6 +635,9 @@ class _FakeTierRepository:
                     record,
                     rpm_limit=rpm_limit if update_rpm_limit else record.rpm_limit,
                     tpm_limit=tpm_limit if update_tpm_limit else record.tpm_limit,
+                    output_tpm_limit=output_tpm_limit
+                    if update_output_tpm_limit
+                    else record.output_tpm_limit,
                 )
             )
         self.model_policies[tier_version_id] = updated_records

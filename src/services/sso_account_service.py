@@ -8,8 +8,12 @@ from src.auth.roles import PlatformRole
 from src.auth.sso_identity import (
     AccountInactiveError,
     LoginSessionCreationError,
+    SSOAccountEligibilityError,
+    SSOAccountLinkRequiredError,
     SSOAccountMatch,
+    SSOAccountResolutionPolicy,
     SSOIdentityAssertion,
+    SSOSubjectSource,
 )
 from src.db.identity.platform_accounts import (
     PlatformAccountDatabase,
@@ -52,7 +56,14 @@ class SSOAccountService:
         *,
         initial_role: str = PlatformRole.ORG_USER,
         expected_account_id: str | None = None,
+        policy: SSOAccountResolutionPolicy = SSOAccountResolutionPolicy.OPERATOR_SSO,
     ) -> SSOAccountResolution:
+        policy = SSOAccountResolutionPolicy(policy)
+        if policy is SSOAccountResolutionPolicy.EXTERNAL_CUSTOMER:
+            identity.require_verified_email()
+            if identity.subject_source is not SSOSubjectSource.PROVIDER:
+                raise SSOAccountLinkRequiredError()
+            self._require_customer_role(initial_role)
         linked = await self.identities.get_account_by_sso_identity(
             provider=identity.provider, subject=identity.subject
         )
@@ -63,14 +74,21 @@ class SSOAccountService:
                 raise ValueError("SSO identity is already linked to another account")
         else:
             resolved = await self._resolve_unlinked(
-                identity, initial_role=initial_role, expected_account_id=expected_account_id
+                identity,
+                initial_role=initial_role,
+                expected_account_id=expected_account_id,
+                policy=policy,
             )
             account, match = resolved.account, resolved.match
         self._require_active(account)
+        if policy is SSOAccountResolutionPolicy.EXTERNAL_CUSTOMER:
+            self._require_customer_role(account.role)
         identity.require_ownership(match, role=account.role)
         if match is not SSOAccountMatch.CREATED:
             account = await self._refresh_existing(identity, account, match=match)
             self._require_active(account)
+            if policy is SSOAccountResolutionPolicy.EXTERNAL_CUSTOMER:
+                self._require_customer_role(account.role)
         await self.identities.link_sso_identity(
             account_id=account.account_id,
             email=account.email,
@@ -85,6 +103,7 @@ class SSOAccountService:
         *,
         initial_role: str,
         expected_account_id: str | None,
+        policy: SSOAccountResolutionPolicy,
     ) -> SSOAccountResolution:
         if expected_account_id is not None:
             row = await self.identities.get_account_by_id(expected_account_id)
@@ -100,6 +119,9 @@ class SSOAccountService:
             )
             if created is not None:
                 return SSOAccountResolution(created, SSOAccountMatch.CREATED)
+            if policy is SSOAccountResolutionPolicy.EXTERNAL_CUSTOMER:
+                # A conflicting email is not approval to claim the stored account.
+                raise SSOAccountLinkRequiredError()
             row = await self.identities.get_account_by_email(identity.email)
             if row is None:
                 raise LoginSessionCreationError("Failed to establish session")
@@ -129,3 +151,8 @@ class SSOAccountService:
     def _require_active(account: PlatformAccountRecord) -> None:
         if not account.is_active:
             raise AccountInactiveError("Account is inactive")
+
+    @staticmethod
+    def _require_customer_role(role: str) -> None:
+        if role != PlatformRole.ORG_USER:
+            raise SSOAccountEligibilityError()

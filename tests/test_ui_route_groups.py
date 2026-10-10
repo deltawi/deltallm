@@ -169,6 +169,7 @@ class _FakeRouteGroupRepository:
         limit=100,
         offset=0,
         managed_asset_ids=None,
+        **list_options,
     ):
         del search
         items = list(self.groups.values())

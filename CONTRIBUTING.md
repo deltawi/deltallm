@@ -156,6 +156,21 @@ real Prisma, Redis, or Helm usage is missing its matching explicit marker. This
 keeps lane selection exhaustive and prevents infrastructure tests from silently
 running in a fake-only job.
 
+In GitHub Actions, the exact `-m app` selection uses two pytest-xdist worker
+processes. Each test still creates its own application and fake stores. The
+other lanes, collection-only commands, and local commands remain serial by
+default. Use `-n 0` to request serial execution or `-n 2` to reproduce the
+application CI run locally. Explicit worker settings take precedence. This
+policy keeps the existing CI deadline and all required checks.
+
+The PostgreSQL lane uses two CI runners. Each runner has its own PostgreSQL and
+Redis services. `--postgres-shard=0/2` and `--postgres-shard=1/2` divide all collected
+PostgreSQL modules by a stable path hash. Each test runs once, and each module stays
+on one runner. Both shards must pass the `test` check. The time limit stays at
+20 minutes per runner. To reproduce a shard, add its option to `-m postgres` and
+use an isolated test database and Redis service. Local runs without this option
+still run the full lane.
+
 ## Reporting Issues
 
 When reporting bugs, please include:

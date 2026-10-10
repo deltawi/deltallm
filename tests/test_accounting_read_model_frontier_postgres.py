@@ -13,6 +13,8 @@ from tests.test_accounting_read_model_cold_plans_postgres import cold_claim
 
 pytestmark = pytest.mark.postgres
 
+HISTORY_INSERT_ROWS = 10_000
+
 TABLES = """
 CREATE TEMP TABLE deltallm_accounting_protocols (
  protocol_name text,generation bigint,state text,partition_count integer,
@@ -29,16 +31,19 @@ INSERT INTO deltallm_accounting_projection_checkpoints
 
 
 async def retain(captured, start, end, analyze):
-    await captured._connection.execute(
-        "INSERT INTO deltallm_accounting_events "
-        "(protocol_name,generation,accounting_partition,sequence,event_type,payload_json,"
-        "audit_envelope_json,event_id,operation_id,component_id,occurred_at) "
-        "SELECT 'primary',7,(n%64)::integer,n,'finalized',"
-        "jsonb_build_object('history',repeat('x',512)),'{}','event-'||n,"
-        "'operation-'||n,'test',now() FROM generate_series($1::bigint,$2::bigint) n",
-        start,
-        end,
-    )
+    # Keep setup inserts inside the existing five-second command deadline.
+    # Retain the full history and row width before any frontier query runs.
+    for first in range(start, end + 1, HISTORY_INSERT_ROWS):
+        await captured._connection.execute(
+            "INSERT INTO deltallm_accounting_events "
+            "(protocol_name,generation,accounting_partition,sequence,event_type,payload_json,"
+            "audit_envelope_json,event_id,operation_id,component_id,occurred_at) "
+            "SELECT 'primary',7,(n%64)::integer,n,'finalized',"
+            "jsonb_build_object('history',repeat('x',512)),'{}','event-'||n,"
+            "'operation-'||n,'test',now() FROM generate_series($1::bigint,$2::bigint) n",
+            first,
+            min(first + HISTORY_INSERT_ROWS - 1, end),
+        )
     await captured._connection.execute(
         "UPDATE deltallm_accounting_projection_checkpoints SET last_sequence=$1,"
         "lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL",

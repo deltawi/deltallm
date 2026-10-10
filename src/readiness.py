@@ -37,7 +37,7 @@ class ReadinessRuntime:
         max_readers: int = 4,
         clock: Callable[[], float] = monotonic,
     ) -> None:
-        if len(probes) > 6 or not 1 <= max_readers <= 100:
+        if len(probes) > 7 or not 1 <= max_readers <= 100:
             raise ValueError("readiness allocation exceeds process bounds")
         self.lifecycle = lifecycle
         self.probes = dict(probes)

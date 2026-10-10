@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.services.output_policy_preview import output_limit_projection
+
 import math
 import re
 from collections.abc import Mapping
@@ -341,6 +343,14 @@ def simulate_tier_policy_request(
         "capacity_pool_rate_limits": [
             _serialize_rate_limit_descriptor(item) for item in pool_rate_limits
         ],
+        "output_limit_projection": output_limit_projection(
+            model_policy,
+            (organization_limits or {}).get("output_tpm_limit"),
+            request_count=request_count,
+            completion_tokens=completion_tokens,
+        )
+        if usage_billing_mode in (None, "chat")
+        else [],
         "static_limit_checks": checks,
         "snapshot": _snapshot_info(service, snapshot),
     }
@@ -418,6 +428,7 @@ def _serialize_rate_limit_descriptor(
 
 
 _ORGANIZATION_LIMIT_FIELDS = (
+    "output_tpm_limit",
     "rpm_limit",
     "tpm_limit",
     "rph_limit",

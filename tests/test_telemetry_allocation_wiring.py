@@ -110,7 +110,7 @@ async def test_auth_invalidation_discovery_cannot_consume_lookup_database():
 
     foreground = SimpleNamespace(query_raw=AsyncMock(side_effect=AssertionError("auth pool used")))
     control = SimpleNamespace(query_raw=AsyncMock(return_value=[{"token": "key-hash"}]))
-    redis = SimpleNamespace(delete=AsyncMock(return_value=1))
+    redis = SimpleNamespace(eval=AsyncMock(return_value=1))
     service = KeyService(
         KeyRepository(foreground),
         redis_client=redis,
@@ -119,7 +119,13 @@ async def test_auth_invalidation_discovery_cannot_consume_lookup_database():
     assert await service.invalidate_keys_for_org("org-1") == 1
     control.query_raw.assert_awaited_once()
     foreground.query_raw.assert_not_awaited()
-    redis.delete.assert_awaited_once()
+    assert redis.eval.await_count == 2
+    assert redis.eval.await_args_list[0].args[2:] == (
+        "key:v4:key-hash",
+        "key:v5:key-hash",
+        "key:v6:key-hash",
+    )
+    assert redis.eval.await_args_list[1].args[2:] == ("key:v7:key-hash",)
 
 
 async def test_admin_policy_invalidation_does_not_consume_audit_acceptance_capacity():

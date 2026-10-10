@@ -74,6 +74,10 @@ def test_migration_verifier_checks_the_partial_oldest_terminal_index_and_counter
         "pending_entries",
         "pending_bytes",
         "failed_entries",
+        "deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)",
+        "deltallm_accounting_ensure_grants_batch(bigint,text,integer,integer,jsonb)",
+        "deltallm_accounting_reserve_grant_batch(bigint,text,integer,integer,jsonb)",
+        "deltallm_accounting_finalize_grant_batch(bigint,jsonb)",
         "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
         "deltallm_accounting_backlog_snapshot(bigint)",
         "deltallm_accounting_project_read_models(bigint,text,uuid,integer,bigint,bigint[])",
@@ -316,7 +320,7 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         validated=False, installed_checks=0, final_checks=0, recovery_checks=0, health_checks=0
     )
     steps: list[str] = []
-    created, dropped = Mock(), Mock()
+    created, dropped, recovery = Mock(), Mock(), Mock()
     history = Mock()
     validation = Path("migrations") / verifier.SELECTOR_VALIDATION_MIGRATION / "migration.sql"
 
@@ -353,6 +357,7 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(verifier, "_create_database", created)
     monkeypatch.setattr(verifier, "_drop_database", dropped)
     monkeypatch.setattr(verifier, "_verify_image_history", history)
+    monkeypatch.setattr(verifier, "_verify_model_identity_recovery_path", recovery)
     return SimpleNamespace(
         schema=base_schema,
         validation=validation,
@@ -361,7 +366,24 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         created=created,
         dropped=dropped,
         history=history,
+        recovery=recovery,
     )
+
+
+def test_model_identity_fixture_keeps_all_unchanged_prerequisite_migrations(tmp_path: Path) -> None:
+    verifier = verify_migration_paths
+    staged = verifier._stage_before_model_identity_migration(tmp_path / "prerequisites")
+    assert staged.read_bytes() == verifier.CURRENT_SCHEMA.read_bytes()
+    for original in (verifier.CURRENT_SCHEMA.parent / "migrations").iterdir():
+        copied = staged.parent / "migrations" / original.name
+        if original.is_dir():
+            assert copied.exists() == (original.name < verifier.MODEL_IDENTITY_MIGRATION)
+            if copied.exists():
+                assert (copied / "migration.sql").read_bytes() == (
+                    original / "migration.sql"
+                ).read_bytes()
+        else:
+            assert copied.read_bytes() == original.read_bytes()
 
 
 @pytest.mark.parametrize("base_state", ["before-install", "installed", "validated"])
@@ -390,8 +412,9 @@ def test_upgrade_verifier_handles_selector_migration_already_in_base(
     assert h.state.final_checks == 1
     assert h.state.recovery_checks == 3
     assert h.state.health_checks == 3
-    assert h.created.call_count == h.dropped.call_count == 3
-    assert h.history.call_count == 3
+    assert h.created.call_count == h.dropped.call_count == 4
+    assert h.history.call_count == 4
+    h.recovery.assert_called_once()
     assert h.dropped.call_args_list == list(reversed(h.created.call_args_list))
 
 

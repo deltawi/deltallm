@@ -17,6 +17,10 @@ BEGIN
         RAISE EXCEPTION 'accounting terminal cold-commit policy is missing';
     END IF;
     FOREACH signature IN ARRAY ARRAY[
+        'deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)',
+        'deltallm_accounting_ensure_grants_batch(bigint,text,integer,integer,jsonb)',
+        'deltallm_accounting_reserve_grant_batch(bigint,text,integer,integer,jsonb)',
+        'deltallm_accounting_finalize_grant_batch(bigint,jsonb)',
         'deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)',
         'deltallm_accounting_backlog_snapshot(bigint)',
         'deltallm_accounting_project_read_models(bigint,text,uuid,integer,bigint,bigint[])'

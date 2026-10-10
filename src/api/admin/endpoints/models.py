@@ -27,6 +27,9 @@ from src.db.catalog.logical_models import LogicalModelRecord, LogicalModelReposi
 from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
+from src.api.admin.list_contracts import AdminListResponse, ModelListItem
+from src.services.admin_list_health import list_health_refs, list_health_snapshot
+from src.services.model_admin_listing import ModelSortKey, SortDirection, model_list_page
 from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated
@@ -279,6 +282,13 @@ async def scoped_model_entries_for_principal(
         entry["display_name"] = (
             str(logical_model.display_name or api_model_id) if logical_model else api_model_id
         )
+        entry["created_by_user_id"] = logical_model.created_by_user_id if logical_model else None
+        if logical_model:
+            entry["created_at"] = entry.get("created_at") or logical_model.created_at
+            if logical_model.updated_at and (
+                not entry.get("updated_at") or logical_model.updated_at > entry["updated_at"]
+            ):
+                entry["updated_at"] = logical_model.updated_at
     visible_policies, creator_names = await _model_access_by_name(
         request.app,
         principal,
@@ -381,6 +391,8 @@ async def _control_plane_model_entries(app: Any) -> list[dict[str, Any]]:
                 "deployment_id": record.deployment_id,
                 "model_id": record.model_id,
                 "model_name": record.model_name,
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
                 "routable": routable,
                 "runtime_status": "active"
                 if routable
@@ -1153,7 +1165,11 @@ async def _reload_model_runtime_after_commit(
     return warnings
 
 
-@router.get("/ui/api/models", dependencies=[Depends(require_authenticated)])
+@router.get(
+    "/ui/api/models",
+    dependencies=[Depends(require_authenticated)],
+    response_model=AdminListResponse[ModelListItem],
+)
 async def list_models(
     request: Request,
     search: str | None = Query(default=None),
@@ -1161,49 +1177,33 @@ async def list_models(
     mode: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    sort_by: ModelSortKey | None = Query(default=None),
+    sort_direction: SortDirection = Query(default="desc"),
 ) -> dict[str, Any]:
-    health_backend = getattr(request.app.state, "router_state_backend", None)
     principal = asset_principal_for_request(request)
     entries = await scoped_model_entries_for_principal(request, principal)
-
-    if search:
-        q = search.lower()
-        entries = [
-            e
-            for e in entries
-            if q in e["model_name"].lower()
-            or q in str(e.get("display_name") or "").lower()
-            or q in e["deployment_id"].lower()
-            or q in e.get("provider", "").lower()
-        ]
-    if provider:
-        p = provider.lower()
-        entries = [e for e in entries if e.get("provider", "").lower() == p]
-    if mode:
-        m = mode.lower()
-        entries = [e for e in entries if (e.get("mode") or "chat").lower() == m]
-
-    total = len(entries)
-    page = entries[offset : offset + limit]
-
-    for entry in page:
-        healthy = bool(entry.get("routable", True))
-        if healthy and health_backend is not None:
-            health = await health_backend.get_health(
-                _runtime_health_ref(request.app, entry["deployment_id"])
-            )
-            healthy = str(health.get("healthy", "true")) != "false"
-        entry["healthy"] = healthy
-
-    return {
-        "data": page,
-        "pagination": {
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + limit < total,
-        },
-    }
+    health = await list_health_snapshot(
+        getattr(request.app.state, "router_state_backend", None),
+        list_health_refs(
+            getattr(getattr(request.app.state, "router", None), "deployment_registry", None),
+            [
+                str(entry["deployment_id"])
+                for entry in entries
+                if entry.get("routable") is not False
+            ],
+        ),
+    )
+    return model_list_page(
+        entries,
+        health=health,
+        search=search,
+        provider=provider,
+        mode=mode,
+        sort_by=sort_by,
+        sort_direction=sort_direction,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/ui/api/models/provider-health-summary", dependencies=[Depends(require_authenticated)])

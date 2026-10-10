@@ -41,6 +41,12 @@ secret-handling classification.
 
 ## Operational reference
 
+`tier_policy_mode` and `tier_policy_missing_service_mode` bind the tier service at
+startup. The admin settings API returns `409 restart_required` if a dynamic
+update changes their effective values. Explicit general settings override
+environment values for these fields. Change the deployment configuration and
+restart to apply a new mode.
+
 ```yaml
 general_settings:
   instance_name: DeltaLLM

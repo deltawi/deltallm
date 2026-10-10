@@ -31,6 +31,10 @@ async def test_redis_command_metrics_use_bounded_families():
 
 async def test_redis_command_owners_use_only_fixed_labels():
     assert _command_owner(("GET", "key:v4:private-tenant-key")) == "authentication"
+    for version in (5, 6, 7):
+        assert (
+            _command_owner(("EVAL", "script", 1, f"key:v{version}:private-key")) == "authentication"
+        )
     assert (
         _command_owner(("EVALSHA", "hash", 2, "parallel:private", "parallel_lease:private"))
         == "concurrency"

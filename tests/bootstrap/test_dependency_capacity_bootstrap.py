@@ -2,6 +2,8 @@ from src.bootstrap.dependency_capacity import DependencyAllocationSnapshot
 from src.config import Settings
 from src.config_runtime.loader import build_app_config
 from tests.test_accounting_native_config import native
+from cryptography.hazmat.primitives.asymmetric import rsa
+from tests.auth.test_external_assertions import settings_for
 import pytest
 
 
@@ -98,3 +100,19 @@ def test_native_api_does_not_allocate_an_unused_assigned_accounting_pool():
     )
     with pytest.raises(RuntimeError, match="allocation settings"):
         snapshot.validate_effective(changed, settings)
+
+
+def test_external_auth_pool_is_counted_and_requires_a_restart_to_change():
+    external = settings_for(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+    settings = Settings(
+        database_url="postgresql://fixture:fixture@fixture/db", external_auth=external
+    )
+    initial = build_app_config({})
+    snapshot = DependencyAllocationSnapshot.build(initial, settings)
+    assert snapshot.external_auth_connections == 4
+    snapshot.validate_effective(initial, settings)
+
+    disabled = build_app_config({"general_settings": {"external_auth": {"enabled": False}}})
+    assert DependencyAllocationSnapshot.build(disabled, settings).external_auth_connections == 0
+    with pytest.raises(RuntimeError, match="allocation settings"):
+        snapshot.validate_effective(disabled, settings)

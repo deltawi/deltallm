@@ -23,7 +23,7 @@ the [API-key admin API](../api/admin.md#api-keys).
 2. Choose who owns it in the admin UI:
    `You` for a human-owned key, or `Service account` for automation.
 3. If you need a new service account, create it directly from the same dialog after selecting a team.
-4. Set optional limits such as budget, RPM, TPM, RPH, RPD, or TPD.
+4. Set optional limits such as budget, RPM, TPM, Output TPM, RPH, RPD, or TPD.
 5. Choose whether the key inherits the team asset set or narrows it to selected targets or access groups.
 6. Create the key and copy the raw secret immediately. It is only shown once.
 
@@ -55,6 +55,19 @@ Team developers with the `key.create_self` permission can create their own API k
 
 Self-service users cannot see or manage keys owned by other users through the My Keys view.
 
+## Key dialog
+
+The create and edit dialog has three tabs:
+
+- **Details**: key name, team, and the owner controls available for the operation.
+- **Access**: inherit team access or select a smaller set of targets and access groups.
+- **Limits**: budget, expiry where supported, and rate limits. Open **Hourly and daily limits** for RPH, RPD, and TPD.
+
+An empty limit adds no key limit. Team and organization limits still apply.
+The save controls remain visible when the form scrolls.
+After creation, select **Copy key** in the one-time key dialog.
+A failed clipboard operation shows an error so you can copy the displayed key manually.
+
 ## Key fields
 
 - **Key name**: human-readable label shown in the table
@@ -62,6 +75,8 @@ Self-service users cannot see or manage keys owned by other users through the My
 - **Owned by**: who the key belongs to in the admin UI
 - **Max budget**: hard spend ceiling for that key
 - **RPM / TPM**: request and token throttles per minute
+- **Output TPM**: actual provider output across text models per completion accounting minute. Leave it blank for no key limit. Admitted calls can exceed the limit; new calls then wait until reset. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
+- **Model Output TPM**: output allowance for each exact callable model. Add or remove rows in the key form. Clearing a key limit keeps its team, organization, and tier limits.
 - **RPH**: request throttle per hour
 - **RPD / TPD**: request and token throttles per day
 
@@ -89,3 +104,9 @@ Runtime requests still use the normal budget and rate-limit checks for the organ
 - Service accounts are non-login owners for shared services, jobs, or automations
 - Keys no longer carry model allowlists on the key record. The create/edit dialog writes callable-target bindings, access-group bindings, and scope policies so a key can inherit its team asset set or narrow it further.
 - When rate limits are updated via the admin API or UI, the key validation cache is automatically invalidated so new limits take effect immediately
+
+## Keys with a Console customer session
+
+An [external customer session](../configuration/external-customer-auth.md) can list, create, revoke, and delete its own keys in its fixed team, subject to the team's self-service policy. It cannot regenerate keys, change ownership or budgets, or administer another customer's keys. Playground selection requires the exact mapped account, runtime user, and team.
+
+Revocation can return `pending` while durable cache invalidation completes. The UI shows this state and polls enforcement status. With the enabled feature's maximum 60-second cache lifetime, enforcement is bounded by 61 seconds. Signing out closes browser sessions; application keys remain active until explicitly revoked or blocked by inference controls.

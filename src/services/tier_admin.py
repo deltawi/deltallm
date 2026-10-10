@@ -37,6 +37,7 @@ from src.services.tier_admin_payloads import (
     normalize_tier_create,
     normalize_tier_update,
     normalize_tier_version_create,
+    normalize_tier_output_limit,
 )
 from src.services.tier_admin_serialization import (
     serialize_capacity_pool,
@@ -580,6 +581,8 @@ class TierAdminService:
                 rpm_limit=payload.get("rpm_limit"),
                 update_tpm_limit="tpm_limit" in payload,
                 tpm_limit=payload.get("tpm_limit"),
+                update_output_tpm_limit="output_tpm_limit" in payload,
+                output_tpm_limit=normalize_tier_output_limit(payload.get("output_tpm_limit")),
                 tier_model_policy_ids=(
                     tuple(str(value) for value in payload["policy_ids"])
                     if payload.get("policy_ids")
@@ -765,6 +768,7 @@ def _policy_fingerprint(record: TierModelPolicyRecord) -> str:
             "access_mode": record.access_mode,
             "rpm_limit": record.rpm_limit,
             "tpm_limit": record.tpm_limit,
+            "output_tpm_limit": record.output_tpm_limit,
             "rph_limit": record.rph_limit,
             "rpd_limit": record.rpd_limit,
             "tpd_limit": record.tpd_limit,

@@ -1,10 +1,12 @@
 """The destructive acceptance helper must stay inside its owned kind fixture."""
 
+from contextlib import contextmanager
 import json
 from pathlib import Path
 from subprocess import CompletedProcess
+import sys
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -15,6 +17,77 @@ from tests.performance.capacity_fixture import install_direct_api
 from tests.performance.lifecycle_fixtures import chart_values
 from tests.performance import lifecycle_recovery
 from tests.performance import run_capacity_acceptance
+
+
+@pytest.mark.parametrize("migration_fails", [False, True])
+def test_capacity_runner_migrates_candidate_before_installing_unchanged_baseline(
+    tmp_path, monkeypatch, migration_fails
+):
+    candidate = "deltallm-capacity:candidate"
+    baseline = "deltallm-capacity:baseline"
+    cluster = LifecycleCluster(tmp_path / "evidence", purpose="pr9-capacity", nodes=2)
+    phases = []
+
+    @contextmanager
+    def owned(image):
+        assert image == candidate
+        yield cluster
+
+    def prime(target, values):
+        assert target is cluster
+        phases.append(("migrate", yaml.safe_load(values.read_text())["image"]["tag"]))
+        if migration_fails:
+            raise RuntimeError("candidate migration failed")
+
+    def release(target, values):
+        assert target is cluster
+        phases.append(("release", yaml.safe_load(values.read_text())["image"]["tag"]))
+
+    monkeypatch.setattr(run_capacity_acceptance, "LifecycleCluster", lambda *args, **kw: cluster)
+    monkeypatch.setattr(cluster, "owned", owned)
+    monkeypatch.setattr(cluster, "run", Mock())
+    monkeypatch.setattr(run_capacity_acceptance, "source_manifest", lambda *args: {})
+    monkeypatch.setattr(run_capacity_acceptance, "install_capacity_dependencies", Mock())
+    monkeypatch.setattr(run_capacity_acceptance, "install_monitoring", Mock())
+    monkeypatch.setattr(run_capacity_acceptance, "prime_database", prime)
+    monkeypatch.setattr(run_capacity_acceptance, "capacity_release", release)
+    edge = Mock()
+    exercise = AsyncMock()
+    monkeypatch.setattr(run_capacity_acceptance, "install_edge", edge)
+    monkeypatch.setattr(run_capacity_acceptance, "exercise", exercise)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "capacity",
+            "--image",
+            candidate,
+            "--baseline-image",
+            baseline,
+            "--baseline-manifest",
+            str(tmp_path / "baseline.json"),
+            "--output",
+            str(cluster.output),
+        ],
+    )
+    try:
+        if migration_fails:
+            with pytest.raises(RuntimeError, match="candidate migration failed"):
+                run_capacity_acceptance.main()
+            assert phases == [("migrate", "candidate")]
+            edge.assert_not_called()
+            exercise.assert_not_called()
+            assert not cluster.events
+        else:
+            run_capacity_acceptance.main()
+            assert phases == [("migrate", "candidate"), ("release", "baseline")]
+            edge.assert_called_once_with(cluster)
+            exercise.assert_awaited_once_with(
+                cluster, Path(cluster.directory.name) / "capacity-values.yaml", candidate, baseline
+            )
+            assert cluster.events[-1]["event"] == "capacity_acceptance_completed"
+    finally:
+        cluster.directory.cleanup()
 
 
 def test_event_timeline_fields_cannot_be_overwritten(tmp_path):

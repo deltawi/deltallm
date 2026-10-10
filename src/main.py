@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from src.bootstrap.status import BootstrapStatus, format_bootstrap_summary
 from src.bootstrap.audit import init_audit_runtime, shutdown_audit_runtime
@@ -30,6 +31,7 @@ from src.rate_limit_release_retry import get_rate_limit_release_retry_queue
 from src.cache import (
     CacheMiddleware,
 )
+from src.ui.routes import install_ui_fallback
 from src.api.admin import admin_router
 from src.middleware.rate_limit_headers import RateLimitHeaderMiddleware
 from src.middleware.rate_limit_lifecycle import RateLimitLeaseLifecycleMiddleware
@@ -40,7 +42,10 @@ from src.middleware.request_timing import RequestTimingMiddleware
 from src.api.v1.router import v1_router
 from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
-from src.ui.routes import mount_ui_bundle
+from src.middleware.external_auth import (
+    require_unmixed_external_auth,
+    require_external_browser_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +133,20 @@ def create_app(
 
     @app.middleware("http")
     async def _platform_auth_context_middleware(request: Request, call_next):
+        if request.url.path not in {"/auth/internal/login", "/auth/master/login"}:
+            try:
+                require_unmixed_external_auth(request)
+                require_external_browser_request(request)
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers
+                )
         await attach_platform_auth_context(request)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.cookies.get("deltallm_session", "").startswith("psk_ext1_"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Vary"] = "Cookie"
+        return response
 
     # This must wrap cache and route middleware so streaming rate-limit leases
     # remain owned until the final response body frame or a disconnect.
@@ -141,7 +158,7 @@ def create_app(
     app.include_router(v1_router)
     app.include_router(admin_router)
 
-    mount_ui_bundle(app)
+    install_ui_fallback(app)
     return app
 
 

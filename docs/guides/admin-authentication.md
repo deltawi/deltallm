@@ -46,3 +46,7 @@ need the exact permission for a page.
 - [Authentication and SSO reference](../features/authentication.md)
 - [People and permissions](../admin-ui/people-and-access.md)
 - [Accounts, teams, and access](../concepts/tenancy-and-access.md)
+
+## Connect customer sign-in from a Console
+
+For a Console that already authenticates customers with Clerk, use [trusted external customer sign-in](../configuration/external-customer-auth.md). Register each existing customer organization/team, configure the Console signer, and complete the [backend vault and proxy contract](console-gateway-connection.md). Customer requests use dedicated scoped sessions. Keep integration management credentials in the provisioning service.

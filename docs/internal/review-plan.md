@@ -203,8 +203,7 @@
 |--------|-------|----------------|
 | Admin Endpoints | `src/api/admin/endpoints/*.py` | ~1000 |
 | Admin Router | `src/api/admin/router.py` | ~200 |
-| Model deployments | `src/db/catalog/model_deployments.py` | ~600 |
-| Audit records | `src/db/audit/repository.py` | Existing audit methods |
+| Repositories | `src/db/repositories.py` | ~600 |
 | DB Client | `src/db/runtime/client.py` | ~200 |
 
 **Checklist**:

@@ -15,6 +15,7 @@ _TOKEN_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
 class StreamLineInfo:
     is_usage_only_chunk: bool = False
     is_terminal: bool = False
+    without_usage: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +75,18 @@ class StreamUsageTracker:
         self._reasoning_estimate_incomplete = (
             self._reasoning_estimate_incomplete or delta_usage.reasoning_estimate_incomplete
         )
-        return StreamLineInfo(is_usage_only_chunk=_is_usage_only_chunk(chunk))
+        without_usage = None
+        metadata = chunk.get("x_groq")
+        if "usage" in chunk or isinstance(metadata, dict) and "usage" in metadata:
+            public_chunk = {key: value for key, value in chunk.items() if key != "usage"}
+            if isinstance(metadata, dict) and "usage" in metadata:
+                public_chunk["x_groq"] = {
+                    key: value for key, value in metadata.items() if key != "usage"
+                }
+            without_usage = "data: " + json.dumps(public_chunk, separators=(",", ":"))
+        return StreamLineInfo(
+            is_usage_only_chunk=_is_usage_only_chunk(chunk), without_usage=without_usage
+        )
 
     def resolve(self, payload: ChatCompletionRequest) -> StreamUsage:
         if self._provider_usage is not None:

@@ -18,6 +18,10 @@ application.
 Do not paste a production application's credential into an untrusted browser or shared screen.
 Create a short-lived, narrowly scoped test key when possible.
 
+The model status can be **Online**, **Offline**, or **Unknown**.
+**Unknown** means that health data is unavailable. It does not mean that the model is offline.
+If the model list fails to load, select **Retry**.
+
 ## Chat
 
 1. Select **Chat**, a healthy chat/completion deployment, and enter the test API key.

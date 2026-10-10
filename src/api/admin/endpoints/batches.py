@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, Field
 
 from src.auth.roles import Permission
+from src.api.admin.batch_access import require_operator_batch_access
 from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
@@ -54,7 +55,7 @@ from src.services.ui_authorization import (
     build_batch_capabilities,
 )
 
-router = APIRouter(tags=["Admin Batches"])
+router = APIRouter(tags=["Admin Batches"], dependencies=[Depends(require_operator_batch_access)])
 logger = logging.getLogger(__name__)
 SCHEDULER_FLOW_LIST_DEFAULT_LIMIT = 200
 SCHEDULER_FLOW_LIST_MAX_LIMIT = 1000

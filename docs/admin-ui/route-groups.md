@@ -17,6 +17,25 @@ Use a route group when one public model name should:
 operations. See [Access requirements](access-requirements.md), the [route-group API](../api/admin.md#route-groups),
 and [Routing and Failover](../features/routing.md).
 
+## List controls
+
+Models, Model Groups, and Prompt Registry use the same list controls.
+Select a column heading or use **Sort list** to change the order.
+The server sorts all permitted results before it selects a page.
+The initial order is **Updated at**, newest first. Search resets the page.
+
+**Created by** shows the creator account ID, including platform administrator IDs.
+Select the copy control to copy the full ID. The list does not show creator email addresses.
+**Updated at** shows the stored update time in your local time zone.
+If an old record has no creator ID or update time, the cell shows **Not recorded**.
+**Visibility** is the last column. On small screens, each row becomes a card with the same fields.
+
+You can sort by name, routing strategy, member count, health, creator ID, update time, or visibility.
+Health includes enabled members and current cooldowns.
+A group with some available members shows **Degraded**.
+A disabled group shows **Paused**. A group with no enabled members shows **No active members**.
+If health data is unavailable, the list shows **Unknown**.
+
 ## Quick Success Workflow
 
 1. Create the route group shell
@@ -84,6 +103,21 @@ Start with the default behavior unless you need one of these:
 - weighted traffic splits
 - a specific routing strategy
 - a draft, publish, rollback, or simulation workflow for routing changes
+
+## Policy tab
+
+The **Policy** tab shows the published routing strategy separately from draft changes.
+Select **Simple shuffle**, **Weighted split**, or **Primary & fallback** in the guided editor.
+Other supported strategies are available in **Other strategies**.
+For Primary & fallback, use the up and down arrows to change the deployment order.
+The first deployment is primary. The others are fallbacks in list order.
+An order change creates an explicit member list. New group members are not added to this list automatically.
+Select **Inherit enabled** to use group membership and its priorities again.
+Open **Advanced settings** for the optional selector, timeouts, retries, and context capacity.
+
+Use **Validate**, **Save draft**, and **Publish** for the current editor policy.
+The tab also contains selector tools, simulation, policy history, and rollback controls.
+Prompt bindings remain in **Advanced**.
 
 ## Routing Policy Basics
 
@@ -297,7 +331,7 @@ The simulation view is especially useful for:
 
 ## Policy Simulation
 
-Open **Advanced → Policy Simulation** to dry-run the policy currently shown in the guided or JSON
+Open **Policy → Policy Simulation** to dry-run the policy currently shown in the guided or JSON
 editor. The simulation can use estimated input/output tokens, request tags, and a per-deployment assumed outcome. A successful
 outcome is the default; failure outcomes pass through the same retry classification, retry budget,
 candidate ordering, and fallback decisions used by gateway requests.

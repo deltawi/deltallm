@@ -12,7 +12,7 @@ async def test_single_bundle_owner_preserves_root_and_nested_refresh(tmp_path, m
     monkeypatch.setattr(routes, "_dist_dir", lambda: tmp_path)
     app = FastAPI()
     app.include_router(routes.ui_router)
-    routes.mount_ui_bundle(app)
+    routes.install_ui_fallback(app)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://fixture"
     ) as client:

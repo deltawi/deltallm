@@ -43,6 +43,7 @@ class _FakePromptRepository:
         limit=50,
         offset=0,
         managed_asset_ids=None,
+        **list_options,
     ):
         items = list(self.templates.values())
         if managed_asset_ids is not None:

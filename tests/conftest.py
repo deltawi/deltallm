@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 import time
 from typing import Any
@@ -45,7 +46,7 @@ from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 
 
-pytest_plugins = ("tests.dependency_lanes",)
+pytest_plugins = ("tests.dependency_lanes", "tests.app_lane_workers")
 
 
 class NoopBudgetService:
@@ -378,6 +379,73 @@ class FakeRedis:
         return transition
 
     async def eval(self, script: str, numkeys: int, *args):
+        if "deltallm_key_auth_revoke_v7" in script:
+            key, legacy_key, v4_key, v6_key, payload, legacy_payload, ttl = args
+            await self.setex(str(key), int(ttl), str(payload))
+            await self.setex(str(legacy_key), int(ttl), str(legacy_payload))
+            await self.delete(str(v4_key), str(v6_key))
+            return 1
+        if "deltallm_key_auth_lookup_v7" in script or "deltallm_key_auth_fill_v7" in script:
+            key, legacy_key = map(str, args[:2])
+            legacy = self.store.get(legacy_key, "")
+            cached = self.store.get(key, "")
+            try:
+                guard = json.loads(legacy)
+            except (ValueError, TypeError):
+                guard = None
+            if (
+                isinstance(guard, dict)
+                and guard.get("cache_version") == 5
+                and guard.get("cache_kind") == "revoked"
+            ):
+                cached = legacy
+            else:
+                try:
+                    current = json.loads(cached)
+                except (ValueError, TypeError):
+                    current = None
+                if (
+                    isinstance(current, dict)
+                    and current.get("cache_version") == 7
+                    and current.get("cache_kind") == "allow"
+                ):
+                    nonce = current.get("cache_guard")
+                    if not (
+                        isinstance(nonce, str)
+                        and nonce
+                        and isinstance(guard, dict)
+                        and guard.get("cache_version") == 5
+                        and guard.get("cache_kind") == "allow"
+                        and guard.get("cache_guard") == nonce
+                    ):
+                        await self.delete(key)
+                        cached = ""
+            if "deltallm_key_auth_lookup_v7" in script:
+                return [cached, int(time.time() * 1000)]
+            if cached:
+                return cached
+            key, legacy_key, payload, legacy_payload, ttl, deadline = args
+            if int(time.time() * 1000) > int(deadline):
+                return ""
+            await self.setex(str(legacy_key), int(ttl), str(legacy_payload))
+            await self.setex(str(key), int(ttl), str(payload))
+            return str(payload)
+        if "deltallm_key_auth_drop_v7" in script:
+            keys = []
+            for value in args[:numkeys]:
+                key = str(value)
+                payload = self.store.get(key)
+                if payload:
+                    try:
+                        revoked = json.loads(payload).get("cache_kind") == "revoked"
+                    except (ValueError, AttributeError, TypeError):
+                        revoked = False
+                    if not revoked:
+                        keys.append(key)
+            if keys:
+                await self.delete(*keys)
+            return len(keys)
+
         if "redis.call('SETEX', KEYS[2]" in script:
             lock_key = str(args[0])
             cache_key = str(args[1])

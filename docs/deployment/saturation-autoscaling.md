@@ -175,6 +175,10 @@ and dependency pods on a standard public GitHub runner. The nodes share the
 runner's physical CPU; this functional experiment does not measure production
 throughput or per-node isolation.
 
+The candidate image migrates the database before the current client seeds it.
+The runner then starts the unchanged comparison image against the additive schema.
+A migration or seed failure stops the check before the comparison API starts.
+
 ```bash
 uv sync --frozen --extra dev
 uv run prisma generate --schema=./prisma/schema.prisma

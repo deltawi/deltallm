@@ -24,6 +24,7 @@ and the [access/identity API](../api/admin.md#access-and-identity).
 - Expanding an account reveals its organization and team memberships
 - Self-registered sandbox users are marked with a sandbox access badge
 - Runtime user budgets, rate limits, and self-service key policy are visible from the account details drawer
+- With user-update permission, edit **Output TPM** in runtime access details. It applies across the runtime user's text models and keys. Blank clears that user limit. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
 - Modals let admins add accounts, attach memberships, or edit runtime user asset access without leaving the page
 
 Platform role changes persist across SSO sign-ins. The configured
@@ -34,6 +35,24 @@ also prevents SSO login until the account is reactivated.
 SSO default-team enrollment adds missing memberships. It keeps existing organization and team roles.
 Before the first SSO link to an existing account, the identity provider must verify the account's email.
 A known provider subject can continue to sign in with its stored permissions.
+
+## Account dialogs
+
+The **Add person** dialog has two tabs:
+
+- **Details** sets the email address and creation method. Select **Email invitation**
+  to send an access link. Select **Create manually** to set an initial password and active status.
+- **Access** sets the platform role and one initial organization or team membership.
+  Email invitations use the Organization User role and require a membership.
+  Manual creation can use the Platform Admin role without an initial membership.
+
+The footer shows the selected access and keeps the submit action available on both tabs.
+Organization and team selectors use search and pages when more results are available.
+
+The **Edit account** dialog keeps the email address fixed. You can change the platform role
+and active status. Open **Change password** to set a password with at least 12 characters.
+Leave the field blank to keep the current password. A new password ends all active sessions
+for the account. Select **Save changes** to apply the update.
 
 ## Invitations
 

@@ -48,13 +48,17 @@ class RequestDeadline:
     async def wait_for(self, awaitable: Awaitable[T], *, limit: float | None = None) -> T:
         try:
             remaining = self.require_remaining()
+            timeout = remaining if limit is None else min(remaining, limit)
+            if timeout <= 0:
+                raise request_timeout_error()
         except BaseException:
             if inspect.iscoroutine(awaitable):
                 awaitable.close()
             raise
-        timeout = remaining if limit is None else min(remaining, limit)
         try:
-            return await asyncio.wait_for(awaitable, timeout=timeout)
+            # Keep work and finalizers in the task that owns the request.
+            async with asyncio.timeout(timeout):
+                return await awaitable
         except asyncio.TimeoutError as exc:
             if self.remaining() <= 0:
                 raise request_timeout_error() from exc

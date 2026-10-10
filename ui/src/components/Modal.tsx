@@ -8,9 +8,14 @@ interface ModalProps {
   title: string;
   children: ReactNode;
   wide?: boolean;
+  focused?: boolean;
+  description?: string;
+  icon?: ReactNode;
+  footer?: ReactNode;
+  navigation?: ReactNode;
 }
 
-export default function Modal({ open, onClose, title, children, wide }: ModalProps) {
+export default function Modal({ open, onClose, title, children, wide, focused, description, icon, footer, navigation }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
   const titleId = useId();
@@ -37,9 +42,9 @@ export default function Modal({ open, onClose, title, children, wide }: ModalPro
     const getFocusable = () => {
       const dialogElement = dialogRef.current;
       if (!dialogElement) return [] as HTMLElement[];
-      const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+      const selector = 'button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
       return Array.from(dialogElement.querySelectorAll<HTMLElement>(selector)).filter(
-        (element) => !element.hasAttribute('disabled') && element.tabIndex !== -1 && element.offsetParent !== null
+        (element) => !element.matches(':disabled') && element.tabIndex !== -1 && element.offsetParent !== null
       );
     };
 
@@ -86,10 +91,16 @@ export default function Modal({ open, onClose, title, children, wide }: ModalPro
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`relative bg-white rounded-t-xl sm:rounded-xl shadow-xl max-h-[90vh] overflow-auto w-full ${wide ? 'sm:max-w-[700px]' : 'sm:max-w-[500px]'} sm:mx-4`}
+        className={`relative flex flex-col bg-white rounded-t-xl sm:rounded-xl shadow-xl max-h-[90vh] overflow-hidden w-full ${wide ? 'sm:max-w-[700px]' : focused ? 'sm:max-w-[548px]' : 'sm:max-w-[500px]'} sm:mx-4`}
       >
-        <div className="flex items-center justify-between p-4 sm:p-5 border-b sticky top-0 bg-white z-10">
-          <h2 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h2>
+        <div className="flex shrink-0 items-center justify-between gap-3 p-4 sm:p-5 border-b bg-white">
+          <div className="flex min-w-0 items-center gap-3">
+            {icon && <div className="rounded-lg bg-brand-primary-soft p-2 text-brand-primary-ink">{icon}</div>}
+            <div>
+              <h2 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h2>
+              {description && <p className="mt-0.5 text-xs text-gray-500">{description}</p>}
+            </div>
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -100,7 +111,9 @@ export default function Modal({ open, onClose, title, children, wide }: ModalPro
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
-        <div className="p-4 sm:p-5">{children}</div>
+        {navigation && <div className="shrink-0 px-4 pt-2 sm:px-5 [&>div]:mb-0">{navigation}</div>}
+        <div className="min-h-0 overflow-y-auto p-4 sm:p-5">{children}</div>
+        {footer && <div className="shrink-0 border-t bg-gray-50 p-4 sm:px-5">{footer}</div>}
       </div>
     </div>
   );

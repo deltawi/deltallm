@@ -1,0 +1,6036 @@
+[
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.8604010000000004,
+    "drain_window_seconds": 0.00042150000808760524,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "main-current",
+    "latency_seconds": {
+      "max": 0.1122909170226194,
+      "mean": 0.006563670471587102,
+      "p50": 0.005097458022646606,
+      "p95": 0.0075312499538995326,
+      "p99": 0.06857545796083286
+    },
+    "max_in_flight_observed": 12,
+    "process_peak_rss_bytes": 581550080,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.1038008329924196,
+      "mean": 0.0025453886779723688,
+      "p50": 0.0014830830041319132,
+      "p95": 0.0026273339753970504,
+      "p99": 0.05328745802398771
+    },
+    "run_id": "d8bbf09009024c37ac3be3ce380000b2",
+    "scheduling_lag_seconds": {
+      "max": 0.027195833041332662,
+      "mean": 0.0009877382034028414,
+      "p50": 0.000961083045694977,
+      "p95": 0.0014176250551827252,
+      "p99": 0.0027571250684559345
+    },
+    "started_at": "2026-10-05T18:48:29.435225+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.8229170000000003,
+    "drain_window_seconds": 0.0009007500484585762,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "output-usage-v2-isolated",
+    "latency_seconds": {
+      "max": 0.024413000035565346,
+      "mean": 0.005171324385810294,
+      "p50": 0.004844916984438896,
+      "p95": 0.0073835409712046385,
+      "p99": 0.010764041042421013
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 558415872,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.01692974998150021,
+      "mean": 0.0014934268156503094,
+      "p50": 0.0013561249943450093,
+      "p95": 0.0022184160188771784,
+      "p99": 0.0037789579946547747
+    },
+    "run_id": "316f94a6a504481084353f263f525597",
+    "scheduling_lag_seconds": {
+      "max": 0.006956374971196055,
+      "mean": 0.0009989237830450293,
+      "p50": 0.0010579579975456,
+      "p95": 0.0014748329995200038,
+      "p99": 0.0016259580152109265
+    },
+    "started_at": "2026-10-05T18:48:38.831033+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "one-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.487501000000001,
+    "drain_window_seconds": 0.0003541659680195153,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        1
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "output-usage-v2-isolated",
+    "latency_seconds": {
+      "max": 0.09569612500490621,
+      "mean": 0.00741331337740121,
+      "p50": 0.005880374985281378,
+      "p95": 0.012742249993607402,
+      "p99": 0.051125166995916516
+    },
+    "max_in_flight_observed": 10,
+    "process_peak_rss_bytes": 558415872,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.0771473339991644,
+      "mean": 0.0019860521847658674,
+      "p50": 0.0013336660340428352,
+      "p95": 0.0029281669994816184,
+      "p99": 0.019346792018041015
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "60e9d2778ac449c19e5ef64aaed3a937",
+    "scheduling_lag_seconds": {
+      "max": 0.008236791007220745,
+      "mean": 0.0008172812149132369,
+      "p50": 0.0008261249749921262,
+      "p95": 0.0012895410181954503,
+      "p99": 0.0020110829500481486
+    },
+    "started_at": "2026-10-05T18:48:47.095201+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.688725,
+    "drain_window_seconds": 0.0005249999812804163,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "output-usage-v2-isolated",
+    "latency_seconds": {
+      "max": 0.10067908396013081,
+      "mean": 0.007671923402886023,
+      "p50": 0.006048540992196649,
+      "p95": 0.012536042020656168,
+      "p99": 0.05650054203579202
+    },
+    "max_in_flight_observed": 11,
+    "process_peak_rss_bytes": 558415872,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.07716658298159018,
+      "mean": 0.0019581908840700635,
+      "p50": 0.001390625024214387,
+      "p95": 0.0034478330053389072,
+      "p99": 0.01606720802374184
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "e4f80250bad64247922df6349e9da1a9",
+    "scheduling_lag_seconds": {
+      "max": 0.04231537494342774,
+      "mean": 0.0010015991525142453,
+      "p50": 0.0008495419751852751,
+      "p95": 0.0013214589562267065,
+      "p99": 0.004622333974111825
+    },
+    "started_at": "2026-10-05T18:48:56.177474+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-stream",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 3.2774469999999987,
+    "drain_window_seconds": 0.0004241249989718199,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "output-usage-v2-isolated",
+    "latency_seconds": {
+      "max": 0.1050979999708943,
+      "mean": 0.008133840910013533,
+      "p50": 0.007068875012919307,
+      "p95": 0.011020665988326073,
+      "p99": 0.04254716704599559
+    },
+    "max_in_flight_observed": 11,
+    "process_peak_rss_bytes": 558415872,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.07184670801507309,
+      "mean": 0.001796726090433367,
+      "p50": 0.0014624170144088566,
+      "p95": 0.003094165993388742,
+      "p99": 0.007106707955244929
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "716406dba46d425882f5eb278fddd67b",
+    "scheduling_lag_seconds": {
+      "max": 0.03311925003072247,
+      "mean": 0.0007240410601662006,
+      "p50": 0.0006129160174168646,
+      "p95": 0.0010657910024747252,
+      "p99": 0.004139124997891486
+    },
+    "started_at": "2026-10-05T18:49:04.943438+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-unknown",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.6233699999999978,
+    "drain_window_seconds": 0.0004399579484015703,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "output-usage-v2-isolated",
+    "latency_seconds": {
+      "max": 0.023704833001829684,
+      "mean": 0.003858410629036371,
+      "p50": 0.0036707499530166388,
+      "p95": 0.004790375009179115,
+      "p99": 0.008416917000431567
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 558415872,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.019522458023857325,
+      "mean": 0.001701859718450578,
+      "p50": 0.0014960000407882035,
+      "p95": 0.0025592910242266953,
+      "p99": 0.005365125020034611
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "a847a51066c2404cbd975e842586fea7",
+    "scheduling_lag_seconds": {
+      "max": 0.003321707947179675,
+      "mean": 0.0010608580416010228,
+      "p50": 0.0012372499913908541,
+      "p95": 0.0016330829821527004,
+      "p99": 0.0017892499454319477
+    },
+    "started_at": "2026-10-05T18:49:13.669800+00:00",
+    "status_counts": {
+      "503": 800
+    },
+    "success_count": 0,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-cache",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.4584100000000007,
+    "drain_window_seconds": 0.00036162498872727156,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "output-usage-v2-isolated",
+    "latency_seconds": {
+      "max": 0.014027833996806294,
+      "mean": 0.0035199135809671133,
+      "p50": 0.003380417008884251,
+      "p95": 0.004472749948035926,
+      "p99": 0.006903459026943892
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 558415872,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.012326124997343868,
+      "mean": 0.0016776377685164335,
+      "p50": 0.0015079999575391412,
+      "p95": 0.0025495000299997628,
+      "p99": 0.004501874966081232
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "b934fbd476d647b89f2a5d5d800cb764",
+    "scheduling_lag_seconds": {
+      "max": 0.0020032499451190233,
+      "mean": 0.0011332086061884184,
+      "p50": 0.0013190830359235406,
+      "p95": 0.0016968330019153655,
+      "p99": 0.0018276660121046007
+    },
+    "started_at": "2026-10-05T18:49:21.923698+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-zero",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 3.4532610000000012,
+    "drain_window_seconds": 0.0009464999893680215,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        1
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.03571428571428571,
+    "label": "output-usage-v2-isolated",
+    "latency_seconds": {
+      "max": 0.40633479197276756,
+      "mean": 0.009045162857000832,
+      "p50": 0.005556584044825286,
+      "p95": 0.03738608304411173,
+      "p99": 0.07946566701866686
+    },
+    "max_in_flight_observed": 41,
+    "process_peak_rss_bytes": 577208320,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.04740545799722895,
+      "mean": 0.0030570080858888103,
+      "p50": 0.0013788749929517508,
+      "p95": 0.014073792030103505,
+      "p99": 0.04274916596477851
+    },
+    "run_id": "244e8925157a499ca4ed84c54fccea8d",
+    "scheduling_lag_seconds": {
+      "max": 0.3643670000019483,
+      "mean": 0.009503276494288003,
+      "p50": 0.0009074170375242829,
+      "p95": 0.00427450001006946,
+      "p99": 0.2855815420043655
+    },
+    "started_at": "2026-10-05T18:49:30.164990+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.149292,
+    "drain_window_seconds": 0.0003940830356441438,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "main-after-review",
+    "latency_seconds": {
+      "max": 0.01356604095781222,
+      "mean": 0.004415560362103861,
+      "p50": 0.004314958001486957,
+      "p95": 0.005551040987484157,
+      "p99": 0.006517875008285046
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 582057984,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.010470625013113022,
+      "mean": 0.0016018569026346086,
+      "p50": 0.0014379170024767518,
+      "p95": 0.0025466670049354434,
+      "p99": 0.0032618329860270023
+    },
+    "run_id": "291adf527d004ec69306d2d3ce4ed11f",
+    "scheduling_lag_seconds": {
+      "max": 0.001728291972540319,
+      "mean": 0.0010986135189887136,
+      "p50": 0.0011677499860525131,
+      "p95": 0.0014361249632202089,
+      "p99": 0.001618957961909473
+    },
+    "started_at": "2026-10-05T19:37:25.934789+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.153714,
+    "drain_window_seconds": 0.00036862498382106423,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "review-fixes",
+    "latency_seconds": {
+      "max": 0.02244650002103299,
+      "mean": 0.004559910468015005,
+      "p50": 0.004301665991079062,
+      "p95": 0.00578924996079877,
+      "p99": 0.014283041993621737
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 623919104,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.018954458995722234,
+      "mean": 0.0016985226891119965,
+      "p50": 0.0013984999968670309,
+      "p95": 0.0025632079923525453,
+      "p99": 0.010360917018260807
+    },
+    "run_id": "ff23625a829c4c1ea77586604feb0a34",
+    "scheduling_lag_seconds": {
+      "max": 0.0020760000334121287,
+      "mean": 0.0010868610512989108,
+      "p50": 0.0011775830062106252,
+      "p95": 0.0014701250474900007,
+      "p99": 0.0016177499783225358
+    },
+    "started_at": "2026-10-05T19:38:04.400272+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "one-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.332972,
+    "drain_window_seconds": 0.00038362498162314296,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "review-fixes",
+    "latency_seconds": {
+      "max": 0.03266874997643754,
+      "mean": 0.005528346086211968,
+      "p50": 0.005234666983596981,
+      "p95": 0.00730087497504428,
+      "p99": 0.009623375022783875
+    },
+    "max_in_flight_observed": 4,
+    "process_peak_rss_bytes": 623919104,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.023189625004306436,
+      "mean": 0.0013585346619220218,
+      "p50": 0.0011991250212304294,
+      "p95": 0.0021936660050414503,
+      "p99": 0.0028948330436833203
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "2ae18f941a2c4f1faeb2f2a0aa3a37b7",
+    "scheduling_lag_seconds": {
+      "max": 0.002473041007760912,
+      "mean": 0.0008527367343049263,
+      "p50": 0.0009351249900646508,
+      "p95": 0.001279457937926054,
+      "p99": 0.0013878329773433506
+    },
+    "started_at": "2026-10-05T19:38:12.644311+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.4252029999999998,
+    "drain_window_seconds": 0.0003642499796114862,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "review-fixes",
+    "latency_seconds": {
+      "max": 0.060113417042884976,
+      "mean": 0.0065514924428862285,
+      "p50": 0.005873250018339604,
+      "p95": 0.00851812498876825,
+      "p99": 0.02333091595210135
+    },
+    "max_in_flight_observed": 7,
+    "process_peak_rss_bytes": 623919104,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.04978741699596867,
+      "mean": 0.0017907185556032346,
+      "p50": 0.001404792012181133,
+      "p95": 0.002467542013619095,
+      "p99": 0.009686417004559189
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "883f40db8f6a438cbdd54e2602abe553",
+    "scheduling_lag_seconds": {
+      "max": 0.004937332996632904,
+      "mean": 0.0008295765120419674,
+      "p50": 0.0008606669725850224,
+      "p95": 0.001173791999462992,
+      "p99": 0.0013665829901583493
+    },
+    "started_at": "2026-10-05T19:38:21.587128+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-stream",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.772989000000001,
+    "drain_window_seconds": 0.00039129104698076844,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        2
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": -0.07142857142857142,
+    "label": "review-fixes",
+    "latency_seconds": {
+      "max": 0.03378866700222716,
+      "mean": 0.006606306755056721,
+      "p50": 0.006278333021327853,
+      "p95": 0.008243000018410385,
+      "p99": 0.01505824999185279
+    },
+    "max_in_flight_observed": 4,
+    "process_peak_rss_bytes": 623919104,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.02306858397787437,
+      "mean": 0.001562686933320947,
+      "p50": 0.0013780840090475976,
+      "p95": 0.002398374956101179,
+      "p99": 0.003957332985009998
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "0ac00822da5e450596ee38dad84df0bf",
+    "scheduling_lag_seconds": {
+      "max": 0.0021461659925989807,
+      "mean": 0.0007324597469414584,
+      "p50": 0.0007657079258933663,
+      "p95": 0.0010817499714903533,
+      "p99": 0.0012540409225039184
+    },
+    "started_at": "2026-10-05T19:38:30.299397+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-unknown",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.535743,
+    "drain_window_seconds": 0.00039787503192201257,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "review-fixes",
+    "latency_seconds": {
+      "max": 0.017798750021029264,
+      "mean": 0.003713556399961817,
+      "p50": 0.003510916023515165,
+      "p95": 0.004920625011436641,
+      "p99": 0.008033999998588115
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 623919104,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013423832948319614,
+      "mean": 0.0016709644127695356,
+      "p50": 0.0014719999744556844,
+      "p95": 0.0027548749931156635,
+      "p99": 0.004659250029362738
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "bdec84f4055d4914b4fdd8f7e9e48e0c",
+    "scheduling_lag_seconds": {
+      "max": 0.0067226249957457185,
+      "mean": 0.0011982110770622967,
+      "p50": 0.0013205829891376197,
+      "p95": 0.0016501659993082285,
+      "p99": 0.0018103750189766288
+    },
+    "started_at": "2026-10-05T19:38:39.011800+00:00",
+    "status_counts": {
+      "503": 800
+    },
+    "success_count": 0,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-cache",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.347614,
+    "drain_window_seconds": 0.00034354202216491103,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "review-fixes",
+    "latency_seconds": {
+      "max": 0.02311304199974984,
+      "mean": 0.0033562358638300795,
+      "p50": 0.00317424995591864,
+      "p95": 0.004187458020169288,
+      "p99": 0.0060475830105133355
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 623919104,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.01437375001842156,
+      "mean": 0.0016200015877984697,
+      "p50": 0.001426749979145825,
+      "p95": 0.0025320000131614506,
+      "p99": 0.004120333003811538
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "91ce7cf59ac74ef5b05df1bdb0dc11b9",
+    "scheduling_lag_seconds": {
+      "max": 0.0019420420285314322,
+      "mean": 0.0011500977751711617,
+      "p50": 0.0013450419646687806,
+      "p95": 0.001739917031954974,
+      "p99": 0.0018270419677719474
+    },
+    "started_at": "2026-10-05T19:38:47.264895+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-zero",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.2092290000000006,
+    "drain_window_seconds": 0.0003807500470429659,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "review-fixes",
+    "latency_seconds": {
+      "max": 0.01783516601426527,
+      "mean": 0.004525467505081906,
+      "p50": 0.004410166991874576,
+      "p95": 0.005555499985348433,
+      "p99": 0.006869165983516723
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 623919104,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.01378141698660329,
+      "mean": 0.0016309661484410754,
+      "p50": 0.001437333005014807,
+      "p95": 0.0025603329995647073,
+      "p99": 0.0037241249810904264
+    },
+    "run_id": "17f4cd7c8dd441ee95600dbf5ac90b7e",
+    "scheduling_lag_seconds": {
+      "max": 0.0019465000368654728,
+      "mean": 0.001060225533292396,
+      "p50": 0.0011376250186003745,
+      "p95": 0.001419916981831193,
+      "p99": 0.0015635419986210763
+    },
+    "started_at": "2026-10-05T19:38:55.899582+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-cache",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.187742,
+    "drain_window_seconds": 0.00038899999344721437,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-after",
+    "latency_seconds": {
+      "max": 0.46757312497356907,
+      "mean": 0.008216468801329029,
+      "p50": 0.004077791003510356,
+      "p95": 0.037850291992072016,
+      "p99": 0.054552749963477254
+    },
+    "max_in_flight_observed": 47,
+    "process_peak_rss_bytes": 586252288,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.03875966597115621,
+      "mean": 0.0037385579493275146,
+      "p50": 0.0018584999488666654,
+      "p95": 0.01828320900676772,
+      "p99": 0.03659070801222697
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "9b63779f949a4832a225dfd1077240ec",
+    "scheduling_lag_seconds": {
+      "max": 0.4318237089901231,
+      "mean": 0.012992085216610575,
+      "p50": 0.0007615419453941286,
+      "p95": 0.03651037497911602,
+      "p99": 0.35290729196276516
+    },
+    "started_at": "2026-10-06T09:01:11.690921+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 3.060727,
+    "drain_window_seconds": 0.0004042909713461995,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        1
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": -0.07142857142857142,
+    "label": "second-review-after",
+    "latency_seconds": {
+      "max": 0.048694790981244296,
+      "mean": 0.008238388127792859,
+      "p50": 0.007169082993641496,
+      "p95": 0.01394158398034051,
+      "p99": 0.02857495896751061
+    },
+    "max_in_flight_observed": 5,
+    "process_peak_rss_bytes": 586252288,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.038989000022411346,
+      "mean": 0.002154215940427093,
+      "p50": 0.0017640830483287573,
+      "p95": 0.003600416996050626,
+      "p99": 0.01006508304271847
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "15cae2d818c54b77bc529a5c9ee3b716",
+    "scheduling_lag_seconds": {
+      "max": 0.005401375005021691,
+      "mean": 0.00042857002190430646,
+      "p50": 0.00040729198371991515,
+      "p95": 0.0007215829682536423,
+      "p99": 0.0015242919907905161
+    },
+    "started_at": "2026-10-06T09:00:45.838297+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-stream",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 3.346102,
+    "drain_window_seconds": 0.0003934999695047736,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        1
+      ],
+      [
+        6,
+        1
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.10714285714285714,
+    "label": "second-review-after",
+    "latency_seconds": {
+      "max": 0.06265679199714214,
+      "mean": 0.008657866681314772,
+      "p50": 0.007638124981895089,
+      "p95": 0.012399583007209003,
+      "p99": 0.04245337500469759
+    },
+    "max_in_flight_observed": 8,
+    "process_peak_rss_bytes": 586252288,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.023391166992951185,
+      "mean": 0.002002106840227498,
+      "p50": 0.0017197919660247862,
+      "p95": 0.0037189580034464598,
+      "p99": 0.006944958004169166
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "6ab388e536e449308afba59d5207d2f5",
+    "scheduling_lag_seconds": {
+      "max": 0.02264258300419897,
+      "mean": 0.000409870026196586,
+      "p50": 0.0003427499905228615,
+      "p95": 0.000559957989025861,
+      "p99": 0.0019609580049291253
+    },
+    "started_at": "2026-10-06T09:00:54.651868+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-unknown",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.8634490000000028,
+    "drain_window_seconds": 0.00036925001768395305,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-after",
+    "latency_seconds": {
+      "max": 0.025994084018748254,
+      "mean": 0.004361415217717876,
+      "p50": 0.004144625039771199,
+      "p95": 0.005760625004768372,
+      "p99": 0.009244791988749057
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 586252288,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.021333792014047503,
+      "mean": 0.0019462792903505034,
+      "p50": 0.0017045839922502637,
+      "p95": 0.002969584020320326,
+      "p99": 0.005326957965735346
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "21e96824f4b843109674eaaa2ad8deb2",
+    "scheduling_lag_seconds": {
+      "max": 0.0011962910066358745,
+      "mean": 0.0006816674880974461,
+      "p50": 0.0007289579953067005,
+      "p95": 0.0008477080264128745,
+      "p99": 0.0009020409779623151
+    },
+    "started_at": "2026-10-06T09:01:03.457800+00:00",
+    "status_counts": {
+      "503": 800
+    },
+    "success_count": 0,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-zero",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.729208,
+    "drain_window_seconds": 0.00035716703860089183,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-after",
+    "latency_seconds": {
+      "max": 0.04376725002657622,
+      "mean": 0.005857062373979716,
+      "p50": 0.005521915969438851,
+      "p95": 0.00748629099689424,
+      "p99": 0.013392125023528934
+    },
+    "max_in_flight_observed": 5,
+    "process_peak_rss_bytes": 586252288,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.011685292003676295,
+      "mean": 0.0021749038033158285,
+      "p50": 0.0019681249978020787,
+      "p95": 0.003473334014415741,
+      "p99": 0.005809249996673316
+    },
+    "run_id": "f0c4e5bfe8fd41ac9e0f47bef75048bf",
+    "scheduling_lag_seconds": {
+      "max": 0.007121833972632885,
+      "mean": 0.0005730848100211006,
+      "p50": 0.000584208988584578,
+      "p95": 0.0007200419786386192,
+      "p99": 0.0010002089547924697
+    },
+    "started_at": "2026-10-06T09:01:19.943817+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 99.875,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.6516279999999997,
+    "drain_window_seconds": 0.008241208037361503,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        14
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        1
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.07142857142857142,
+    "label": "second-review-after",
+    "latency_seconds": {
+      "max": 0.5199095000280067,
+      "mean": 0.029725580928861746,
+      "p50": 0.005317417031619698,
+      "p95": 0.15606587496586144,
+      "p99": 0.45742437499575317
+    },
+    "max_in_flight_observed": 53,
+    "process_peak_rss_bytes": 586252288,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.1925497920019552,
+      "mean": 0.006871454455613275,
+      "p50": 0.001758416008669883,
+      "p95": 0.045392374973744154,
+      "p99": 0.06352204096037894
+    },
+    "run_id": "6f54df17991545e8a82cd470444f4f9a",
+    "scheduling_lag_seconds": {
+      "max": 0.16457429202273488,
+      "mean": 0.005053169490129222,
+      "p50": 0.0006542500341311097,
+      "p95": 0.023631208983715624,
+      "p99": 0.11618116707541049
+    },
+    "started_at": "2026-10-06T09:00:28.738096+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "one-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 3.1431010000000006,
+    "drain_window_seconds": 0.0004431669949553907,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        1
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.07142857142857142,
+    "label": "second-review-after",
+    "latency_seconds": {
+      "max": 0.3045697499765083,
+      "mean": 0.01699308889968961,
+      "p50": 0.0070965830236673355,
+      "p95": 0.07582512497901917,
+      "p99": 0.19518783304374665
+    },
+    "max_in_flight_observed": 35,
+    "process_peak_rss_bytes": 586252288,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.28900633298326284,
+      "mean": 0.003603539807481866,
+      "p50": 0.0017507500015199184,
+      "p95": 0.0161005420377478,
+      "p99": 0.033944291004445404
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "837dbd41a52c48abbe5a2781c39760a5",
+    "scheduling_lag_seconds": {
+      "max": 0.28325433301506564,
+      "mean": 0.006517205935524544,
+      "p50": 0.0004504169919528067,
+      "p95": 0.02082549995975569,
+      "p99": 0.20437158300774172
+    },
+    "started_at": "2026-10-06T09:00:37.024454+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-cache",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.843909,
+    "drain_window_seconds": 0.0004225830198265612,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": -0.10714285714285714,
+    "label": "second-review-after-repeat",
+    "latency_seconds": {
+      "max": 0.021214750013314188,
+      "mean": 0.003954001659876667,
+      "p50": 0.003567499981727451,
+      "p95": 0.006135874951723963,
+      "p99": 0.01151108299382031
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 570032128,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.01806487503927201,
+      "mean": 0.0016510970168019412,
+      "p50": 0.0012528329971246421,
+      "p95": 0.0033319159992970526,
+      "p99": 0.008015250030439347
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "16db86361a434869b77850eadfc7cfd9",
+    "scheduling_lag_seconds": {
+      "max": 0.003460291016381234,
+      "mean": 0.0007379417707124958,
+      "p50": 0.0007958749774843454,
+      "p95": 0.0009462910238653421,
+      "p99": 0.001597624970600009
+    },
+    "started_at": "2026-10-06T09:05:31.596373+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.729655,
+    "drain_window_seconds": 0.0003926670178771019,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-after-repeat",
+    "latency_seconds": {
+      "max": 0.09299975004978478,
+      "mean": 0.006911556749473675,
+      "p50": 0.0051839170046150684,
+      "p95": 0.011235208017751575,
+      "p99": 0.06715037499088794
+    },
+    "max_in_flight_observed": 10,
+    "process_peak_rss_bytes": 570032128,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.08022629102924839,
+      "mean": 0.002853513627924258,
+      "p50": 0.0016560420044697821,
+      "p95": 0.004936832992825657,
+      "p99": 0.04333670798223466
+    },
+    "run_id": "1e372c02cbab4562b16c82207235e38b",
+    "scheduling_lag_seconds": {
+      "max": 0.028288374945987016,
+      "mean": 0.0006563401193125174,
+      "p50": 0.0006026249611750245,
+      "p95": 0.0008294579456560314,
+      "p99": 0.0015398329705931246
+    },
+    "started_at": "2026-10-06T09:05:14.222903+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "one-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.987324,
+    "drain_window_seconds": 0.0003570840344764292,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": -0.35714285714285715,
+    "label": "second-review-after-repeat",
+    "latency_seconds": {
+      "max": 0.05016849999083206,
+      "mean": 0.008192552988184616,
+      "p50": 0.007027958985418081,
+      "p95": 0.013497957959771156,
+      "p99": 0.035411707998719066
+    },
+    "max_in_flight_observed": 5,
+    "process_peak_rss_bytes": 570032128,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.021147084014955908,
+      "mean": 0.0020732785253130713,
+      "p50": 0.001514083007350564,
+      "p95": 0.004972374998033047,
+      "p99": 0.00919120799517259
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "8f0c35651f1f4e6eb5d79c2ef37060e2",
+    "scheduling_lag_seconds": {
+      "max": 0.005172042001504451,
+      "mean": 0.0004544178862852277,
+      "p50": 0.0004189999890513718,
+      "p95": 0.0007801250321790576,
+      "p99": 0.0014744169893674552
+    },
+    "started_at": "2026-10-06T09:05:22.464533+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-cache",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.673731,
+    "drain_window_seconds": 0.0004164580022916198,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before",
+    "latency_seconds": {
+      "max": 0.0581152499653399,
+      "mean": 0.00497218356897065,
+      "p50": 0.004068250011187047,
+      "p95": 0.008567375014536083,
+      "p99": 0.024975250009447336
+    },
+    "max_in_flight_observed": 7,
+    "process_peak_rss_bytes": 584220672,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.023992583970539272,
+      "mean": 0.0023858782226307083,
+      "p50": 0.0019051249837502837,
+      "p95": 0.00465337501373142,
+      "p99": 0.011159708024933934
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "472ed498a41143c2906c0c42274c8a16",
+    "scheduling_lag_seconds": {
+      "max": 0.01640604203566909,
+      "mean": 0.0007332197474170243,
+      "p50": 0.0007288749911822379,
+      "p95": 0.0008953749784268439,
+      "p99": 0.0022693340433761477
+    },
+    "started_at": "2026-10-06T08:58:45.146108+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.978212000000001,
+    "drain_window_seconds": 0.0004421250196173787,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        9
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.6428571428571429,
+    "label": "second-review-before",
+    "latency_seconds": {
+      "max": 0.24198062502546236,
+      "mean": 0.011832591802885872,
+      "p50": 0.0068087499821558595,
+      "p95": 0.016207125037908554,
+      "p99": 0.1793452919810079
+    },
+    "max_in_flight_observed": 25,
+    "process_peak_rss_bytes": 584220672,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.20912312500877306,
+      "mean": 0.003951195601766813,
+      "p50": 0.001609249971807003,
+      "p95": 0.004737749986816198,
+      "p99": 0.09778266702778637
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "06371054b9c7430aa5ed608ee522bdec",
+    "scheduling_lag_seconds": {
+      "max": 0.002285290975123644,
+      "mean": 0.0004381348865717882,
+      "p50": 0.00044670799979940057,
+      "p95": 0.0006483750184997916,
+      "p99": 0.001082250033505261
+    },
+    "started_at": "2026-10-06T08:58:19.401954+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-stream",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 3.2665219999999984,
+    "drain_window_seconds": 0.00039479200495406985,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        1
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": -0.03571428571428571,
+    "label": "second-review-before",
+    "latency_seconds": {
+      "max": 0.05886037496384233,
+      "mean": 0.007928744869641378,
+      "p50": 0.0070675419992767274,
+      "p95": 0.011416000023018569,
+      "p99": 0.030380374984815717
+    },
+    "max_in_flight_observed": 6,
+    "process_peak_rss_bytes": 584220672,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.04606783401686698,
+      "mean": 0.00187327564242878,
+      "p50": 0.0014882499817758799,
+      "p95": 0.00270154100144282,
+      "p99": 0.010852499981410801
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "0ef8255305b94e288a1d1099f38fbf06",
+    "scheduling_lag_seconds": {
+      "max": 0.0014299160102382302,
+      "mean": 0.000396328443166567,
+      "p50": 0.00039916601963341236,
+      "p95": 0.0005712499842047691,
+      "p99": 0.0010695409728214145
+    },
+    "started_at": "2026-10-06T08:58:28.210070+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-unknown",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.7211309999999997,
+    "drain_window_seconds": 0.0003862499725073576,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before",
+    "latency_seconds": {
+      "max": 0.016390540986321867,
+      "mean": 0.003983215107655269,
+      "p50": 0.00384066702099517,
+      "p95": 0.005051041021943092,
+      "p99": 0.006422459031455219
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 584220672,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013918709009885788,
+      "mean": 0.0017428182849107542,
+      "p50": 0.001593041990417987,
+      "p95": 0.0026722089969553053,
+      "p99": 0.0040575420134700835
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "c1270c2f3743474bb24250ef07e66d25",
+    "scheduling_lag_seconds": {
+      "max": 0.0011127919424325228,
+      "mean": 0.0006514125272951787,
+      "p50": 0.000739457958843559,
+      "p95": 0.0008689169771969318,
+      "p99": 0.0009368330356664956
+    },
+    "started_at": "2026-10-06T08:58:36.905722+00:00",
+    "status_counts": {
+      "503": 800
+    },
+    "success_count": 0,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-zero",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.4968339999999998,
+    "drain_window_seconds": 0.00039733300218358636,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before",
+    "latency_seconds": {
+      "max": 0.015615541022270918,
+      "mean": 0.005269866206508596,
+      "p50": 0.005042499979026616,
+      "p95": 0.007205916976090521,
+      "p99": 0.011497957981191576
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 584220672,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.011299250007141382,
+      "mean": 0.001991114019983797,
+      "p50": 0.0017190830549225211,
+      "p95": 0.0037806659820489585,
+      "p99": 0.006891541997902095
+    },
+    "run_id": "ddf4446157c744b4a1049edd51a11134",
+    "scheduling_lag_seconds": {
+      "max": 0.0017155000241473317,
+      "mean": 0.0005384395562577993,
+      "p50": 0.0005896250368095934,
+      "p95": 0.000772042025346309,
+      "p99": 0.0008539169793948531
+    },
+    "started_at": "2026-10-06T08:58:53.745868+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.6865060000000005,
+    "drain_window_seconds": 0.0003813749644905329,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before",
+    "latency_seconds": {
+      "max": 0.038354458985850215,
+      "mean": 0.005742148394565447,
+      "p50": 0.005065999983344227,
+      "p95": 0.007728917000349611,
+      "p99": 0.023760124982800335
+    },
+    "max_in_flight_observed": 4,
+    "process_peak_rss_bytes": 584220672,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013535708014387637,
+      "mean": 0.001808002332400065,
+      "p50": 0.0016181250102818012,
+      "p95": 0.0028159169596619904,
+      "p99": 0.004381834005471319
+    },
+    "run_id": "24df931fba2f49529b4479e1ae8e7e93",
+    "scheduling_lag_seconds": {
+      "max": 0.008352667035069317,
+      "mean": 0.0006413510585844051,
+      "p50": 0.0006085829809308052,
+      "p95": 0.0008230420062318444,
+      "p99": 0.002871750039048493
+    },
+    "started_at": "2026-10-06T08:58:02.098879+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "one-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.7643319999999996,
+    "drain_window_seconds": 0.0003613749868236482,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before",
+    "latency_seconds": {
+      "max": 0.018570250016637146,
+      "mean": 0.0066490522315143605,
+      "p50": 0.006255875050555915,
+      "p95": 0.009482458990532905,
+      "p99": 0.014917667023837566
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 584220672,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.012337916006799787,
+      "mean": 0.0016738563734907076,
+      "p50": 0.001487332978285849,
+      "p95": 0.0026852500159293413,
+      "p99": 0.005664792028255761
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "66bb21bdcd52433abdfa9bd87ac4f64b",
+    "scheduling_lag_seconds": {
+      "max": 0.0012985829962417483,
+      "mean": 0.000466122238067328,
+      "p50": 0.0004908749833703041,
+      "p95": 0.0006267499993555248,
+      "p99": 0.0007565409759990871
+    },
+    "started_at": "2026-10-06T08:58:10.341719+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "four-cache",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 1.8570130000000002,
+    "drain_window_seconds": 0.0004677500110119581,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before-repeat",
+    "latency_seconds": {
+      "max": 0.016384540998842567,
+      "mean": 0.003863758280422189,
+      "p50": 0.0035072080208919942,
+      "p95": 0.006425208004657179,
+      "p99": 0.009654833003878593
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 559104000,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.008143667015247047,
+      "mean": 0.0014825781252147863,
+      "p50": 0.0012433339725248516,
+      "p95": 0.0025043750065378845,
+      "p99": 0.005568374996073544
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "cb1ee35be81a4f78b2cc6de1fd9407a6",
+    "scheduling_lag_seconds": {
+      "max": 0.0034247500589117408,
+      "mean": 0.0007587235321989283,
+      "p50": 0.0007556250202469528,
+      "p95": 0.001370374986436218,
+      "p99": 0.0017530409968458116
+    },
+    "started_at": "2026-10-06T09:06:09.886678+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "null",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.713184,
+    "drain_window_seconds": 0.00048279197653755546,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before-repeat",
+    "latency_seconds": {
+      "max": 0.025038541003596038,
+      "mean": 0.00516543373472814,
+      "p50": 0.004818500019609928,
+      "p95": 0.007208499999251217,
+      "p99": 0.012712916010059416
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 559104000,
+    "provider_calls": 800,
+    "redis_calls": {
+      "eval": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.019816291984170675,
+      "mean": 0.001545287933331565,
+      "p50": 0.001363457995466888,
+      "p95": 0.0028256250079721212,
+      "p99": 0.005384333024267107
+    },
+    "run_id": "9f794f57ec6b48979f356e0d8c6ac930",
+    "scheduling_lag_seconds": {
+      "max": 0.0020382910151965916,
+      "mean": 0.0005734674659470329,
+      "p50": 0.0005945829325355589,
+      "p95": 0.0008289999677799642,
+      "p99": 0.0011011659516952932
+    },
+    "started_at": "2026-10-06T09:05:52.636844+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 8,
+    "case": "one-json",
+    "client_started_count": 800,
+    "client_started_rps": 100.0,
+    "completion_count": 800,
+    "cpu_seconds": 2.974945,
+    "drain_window_seconds": 0.00041566701838746667,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "second-review-before-repeat",
+    "latency_seconds": {
+      "max": 0.12485383299645036,
+      "mean": 0.007857364301235065,
+      "p50": 0.00607754202792421,
+      "p95": 0.00910095899598673,
+      "p99": 0.08306058298330754
+    },
+    "max_in_flight_observed": 15,
+    "process_peak_rss_bytes": 559104000,
+    "provider_calls": 800,
+    "redis_calls": {
+      "evalsha": 1600
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.040302959037944674,
+      "mean": 0.001643714199999522,
+      "p50": 0.0012047909549437463,
+      "p95": 0.0028177499771118164,
+      "p99": 0.01333841698942706
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 801,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "9f0217d544924c8ab339252146fb4d69",
+    "scheduling_lag_seconds": {
+      "max": 0.02054041699739173,
+      "mean": 0.0006423643612652086,
+      "p50": 0.000493750034365803,
+      "p95": 0.0007693750085309148,
+      "p99": 0.007751750003080815
+    },
+    "started_at": "2026-10-06T09:06:00.876087+00:00",
+    "status_counts": {
+      "200": 800
+    },
+    "success_count": 800,
+    "target_count": 800,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-cache",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 0.9088499999999993,
+    "drain_window_seconds": 0.000415499962400645,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after",
+    "latency_seconds": {
+      "max": 0.0339742079959251,
+      "mean": 0.0044084130122791975,
+      "p50": 0.0037733750068582594,
+      "p95": 0.007278583012521267,
+      "p99": 0.016983999987132847
+    },
+    "max_in_flight_observed": 4,
+    "process_peak_rss_bytes": 572227584,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.02794825000455603,
+      "mean": 0.002002159679250326,
+      "p50": 0.0015232500154525042,
+      "p95": 0.004051833006087691,
+      "p99": 0.013046125008258969
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "562dc39d666d44e28cddcc482815d5c9",
+    "scheduling_lag_seconds": {
+      "max": 0.01969200000166893,
+      "mean": 0.0006972530380880926,
+      "p50": 0.0007072919979691505,
+      "p95": 0.0008882920374162495,
+      "p99": 0.001188000023830682
+    },
+    "started_at": "2026-10-06T10:17:23.428059+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.476597,
+    "drain_window_seconds": 0.0003276659990660846,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after",
+    "latency_seconds": {
+      "max": 0.022057374997530133,
+      "mean": 0.006888981547235744,
+      "p50": 0.006624749978072941,
+      "p95": 0.008741375000681728,
+      "p99": 0.012025708972942084
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 572227584,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013198875007219613,
+      "mean": 0.0017014228700281818,
+      "p50": 0.0015725829871371388,
+      "p95": 0.002750959014520049,
+      "p99": 0.003640957991592586
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "4eff30836da4491994aa37d4d78eec05",
+    "scheduling_lag_seconds": {
+      "max": 0.0010742919985204935,
+      "mean": 0.0004124992899596691,
+      "p50": 0.0004331249510869384,
+      "p95": 0.0005920419353060424,
+      "p99": 0.0006549590034410357
+    },
+    "started_at": "2026-10-06T10:17:09.927695+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-stream",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.7243049999999993,
+    "drain_window_seconds": 0.0002530000056140125,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after",
+    "latency_seconds": {
+      "max": 0.018124208028893918,
+      "mean": 0.007277152669994394,
+      "p50": 0.007056458038277924,
+      "p95": 0.009067374980077147,
+      "p99": 0.011695249995682389
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 572227584,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.01168283395236358,
+      "mean": 0.001536332046816824,
+      "p50": 0.0014287499943748116,
+      "p95": 0.002401290985289961,
+      "p99": 0.0040015000267885625
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "5624ab6e42a14956887a57025b7eb8dd",
+    "scheduling_lag_seconds": {
+      "max": 0.0010908750118687749,
+      "mean": 0.0003651025133149233,
+      "p50": 0.0003802499850280583,
+      "p95": 0.0005331250140443444,
+      "p99": 0.0005811670562252402
+    },
+    "started_at": "2026-10-06T10:17:14.556657+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-unknown",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.0040980000000008,
+    "drain_window_seconds": 0.00023374997545033693,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after",
+    "latency_seconds": {
+      "max": 0.012148667010478675,
+      "mean": 0.004230437877849908,
+      "p50": 0.004014834004919976,
+      "p95": 0.00609341700328514,
+      "p99": 0.00737470795866102
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 572227584,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.009652625012677163,
+      "mean": 0.0016202344650810118,
+      "p50": 0.0015147089725360274,
+      "p95": 0.002449417021125555,
+      "p99": 0.0035322080366313457
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "6575eb05d3aa42c6af56e7ff7d50b717",
+    "scheduling_lag_seconds": {
+      "max": 0.0010849160025827587,
+      "mean": 0.0006809020633227192,
+      "p50": 0.0007306249462999403,
+      "p95": 0.0008484579739160836,
+      "p99": 0.0008984159794636071
+    },
+    "started_at": "2026-10-06T10:17:19.120624+00:00",
+    "status_counts": {
+      "503": 400
+    },
+    "success_count": 0,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-zero",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.5660190000000007,
+    "drain_window_seconds": 0.00025524996453896165,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after",
+    "latency_seconds": {
+      "max": 0.04927579202922061,
+      "mean": 0.006040254028339405,
+      "p50": 0.005352666019462049,
+      "p95": 0.008043417008593678,
+      "p99": 0.020833290996961296
+    },
+    "max_in_flight_observed": 6,
+    "process_peak_rss_bytes": 572227584,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.02712400001473725,
+      "mean": 0.001727338305354351,
+      "p50": 0.0013949170242995024,
+      "p95": 0.002967792039271444,
+      "p99": 0.006861500034574419
+    },
+    "run_id": "4eaf9733b19c4413a31f8c7fbe2c3df0",
+    "scheduling_lag_seconds": {
+      "max": 0.010616208019200712,
+      "mean": 0.0005574534612242132,
+      "p50": 0.0005582500016316772,
+      "p95": 0.0007292919908650219,
+      "p99": 0.0012967080110684037
+    },
+    "started_at": "2026-10-06T10:17:28.059557+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "null",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.2548649999999997,
+    "drain_window_seconds": 0.0002997079864144325,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after",
+    "latency_seconds": {
+      "max": 0.016532083973288536,
+      "mean": 0.0050392627155815715,
+      "p50": 0.00488516699988395,
+      "p95": 0.006338292034342885,
+      "p99": 0.008232416003011167
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 562708480,
+    "provider_calls": 400,
+    "redis_calls": {
+      "eval": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013265166955534369,
+      "mean": 0.0017823399094049818,
+      "p50": 0.0016549580032005906,
+      "p95": 0.0027672500000335276,
+      "p99": 0.00483841699315235
+    },
+    "run_id": "75f1a0a30999467794cf50cba5dbecc7",
+    "scheduling_lag_seconds": {
+      "max": 0.0010867079836316407,
+      "mean": 0.0005844750737014692,
+      "p50": 0.000627624976914376,
+      "p95": 0.0007633749628439546,
+      "p99": 0.000815790961496532
+    },
+    "started_at": "2026-10-06T10:17:00.739689+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "one-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.5176719999999992,
+    "drain_window_seconds": 0.00027249997947365046,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after",
+    "latency_seconds": {
+      "max": 0.09297970804618672,
+      "mean": 0.008724859731592005,
+      "p50": 0.006336957972962409,
+      "p95": 0.012314666993916035,
+      "p99": 0.06635058397660032
+    },
+    "max_in_flight_observed": 12,
+    "process_peak_rss_bytes": 572227584,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.0690809580264613,
+      "mean": 0.0021667427136708283,
+      "p50": 0.0013744579628109932,
+      "p95": 0.003587166022043675,
+      "p99": 0.022437208041083068
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "e30daf1416144101821f69ceb7788296",
+    "scheduling_lag_seconds": {
+      "max": 0.03645187499932945,
+      "mean": 0.0008573513563896996,
+      "p50": 0.00047741702292114496,
+      "p95": 0.0006539170281030238,
+      "p99": 0.020758208993356675
+    },
+    "started_at": "2026-10-06T10:17:05.045357+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-cache",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 0.9840970000000002,
+    "drain_window_seconds": 0.00024625001242384315,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before",
+    "latency_seconds": {
+      "max": 0.027781917015090585,
+      "mean": 0.004727766874275403,
+      "p50": 0.003944292024243623,
+      "p95": 0.00849699997343123,
+      "p99": 0.017423291050363332
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 631635968,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.020901250012684613,
+      "mean": 0.0020203972993476783,
+      "p50": 0.001492624985985458,
+      "p95": 0.004332041018642485,
+      "p99": 0.009949125000275671
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "d0e9a10627b84586b89773a994046123",
+    "scheduling_lag_seconds": {
+      "max": 0.002623083011712879,
+      "mean": 0.0006622115263598971,
+      "p50": 0.0007152909529395401,
+      "p95": 0.0009146249503828585,
+      "p99": 0.0015392079949378967
+    },
+    "started_at": "2026-10-06T10:16:18.482567+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 99.75,
+    "arrival_window_seconds": 4,
+    "case": "four-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.3890030000000007,
+    "drain_window_seconds": 0.0004344169865362346,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before",
+    "latency_seconds": {
+      "max": 0.028848375019151717,
+      "mean": 0.007161827853269642,
+      "p50": 0.006716333969961852,
+      "p95": 0.01092695799889043,
+      "p99": 0.0159977920120582
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 631635968,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.018187207984738052,
+      "mean": 0.001899149746823241,
+      "p50": 0.0018107090145349503,
+      "p95": 0.0034602920059114695,
+      "p99": 0.005380708957090974
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "a5cf42363676491c93975882ebe91fe9",
+    "scheduling_lag_seconds": {
+      "max": 0.0015218329499475658,
+      "mean": 0.000423225172853563,
+      "p50": 0.00042120798025280237,
+      "p95": 0.0006316669750958681,
+      "p99": 0.0007423749775625765
+    },
+    "started_at": "2026-10-06T10:16:04.803266+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 99.75,
+    "arrival_window_seconds": 4,
+    "case": "four-stream",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.9459529999999994,
+    "drain_window_seconds": 0.0053381670149974525,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before",
+    "latency_seconds": {
+      "max": 0.01593029103241861,
+      "mean": 0.008370146647503135,
+      "p50": 0.007985499978531152,
+      "p95": 0.011868666973896325,
+      "p99": 0.01395654201041907
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 631635968,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.009976957982871681,
+      "mean": 0.0017474457385833375,
+      "p50": 0.0016015000292100012,
+      "p95": 0.002852334000635892,
+      "p99": 0.0043388340272940695
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "c1ed32ffab1a4d1e80d84cabbc041060",
+    "scheduling_lag_seconds": {
+      "max": 0.0010341249871999025,
+      "mean": 0.00029047012125374747,
+      "p50": 0.0002921670093201101,
+      "p95": 0.0004759170114994049,
+      "p99": 0.0006903330213390291
+    },
+    "started_at": "2026-10-06T10:16:09.487502+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-unknown",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.0051120000000004,
+    "drain_window_seconds": 0.0002585829934105277,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before",
+    "latency_seconds": {
+      "max": 0.03370433300733566,
+      "mean": 0.005026047394203488,
+      "p50": 0.004392625007312745,
+      "p95": 0.007825459004379809,
+      "p99": 0.01644404197577387
+    },
+    "max_in_flight_observed": 4,
+    "process_peak_rss_bytes": 631635968,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.03010404104134068,
+      "mean": 0.002415521967195673,
+      "p50": 0.0017987919854931533,
+      "p95": 0.004870584001764655,
+      "p99": 0.013759540976025164
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "2674dbaf131742588825411c81f79580",
+    "scheduling_lag_seconds": {
+      "max": 0.001155333942733705,
+      "mean": 0.0006337836450256873,
+      "p50": 0.000685916980728507,
+      "p95": 0.0008575839456170797,
+      "p99": 0.0010387919610366225
+    },
+    "started_at": "2026-10-06T10:16:14.153197+00:00",
+    "status_counts": {
+      "503": 400
+    },
+    "success_count": 0,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-zero",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.4853330000000007,
+    "drain_window_seconds": 0.0002466669538989663,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before",
+    "latency_seconds": {
+      "max": 0.04720916599035263,
+      "mean": 0.006423158419784159,
+      "p50": 0.005635291978251189,
+      "p95": 0.010315500025171787,
+      "p99": 0.022536707983817905
+    },
+    "max_in_flight_observed": 5,
+    "process_peak_rss_bytes": 631635968,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.03868225001497194,
+      "mean": 0.0024688665266148747,
+      "p50": 0.001777667028363794,
+      "p95": 0.005585291015449911,
+      "p99": 0.016951999976299703
+    },
+    "run_id": "033b56c2a3514e2c9ec94c95d80a3ec2",
+    "scheduling_lag_seconds": {
+      "max": 0.001288625062443316,
+      "mean": 0.0005299137509427965,
+      "p50": 0.000555249978788197,
+      "p95": 0.0007569160079583526,
+      "p99": 0.0010839580208994448
+    },
+    "started_at": "2026-10-06T10:16:22.801314+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "null",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.315893,
+    "drain_window_seconds": 0.0002496660454198718,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before",
+    "latency_seconds": {
+      "max": 0.018301667005289346,
+      "mean": 0.005211252374137985,
+      "p50": 0.004927084024529904,
+      "p95": 0.006923292006831616,
+      "p99": 0.011110124993138015
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 631635968,
+    "provider_calls": 400,
+    "redis_calls": {
+      "eval": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013837290985975415,
+      "mean": 0.00175306542092585,
+      "p50": 0.0015894160023890436,
+      "p95": 0.0028794590034522116,
+      "p99": 0.005283542035613209
+    },
+    "run_id": "043ab689e68d4d348f554aafe3634939",
+    "scheduling_lag_seconds": {
+      "max": 0.0010738749988377094,
+      "mean": 0.0005691566977475305,
+      "p50": 0.0006235839682631195,
+      "p95": 0.0007394590065814555,
+      "p99": 0.0008092499920167029
+    },
+    "started_at": "2026-10-06T10:15:55.652717+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "one-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.5613259999999993,
+    "drain_window_seconds": 0.0002769579878076911,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before",
+    "latency_seconds": {
+      "max": 0.020866792008746415,
+      "mean": 0.007234970298741246,
+      "p50": 0.006688249995931983,
+      "p95": 0.011321833007968962,
+      "p99": 0.015744625008665025
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 631635968,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013767166004981846,
+      "mean": 0.0016772020064672688,
+      "p50": 0.001490957976784557,
+      "p95": 0.0027726669795811176,
+      "p99": 0.005634083005134016
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "3216ca17f65d4731a693ac41caca12bd",
+    "scheduling_lag_seconds": {
+      "max": 0.0016076249885372818,
+      "mean": 0.0004452761242282577,
+      "p50": 0.00045866600703448057,
+      "p95": 0.0006465829792432487,
+      "p99": 0.0011938330135308206
+    },
+    "started_at": "2026-10-06T10:15:59.951110+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "one-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.445812,
+    "drain_window_seconds": 0.000250459008384496,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-after-repeat",
+    "latency_seconds": {
+      "max": 0.021863624977413565,
+      "mean": 0.007148528027319117,
+      "p50": 0.006941958039533347,
+      "p95": 0.009135042026173323,
+      "p99": 0.013182416034396738
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 615546880,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.015217375010251999,
+      "mean": 0.0018530331164220116,
+      "p50": 0.0017081669648177922,
+      "p95": 0.0028423339826986194,
+      "p99": 0.00466924998909235
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "f595bd8e479044849beaf85e439cd76b",
+    "scheduling_lag_seconds": {
+      "max": 0.0010762080200947821,
+      "mean": 0.0004099606417003088,
+      "p50": 0.0004113329923711717,
+      "p95": 0.0006012920057401061,
+      "p99": 0.0007044580415822566
+    },
+    "started_at": "2026-10-06T10:19:01.989475+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "one-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.4965830000000002,
+    "drain_window_seconds": 0.0002468329621478915,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "third-review-before-repeat",
+    "latency_seconds": {
+      "max": 0.02358008298324421,
+      "mean": 0.00765428783633979,
+      "p50": 0.007251041999552399,
+      "p95": 0.010574291052762419,
+      "p99": 0.015225582988932729
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 551501824,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013106082973536104,
+      "mean": 0.0020428105913015315,
+      "p50": 0.0019077500328421593,
+      "p95": 0.0033589579979889095,
+      "p99": 0.006573082995600998
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "a96afbdff84849878fde525c02001ee3",
+    "scheduling_lag_seconds": {
+      "max": 0.0038255000254139304,
+      "mean": 0.0003788685855397489,
+      "p50": 0.00037875003181397915,
+      "p95": 0.000594334036577493,
+      "p99": 0.00084695901023224
+    },
+    "started_at": "2026-10-06T10:19:31.732563+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-cache",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 0.8764060000000011,
+    "drain_window_seconds": 0.000224083021748811,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before",
+    "latency_seconds": {
+      "max": 0.022572875022888184,
+      "mean": 0.004297635927068768,
+      "p50": 0.003940416965633631,
+      "p95": 0.006301917019300163,
+      "p99": 0.01393079198896885
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 548372480,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.014425500005017966,
+      "mean": 0.00199607450311305,
+      "p50": 0.0018237080075778067,
+      "p95": 0.0032917920034378767,
+      "p99": 0.005839999997988343
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "a73788f5b8ef4068897332c8d479fe0f",
+    "scheduling_lag_seconds": {
+      "max": 0.00529954198282212,
+      "mean": 0.0006695323927851859,
+      "p50": 0.0007166250143200159,
+      "p95": 0.0008922499837353826,
+      "p99": 0.0009853749652393162
+    },
+    "started_at": "2026-10-06T13:18:24.831817+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 99.75,
+    "arrival_window_seconds": 4,
+    "case": "four-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.5196259999999997,
+    "drain_window_seconds": 0.00503166695125401,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before",
+    "latency_seconds": {
+      "max": 0.04209862503921613,
+      "mean": 0.006838128210656578,
+      "p50": 0.0056378329754807055,
+      "p95": 0.015093708992935717,
+      "p99": 0.025012750003952533
+    },
+    "max_in_flight_observed": 5,
+    "process_peak_rss_bytes": 548372480,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.012562707997858524,
+      "mean": 0.0013142846833943621,
+      "p50": 0.0010950000141747296,
+      "p95": 0.0025703749852254987,
+      "p99": 0.005955542030278593
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "22398b5ff48b4d57b5e333a33de28b94",
+    "scheduling_lag_seconds": {
+      "max": 0.002992957946844399,
+      "mean": 0.0005385960004059598,
+      "p50": 0.0005579579737968743,
+      "p95": 0.0007399159367196262,
+      "p99": 0.0016644579591229558
+    },
+    "started_at": "2026-10-06T13:18:11.624611+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-stream",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.556305,
+    "drain_window_seconds": 0.00020595802925527096,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before",
+    "latency_seconds": {
+      "max": 0.019413166970480233,
+      "mean": 0.006780381030112039,
+      "p50": 0.0064494170364923775,
+      "p95": 0.009093792003113776,
+      "p99": 0.012675665959250182
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 548372480,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.00914654100779444,
+      "mean": 0.0014618956790218363,
+      "p50": 0.0013339160359464586,
+      "p95": 0.0025840839953161776,
+      "p99": 0.0049085409846156836
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "c81f7807ffcd4b5e85bfdc9adff04fa2",
+    "scheduling_lag_seconds": {
+      "max": 0.0010556670022197068,
+      "mean": 0.00041235617405618543,
+      "p50": 0.00043050001841038465,
+      "p95": 0.0006382499705068767,
+      "p99": 0.0006920419982634485
+    },
+    "started_at": "2026-10-06T13:18:16.118833+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-unknown",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 0.9204710000000009,
+    "drain_window_seconds": 0.00020012498134747148,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before",
+    "latency_seconds": {
+      "max": 0.01588258397532627,
+      "mean": 0.0041985310378368015,
+      "p50": 0.003943707968574017,
+      "p95": 0.006066000030841678,
+      "p99": 0.009125666983891279
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 548372480,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.011698290996719152,
+      "mean": 0.0018010833305015695,
+      "p50": 0.0015812499914318323,
+      "p95": 0.003672166960313916,
+      "p99": 0.0063049159944057465
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "517c027949e34fc5899939c2df69c8be",
+    "scheduling_lag_seconds": {
+      "max": 0.0013219579705037177,
+      "mean": 0.0006309763505123556,
+      "p50": 0.00071312504587695,
+      "p95": 0.0008953750366345048,
+      "p99": 0.0009385000448673964
+    },
+    "started_at": "2026-10-06T13:18:20.591034+00:00",
+    "status_counts": {
+      "503": 400
+    },
+    "success_count": 0,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-zero",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.1389069999999997,
+    "drain_window_seconds": 0.0002014170167967677,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before",
+    "latency_seconds": {
+      "max": 0.015723041025921702,
+      "mean": 0.004805661494174274,
+      "p50": 0.004516499990131706,
+      "p95": 0.006074792006984353,
+      "p99": 0.008978208003100008
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 548372480,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.011536458972841501,
+      "mean": 0.0018596580217126756,
+      "p50": 0.0015673330053687096,
+      "p95": 0.0029236249974928796,
+      "p99": 0.006041207991074771
+    },
+    "run_id": "242e7f731f034ea0b378888a3bd3913a",
+    "scheduling_lag_seconds": {
+      "max": 0.0014375410391949117,
+      "mean": 0.0006260968478454743,
+      "p50": 0.0006730410386808217,
+      "p95": 0.0007705000462010503,
+      "p99": 0.0008642079774290323
+    },
+    "started_at": "2026-10-06T13:18:29.109295+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "null",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.2324269999999995,
+    "drain_window_seconds": 0.0004707080079242587,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before",
+    "latency_seconds": {
+      "max": 0.023046916991006583,
+      "mean": 0.0045058577183226586,
+      "p50": 0.00411525001982227,
+      "p95": 0.006710292014759034,
+      "p99": 0.011286084016319364
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 536805376,
+    "provider_calls": 400,
+    "redis_calls": {
+      "eval": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.007926625024992973,
+      "mean": 0.0011442252158303744,
+      "p50": 0.0010337920393794775,
+      "p95": 0.0016866250080056489,
+      "p99": 0.0037090840050950646
+    },
+    "run_id": "534175dd9db541d1bfc86a9cab915779",
+    "scheduling_lag_seconds": {
+      "max": 0.0042873750207945704,
+      "mean": 0.0006575034260458779,
+      "p50": 0.0007076660403981805,
+      "p95": 0.0008907910087145865,
+      "p99": 0.0012607499957084656
+    },
+    "started_at": "2026-10-06T13:18:02.676369+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "one-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.2585129999999998,
+    "drain_window_seconds": 0.0002060420229099691,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before",
+    "latency_seconds": {
+      "max": 0.012151333037763834,
+      "mean": 0.0048063167207874355,
+      "p50": 0.004619124985765666,
+      "p95": 0.006722500023897737,
+      "p99": 0.00837925000814721
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 536805376,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.005265749990940094,
+      "mean": 0.0009101825048855971,
+      "p50": 0.0008427499560639262,
+      "p95": 0.0013686250313185155,
+      "p99": 0.0026796250022016466
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "6bbb0a4bf32c41939d2d87c68b3d75c1",
+    "scheduling_lag_seconds": {
+      "max": 0.003374250023625791,
+      "mean": 0.0006175327919481788,
+      "p50": 0.0006632920703850687,
+      "p95": 0.0007991250022314489,
+      "p99": 0.0009186250390484929
+    },
+    "started_at": "2026-10-06T13:18:06.907639+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-cache",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 0.8206600000000002,
+    "drain_window_seconds": 0.00037299998803064227,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after",
+    "latency_seconds": {
+      "max": 0.016893292020540684,
+      "mean": 0.00327856946765678,
+      "p50": 0.0029432920273393393,
+      "p95": 0.005540540965739638,
+      "p99": 0.007696125016082078
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 560021504,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.011607499967794865,
+      "mean": 0.001185198150924407,
+      "p50": 0.001059084024745971,
+      "p95": 0.0017577909748069942,
+      "p99": 0.0029327089432626963
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "9ff1ca3529884f47864fda400bf6ed2b",
+    "scheduling_lag_seconds": {
+      "max": 0.002837040985468775,
+      "mean": 0.0007627870478609111,
+      "p50": 0.0008516249945387244,
+      "p95": 0.0009489160147495568,
+      "p99": 0.0010202080011367798
+    },
+    "started_at": "2026-10-06T13:19:25.103289+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.581620000000001,
+    "drain_window_seconds": 0.00020775001030415297,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after",
+    "latency_seconds": {
+      "max": 0.2577684170100838,
+      "mean": 0.010694823768426431,
+      "p50": 0.005823083978611976,
+      "p95": 0.055776249966584146,
+      "p99": 0.06985700002405792
+    },
+    "max_in_flight_observed": 29,
+    "process_peak_rss_bytes": 560021504,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.028746917028911412,
+      "mean": 0.002764204858467565,
+      "p50": 0.0012314589694142342,
+      "p95": 0.01881566597148776,
+      "p99": 0.026346208003815264
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "00a0f55344854aa8bf107a8b4e233985",
+    "scheduling_lag_seconds": {
+      "max": 0.23804004199337214,
+      "mean": 0.007959869485785021,
+      "p50": 0.0005282919737510383,
+      "p95": 0.04028837499208748,
+      "p99": 0.19868470897199586
+    },
+    "started_at": "2026-10-06T13:19:11.842447+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 99.5,
+    "arrival_window_seconds": 4,
+    "case": "four-stream",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.5591620000000006,
+    "drain_window_seconds": 0.01506350003182888,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after",
+    "latency_seconds": {
+      "max": 0.027205375023186207,
+      "mean": 0.006844972366379807,
+      "p50": 0.0064139169990085065,
+      "p95": 0.00942841701908037,
+      "p99": 0.01747020799666643
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 560021504,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.017976375005673617,
+      "mean": 0.001444481444414123,
+      "p50": 0.0012049999786540866,
+      "p95": 0.0026092500193044543,
+      "p99": 0.0057254579733125865
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "97395a43aa634ae4856e5e4afb7603a3",
+    "scheduling_lag_seconds": {
+      "max": 0.002409040986094624,
+      "mean": 0.00043336029979400335,
+      "p50": 0.00044545799028128386,
+      "p95": 0.0006519579910673201,
+      "p99": 0.0010766249615699053
+    },
+    "started_at": "2026-10-06T13:19:16.327242+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-unknown",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 0.8362030000000011,
+    "drain_window_seconds": 0.000237083004321903,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after",
+    "latency_seconds": {
+      "max": 0.015053333947435021,
+      "mean": 0.0033907268670736812,
+      "p50": 0.003176291997078806,
+      "p95": 0.004397708980832249,
+      "p99": 0.009263583982829005
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 560021504,
+    "provider_calls": 0,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.012697875034064054,
+      "mean": 0.00123942698672181,
+      "p50": 0.001038875023368746,
+      "p95": 0.0018401669804006815,
+      "p99": 0.005948083009570837
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 1,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "2c73240ac8f94ad2a27a7c987329b794",
+    "scheduling_lag_seconds": {
+      "max": 0.0010017909808084369,
+      "mean": 0.0007374820362019819,
+      "p50": 0.000828457938041538,
+      "p95": 0.0009308329899795353,
+      "p99": 0.0009770829929038882
+    },
+    "started_at": "2026-10-06T13:19:20.873922+00:00",
+    "status_counts": {
+      "503": 400
+    },
+    "success_count": 0,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-zero",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.131525,
+    "drain_window_seconds": 0.00021425000159069896,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after",
+    "latency_seconds": {
+      "max": 0.010836041998118162,
+      "mean": 0.004012775342271197,
+      "p50": 0.00381258298875764,
+      "p95": 0.005433208018075675,
+      "p99": 0.0067965000052936375
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 560021504,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.0058340830146335065,
+      "mean": 0.0010822302242740989,
+      "p50": 0.0009931669919751585,
+      "p95": 0.0015447910409420729,
+      "p99": 0.002645250002387911
+    },
+    "run_id": "2d80189824f74afbb454ce4aebc2ed16",
+    "scheduling_lag_seconds": {
+      "max": 0.0011280410108156502,
+      "mean": 0.0006884171749697998,
+      "p50": 0.000749291037209332,
+      "p95": 0.0008373330347239971,
+      "p99": 0.000942540995310992
+    },
+    "started_at": "2026-10-06T13:19:29.386010+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "null",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.1663179999999995,
+    "drain_window_seconds": 0.0001919170026667416,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after",
+    "latency_seconds": {
+      "max": 0.013818165985867381,
+      "mean": 0.0047297580390295475,
+      "p50": 0.004557334003038704,
+      "p95": 0.006120249978266656,
+      "p99": 0.008975874981842935
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 554565632,
+    "provider_calls": 400,
+    "redis_calls": {
+      "eval": 400
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.0098230000003241,
+      "mean": 0.001699999764241511,
+      "p50": 0.0014969169860705733,
+      "p95": 0.002811834041494876,
+      "p99": 0.005430166027508676
+    },
+    "run_id": "745710b035b74fb69192bbb3940be3b3",
+    "scheduling_lag_seconds": {
+      "max": 0.0009447080083191395,
+      "mean": 0.000629210894840071,
+      "p50": 0.0006717079668305814,
+      "p95": 0.0007896659662947059,
+      "p99": 0.0008297910098917782
+    },
+    "started_at": "2026-10-06T13:19:03.170383+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "eval": 1
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "one-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.240856,
+    "drain_window_seconds": 0.00022266700398176908,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after",
+    "latency_seconds": {
+      "max": 0.017710540967527777,
+      "mean": 0.00652164071550942,
+      "p50": 0.006302708992734551,
+      "p95": 0.008714874973520637,
+      "p99": 0.011163332965224981
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 554565632,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.01257750001968816,
+      "mean": 0.001793700606067432,
+      "p50": 0.001608832972124219,
+      "p95": 0.0029630830395035446,
+      "p99": 0.004685207968577743
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 1,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "a19645725d7a41ba98b0b2a00d74b2fe",
+    "scheduling_lag_seconds": {
+      "max": 0.0011138750123791397,
+      "mean": 0.00045147281198296694,
+      "p50": 0.0004731660010293126,
+      "p95": 0.0006538330344483256,
+      "p99": 0.0007255410309880972
+    },
+    "started_at": "2026-10-06T13:19:07.396582+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.3505590000000005,
+    "drain_window_seconds": 0.00020258297445252538,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-after-repeat",
+    "latency_seconds": {
+      "max": 0.022041958989575505,
+      "mean": 0.007069483082887018,
+      "p50": 0.006445874983910471,
+      "p95": 0.011584083957131952,
+      "p99": 0.016217083961237222
+    },
+    "max_in_flight_observed": 3,
+    "process_peak_rss_bytes": 571424768,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.01595562504371628,
+      "mean": 0.0018846330222731921,
+      "p50": 0.001616082969121635,
+      "p95": 0.0034069590037688613,
+      "p99": 0.0073607920203357935
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "4884f1cca88449bd97b5be6077cb7122",
+    "scheduling_lag_seconds": {
+      "max": 0.003235084004700184,
+      "mean": 0.00045238711056299507,
+      "p50": 0.0004549170262180269,
+      "p95": 0.0006839589914306998,
+      "p99": 0.0011304999934509397
+    },
+    "started_at": "2026-10-06T13:21:25.886983+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  },
+  {
+    "arrival_window_completion_rps": 100.0,
+    "arrival_window_seconds": 4,
+    "case": "four-json",
+    "client_started_count": 400,
+    "client_started_rps": 100.0,
+    "completion_count": 400,
+    "cpu_seconds": 1.2810940000000004,
+    "drain_window_seconds": 0.00020466698333621025,
+    "environment": "macOS ASGI, fixed provider, fake auth/routing/billing, Redis 7 standalone Docker",
+    "generator_dropped_count": 0,
+    "in_flight_samples": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "in_flight_slope_per_second": 0.0,
+    "label": "fourth-review-before-repeat",
+    "latency_seconds": {
+      "max": 0.019333708041813225,
+      "mean": 0.006347129779460375,
+      "p50": 0.00596425001276657,
+      "p95": 0.00866074999794364,
+      "p99": 0.01186887500807643
+    },
+    "max_in_flight_observed": 2,
+    "process_peak_rss_bytes": 626245632,
+    "provider_calls": 400,
+    "redis_calls": {
+      "evalsha": 800
+    },
+    "redis_command_latency_seconds": {
+      "max": 0.013659999996889383,
+      "mean": 0.0016551616078504595,
+      "p50": 0.0014521670527756214,
+      "p95": 0.002878041996154934,
+      "p99": 0.004301832988858223
+    },
+    "redis_memory": {
+      "bucket": {
+        "count": 4,
+        "mean_bytes": 248.0
+      },
+      "receipt": {
+        "count": 401,
+        "mean_bytes": 360.0
+      }
+    },
+    "run_id": "c531d903af81434bb75aa41028c13e61",
+    "scheduling_lag_seconds": {
+      "max": 0.0011199589353054762,
+      "mean": 0.0004696604133641813,
+      "p50": 0.0004982499522157013,
+      "p95": 0.0006722919642925262,
+      "p99": 0.0007252090144902468
+    },
+    "started_at": "2026-10-06T13:22:04.824746+00:00",
+    "status_counts": {
+      "200": 400
+    },
+    "success_count": 400,
+    "target_count": 400,
+    "target_rate_rps": 100.0,
+    "ttft_seconds": {
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "warmup_redis_calls": {
+      "evalsha": 2,
+      "script_load": 2
+    }
+  }
+]

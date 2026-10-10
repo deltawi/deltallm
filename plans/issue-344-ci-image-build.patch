@@ -1,0 +1,61 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 69908384..72731502 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -301,22 +301,53 @@ jobs:
+           uv run pytest -q -m helm -rs
+           --durations=25 --durations-min=0.5
+ 
++  image-build:
++    name: Production image build and smoke
++    runs-on: ubuntu-latest
++    timeout-minutes: 25
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v3
++
++      - name: Build the production image from this revision
++        uses: docker/build-push-action@v6
++        with:
++          context: .
++          file: ./Dockerfile
++          load: true
++          push: false
++          tags: deltallm:ci
++          cache-from: type=gha,scope=ci-image
++          cache-to: type=gha,mode=max,scope=ci-image
++
++      - name: Verify non-root runtime and external-auth routes
++        run: |
++          docker run --rm --entrypoint python \
++            -e DELTALLM_MASTER_KEY=sk-ci-image-validation-0123456789abcdefA1 \
++            -e DELTALLM_SALT_KEY=ci-image-salt-only-0123456789abcdef0123456789abcdef \
++            -e DELTALLM_CONFIG_PATH=/app/config.example.yaml \
++            deltallm:ci -c 'import os; from pathlib import Path; from src.main import app; assert os.getuid() == 10001; assert Path("/app/ui/dist/index.html").is_file(); required = {"/auth/external/exchange", "/auth/external/revoke", "/auth/external/inference-key"}; actual = {route.path for route in app.routes if "POST" in getattr(route, "methods", set())}; assert required <= actual; print("Production image UID, UI assets, and external-auth POST routes verified")'
++          docker image inspect deltallm:ci --format '{{.Id}}'
++
+   test:
+     name: test
+     if: ${{ always() }}
+-    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm]
++    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm, image-build]
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+     steps:
+-      - name: Verify all Python test lanes passed
++      - name: Verify all Python test lanes and the production image passed
+         env:
+           APP_AND_HERMETIC: ${{ needs.python-tests.result }}
+           POSTGRES: ${{ needs.postgres-tests.result }}
+           REDIS: ${{ needs.redis-tests.result }}
+           MIGRATIONS: ${{ needs.migration-paths.result }}
+           HELM: ${{ needs.helm.result }}
++          IMAGE: ${{ needs.image-build.result }}
+         run: |
+-          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM"; do
++          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM" "$IMAGE"; do
+             if [ "$result" != success ]; then
+               echo "Required test job finished with status: $result"
+               exit 1

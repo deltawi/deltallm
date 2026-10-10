@@ -124,6 +124,14 @@ before discovery. Error backoff and required health checks do not change.
 
 ## Database preparation
 
+### Grant execution policy
+
+Apply migration `20261010083000_accounting_grant_execution_policy` before the
+upgraded image. It disables JIT compilation only inside the short grant admission,
+allocation, reservation and finalization functions. The caller's JIT setting is
+restored after success or error. Request deadlines, budget rules, durable records
+and retry identities do not change. This migration changes no table data.
+
 ### Upgrade terminal publication ordering
 
 Migration `20261007173000_accounting_event_publication_order` orders terminal

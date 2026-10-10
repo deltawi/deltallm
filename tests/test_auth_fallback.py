@@ -8,6 +8,7 @@ import json
 import pytest
 
 from src.db.identity.key_repository import KeyRecord, KeyRepository
+from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.metrics.prometheus import get_prometheus_registry
 from src.models.errors import AuthenticationError, AuthenticationUnavailableError
 from src.services.auth_fallback import AuthFallbackLimits
@@ -54,7 +55,10 @@ async def test_same_key_is_collapsed_and_mutable_auth_is_not_shared() -> None:
         results = await asyncio.gather(*tasks)
         results[0].metadata["mutable"]["value"] = 99
         assert results[1].metadata["mutable"]["value"] == 1
-        assert len(cache.store) == 1
+        assert set(cache.store) == {
+            f"key:v5:{auth.hash_key('sk-one')}",
+            f"key:v7:{auth.hash_key('sk-one')}",
+        }
         assert auth.fallback.size == auth.fallback.callers == auth.fallback.gate.active == 0
     finally:
         repo.release.set()
@@ -167,12 +171,13 @@ async def test_cache_failure_uses_durable_auth_with_bounded_cache_io(failure: st
     repo.release.set()
 
     class Cache(RecordingRedis):
-        async def get(self, key):
-            if failure == "read":
-                raise ConnectionError("private connection details")
-            if failure == "read_timeout":
-                await asyncio.Event().wait()
-            return await super().get(key)
+        async def eval(self, script, numkeys, *args):
+            if "deltallm_key_auth_lookup_v7" in script:
+                if failure == "read":
+                    raise ConnectionError("private connection details")
+                if failure == "read_timeout":
+                    await asyncio.Event().wait()
+            return await super().eval(script, numkeys, *args)
 
         async def setex(self, key, ttl, value):
             if failure == "write":
@@ -203,7 +208,10 @@ async def test_cached_expiry_is_checked_even_if_redis_retains_entry() -> None:
     auth = service(repo, cache)
     result = await auth.validate_key("sk-key")
     result.expires = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
-    cache.store[auth._cache_key(auth.hash_key("sk-key"))] = result.model_dump_json()
+    key = auth._cache_key(auth.hash_key("sk-key"))
+    snapshot = json.loads(cache.store[key])
+    snapshot["auth"] = result.model_dump(mode="json")
+    cache.store[key] = json.dumps(snapshot)
     with pytest.raises(AuthenticationError, match="expired"):
         await auth.validate_key("sk-key")
     assert repo.calls == 1
@@ -215,6 +223,22 @@ async def test_missing_database_is_unavailable_instead_of_invalid_identity() -> 
         await auth.validate_key("sk-key")
     assert error.value.affects_deployment_health is False
     assert error.value.retry_after == 1
+
+
+async def test_native_database_overload_keeps_the_auth_unavailable_contract() -> None:
+    class UnavailableRepository:
+        async def get_by_token(self, token_hash: str) -> KeyRecord:
+            raise DatabaseUnavailableError()
+
+    auth = service(UnavailableRepository())
+    try:
+        with pytest.raises(AuthenticationUnavailableError) as error:
+            await auth.validate_key("sk-key")
+        assert error.value.affects_deployment_health is False
+        assert error.value.retry_after == 1
+        assert auth.fallback.gate.active == auth.fallback.size == 0
+    finally:
+        await auth.close()
 
 
 async def test_metrics_do_not_label_credentials_or_exception_text() -> None:

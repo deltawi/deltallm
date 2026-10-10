@@ -101,6 +101,8 @@ export default function TierPolicyPreviewPanel({
                     <th className="px-4 py-2 text-left">Access</th>
                     <th className="px-4 py-2 text-left">RPM</th>
                     <th className="px-4 py-2 text-left">TPM</th>
+                    <th className="px-4 py-2 text-left">Output TPM</th>
+                    <th className="px-4 py-2 text-left">Source</th>
                     <th className="px-4 py-2 text-left">Pool</th>
                   </tr>
                 </thead>
@@ -111,6 +113,11 @@ export default function TierPolicyPreviewPanel({
                       <td className="px-4 py-2 text-xs font-semibold text-gray-700">{policy.access_mode}</td>
                       <td className="px-4 py-2 text-xs text-gray-600">{formatLimit(policy.limits.rpm_limit)}</td>
                       <td className="px-4 py-2 text-xs text-gray-600">{formatLimit(policy.limits.tpm_limit)}</td>
+                      <td className="px-4 py-2">{formatLimit(policy.limits.output_tpm_limit)}</td>
+                      <td className="px-4 py-2 text-xs text-gray-500">
+                        {String(policy.source.tier_key || '-')} v{String(policy.source.tier_version_number || '-')}
+                        <span className="block">{String(policy.source.assignment_type || '')}</span>
+                      </td>
                       <td className="px-4 py-2 text-xs text-gray-500">{policy.capacity_pool_key || '-'}</td>
                     </tr>
                   ))}

@@ -2,7 +2,8 @@
 
 This decision replaces the separate PR4, PR5, PR6, PR7 and PR9 design notes.
 It records the retained contracts, not a production capacity claim.
-The upgrade is a draft until current main is integrated and qualified.
+Main revision `14cf7871` is integrated. The upgrade remains a draft until release
+checks and all four qualification tiers pass on one unchanged image.
 
 ## Ownership and alternatives
 

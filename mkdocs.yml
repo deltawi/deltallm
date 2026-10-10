@@ -104,6 +104,8 @@ nav:
           - Application keys: admin-ui/api-keys.md
           - Plans and tiers: guides/admin-tiers.md
           - Set up sign-in and SSO: guides/admin-authentication.md
+          - External customer sign-in: configuration/external-customer-auth.md
+          - Connect a Console: guides/console-gateway-connection.md
       - Monitor and control:
           - Dashboard: admin-ui/dashboard.md
           - Usage and spending: admin-ui/usage.md
@@ -132,6 +134,7 @@ nav:
       - Maintain the system:
           - Upgrade or roll back: guides/deployment-workflow.md
           - Update the database: deployment/database-migrations.md
+          - Recover the v0.1.48 model migration: deployment/model-api-identity-migration-recovery.md
           - Back up and restore data: deployment/backup-and-restore.md
           - Respond to incidents: deployment/incident-runbooks.md
   - Understand the system:

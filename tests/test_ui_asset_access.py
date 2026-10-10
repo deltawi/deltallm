@@ -279,7 +279,7 @@ class _CountingRouteGroupRepository:
     async def get_group(self, group_key: str):  # noqa: ANN201
         return self.shared.groups.get(group_key)
 
-    async def list_groups(self, *, limit=100, offset=0):  # noqa: ANN001, ANN201
+    async def list_groups(self, *, limit=100, offset=0, **list_options):  # noqa: ANN001, ANN201
         items = list(self.shared.groups.values())[offset : offset + limit]
         return items, len(self.shared.groups)
 

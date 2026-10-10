@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Sparkles, Trash2 } from 'lucide-react';
-import DataTable from '../components/DataTable';
+import { Plus, FileText, Trash2 } from 'lucide-react';
+import type { Column } from '../components/DataTable';
+import AssetList from '../components/admin/lists/AssetList';
+import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
+import { ListIdentity } from '../components/admin/lists/AssetListCells';
+import { useAssetListSort } from '../lib/useAssetListSort';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ManagedAssetAccessFields from '../components/ManagedAssetAccessFields';
@@ -13,7 +17,7 @@ import {
 } from '../lib/api';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
-import { ContentCard, IndexShell } from '../components/admin/shells';
+import { IndexShell } from '../components/admin/shells';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
@@ -44,9 +48,10 @@ export default function PromptRegistry() {
   });
 
   const pageSize = 10;
-  const { data: result, loading, refetch } = useApi(
-    () => promptRegistry.listTemplates({ search, limit: pageSize, offset: pageOffset }),
-    [search, pageOffset]
+  const listSort = useAssetListSort(['name', 'versions', 'labels', 'bindings', 'created_by', 'updated_at', 'visibility'] as const, () => setPageOffset(0));
+  const { data: result, loading, error, refetch } = useApi(
+    (signal) => promptRegistry.listTemplates({ search, limit: pageSize, offset: pageOffset, sort_by: listSort.sortBy, sort_direction: listSort.sortDirection }, signal),
+    [search, pageOffset, listSort.sortBy, listSort.sortDirection]
   );
 
   useEffect(() => {
@@ -86,9 +91,9 @@ export default function PromptRegistry() {
       setCreateOpen(false);
       resetForm();
       pushToast({ tone: 'success', title: 'Template created', message: `Prompt template "${created.template_key}" is ready.` });
-      navigate(`/prompts/${created.template_key}`);
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Create failed', message: error?.message || 'Failed to create prompt template.' });
+      navigate(`/prompts/${encodeURIComponent(created.template_key)}`);
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Create failed', message: error instanceof Error ? error.message : 'Failed to create prompt template.' });
     } finally {
       setCreating(false);
     }
@@ -102,49 +107,27 @@ export default function PromptRegistry() {
       pushToast({ tone: 'success', title: 'Template deleted', message: `Template "${deleteTarget}" was deleted.` });
       setDeleteTarget(null);
       refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete prompt template.' });
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Delete failed', message: error instanceof Error ? error.message : 'Failed to delete prompt template.' });
     } finally {
       setDeletingKey(null);
     }
   };
 
-  const columns = [
-    { key: 'template_key', header: 'Template Key', render: (row: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{row.template_key}</code> },
-    { key: 'name', header: 'Name' },
-    { key: 'description', header: 'Description', render: (row: any) => row.description || <span className="text-gray-400">—</span> },
-    { key: 'version_count', header: 'Versions' },
-    {
-      key: 'visibility',
-      header: 'Visibility',
-      render: (row: PromptTemplate) => row.access?.visibility || 'Platform',
-    },
-    { key: 'label_count', header: 'Labels' },
-    {
-      key: 'actions',
-      header: '',
-      render: (row: PromptTemplate) => (
-        <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
-          {(!row.access || row.access.capabilities.delete) ? (
-            <button
-              onClick={() => setDeleteTarget(row.template_key)}
-              disabled={deletingKey === row.template_key}
-              className="p-1.5 hover:bg-red-50 rounded-lg disabled:opacity-50"
-              title="Delete template"
-            >
-              <Trash2 className="w-4 h-4 text-red-500" />
-            </button>
-          ) : null}
-        </div>
-      ),
-    },
+  const columns: Column<PromptTemplate>[] = [
+    { key: 'name', header: 'Prompt', sortKey: 'name', render: (row) => <ListIdentity name={row.name} identifier={row.template_key} onOpen={() => navigate(`/prompts/${encodeURIComponent(row.template_key)}`)} secondary={row.description ? <span title={row.description} className="block max-w-60 truncate">{row.description}</span> : undefined} actions={(!row.access || row.access.capabilities.delete) ? <button type="button" aria-label={`Delete ${row.name}`} onClick={() => setDeleteTarget(row.template_key)} disabled={deletingKey === row.template_key} className="rounded-lg p-2 md:p-1.5 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4 text-red-500" /></button> : null} /> },
+    { key: 'version_count', header: 'Versions', sortKey: 'versions', defaultDirection: 'desc' },
+    { key: 'label_count', header: 'Labels', sortKey: 'labels', defaultDirection: 'desc' },
+    { key: 'binding_count', header: 'Bindings', sortKey: 'bindings', defaultDirection: 'desc' },
+    ...assetMetadataColumns<PromptTemplate>(),
   ];
 
   return (
     <IndexShell
       title="Prompt Registry"
+      titleIcon={FileText}
       count={result?.pagination?.total ?? null}
-      description="Create the prompt shell first, add the system prompt and variables, then validate and register a usable version."
+      description="Manage prompt templates, versions, and labels."
       action={(
         <button
           onClick={() => setCreateOpen(true)}
@@ -154,55 +137,10 @@ export default function PromptRegistry() {
           Create Prompt
         </button>
       )}
-      intro={(
-        <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-amber-50 via-white to-slate-50 px-5 py-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-amber-700 shadow-sm ring-1 ring-amber-100">
-                <Sparkles className="h-3.5 w-3.5" />
-                Recommended setup order
-              </div>
-              <p className="mt-3 text-sm text-slate-700">
-                Keep the first pass linear: create the prompt shell, write the system prompt, then validate and register a version before using it elsewhere.
-              </p>
-            </div>
-            <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-3">
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 1</div>
-                <div className="mt-1 font-medium">Create shell</div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2</div>
-                <div className="mt-1 font-medium">Author version</div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 3</div>
-                <div className="mt-1 font-medium">Validate and register</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      toolbar={(
-        <input
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
-          placeholder="Search prompts..."
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary sm:w-80"
-        />
-      )}
+
     >
-      <ContentCard>
-        <DataTable
-          columns={columns}
-          data={result?.data || []}
-          loading={loading}
-          emptyMessage="No prompt templates found"
-          pagination={result?.pagination}
-          onPageChange={setPageOffset}
-          onRowClick={(row: any) => navigate(`/prompts/${row.template_key}`)}
-        />
-      </ContentCard>
+      <AssetList columns={columns} data={result?.data || []} rowKey={(row) => row.prompt_template_id} loading={loading} error={error} onRetry={refetch} emptyMessage="No prompt templates found" search={searchInput} searchLabel="Search prompts" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={result?.pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(`/prompts/${encodeURIComponent(row.template_key)}`)} />
+      <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Prompt setup</summary><p className="mt-2">Create the prompt shell, write the system prompt and variables, then validate and register a version before you use it.</p></details>
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create Prompt" wide>
         <div className="space-y-5">

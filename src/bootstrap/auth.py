@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from asyncio import Task, create_task
+from asyncio import Task, create_task, timeout
 from src.shutdown import BoundedExitStack, cleanup_deadline
 from src.telemetry.lifecycle import stop_tasks_before_deadline
 from dataclasses import dataclass
@@ -11,6 +11,8 @@ from typing import Any
 from uuid import uuid4
 
 from src.bootstrap.status import BootstrapStatus
+from src.bootstrap.external_auth import init_external_auth_runtime, external_auth_status
+from src.services.external_auth_runtime import ExternalAuthRuntime
 from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.db.identity.email_tokens import EmailTokenRepository
 from src.db.identity.invitations import InvitationRepository
@@ -34,6 +36,10 @@ from src.services.key_service import KeyService
 from src.services.auth_fallback import AuthFallbackLimits
 from src.config_startup import startup_field_values
 from src.services.limit_counter import LimitCounter
+from src.services.output_policy_configuration import validate_output_policy_configuration
+from src.services.output_limit_lua import OUTPUT_ACCOUNTING_LUA
+from src.services.rate_limit_admission_lua import RATE_LIMIT_OUTPUT_LUA
+from src.services.tier_fair_share_admission_lua import RATE_AND_FAIR_SHARE_OUTPUT_LUA
 from src.services.master_session_service import MasterSessionService
 from src.bootstrap.organization_deletion import (
     initialize_organization_deletion_runtime,
@@ -53,6 +59,7 @@ _AUTH_BOOT_ID = uuid4().hex[:12]
 class AuthRuntime:
     initialized: bool = True
     key_service: KeyService | None = None
+    external_auth: ExternalAuthRuntime | None = None
     organization_lifecycle_task: Task[None] | None = None
     cache_invalidation_worker: CacheInvalidationWorker | None = None
     cache_invalidation_task: Task[None] | None = None
@@ -242,10 +249,31 @@ async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRu
     )
     app.state.limit_counter = LimitCounter(
         redis_client=app.state.redis,
+        environment=app.state.settings.app_env,
         degraded_mode=str(
             cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
         ),
     )
+    await validate_output_policy_configuration(
+        app.state.prisma_manager.client,
+        cfg,
+        redis_available=app.state.redis is not None,
+        degraded_mode=str(
+            cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
+        ),
+        runtime_settings=app.state.settings,
+    )
+    if app.state.redis is not None:
+        try:
+            async with timeout(1.0):
+                for script in (
+                    RATE_LIMIT_OUTPUT_LUA,
+                    RATE_AND_FAIR_SHARE_OUTPUT_LUA,
+                    OUTPUT_ACCOUNTING_LUA,
+                ):
+                    await script.load(app.state.redis)
+        except Exception:
+            logger.warning("output_tpm_script_preload_unavailable")
     app.state.email_token_service = EmailTokenService(
         repository=getattr(
             app.state,
@@ -345,6 +373,8 @@ async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRu
     else:
         statuses.append(BootstrapStatus("custom_auth", "disabled"))
 
+    runtime.external_auth = await init_external_auth_runtime(app, cfg)
+
     start_organization_deletion_tasks(app, runtime)
     if runtime.cache_invalidation_worker is not None:
         runtime.cache_invalidation_task = create_task(runtime.cache_invalidation_worker.run())
@@ -358,6 +388,12 @@ async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRu
         ):
             if worker is not None and task is not None:
                 lifecycle.register_producer(worker.stop, task)
+    if runtime.external_auth is not None:
+        runtime.external_auth.cache_worker_ready = lambda: (
+            runtime.cache_invalidation_task is not None
+            and not runtime.cache_invalidation_task.done()
+        )
+    statuses.append(external_auth_status(runtime.external_auth))
     runtime.statuses = tuple(statuses)
     return runtime
 
@@ -366,6 +402,8 @@ async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
     async with BoundedExitStack() as cleanup:
         if runtime.key_service is not None:
             cleanup.push_async_callback(runtime.key_service.close)
+        if runtime.external_auth is not None:
+            cleanup.push_async_callback(runtime.external_auth.close)
         for worker in (runtime.cache_invalidation_worker, runtime.organization_deletion_worker):
             if worker is not None:
                 worker.stop()

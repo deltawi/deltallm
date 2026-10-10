@@ -104,3 +104,28 @@ async def test_route_shortening_reschedules_outer_deadline_for_finalization(dead
         await RequestDeadlineMiddleware(app)(scope(), AsyncMock(), send)
     assert reached_finalization
     assert send.await_args_list[0].args[0]["status"] == 408
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+async def test_exhausted_attempt_budget_does_not_start_work(limit: float) -> None:
+    started = False
+
+    async def work() -> str:
+        nonlocal started
+        started = True
+        return "result"
+
+    with pytest.raises(ProxyTimeoutError, match="Request deadline exceeded"):
+        await RequestDeadline.after(10).wait_for(work(), limit=limit)
+
+    assert not started
+
+
+async def test_attempt_work_stays_in_the_request_owner_task():
+    owner = asyncio.current_task()
+
+    async def work():
+        assert asyncio.current_task() is owner
+        return "result"
+
+    assert await RequestDeadline.after(10).wait_for(work()) == "result"

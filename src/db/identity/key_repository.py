@@ -3,7 +3,41 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, Protocol
+
+KeyTokenScope = Literal["organization_id", "team_id", "user_id"]
+
+
+class KeyScopeDatabase(Protocol):
+    async def query_raw(self, query: str, *params: object) -> list[dict[str, object]]: ...
+
+
+async def read_key_tokens_for_scope(
+    db: KeyScopeDatabase, *, scope: KeyTokenScope, identity: str
+) -> list[str]:
+    if scope == "user_id":
+        query = "SELECT token FROM deltallm_verificationtoken WHERE user_id = $1"
+    else:
+        scope_filter = (
+            "t.organization_id = $1"
+            if scope == "organization_id"
+            else "COALESCE(v.team_id, u.team_id, s.team_id) = $1"
+        )
+        team_join = (
+            "LEFT JOIN deltallm_teamtable t ON t.team_id = COALESCE(v.team_id, u.team_id, s.team_id)"
+            if scope == "organization_id"
+            else ""
+        )
+        query = f"""
+            SELECT v.token FROM deltallm_verificationtoken v
+            LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
+            LEFT JOIN deltallm_serviceaccount s
+                ON s.service_account_id = v.owner_service_account_id
+            {team_join}
+            WHERE {scope_filter}
+        """
+    rows = await db.query_raw(query, identity)
+    return [str(row["token"]) for row in rows or [] if row.get("token")]
 
 
 def _parse_metadata(value: Any) -> dict[str, Any] | None:
@@ -32,12 +66,18 @@ class KeyRecord:
     max_budget: float | None = None
     spend: float = 0.0
     tpm_limit: int | None = None
+    output_tpm_limit: int | None = None
+    model_output_tpm_limit: dict[str, int] | None = None
     rpm_limit: int | None = None
     user_tpm_limit: int | None = None
+    user_output_tpm_limit: int | None = None
     user_rpm_limit: int | None = None
     team_tpm_limit: int | None = None
+    team_output_tpm_limit: int | None = None
+    team_model_output_tpm_limit: dict[str, int] | None = None
     team_rpm_limit: int | None = None
     org_tpm_limit: int | None = None
+    org_output_tpm_limit: int | None = None
     org_rpm_limit: int | None = None
     team_model_rpm_limit: dict[str, int] | None = None
     team_model_tpm_limit: dict[str, int] | None = None
@@ -100,12 +140,18 @@ class KeyRepository:
                 v.max_budget,
                 v.spend,
                 v.tpm_limit AS key_tpm_limit,
+                v.output_tpm_limit AS key_output_tpm_limit,
+                v.model_output_tpm_limit AS key_model_output_tpm_limit,
                 v.rpm_limit AS key_rpm_limit,
                 u.tpm_limit AS user_tpm_limit,
+                u.output_tpm_limit AS user_output_tpm_limit,
                 u.rpm_limit AS user_rpm_limit,
                 t.tpm_limit AS team_tpm_limit,
+                t.output_tpm_limit AS team_output_tpm_limit,
+                t.model_output_tpm_limit AS team_model_output_tpm_limit,
                 t.rpm_limit AS team_rpm_limit,
                 o.tpm_limit AS org_tpm_limit,
+                o.output_tpm_limit AS org_output_tpm_limit,
                 o.rpm_limit AS org_rpm_limit,
                 t.model_rpm_limit AS team_model_rpm_limit,
                 t.model_tpm_limit AS team_model_tpm_limit,
@@ -165,12 +211,18 @@ class KeyRepository:
             max_budget=row.get("max_budget"),
             spend=float(row.get("spend") or 0.0),
             tpm_limit=row.get("key_tpm_limit"),
+            output_tpm_limit=row.get("key_output_tpm_limit"),
+            model_output_tpm_limit=_parse_metadata(row.get("key_model_output_tpm_limit")),
             rpm_limit=row.get("key_rpm_limit"),
             user_tpm_limit=row.get("user_tpm_limit"),
+            user_output_tpm_limit=row.get("user_output_tpm_limit"),
             user_rpm_limit=row.get("user_rpm_limit"),
             team_tpm_limit=row.get("team_tpm_limit"),
+            team_output_tpm_limit=row.get("team_output_tpm_limit"),
+            team_model_output_tpm_limit=_parse_metadata(row.get("team_model_output_tpm_limit")),
             team_rpm_limit=row.get("team_rpm_limit"),
             org_tpm_limit=row.get("org_tpm_limit"),
+            org_output_tpm_limit=row.get("org_output_tpm_limit"),
             org_rpm_limit=row.get("org_rpm_limit"),
             team_model_rpm_limit=_parse_metadata(row.get("team_model_rpm_limit")),
             team_model_tpm_limit=_parse_metadata(row.get("team_model_tpm_limit")),

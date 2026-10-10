@@ -64,6 +64,7 @@ from src.services.key_notifications import KeyNotificationService
 from src.services.notification_recipients import NotificationRecipientResolver
 from src.services.prompt_registry import PromptRegistryService
 from src.services.tier_policy_service import TierPolicyService
+from src.runtime_settings import resolve_general_setting
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +129,11 @@ async def _init_runtime_services(
     general_settings = getattr(cfg, "general_settings", None)
     settings = getattr(app.state, "settings", None)
     tier_policy_mode = str(
-        _runtime_setting(general_settings, settings, "tier_policy_mode", "disabled") or "disabled"
+        resolve_general_setting(general_settings, settings, "tier_policy_mode", "disabled")
+        or "disabled"
     )
     tier_policy_missing_service_mode = str(
-        _runtime_setting(
+        resolve_general_setting(
             general_settings,
             settings,
             "tier_policy_missing_service_mode",
@@ -143,25 +145,25 @@ async def _init_runtime_services(
         repository=getattr(app.state, "tier_repository", None),
         mode=tier_policy_mode,
         missing_service_mode=tier_policy_missing_service_mode,
-        refresh_interval_seconds=_runtime_setting(
+        refresh_interval_seconds=resolve_general_setting(
             general_settings,
             settings,
             "tier_policy_refresh_interval_seconds",
             300.0,
         ),
-        refresh_jitter_seconds=_runtime_setting(
+        refresh_jitter_seconds=resolve_general_setting(
             general_settings,
             settings,
             "tier_policy_refresh_jitter_seconds",
             1.0,
         ),
-        transition_grace_seconds=_runtime_setting(
+        transition_grace_seconds=resolve_general_setting(
             general_settings,
             settings,
             "tier_policy_transition_grace_seconds",
             0.05,
         ),
-        refresh_retry_delay_seconds=_runtime_setting(
+        refresh_retry_delay_seconds=resolve_general_setting(
             general_settings,
             settings,
             "tier_policy_refresh_retry_delay_seconds",
@@ -198,43 +200,43 @@ async def _init_runtime_services(
         route_group_repository=app.state.route_group_repository,
         redis_client=app.state.cache_redis,
         render_log_sink=getattr(app.state, "audit_service", None),
-        l1_ttl_seconds=_runtime_setting(
+        l1_ttl_seconds=resolve_general_setting(
             general_settings, settings, "prompt_cache_l1_ttl_seconds", 30
         ),
-        l2_ttl_seconds=_runtime_setting(
+        l2_ttl_seconds=resolve_general_setting(
             general_settings, settings, "prompt_cache_l2_ttl_seconds", 300
         ),
-        negative_cache_enabled=_runtime_setting(
+        negative_cache_enabled=resolve_general_setting(
             general_settings,
             settings,
             "prompt_negative_cache_enabled",
             False,
         ),
-        negative_l1_ttl_seconds=_runtime_setting(
+        negative_l1_ttl_seconds=resolve_general_setting(
             general_settings,
             settings,
             "prompt_negative_l1_ttl_seconds",
             5,
         ),
-        negative_l2_ttl_seconds=_runtime_setting(
+        negative_l2_ttl_seconds=resolve_general_setting(
             general_settings,
             settings,
             "prompt_negative_l2_ttl_seconds",
             30,
         ),
-        l1_max_entries=_runtime_setting(
+        l1_max_entries=resolve_general_setting(
             general_settings,
             settings,
             "prompt_cache_l1_max_entries",
             10_000,
         ),
-        singleflight_max_keys=_runtime_setting(
+        singleflight_max_keys=resolve_general_setting(
             general_settings,
             settings,
             "prompt_singleflight_max_keys",
             256,
         ),
-        singleflight_timeout_seconds=_runtime_setting(
+        singleflight_timeout_seconds=resolve_general_setting(
             general_settings,
             settings,
             "prompt_singleflight_timeout_seconds",
@@ -372,7 +374,7 @@ async def _init_runtime_services(
     )
     spend_ingestion_mode = str(
         getattr(app.state, "spend_ingestion_mode", None)
-        or _runtime_setting(general_settings, settings, "spend_ingestion_mode", "legacy")
+        or resolve_general_setting(general_settings, settings, "spend_ingestion_mode", "legacy")
         or "legacy"
     )
     telemetry_db_client = getattr(
@@ -451,46 +453,52 @@ async def _init_runtime_services(
         config=SpendIngestionConfig(
             enabled=spend_ingestion_mode == "outbox",
             batch_size=int(
-                _runtime_setting(general_settings, settings, "spend_ingestion_batch_size", 100)
+                resolve_general_setting(
+                    general_settings, settings, "spend_ingestion_batch_size", 100
+                )
             ),
             flush_interval_seconds=(
                 float(
-                    _runtime_setting(
+                    resolve_general_setting(
                         general_settings, settings, "spend_ingestion_flush_interval_ms", 100
                     )
                 )
                 / 1000.0
             ),
             lease_seconds=int(
-                _runtime_setting(general_settings, settings, "spend_ingestion_lease_seconds", 30)
+                resolve_general_setting(
+                    general_settings, settings, "spend_ingestion_lease_seconds", 30
+                )
             ),
             max_attempts=int(
-                _runtime_setting(general_settings, settings, "spend_ingestion_max_attempts", 10)
+                resolve_general_setting(
+                    general_settings, settings, "spend_ingestion_max_attempts", 10
+                )
             ),
             worker_enabled=spend_worker_enabled,
             max_pending_events=int(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_max_pending_events", 100_000
                 )
             ),
             overload_policy=str(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_overload_policy", "sync_fallback"
                 )
             ),
             fallback_max_concurrency=int(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_fallback_max_concurrency", 1
                 )
             ),
             fallback_max_waiters=int(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_fallback_max_waiters", 8
                 )
             ),
             fallback_queue_timeout_seconds=(
                 float(
-                    _runtime_setting(
+                    resolve_general_setting(
                         general_settings,
                         settings,
                         "spend_ingestion_fallback_queue_timeout_ms",
@@ -500,7 +508,7 @@ async def _init_runtime_services(
                 / 1000.0
             ),
             fallback_execution_timeout_seconds=float(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings,
                     settings,
                     "spend_ingestion_fallback_execution_timeout_seconds",
@@ -508,27 +516,27 @@ async def _init_runtime_services(
                 )
             ),
             completed_retention_hours=int(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_completed_retention_hours", 1
                 )
             ),
             failed_retention_days=int(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_failed_retention_days", 30
                 )
             ),
             cleanup_interval_seconds=float(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_cleanup_interval_seconds", 60.0
                 )
             ),
             cleanup_batch_size=int(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "spend_ingestion_cleanup_batch_size", 1000
                 )
             ),
             cleanup_max_batches_per_run=int(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings,
                     settings,
                     "spend_ingestion_cleanup_max_batches_per_run",
@@ -536,7 +544,7 @@ async def _init_runtime_services(
                 )
             ),
             cleanup_time_budget_seconds=float(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings,
                     settings,
                     "spend_ingestion_cleanup_time_budget_seconds",
@@ -544,7 +552,7 @@ async def _init_runtime_services(
                 )
             ),
             worker_startup_timeout_seconds=float(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings,
                     settings,
                     "telemetry_worker_startup_timeout_seconds",
@@ -552,7 +560,7 @@ async def _init_runtime_services(
                 )
             ),
             shutdown_drain_timeout_seconds=float(
-                _runtime_setting(
+                resolve_general_setting(
                     general_settings, settings, "telemetry_shutdown_drain_timeout_seconds", 20.0
                 )
             ),
@@ -602,13 +610,13 @@ async def _init_runtime_services(
             "budget_enforcement_query_mode",
             "legacy",
         ),
-        shadow_sample_rate=_runtime_setting(
+        shadow_sample_rate=resolve_general_setting(
             general_settings,
             settings,
             "budget_enforcement_shadow_sample_rate",
             0.01,
         ),
-        query_timeout_seconds=_runtime_setting(
+        query_timeout_seconds=resolve_general_setting(
             general_settings,
             settings,
             "budget_enforcement_query_timeout_seconds",

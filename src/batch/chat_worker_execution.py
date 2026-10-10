@@ -18,6 +18,7 @@ from src.batch.chat_batching import (
     estimate_chat_input_tokens,
     normalize_chat_microbatch_results,
     resolve_chat_batching_settings,
+    has_chat_microbatch_output_policy,
 )
 from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_for_batch_endpoint
 from src.batch.error_sanitization import persisted_batch_error_message
@@ -480,6 +481,10 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
             deployment: Any,
         ) -> Sequence[Any] | ProviderAttemptResult[Sequence[Any]]:
             nonlocal last_retryable_microbatch_exc
+            if has_chat_microbatch_output_policy(prepared_items):
+                raise ServiceUnavailableError(
+                    code="chat_microbatch_unsupported", affects_deployment_health=False
+                )
             deployment_executor = self._resolve_chat_microbatch_capable_executor(
                 first_item,
                 deployment=deployment,

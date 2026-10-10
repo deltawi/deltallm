@@ -1,28 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  ArrowRight,
-  Brain,
-  ChevronRight,
-  GitBranch,
-  Layers,
-  Mic,
-  Plus,
-  Search,
-  Shuffle,
-  Sparkles,
-  Trash2,
-  X,
-  Zap,
-} from 'lucide-react';
+import { Layers, Plus, Trash2 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
-import ManagedAssetAccessFields from '../components/ManagedAssetAccessFields';
+import CreateDrawer from '../components/route-groups/CreateRouteGroupDrawer';
+import type { Column } from '../components/DataTable';
+import AssetList from '../components/admin/lists/AssetList';
+import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
+import { ListIdentity } from '../components/admin/lists/AssetListCells';
+import StatusBadge from '../components/StatusBadge';
+import ModelTypePill from '../components/models/ModelTypePill';
+import { routeGroupStrategyLabel } from '../lib/routeGroups';
+import { useAssetListSort } from '../lib/useAssetListSort';
 import IndexShell from '../components/admin/shells/IndexShell';
 import { managedAssetAccessInput, routeGroups } from '../lib/api';
 import type { ManagedAssetGrantInput, RouteGroup } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
-import { groupKeySuffixFromName, routeGroupMutationOutcome, ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
+import { groupKeySuffixFromName, routeGroupMutationOutcome } from '../lib/routeGroups';
 import { useApi } from '../lib/hooks';
 import { routeGroupDetailPath } from '../lib/routeGroupRoutes';
 import { useRouteGroupMutationScope } from '../lib/useRouteGroupMutationScope';
@@ -30,255 +24,8 @@ import { useToast } from '../components/ToastProvider';
 import { useBranding } from '../lib/brandingContext';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
-/* ─── Mode chip ─────────────────────────────────────────────────────────── */
-const MODE_ICONS: Record<string, React.ElementType> = {
-  chat:                Brain,
-  embedding:           Zap,
-  audio_speech:        Mic,
-  audio_transcription: Mic,
-  image_generation:    Layers,
-  rerank:              GitBranch,
-};
-
-const MODE_COLORS: Record<string, string> = {
-  chat:                'bg-blue-50 text-blue-700 border-blue-100',
-  embedding:           'bg-violet-50 text-violet-700 border-violet-100',
-  audio_speech:        'bg-orange-50 text-orange-700 border-orange-100',
-  audio_transcription: 'bg-orange-50 text-orange-700 border-orange-100',
-  image_generation:    'bg-pink-50 text-pink-700 border-pink-100',
-  rerank:              'bg-teal-50 text-teal-700 border-teal-100',
-};
-
-function ModeChip({ mode }: { mode: string }) {
-  const Icon = MODE_ICONS[mode] || Layers;
-  const color = MODE_COLORS[mode] || 'bg-gray-50 text-gray-700 border-gray-200';
-  const label = mode.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${color}`}>
-      <Icon className="h-3 w-3" />
-      {label}
-    </span>
-  );
-}
-
-/* ─── Health bar ─────────────────────────────────────────────────────────── */
-function HealthBar({ enabled, memberCount }: { enabled: boolean; memberCount: number }) {
-  if (memberCount === 0) {
-    return <span className="text-xs text-gray-300">No members</span>;
-  }
-  const color = enabled ? 'bg-emerald-500' : 'bg-gray-300';
-  const textColor = enabled ? 'text-emerald-600' : 'text-gray-400';
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
-        <div className={`h-full rounded-full ${color}`} style={{ width: enabled ? '100%' : '0%' }} />
-      </div>
-      <span className={`text-xs font-semibold ${textColor}`}>{memberCount}</span>
-    </div>
-  );
-}
-
-/* ─── Routing strategy display ────────────────────────────────────────────── */
-const ROUTING_LABELS: Record<string, string> = {
-  'simple-shuffle':       'Shuffle',
-  'weighted':             'Weighted',
-  'least-busy':           'Least Busy',
-  'latency-based-routing':'Latency',
-  'cost-based-routing':   'Cost',
-  'usage-based-routing':  'Usage',
-  'tag-based-routing':    'Tag (Legacy)',
-  'priority-based-routing':'Priority',
-  'rate-limit-aware':     'Rate Limit',
-};
-
 function mutationErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
-}
-
-function RoutingBadge({ strategy }: { strategy: string | null }) {
-  const label = strategy ? (ROUTING_LABELS[strategy] || strategy) : 'Shuffle';
-  const Icon = !strategy || strategy === 'simple-shuffle' ? Shuffle : GitBranch;
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-600">
-      <Icon className="h-3 w-3" />
-      {label}
-    </span>
-  );
-}
-
-/* ─── Create drawer ──────────────────────────────────────────────────────── */
-interface CreateDrawerProps {
-  open: boolean;
-  onClose: () => void;
-  form: { group_key: string; name: string; mode: string };
-  setForm: React.Dispatch<React.SetStateAction<{ group_key: string; name: string; mode: string }>>;
-  formError: string | null;
-  setFormError: React.Dispatch<React.SetStateAction<string | null>>;
-  creating: boolean;
-  onCreate: () => void;
-  grants: ManagedAssetGrantInput[];
-  teamOptions: Array<{ id: string; label: string }>;
-  organizationOptions: Array<{ id: string; label: string }>;
-  audiencesLoading: boolean;
-  audiencesError: string | null;
-  onRetryAudiences: () => void;
-  allowPublic: boolean;
-  useGeneratedPrefix: boolean;
-  onGrantsChange: (grants: ManagedAssetGrantInput[]) => void;
-}
-
-function CreateDrawer({
-  open,
-  onClose,
-  form,
-  setForm,
-  formError,
-  setFormError,
-  creating,
-  onCreate,
-  grants,
-  teamOptions,
-  organizationOptions,
-  audiencesLoading,
-  audiencesError,
-  onRetryAudiences,
-  allowPublic,
-  useGeneratedPrefix,
-  onGrantsChange,
-}: CreateDrawerProps) {
-  if (!open) return null;
-  const generatedKeyPreview = groupKeySuffixFromName(form.name) || 'group-name';
-  return (
-    <div className="fixed inset-0 z-50 flex">
-      <div className="flex-1 bg-black/20" onClick={onClose} />
-      <div className="flex w-[440px] shrink-0 flex-col border-l border-gray-200 bg-white shadow-xl">
-        {/* Drawer header */}
-        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Create Model Group</h2>
-            <p className="text-xs text-gray-500">Add the shell — configure members on the next page.</p>
-          </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 hover:bg-gray-100">
-            <X className="h-4 w-4 text-gray-400" />
-          </button>
-        </div>
-
-        {/* Drawer body */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          {/* Info banner */}
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-            <div className="text-sm font-semibold text-blue-800">What happens next</div>
-            <div className="mt-1 text-xs text-blue-700">
-              Creates the group shell only. On the next page you'll add members, configure routing, and optionally bind a prompt.
-            </div>
-          </div>
-
-          {useGeneratedPrefix ? (
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">
-                Group Key <span className="text-red-500">*</span>
-              </label>
-              <div className="flex rounded-lg border border-gray-300 focus-within:ring-2 focus-within:ring-brand-primary">
-                <span className="flex items-center rounded-l-lg border-r border-gray-200 bg-gray-50 px-3 font-mono text-xs text-gray-500">
-                  grp-XXXX-
-                </span>
-                <input
-                  value={form.name}
-                  onChange={(e) => {
-                    setForm({ ...form, name: e.target.value });
-                    if (formError) setFormError(null);
-                  }}
-                  placeholder="Customer Support"
-                  maxLength={64}
-                  data-autofocus="true"
-                  className="min-w-0 flex-1 rounded-r-lg px-3 py-2 text-sm focus:outline-none"
-                />
-              </div>
-              <p className="mt-1 text-xs text-gray-400">
-                Your exact entry is also the display name. Generated key:{' '}
-                <code>grp-XXXX-{generatedKeyPreview}</code>
-              </p>
-            </div>
-          ) : (
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">
-                Group Key <span className="text-red-500">*</span>
-              </label>
-              <input
-                value={form.group_key}
-                onChange={(e) => {
-                  setForm({ ...form, group_key: e.target.value });
-                  if (formError) setFormError(null);
-                }}
-                placeholder="prod-chat-primary"
-                data-autofocus="true"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-              />
-              <p className="mt-1 text-xs text-gray-400">Stable key used by clients, policies, and bindings.</p>
-            </div>
-          )}
-
-          {formError && !formError.startsWith('Select a ') ? (
-            <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>
-          ) : null}
-
-          <div className={`grid gap-3 ${useGeneratedPrefix ? 'grid-cols-1' : 'grid-cols-2'}`}>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Workload Type</label>
-              <select
-                value={form.mode}
-                onChange={(e) => setForm({ ...form, mode: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-              >
-                {ROUTE_GROUP_MODE_OPTIONS.map((m) => (
-                  <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>
-                ))}
-              </select>
-            </div>
-            {!useGeneratedPrefix ? (
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
-                <input
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="Production Chat"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                />
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-xl border border-slate-200 p-4">
-            <ManagedAssetAccessFields
-              grants={grants}
-              teamOptions={teamOptions}
-              organizationOptions={organizationOptions}
-              allowPublic={allowPublic}
-              audiencesLoading={audiencesLoading}
-              audiencesError={audiencesError}
-              onRetryAudiences={onRetryAudiences}
-              error={formError?.startsWith('Select a ') ? formError : null}
-              onChange={onGrantsChange}
-            />
-          </div>
-        </div>
-
-        {/* Drawer footer */}
-        <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
-          <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-            Cancel
-          </button>
-          <button
-            onClick={onCreate}
-            disabled={creating}
-            className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
-          >
-            {creating ? 'Creating…' : 'Create and continue →'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
@@ -306,9 +53,10 @@ export default function RouteGroups() {
   const [grants, setGrants] = useState<ManagedAssetGrantInput[]>([]);
 
   const pageSize = 20;
-  const { data: result, loading, refetch } = useApi(
-    (signal) => routeGroups.list({ search, limit: pageSize, offset: pageOffset }, signal),
-    [search, pageOffset],
+  const listSort = useAssetListSort(['name', 'routing', 'members', 'health', 'created_by', 'updated_at', 'visibility'] as const, () => setPageOffset(0));
+  const { data: result, loading, error, refetch } = useApi(
+    (signal) => routeGroups.list({ search, limit: pageSize, offset: pageOffset, sort_by: listSort.sortBy, sort_direction: listSort.sortDirection }, signal),
+    [search, pageOffset, listSort.sortBy, listSort.sortDirection],
   );
 
   useEffect(() => {
@@ -392,6 +140,14 @@ export default function RouteGroups() {
   const groups: RouteGroup[] = result?.data || [];
   const pagination = result?.pagination;
 
+  const columns: Column<RouteGroup>[] = [
+    { key: 'name', header: 'Group', sortKey: 'name', render: (row) => <ListIdentity name={row.name || row.group_key} identifier={row.group_key} onOpen={() => navigate(routeGroupDetailPath(row.route_group_id))} secondary={<ModelTypePill mode={row.mode} />} actions={(!row.access || row.access.capabilities.delete) ? <button type="button" aria-label={`Delete ${row.name || row.group_key}`} onClick={() => setDeleteTarget(row)} disabled={deletingKey === row.route_group_id} className="rounded-lg p-2 md:p-1.5 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4 text-red-500" /></button> : null} /> },
+    { key: 'routing', header: 'Routing', sortKey: 'routing', render: (row) => <div className="text-xs">{routeGroupStrategyLabel(row.routing_strategy || 'simple-shuffle')}<span className="mt-1 block text-gray-400">Traffic {row.enabled ? 'live' : 'off'}</span></div> },
+    { key: 'member_count', header: 'Members', sortKey: 'members', defaultDirection: 'desc' },
+    { key: 'health', header: 'Health', sortKey: 'health', render: (row) => <div><StatusBadge status={row.health_status || 'unknown'} label={row.health_status === 'empty' ? 'No active members' : undefined} /><span className="mt-1 block text-xs text-gray-400">{row.health_status === 'unknown' || !row.health_status ? 'Health unavailable' : row.health_status === 'paused' ? 'Traffic off' : row.health_status === 'empty' ? 'No active deployments' : row.healthy_member_count == null || row.active_member_count == null ? 'Health unavailable' : `${row.healthy_member_count} of ${row.active_member_count} available`}</span></div> },
+    ...assetMetadataColumns<RouteGroup>(),
+  ];
+
   return (
     <IndexShell
       title="Model Groups"
@@ -406,42 +162,7 @@ export default function RouteGroups() {
           <Plus className="h-4 w-4" /> Create Group
         </button>
       )}
-      intro={(
-        <div className="overflow-hidden rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-slate-50">
-          <div className="flex items-center gap-4 px-5 py-4">
-            <div className="flex-1">
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-blue-100">
-                <Sparkles className="h-3 w-3" /> Recommended setup order
-              </div>
-              <p className="mt-2 text-sm text-slate-600">
-                Create the group shell, add members, then start with default shuffle. Upgrade to a routing policy only when you need it.
-              </p>
-            </div>
-            <div className="hidden sm:flex items-center gap-2">
-              {['Create shell', 'Add members', 'Use default shuffle'].map((step, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-center shadow-sm">
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Step {i + 1}</div>
-                    <div className="mt-0.5 text-xs font-semibold text-slate-700">{step}</div>
-                  </div>
-                  {i < 2 && <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-      toolbar={(
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search model groups…"
-            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-          />
-        </div>
-      )}
+
     >
       <CreateDrawer
         open={createOpen}
@@ -462,153 +183,8 @@ export default function RouteGroups() {
         useGeneratedPrefix={!isPlatformAdmin}
         onGrantsChange={(nextGrants) => { setGrants(nextGrants); if (formError) setFormError(null); }}
       />
-      <div className="space-y-3">
-        {result === null && !loading && (
-          <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
-            Failed to load model groups.
-          </div>
-        )}
-
-        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-          {/* Header row */}
-          <div className="grid items-center gap-4 border-b border-gray-100 bg-gray-50 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-widest text-gray-400"
-            style={{ gridTemplateColumns: '1fr 130px 110px 110px 72px 48px' }}>
-            <div>Group</div>
-            <div className="text-center">Mode</div>
-            <div className="text-center">Health</div>
-            <div className="text-center">Routing</div>
-            <div className="text-center">Traffic</div>
-            <div />
-          </div>
-
-          {/* Loading skeleton */}
-          {loading && (
-            <div className="divide-y divide-gray-100">
-              {[...Array(4)].map((_, i) => (
-                <div key={i} className="grid items-center gap-4 px-4 py-3 animate-pulse"
-                  style={{ gridTemplateColumns: '1fr 130px 110px 110px 72px 48px' }}>
-                  <div className="space-y-1.5">
-                    <div className="h-3.5 w-40 rounded bg-gray-100" />
-                    <div className="h-3 w-28 rounded bg-gray-100" />
-                  </div>
-                  <div className="flex justify-center"><div className="h-5 w-20 rounded-full bg-gray-100" /></div>
-                  <div className="flex justify-center"><div className="h-3 w-20 rounded-full bg-gray-100" /></div>
-                  <div className="flex justify-center"><div className="h-5 w-20 rounded-full bg-gray-100" /></div>
-                  <div className="flex justify-center"><div className="h-5 w-10 rounded-full bg-gray-100" /></div>
-                  <div />
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Data rows */}
-          {!loading && groups.map((g, i) => (
-            <div
-              key={g.group_key}
-              onClick={() => navigate(routeGroupDetailPath(g.route_group_id))}
-              className={`group grid cursor-pointer items-center gap-4 px-4 py-3 transition hover:bg-blue-50/40 ${i < groups.length - 1 ? 'border-b border-gray-100' : ''}`}
-              style={{ gridTemplateColumns: '1fr 130px 110px 110px 72px 48px' }}
-            >
-              {/* Name + key */}
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-semibold text-gray-900">{g.name || g.group_key}</span>
-                  {!g.enabled && (
-                    <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">
-                      paused
-                    </span>
-                  )}
-                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold capitalize text-slate-600">
-                    {g.access?.visibility || 'platform'}
-                  </span>
-                </div>
-                <code className="text-[11px] text-gray-400 font-mono">{g.group_key}</code>
-              </div>
-
-              {/* Mode chip */}
-              <div className="flex justify-center">
-                <ModeChip mode={g.mode} />
-              </div>
-
-              {/* Health bar */}
-              <div className="flex justify-center">
-                <HealthBar enabled={g.enabled} memberCount={g.member_count} />
-              </div>
-
-              {/* Routing strategy */}
-              <div className="flex justify-center">
-                <RoutingBadge strategy={g.routing_strategy} />
-              </div>
-
-              {/* Traffic (enabled) */}
-              <div className="flex justify-center">
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${g.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                  {g.enabled ? 'Live' : 'Off'}
-                </span>
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-1 opacity-0 transition group-hover:opacity-100">
-                {(!g.access || g.access.capabilities.delete) ? (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(g); }}
-                    disabled={deletingKey === g.route_group_id}
-                    className="rounded-lg p-1 hover:bg-red-50 disabled:opacity-40"
-                    title="Delete group"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                  </button>
-                ) : null}
-                <ArrowRight className="h-3.5 w-3.5 text-gray-300" />
-              </div>
-            </div>
-          ))}
-
-          {/* Empty state */}
-          {!loading && groups.length === 0 && (
-            <div className="px-6 py-12 text-center">
-              <Layers className="mx-auto h-8 w-8 text-gray-200" />
-              <p className="mt-3 text-sm text-gray-400">
-                {search ? `No model groups matching "${search}"` : 'No model groups yet'}
-              </p>
-              {!search && (
-                <button
-                  onClick={() => setCreateOpen(true)}
-                  className="mt-3 text-sm text-brand-primary-ink hover:underline"
-                >
-                  Create your first group →
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Pagination footer */}
-        {pagination && (
-          <div className="flex items-center justify-between px-1 text-xs text-gray-400">
-            <span>{pagination.total} group{pagination.total !== 1 ? 's' : ''}</span>
-            <div className="flex items-center gap-2">
-              <button
-                disabled={pageOffset === 0}
-                onClick={() => setPageOffset(Math.max(0, pageOffset - pageSize))}
-                className="rounded-lg border border-gray-200 px-3 py-1.5 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
-              >
-                ← Prev
-              </button>
-              <span className="text-gray-500">
-                Page {Math.floor(pageOffset / pageSize) + 1} of {Math.max(1, Math.ceil(pagination.total / pageSize))}
-              </span>
-              <button
-                disabled={!pagination.has_more}
-                onClick={() => setPageOffset(pageOffset + pageSize)}
-                className="rounded-lg border border-gray-200 px-3 py-1.5 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
-              >
-                Next →
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <AssetList columns={columns} data={groups} rowKey={(row) => row.route_group_id} loading={loading} error={error} onRetry={refetch} emptyMessage={search ? `No model groups matching "${search}"` : 'No model groups yet'} search={searchInput} searchLabel="Search model groups" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(routeGroupDetailPath(row.route_group_id))} />
+      <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Group setup</summary><p className="mt-2">Create the group shell, add members, then use default shuffle. Add a policy when you need more control.</p></details>
 
       {/* Delete confirmation */}
       <ConfirmDialog

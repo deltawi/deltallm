@@ -14,6 +14,7 @@ const colorMap: Record<string, string> = {
   enabled: 'bg-green-100 text-green-700',
   disabled: 'bg-gray-100 text-gray-600',
   warning: 'bg-yellow-100 text-yellow-700',
+  degraded: 'bg-yellow-100 text-yellow-700',
 };
 
 export default function StatusBadge({ status, label }: StatusBadgeProps) {

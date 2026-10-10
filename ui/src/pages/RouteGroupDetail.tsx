@@ -2,19 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
-  Brain,
-  CheckCircle2,
   GitBranch,
   Layers,
-  Mic,
-  Pencil,
   Server,
   Settings,
-  Shuffle,
   Terminal,
-  Trash2,
-  XCircle,
-  Zap,
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
@@ -35,9 +27,7 @@ import {
   parsePolicyTextLoose,
   reconcileGuidedPolicyMembers,
   restoreDraftPolicyTombstones,
-  ROUTE_GROUP_MODE_COLORS,
   routeGroupMutationOutcome,
-  routeGroupStrategyLabel,
   toGuidedPolicy,
   validateGuidedPolicy,
   validatePolicyContextCompatibility,
@@ -48,25 +38,15 @@ import RouteGroupSettingsPanel from '../components/route-groups/RouteGroupSettin
 import RouteGroupMembersCard from '../components/route-groups/RouteGroupMembersCard';
 import RouteGroupUsageCard from '../components/route-groups/RouteGroupUsageCard';
 import RouteGroupAdvancedTab from '../components/route-groups/RouteGroupAdvancedTab';
-import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
-import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
+import { HeroTabbedDetailShell, IconTabs, PanelCard } from '../components/admin/shells';
+import RouteGroupHero from '../components/route-groups/RouteGroupHero';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
-
-/* ─── Visual helpers ─────────────────────────────────────────────────────── */
-
-const MODE_ICONS: Record<string, React.ElementType> = {
-  chat:                Brain,
-  embedding:           Zap,
-  audio_speech:        Mic,
-  audio_transcription: Mic,
-  image_generation:    Layers,
-  rerank:              GitBranch,
-};
 
 /* ─── Tab definitions ────────────────────────────────────────────────────── */
 
 const TABS = [
   { id: 'models',   label: 'Models',   icon: Server   },
+  { id: 'policy',   label: 'Policy',   icon: GitBranch },
   { id: 'test',     label: 'Test',     icon: Terminal  },
   { id: 'settings', label: 'Settings', icon: Settings  },
   { id: 'advanced', label: 'Advanced', icon: Layers    },
@@ -151,6 +131,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   const workloadMode = detail.data?.group.mode || 'chat';
   const bindings = useMemo(() => groupBindings.data?.data || [], [groupBindings.data?.data]);
   const healthyMembers = members.filter((m) => m.healthy === true).length;
+  const unknownHealth = members.filter((m) => m.healthy == null).length;
   const missingMembers = members.filter((m) => m.healthy == null).length;
   const memberIds = useMemo(() => members.map((m) => m.deployment_id), [members]);
   const isPolicyBusy = policyAction !== null;
@@ -158,7 +139,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   const groupAccess = detail.data?.group.access;
   const canWrite = isPlatformAdmin || !groupAccess || groupAccess.capabilities.write;
   const canDelete = isPlatformAdmin || !groupAccess || groupAccess.capabilities.delete;
-  const publishedPolicy = useMemo(() => policies.find((p) => p.status === 'published') || null, [policies]);
+  const publishedPolicy = useMemo(() => policies.find((p) => p.status === 'published') || detail.data?.policy || null, [policies, detail.data?.policy]);
   const draftPolicy = useMemo(() => policies.find((p) => p.status === 'draft') || null, [policies]);
   const winningPrompt = bindingPreview.data?.winner || null;
   const winningPromptDetail = useApi(
@@ -574,10 +555,6 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   }
 
   const group = detail.data.group;
-  const ModeIcon = MODE_ICONS[group.mode] || Layers;
-  const modeColor = ROUTE_GROUP_MODE_COLORS[group.mode] || 'bg-gray-100 text-gray-700';
-  const routingLabel = routeGroupStrategyLabel(group.routing_strategy);
-  const RoutingIcon = !group.routing_strategy || group.routing_strategy === 'simple-shuffle' ? Shuffle : GitBranch;
 
   return (
     <>
@@ -591,88 +568,23 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
         </button>
       )}
       hero={(
-        <div className="relative overflow-hidden border-b border-gray-200 bg-white">
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-slate-50 opacity-70" />
-          <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-100/40 blur-3xl" />
-
-          <div className="relative px-6 pb-5 pt-6">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${modeColor}`}>
-                <ModeIcon className="h-3.5 w-3.5" />
-                {group.mode.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-              </span>
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${group.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                {group.enabled ? <><CheckCircle2 className="h-3.5 w-3.5" /> Live</> : <><XCircle className="h-3.5 w-3.5" /> Off</>}
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                <RoutingIcon className="h-3.5 w-3.5" />
-                {publishedPolicy ? `Override v${publishedPolicy.version}` : `${routingLabel} routing`}
-              </span>
-              {group.access ? (
-                <ManagedAssetAccessSummary
-                  access={group.access}
-                  teamOptions={teamOptions}
-                  organizationOptions={organizationOptions}
-                />
-              ) : null}
-            </div>
-
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">{group.name || group.group_key}</h1>
-                <p className="mt-0.5 text-sm text-gray-500">
-                  Group key:{' '}
-                  <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700">{group.group_key}</code>
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                {canWrite ? (
-                  <button
-                    onClick={() => setActiveTab('settings')}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50"
-                  >
-                    <Pencil className="h-4 w-4" /> Edit
-                  </button>
-                ) : null}
-                {canDelete ? (
-                  <button
-                    onClick={() => setConfirmDeleteGroup(true)}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50"
-                    title="Delete group"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="mt-5 flex flex-wrap items-center gap-6 divide-x divide-gray-100">
-              <InlineStat label="Members" value={String(members.length)} />
-              <div className="pl-6">
-                <InlineStat label="Healthy" value={members.length > 0 ? `${healthyMembers}/${members.length}` : '—'} />
-              </div>
-              <div className="pl-6">
-                <InlineStat label="Policy" value={publishedPolicy ? `v${publishedPolicy.version} published` : 'Default shuffle'} />
-              </div>
-              <div className="pl-6">
-                <InlineStat label="Prompt" value={promptSummary ? promptSummary.templateKey : 'None bound'} />
-              </div>
-              {missingMembers > 0 && (
-                <div className="pl-6">
-                  <InlineStat label="Registry Gaps" value={`${missingMembers} missing`} />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <RouteGroupHero group={group} publishedPolicy={publishedPolicy} members={members.length}
+          healthyMembers={healthyMembers} unknownHealth={unknownHealth} missingMembers={missingMembers}
+          promptKey={promptSummary?.templateKey ?? null} teamOptions={teamOptions} organizationOptions={organizationOptions}
+          canWrite={canWrite} canDelete={canDelete} onEdit={() => setActiveTab('settings')}
+          onDelete={() => setConfirmDeleteGroup(true)} />
       )}
       body={(
         <>
           <IconTabs
+            id="model-group-tabs"
+            label="Model group sections"
             active={activeTab}
             onChange={setActiveTab}
             items={TABS.map(({ id, label, icon }) => ({ id, label, icon }))}
           />
+          {TABS.map(({ id }) => <div key={id} role="tabpanel" id={`model-group-tabs-panel-${id}`} aria-labelledby={`model-group-tabs-tab-${id}`} hidden={activeTab !== id}>
+          {activeTab === id && (<>
           {activeTab === 'models' ? (
             <RouteGroupMembersCard
               mode={form.mode}
@@ -691,8 +603,10 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
               onRequestRemoveMember={setMemberToRemove}
               canWrite={canWrite}
             />
-          ) : activeTab === 'advanced' ? (
+          ) : activeTab === 'advanced' || activeTab === 'policy' ? (
             <RouteGroupAdvancedTab
+              section={activeTab}
+              defaultStrategy={group.routing_strategy}
               routeGroupId={group.route_group_id}
               groupKey={group.group_key}
               workloadMode={workloadMode}
@@ -732,8 +646,8 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
                 } else setPolicyText(guidedPreview);
                 setShowAdvancedJson((cur) => !cur);
               }}
-              onGuidedPolicyChange={setGuidedPolicy}
-              onPolicyTextChange={setPolicyText}
+              onGuidedPolicyChange={(next) => { setGuidedPolicy(next); setPolicyMessage(null); setPolicyError(null); }}
+              onPolicyTextChange={(next) => { setPolicyText(next); setPolicyMessage(null); setPolicyError(null); }}
               onValidate={handleValidatePolicy}
               onSaveDraft={handleSaveDraft}
               onPublish={handlePublish}
@@ -767,6 +681,8 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
               )}
             </PanelCard>
           )}
+          </>)}
+          </div>)}
         </>
       )}
       />

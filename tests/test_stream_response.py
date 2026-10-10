@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import anyio
 from typing import Any
 
 import pytest
@@ -10,6 +11,10 @@ from src.chat.stream_response import DeadlineStreamingResponse
 from src.models.errors import TimeoutError
 from src.router.execution import ManagedFailoverResult, RequestDeadline
 from src.router.router import Deployment
+from src.services.output_token_context import OutputTokenContext
+from src.services.rate_limit_lease import RateLimitState
+from tests.test_output_tpm_contracts import snapshot
+from types import SimpleNamespace
 
 
 def _deployment() -> Deployment:
@@ -122,6 +127,48 @@ async def test_downstream_disconnect_closes_body_and_resources() -> None:
 
     assert body_finalized.is_set()
     assert resources_closed.is_set()
+
+
+@pytest.mark.parametrize("actual", [None, 20])
+async def test_asgi_disconnect_completes_output_accounting_once(actual) -> None:
+    first_sent = anyio.Event()
+    events = []
+
+    async def account(event):
+        await anyio.sleep(0)
+        events.append(event)
+        return snapshot()
+
+    context = OutputTokenContext(
+        SimpleNamespace(account_output=account), snapshot(), RateLimitState()
+    )
+    context.mark_dispatched()
+    context.observe_output(actual)
+
+    async def body():
+        try:
+            yield "data: chunk\n\n"
+            await anyio.sleep_forever()
+        finally:
+            await context.finish()
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            first_sent.set()
+
+    async def receive():
+        await first_sent.wait()
+        return {"type": "http.disconnect"}
+
+    async def close(_exc):
+        await context.finish()
+
+    response = DeadlineStreamingResponse(body(), deadline=RequestDeadline.after(10), close=close)
+    await asyncio.wait_for(
+        response({"type": "http", "asgi": {"spec_version": "2.3"}}, receive, send), 2
+    )
+    assert context.closed
+    assert [event.actual for event in events] == [actual]
 
 
 @pytest.mark.asyncio

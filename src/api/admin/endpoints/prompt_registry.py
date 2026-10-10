@@ -17,6 +17,8 @@ from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.prompt_registry import PromptRegistryRepository
+from src.db.catalog.admin_asset_lists import ListDirection, PromptSortKey
+from src.api.admin.list_contracts import AdminListResponse, PromptListItem
 from src.middleware.admin import require_admin_permission, require_authenticated
 from src.services.asset_ownership import (
     apply_owner_scope_to_metadata,
@@ -361,12 +363,15 @@ def _resolve_template_metadata(
 @router.get(
     "/ui/api/prompt-registry/templates",
     dependencies=[Depends(require_authenticated)],
+    response_model=AdminListResponse[PromptListItem],
 )
 async def list_prompt_templates(
     request: Request,
     search: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    sort_by: PromptSortKey | None = Query(default=None),
+    sort_direction: ListDirection = Query(default="desc"),
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
     access_repository = _access_repository_or_503(request)
@@ -381,6 +386,8 @@ async def list_prompt_templates(
         limit=limit,
         offset=offset,
         managed_asset_ids=None if principal.is_platform_admin else list(policy_by_id),
+        sort_by=sort_by,
+        sort_direction=sort_direction,
     )
     data = [
         _template_response_payload(

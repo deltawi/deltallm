@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.db.identity.output_policy import read_organization_preview_limits
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
 from src.services.tier_admin_errors import TierAdminError, TierAdminNotFoundError
@@ -51,23 +52,7 @@ async def _organization_limits(
     db = getattr(prisma_manager, "client", None)
     if db is None or not callable(getattr(db, "query_raw", None)):
         return {}
-    rows = await db.query_raw(
-        """
-        SELECT
-            rpm_limit,
-            tpm_limit,
-            rph_limit,
-            rpd_limit,
-            tpd_limit,
-            model_rpm_limit,
-            model_tpm_limit
-        FROM deltallm_organizationtable
-        WHERE organization_id = $1
-        LIMIT 1
-        """,
-        organization_id,
-    )
-    return dict(rows[0]) if rows else {}
+    return await read_organization_preview_limits(db, organization_id)
 
 
 def _http_error(exc: Exception) -> HTTPException:

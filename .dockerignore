@@ -2,6 +2,7 @@
 .git/
 .github/
 .codex/
+.local/
 .claude/
 .agents/
 .worktree/
