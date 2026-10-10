@@ -245,6 +245,24 @@ identities, client behavior, and charges. Incomplete rollouts still fail.
 All 128 affected tool checks passed. Keep the original failed recovery record.
 This selected-tier result is not the final four-rate release qualification.
 
+The next normal run used the same image and twelve-CPU fixture, from clean
+harness `25305952`. Its initial 50/100/200 RPS stages passed. The initial
+600-second 500 RPS stage failed: 298,845/300,000 successes, with 1,155
+`spend_persistence_unavailable` responses and no client errors or dropped
+arrivals. Its p95/p99 were 59.43/97.66 ms. Queue growth was +0.001329/second.
+Latency and growth passed, but success was 99.615%, below the required 99.9%.
+All failed responses occurred in one 2.65-second window across the four APIs.
+
+Accounting drained in 0.620 seconds with no pending or unsafe state. Facts and
+all four scope totals match successful requests. The official economic gate
+still fails for a mixed-success stage. Do not relax it or call this a pass.
+The final sustained series, maintenance, and recovery did not run.
+Several accounting operations recorded errors in the same sampled interval.
+The existing five-second snapshots do not identify the blocking owner or prove
+a host, network, or database cause. The next diagnostic samples live database
+waits at a bounded higher rate, only at 500 RPS, without a profiler or changed
+application limits. Retain both the passing and failed results.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the

@@ -73,6 +73,51 @@ class QualificationEvidenceExportTests(unittest.TestCase):
             export_evidence(self.source, self.root / "export", ())
         self.assertFalse((self.root / "export").exists())
 
+    def test_failed_warmup_is_saved_without_a_measured_stage(self) -> None:
+        warmup = {
+            **self.report,
+            "run_id": "a" * 32,
+            "duration_seconds": 60,
+            "success_count": 29000,
+            "generator_dropped_count": 1000,
+        }
+        self.report = {
+            "measurement_started": False,
+            "passed": False,
+            "phase": "short",
+            "target_rate_rps": 500,
+            "warmup": warmup,
+        }
+        self.save_report()
+        (self.stage / "warmup.json").write_text(json.dumps(warmup))
+        raw_directory = self.stage / "warmup"
+        raw_directory.mkdir()
+        raw = raw_directory / f"gateway-load-{'a' * 32}.jsonl.gz"
+        raw.write_bytes(b"original preparation samples")
+        output = self.root / "export"
+        index = export_evidence(self.source, output, ("native-fixture",))
+        self.assertEqual(index["stage_count"], 0)
+        self.assertEqual(index["preparation_count"], 1)
+        self.assertFalse(index["preparations"][0]["passed"])
+        self.assertEqual(index["preparations"][0]["generator_dropped_count"], 1000)
+        self.assertNotIn("private_extra", (output / "all-runs.json").read_text())
+        self.assertIn("not measured qualification stages", (output / "all-runs.md").read_text())
+        verify_files(output, json.loads((output / "checksums.json").read_text()))
+
+    def test_preparation_requires_original_raw_samples(self) -> None:
+        warmup = {**self.report, "run_id": "b" * 32, "duration_seconds": 60}
+        (self.stage / "warmup.json").write_text(json.dumps(warmup))
+        with self.assertRaises(ValueError):
+            export_evidence(self.source, self.root / "export", ())
+        self.assertFalse((self.root / "export").exists())
+
+    def test_unmeasured_stage_cannot_discard_its_failed_preparation(self) -> None:
+        self.report = {"measurement_started": False, "passed": False, "warmup": {}}
+        self.save_report()
+        with self.assertRaisesRegex(ValueError, "preserve its failed preparation"):
+            export_evidence(self.source, self.root / "export", ())
+        self.assertFalse((self.root / "export").exists())
+
     def test_rejects_unsupported_rates_and_campaign_paths(self) -> None:
         self.report["target_rate_rps"] = 1000
         self.save_report()
