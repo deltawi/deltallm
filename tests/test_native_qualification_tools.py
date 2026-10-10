@@ -427,7 +427,15 @@ def test_qualification_profile_and_generator_keep_fixed_bounded_topology(tmp_pat
 
 @pytest.mark.parametrize(
     "unsafe",
-    [None, "fsync", "synchronous_commit", "full_page_writes", "autovacuum", "max_connections"],
+    [
+        None,
+        "fsync",
+        "synchronous_commit",
+        "full_page_writes",
+        "autovacuum",
+        "max_connections",
+        "wal_compression",
+    ],
 )
 def test_native_database_fixture_has_explicit_resources_and_preserves_durability(
     tmp_path, monkeypatch, unsafe
@@ -436,6 +444,7 @@ def test_native_database_fixture_has_explicit_resources_and_preserves_durability
         "shared_buffers": "512MB",
         "max_wal_size": "4GB",
         "max_connections": "1000",
+        "wal_compression": "lz4",
         "fsync": "on",
         "synchronous_commit": "on",
         "full_page_writes": "on",
@@ -477,6 +486,7 @@ def test_native_database_fixture_has_explicit_resources_and_preserves_durability
         {"name": "postgres-shm", "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}}
     ]
     assert "max_connections=1000" in patch["args"]
+    assert "wal_compression=lz4" in patch["args"]
     assert {"fsync=on", "synchronous_commit=on", "full_page_writes=on"}.issubset(patch["args"])
     assert commands[1] == ("rollout", "status", "deployment/postgres", "--timeout=180s")
 
@@ -512,6 +522,7 @@ def test_native_database_fixture_rejects_wrong_shared_memory_capacity(
         "shared_buffers": "512MB",
         "max_wal_size": "4GB",
         "max_connections": "1000",
+        "wal_compression": "lz4",
         "fsync": "on",
         "synchronous_commit": "on",
         "full_page_writes": "on",

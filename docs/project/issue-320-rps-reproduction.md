@@ -25,13 +25,16 @@ The current native runner declares and records PostgreSQL fixture resources
 and live settings in `database-fixture.json`. Its limits are four CPUs and four
 GiB, with 512-MiB shared buffers and a four-GiB WAL limit. It verifies that
 `fsync`, synchronous commit, full-page writes, and autovacuum remain enabled.
+It also declares and verifies `wal_compression=lz4` on the pinned PostgreSQL
+build. Older harness revisions used the default compression setting. Use the
+recorded source and database profile for each result; do not change old results.
 The connection bound stays 1,000. These are test settings, not production
 minimums. Earlier source bundles retain their earlier database allocations.
 The current fixture also verifies a 256-MiB memory-backed `/dev/shm` volume.
 Earlier fixed image `d62715d0` uses runtime `609bad89` and forward migration
 `20261010190000_accounting_append_cold_plans`. Current diagnostics use twelve
 VM CPUs and 12 GiB RAM. A selected-tier pass does not qualify all four rates.
-The next image adds reporting migrations `20261010213000` and `20261010214000`.
+The current reporting image adds migrations `20261010213000` and `20261010214000`.
 Use its own recorded source and image identity; do not use the earlier image
 to test those changes. Keep the 60-second warm-ups, ten-minute stages, retained
 history, exact financial checks, and native recovery gates unchanged.

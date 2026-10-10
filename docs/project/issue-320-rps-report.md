@@ -314,8 +314,55 @@ before the new image. An older image can use its original queries on the expande
 database. Do not remove an applied migration to roll back the image.
 
 These checks prove the cached-plan defect and its correction. They do not prove
-that it caused every HTTP failure. Wider tests, final CI, a new fixed image,
-retained-history load, and all functional recovery checks remain required.
+that it caused every HTTP failure.
+
+### Fixed reporting image and database write profile
+
+The corrected runtime is `c70d63cd`, with fixed image ID
+`sha256:8c9e5e246361f05904420cbddf600ebb0cd263761dd20e83b4ebb10dcdd882d9`.
+All 8,461 application and hermetic tests passed. All 1,194 real-database cases
+passed, including the separately provisioned SDK and external-customer cases.
+Fresh, v0.3.1, and v0.3.2 migration paths passed. All five offline image checks
+passed. CI run `38088596302`, attempt 2, passed all required jobs. Attempt 1
+had one session transaction expire at 906 ms. The unchanged failed-job rerun
+passed. Keep both attempts; no auth cause or auth fix is claimed.
+
+The first upper-tier check on that image failed. It had 299,249/300,000 successes,
+750 persistence 503 responses, one client read error, and no dropped arrivals.
+p95/p99 were 203.21/404.69 ms. Growth was -0.088864/second. Successful charges
+matched all four scopes and drained with no pending or unsafe state. The second
+stage and recovery did not run. This result remains failed.
+
+Read-only diagnosis found a grant lock timeout near a database checkpoint.
+Its final sync took 2.304 seconds. Earlier latency also rose while each API
+process used about one full CPU core. No cgroup CPU throttling was recorded.
+These observations do not identify one cause for every failure. Keep the grant
+locks: append and processing also lock the same terminal-capacity row. A weaker
+grant lock alone cannot remove that transaction conflict safely.
+
+A database-only comparison enabled LZ4 WAL compression. The application image,
+four API processes, twelve-CPU VM, 12 GiB RAM, database allocation, deadlines,
+durability settings, and gates stayed unchanged. It kept bounded read-only
+wait samples. Both 600-second stages used the same database, with retained history:
+
+| Stage | Successes / arrivals | p95 / p99 | Growth / second | Drain | Decision |
+| --- | --- | --- | --- | --- | --- |
+| First 500 RPS stage | 300,000 / 300,000 | 63.06 / 100.79 ms | -0.003494 | 0.489 s | Passed diagnostic |
+| Retained-history 500 RPS stage | 300,000 / 300,000 | 82.59 / 157.36 ms | +0.007843 | 1.518 s | Passed diagnostic |
+
+There were no errors or dropped arrivals. Charges were exact in all four scopes;
+no pending or unsafe state remained. First-stage WAL volume was about 5.62 GB,
+versus 5.77 GB before, only about 2.5% less. Do not claim compression alone fixed
+the failures. The normal runner now declares and verifies this database profile.
+The full four-tier sequence and installed functional recovery remain required.
+
+The selected comparison also passed bounded database maintenance, process loss
+in each role, and a same-image Helm rollout. All seven processes were replaced.
+Both recovery phases repeated 24 completions, four complete streams, 16
+functional checks, readiness, and exact accounting. The pod records also show
+initial API startup retries before load. Their previous logs were not retained;
+their cause is not proved. The normal run will retain initial status and previous
+logs before arrivals. A passing load result must not hide startup failures.
 
 ### Functional readiness
 
@@ -334,14 +381,14 @@ fix for the distinct persistence or latency failures.
 
 | Area | Current evidence | Remaining release check |
 | --- | --- | --- |
-| Client request IDs, complete streams, and native reporting | 24 installed-image completions passed, including four complete streams and omitted or invalid headers; charges were exact and all seven processes were ready | Repeat after process loss and Helm rollout |
-| Installed authentication, input validation, model visibility, and UI delivery | All 16 checks passed across the four API processes | Repeat after process loss and Helm rollout |
+| Client request IDs, complete streams, and native reporting | Cold start, process-loss recovery, and Helm-rollout recovery each passed 24 completions, including four complete streams; charges were exact and all seven processes were ready | Repeat in the full final sequence and retain initial startup status |
+| Installed authentication, input validation, model visibility, and UI delivery | All 16 checks passed across the four API processes before load and after both recovery phases | Repeat in the full final sequence |
 | Application behavior, including streaming and access checks | 1,696 application tests passed locally | Keep all final application CI checks passing |
-| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed locally; all five opt-in cases passed separately; latest CI failed five reporting-startup cases | Resolve the startup cause and pass both final database CI shards |
+| Database behavior, budgets, permissions, and reporting | All 1,194 PostgreSQL cases passed locally, with missing-service/profile cases provisioned separately; both latest CI database shards passed | Keep both final database CI shards passing |
 | Realtime clients | All four pinned official SDK cases passed locally | Keep final Realtime CI checks passing |
 | Redis limits and failure policies | 256 tests passed, including separate memory-pressure services | Keep all final Redis CI checks passing |
-| Install and upgrade migrations | Clean install, last-release upgrade, shared-feature upgrade, and model-identity recovery passed | Apply the forward reporting migration before the corrected image |
-| Container lifecycle and accepted-work recovery | Offline non-root startup and bounded exit passed; the lifecycle comparison recovered one accepted charge exactly once | Complete native process-loss and Helm-rollout recovery |
+| Install and upgrade migrations | Clean install, v0.3.1, v0.3.2, shared-feature upgrade, and model-identity recovery passed | Apply both forward reporting migrations before the corrected image |
+| Container lifecycle and accepted-work recovery | Offline non-root startup and bounded exit passed; the lifecycle comparison recovered one accepted charge exactly once; selected native process loss and rollout passed | Repeat native recovery after the full final load sequence |
 | Helm configuration and packaged UI | All 275 Helm tests and the UI CI job passed | Keep all final chart and UI CI checks passing |
 
 The full local database group in CI order passed: 504 passed and one opt-in case
