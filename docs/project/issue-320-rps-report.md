@@ -187,6 +187,39 @@ in the saved half-second observations. Those observations do not exclude
 shorter waits or unsampled work. Further measured load stopped. The next selected
 diagnostic adds fixed 20-second non-blocking profiles of one owned API process.
 
+The startup-corrected image `d7aa9008` passed the installed functional checks,
+but its 500 RPS warm-up failed: 22,054/30,000 successes, 4,513 HTTP 503 responses,
+276 client read timeouts, and 3,157 dropped arrivals. The 180-second drain failed
+with 240 unsettled operations and eight open grants. No unsafe windows were
+found. No measured stage or native recovery ran. Its database recorded
+317,253,358 sequential journal row reads for 22,382 stored journal rows.
+Those totals alone do not identify a specific query or prove a lock cycle.
+
+A real-database regression check now reproduces a retained-history scan in the
+append function's prior-operation lookup. It first collects empty-table
+statistics and compiles the lookup. After history grows, the cached plan reads
+and rejects 40,007 rows for one absent operation. The same check without the
+initial statistics snapshot passed. This explains why an analyzed-history test
+alone did not expose the defect.
+
+Forward migration `20261010190000_accounting_append_cold_plans` selects custom
+plans for this one function, as the existing claim and materialize functions
+already do. It changes no SQL validation, foreign key, lock order, charge,
+replay identity, or timeout. It adds no index or network call. All eight planner
+and statistics cases passed in the diagnostic trial after this setting changed.
+Full financial regression checks, migration checks, CI, and a new fixed-image
+upper-tier run must pass before this is a claimed qualification fix. Preserve
+the original failed result.
+
+All 109 related real-database checks then passed, including the twelve new cold
+append and failure-policy cases, exact replay, journal workers, compact receipts,
+and event publication. All thirteen execution-policy checks passed. Fresh and
+upgrade migration checks and fixed-image load checks remain required. Install
+the migration before rollout; API startup does not apply it. If rollback is
+needed, use a new reviewed migration to restore this function's prior setting.
+Do not remove or change the applied migration, disable a foreign key, or relax
+a request limit.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the

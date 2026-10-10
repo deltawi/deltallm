@@ -47,6 +47,10 @@ FUNCTION_POLICIES = (
         {"plan_cache_mode=force_custom_plan"},
     ),
     (
+        "deltallm_accounting_append_terminal_journal(bigint,jsonb,text[],text[])",
+        {"plan_cache_mode=force_custom_plan"},
+    ),
+    (
         "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
         {"jit=off"},
     ),
