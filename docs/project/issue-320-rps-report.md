@@ -116,6 +116,14 @@ those live settings before load. Application replicas, limits, deadlines,
 financial controls, and performance gates remain unchanged. This test allocation
 is not a production minimum or proof that the slowdown is fixed.
 
+The normal preparation comparison passed all four initial stages. The initial
+ten-minute 500 RPS check had 300,000/300,000 successes, p95 82.15 ms, p99 145.51 ms,
+and growth +0.001469/second. Exact accounting and complete drain passed. It used
+the unchanged verified image `88e5a59c` and the declared four-CPU, four-GiB
+PostgreSQL fixture in the eight-CPU VM. This is a better steady-state result than
+the six-CPU series, not an application optimization or a production minimum.
+The final four ten-minute stages and native recovery are still in progress.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the
@@ -150,6 +158,16 @@ bounds. It also checks bounded blocks and rejects lossy scans, large index
 probes, and history filtering. It must pass with both the default planner and
 an explicit bitmap plan. All other required main CI jobs passed. This failure
 still blocks release approval until the follow-up checks pass.
+
+The first follow-up default-plan case passed. Its forced bitmap case returned
+one visible row from three physical tuple versions left by reservation and
+dispatch. The check now bounds physical probes separately while keeping the
+one-visible-row, exact-index, loop, and block limits. PostgreSQL shard 0 also had
+one external-customer permission check return unavailable (503), not denial
+(403). No unauthorized change was accepted. Test-only diagnostics now preserve
+the cause class, bounded Prisma code, and elapsed time without session tokens.
+The expected denial and all application deadlines remain unchanged. These
+failures remain in the saved evidence; the next complete CI result is required.
 
 The synthetic provider does not validate a real provider's quotas, service
 availability, model behavior, or network delay. Qualify the actual production

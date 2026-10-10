@@ -95,11 +95,12 @@ def test_cost_aggregation_is_bounded():
         aggregate_routing_costs((cost(),) * 1001)
 
 
+@pytest.mark.parametrize("probes", [1, 3])
 @pytest.mark.parametrize(
     "fault",
     [None, "sequential", "wrong_index", "many_rows", "many_blocks", "lossy", "filter"],
 )
-def test_report_plan_guard_keeps_exact_index_and_work_bounds(fault):
+def test_report_plan_guard_keeps_exact_index_and_work_bounds(fault, probes):
     from tests.test_routing_cost_reports_postgres import assert_bounded_index
 
     node = {
@@ -112,7 +113,7 @@ def test_report_plan_guard_keeps_exact_index_and_work_bounds(fault):
                 "Node Type": "Bitmap Index Scan",
                 "Index Name": "scope_time_idx",
                 "Index Cond": "organization_id = 'org' AND created_at > now()",
-                "Actual Rows": 1,
+                "Actual Rows": probes,
                 "Actual Loops": 1,
             }
         ],
