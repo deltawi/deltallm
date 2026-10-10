@@ -8,6 +8,7 @@ import sys
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import httpx
 import pytest
 import yaml
 from src.config import GeneralSettings
@@ -133,6 +134,47 @@ deltallm_python_gc_pause_seconds_count{generation="private"} 99
 """)
     assert len(selected) == 8
     assert "private" not in repr(selected)
+
+
+@pytest.mark.parametrize(
+    "error,reason",
+    [
+        (httpx.ReadTimeout("private token"), "http_timeout"),
+        (httpx.ConnectError("private token"), "http_connection"),
+        (TimeoutError("private token"), "deadline"),
+        (UnicodeError("private token"), "decode"),
+        (ValueError("private token"), "parse"),
+        (RuntimeError("private token"), "unknown"),
+    ],
+)
+def test_metric_failure_classification_preserves_only_bounded_reason(error, reason):
+    assert metrics.scrape_failure_reason(error) == reason
+    records = metrics._encode_metric_records(
+        [None], [metrics.MetricSource("http://fixture/metrics", "api", 0)], 1.0, [reason]
+    )
+    saved = json.loads(records[0].line)
+    assert saved["error"] == "scrape_failed" and saved["error_reason"] == reason
+    assert "private" not in records[0].line and "fixture" not in records[0].line
+    assert records[0].values is None
+
+
+def test_metric_http_status_failure_does_not_export_response_or_url():
+    request = httpx.Request("GET", "http://fixture/private-token")
+    response = httpx.Response(503, request=request, text="private token")
+    assert (
+        metrics.scrape_failure_reason(
+            httpx.HTTPStatusError("private token", request=request, response=response)
+        )
+        == "http_status"
+    )
+
+
+@pytest.mark.parametrize("reasons", [["private token"], ["unknown", "unknown"]])
+def test_metric_failure_encoding_rejects_unbounded_or_misaligned_classifications(reasons):
+    with pytest.raises(ValueError, match="classifications are invalid"):
+        metrics._encode_metric_records(
+            [None], [metrics.MetricSource("http://fixture/metrics", "api", 0)], 1.0, reasons
+        )
 
 
 def test_cpu_counters_are_complete_and_deltas_do_not_hide_missing_data():
