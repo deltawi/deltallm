@@ -233,6 +233,9 @@ the dependency capacity contract.
    p95 at most 150 ms, p99 at most 300 ms and active-request slope at most
    +0.01 requests/second. Preserve generator, resource, dependency and strict
    financial gates, including correct charges, no overspend and completed drain.
+   Record the growth method. The corrected runner uses all request lifetimes
+   to calculate time-weighted mean live requests in each one-second interval,
+   then fits the middle 80 percent. It does not use one instant sample per second.
 5. Test the representative production traffic mix through the real ingress.
    Set separate streaming and real-provider SLOs; the synthetic 150/300 ms limits
    do not describe model generation time.
@@ -241,6 +244,10 @@ the dependency capacity contract.
    exact financial state. Keep every failed attempt.
 7. Complete the [production checklist](production-checklist.md), including
    security, backups, alert ownership and the last safe rollback point.
+8. Pass functional release checks, not only load tests. Check authentication,
+   tenant and role permissions, budgets, supported API paths, complete streams,
+   Realtime clients, native reporting, migrations, and the packaged UI. Repeat
+   installed-image client and accounting checks after process loss and rollout.
 
 Do not promise 1,000 RPS from the current evidence. First distinguish application
 CPU cost from fixture overhead, then verify the chosen code or topology change

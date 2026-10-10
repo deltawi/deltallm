@@ -53,11 +53,30 @@ latency passed, and accounting was exact. At 200 RPS, sampled live requests
 varied from three to five. A small change over this short window produced a
 slope of +0.038261/second. This is not evidence of a financial backlog.
 
-The next normal series uses the runner's supported 60-second short stages,
-followed by the same four 600-second stages and native recovery checks. It keeps
-one final image, all thresholds, and the failed attempt's evidence. The longer
-short window reduces sensitivity to a few changing live requests; it does not
-replace or shorten sustained qualification.
+The supported 60-second short-stage repeat also failed at 500 RPS. It had
+30,000 successful requests and exact charges, but latency increased slightly
+within that short window. That failed decision remains unchanged.
+
+### Growth measurement correction
+
+The old growth series sampled live requests at one instant each second. The
+new series uses the exact time spent by every request in each one-second
+interval. The slope still uses the middle 80 percent of the arrival window and
+the same +0.01/second limit. Peak concurrency, latency, dropped-arrival checks,
+financial checks, and stage stop rules remain unchanged.
+
+Saved-record diagnosis found sampling errors in the first 30-second eight-CPU
+attempt: 200 RPS gave +0.038261/second from instant samples but +0.003908 from
+all lifetimes; 500 RPS gave +0.057391 but +0.006455. The 60-second failure still
+fails with the new method: +0.068595/second. The six-CPU sustained failure also
+still fails: +0.049627/second, with failed latency limits. Regression tests check
+that the method rejects small real growth and does not create growth from
+a sampling-phase change.
+
+These calculations diagnose the measurement. They do not change past pass/fail
+records or create a release certificate. A new complete series uses 30-second
+short stages, all four 600-second stages, one unchanged final image, and native
+recovery checks. Its report records the measurement method explicitly.
 
 ### Functional readiness
 
