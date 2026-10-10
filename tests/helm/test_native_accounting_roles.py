@@ -35,6 +35,33 @@ def arguments(*changes):
     )
 
 
+def test_native_probe_schedule_publishes_ready_roles_with_full_startup_grace():
+    documents = _render(*arguments())
+    for component in ("api", "accounting-request", "accounting-worker"):
+        container = _deployment_by_pod_component(documents, component)["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        startup = container["startupProbe"]
+        readiness = container["readinessProbe"]
+        assert startup["httpGet"]["path"] == "/health/readiness"
+        assert startup["periodSeconds"] == 1
+        assert startup["failureThreshold"] * startup["periodSeconds"] == 300
+        assert startup["timeoutSeconds"] == 5
+        assert readiness["httpGet"]["path"] == "/health/readiness"
+        assert readiness["initialDelaySeconds"] == 0
+        assert readiness["periodSeconds"] == 1
+        assert readiness["successThreshold"] == 2
+        assert readiness["failureThreshold"] * readiness["periodSeconds"] == 15
+        assert readiness["timeoutSeconds"] == 3
+        assert container["livenessProbe"] == {
+            "httpGet": {"path": "/health/liveliness", "port": "http"},
+            "initialDelaySeconds": 30,
+            "periodSeconds": 10,
+            "timeoutSeconds": 5,
+            "failureThreshold": 3,
+        }
+
+
 def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_path):
     documents = _render(*arguments())
     report = CapacityReport.model_validate_json(

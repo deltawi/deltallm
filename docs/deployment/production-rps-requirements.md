@@ -113,6 +113,13 @@ The operator owns the external database setting and must qualify its exact
 storage and workload. A two-core API pod limit does not make one Python event
 loop use two cores. Size replicas for usable process CPU, not only pod limits.
 
+Native accounting also needs prompt publication of healthy service endpoints.
+The native overlay checks startup and readiness each second. It keeps the same
+health criteria, two positive readiness observations, 300-second startup grace,
+15-second readiness failure tolerance, and liveness settings. The API's
+five-second admission-monitor startup deadline stays unchanged. Verify cold
+startup without process retries; do not use load warm-up to hide startup faults.
+
 Pod limits do not add physical CPU capacity: the sum of these limits exceeds the
 shared VM's six CPUs. At 1,000 RPS the VM was 99.11% busy. Increasing only a pool,
 pod limit or HPA maximum does not establish that this bottleneck is removed.

@@ -39,6 +39,13 @@ Use its own recorded source and image identity; do not use the earlier image
 to test those changes. Keep the 60-second warm-ups, ten-minute stages, retained
 history, exact financial checks, and native recovery gates unchanged.
 
+The current native Helm overlay checks startup and readiness each second.
+It keeps two positive readiness observations, 300-second startup grace,
+15-second readiness failure tolerance, and the existing liveness checks.
+The API's five-second admission-monitor startup deadline does not change.
+Retain initial process status and previous logs before cold client checks.
+An initial retry is a functional readiness result, not a load warm-up result.
+
 ## Latest provider-pool source
 
 The 8 October revised-adapter bundle is `artifacts/http-pool-20261008/`.
