@@ -17,12 +17,17 @@ accounting. It does not represent long model replies, large bodies or streaming.
 | 50 RPS | Fixed candidate passed 30 seconds and ten minutes on the six-CPU fixture | Complete the final release checks and test the real traffic mix |
 | 100 RPS | Same fixed candidate passed 30 seconds and ten minutes | Same checks, with measured provider and dependency headroom |
 | 200 RPS | Same fixed candidate passed 30 seconds and ten minutes | Same checks, including peak concurrency and worker catch-up |
-| 500 RPS | Same candidate passed 30 seconds but failed ten-minute latency and growth limits | Pass sustained stability, functional recovery, and all four normal stages in the final setup |
+| 500 RPS | Six-CPU series failed ten-minute latency and growth limits; the same image passed a fresh ten-minute eight-CPU diagnostic | Pass functional recovery and all four normal stages in the final setup |
 | 1,000 RPS | Latest 30-second diagnostic failed | Resolve or isolate CPU saturation, then repeat the diagnostic and sustained tests |
 
 The fixed candidate's six-CPU series is not a passing release qualification. There is no
 verified production hardware minimum for each tier. Earlier RPS results do not
 qualify a later release image.
+
+The eight-CPU diagnostic reached 500 RPS with 300,000 successful requests,
+p95 65.42 ms, and p99 91.27 ms. It kept 12 GiB RAM and all original limits.
+Its database was fresh. Do not use this selected-tier result as the complete
+release qualification or a production hardware minimum.
 
 The [release-readiness PR](https://github.com/deltawi/deltallm/pull/351) records
 the current fixed-candidate checks and their evidence. That qualification uses
