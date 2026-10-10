@@ -282,6 +282,7 @@ def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
             "requests": {"cpu": "1", "memory": "1Gi"},
             "limits": {"cpu": "4", "memory": "4Gi"},
         },
+        "volumeMounts": [{"name": "postgres-shm", "mountPath": "/dev/shm"}],
         "args": [
             "-c",
             "shared_preload_libraries=pg_stat_statements",
@@ -305,7 +306,21 @@ def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
         "--type=strategic",
         "-p",
         json.dumps(
-            {"spec": {"template": {"spec": {"containers": [{"name": "postgres", **settings}]}}}}
+            {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{"name": "postgres", **settings}],
+                            "volumes": [
+                                {
+                                    "name": "postgres-shm",
+                                    "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"},
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
         ),
     )
     cluster.kubectl("rollout", "status", "deployment/postgres", "--timeout=180s")
@@ -344,10 +359,44 @@ def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
         raise RuntimeError(
             "Native qualification database settings do not match the declared fixture"
         )
+    shared_memory = cluster.kubectl(
+        "exec", "deployment/postgres", "--", "df", "-B1", "/dev/shm", timeout=10
+    ).stdout.splitlines()
+    if len(shared_memory) != 2 or len(shared_memory[1].split()) != 6:
+        raise RuntimeError("Native qualification database shared-memory evidence is invalid")
+    capacity = int(shared_memory[1].split()[1])
+    if capacity != 256 * 1024 * 1024:
+        raise RuntimeError("Native qualification database shared-memory capacity does not match")
     (cluster.output / "database-fixture.json").write_text(
-        json.dumps({"container": settings, "observed": observed}, indent=2) + "\n"
+        json.dumps(
+            {"container": settings, "observed": observed, "shared_memory_bytes": capacity}, indent=2
+        )
+        + "\n"
     )
     cluster.event("native_database_fixture_verified", **observed)
+
+
+def collect_native_logs(cluster: LifecycleCluster) -> None:
+    """Keep bounded dependency and gateway logs before the owned cluster is removed."""
+    for name, arguments in (
+        ("postgres", ("deployment/postgres",)),
+        ("gateway", ("-l", "app.kubernetes.io/instance=gateway", "--all-containers", "--prefix")),
+    ):
+        try:
+            result = cluster.kubectl(
+                "logs",
+                *arguments,
+                "--tail=5000",
+                "--request-timeout=5s",
+                "--pod-running-timeout=5s",
+                check=False,
+                timeout=20,
+            )
+            payload = (result.stdout + result.stderr)[-2 * 1024 * 1024 :]
+        except Exception as error:
+            # A failed diagnostic must not replace the original test failure.
+            payload = "Log collection failed: " + type(error).__name__ + "\n"
+        (cluster.output / f"native-final-{name}.log").write_text(payload)
 
 
 def pin_api_services(cluster: LifecycleCluster, pods: list[str]) -> list[str]:
@@ -784,15 +833,18 @@ def main() -> None:
         install_resource_metrics(cluster, metrics_image)
         values = qualification_values(cluster, args.image)
         prime_database(cluster, values)
-        results = asyncio.run(
-            exercise(
-                cluster,
-                values,
-                args.image,
-                short_seconds=args.short_seconds,
-                diagnostic_rates=diagnostic_rates,
+        try:
+            results = asyncio.run(
+                exercise(
+                    cluster,
+                    values,
+                    args.image,
+                    short_seconds=args.short_seconds,
+                    diagnostic_rates=diagnostic_rates,
+                )
             )
-        )
+        finally:
+            collect_native_logs(cluster)
     manifest["qualification_passed"] = diagnostic_rates is None and all(
         result["passed"] for result in results
     )

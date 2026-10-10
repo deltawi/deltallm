@@ -122,7 +122,34 @@ and growth +0.001469/second. Exact accounting and complete drain passed. It used
 the unchanged verified image `88e5a59c` and the declared four-CPU, four-GiB
 PostgreSQL fixture in the eight-CPU VM. This is a better steady-state result than
 the six-CPU series, not an application optimization or a production minimum.
-The final four ten-minute stages and native recovery are still in progress.
+The final sequence on the same retained database did not pass:
+
+| Rate | Successes / arrivals | p95 / p99 | Growth / second | Decision |
+| --- | --- | --- | --- | --- |
+| 50 RPS | 30,000 / 30,000 | 21.97 / 25.59 ms | -0.000015 | Passed |
+| 100 RPS | 60,000 / 60,000 | 22.30 / 26.09 ms | +0.000028 | Passed |
+| 200 RPS | 120,000 / 120,000 | 25.74 / 42.40 ms | -0.000161 | Passed |
+| 500 RPS | 298,734 / 300,000 | 276.52 / 592.63 ms | +0.028375 | Success, latency, and growth limits exceeded |
+
+The final 500 RPS stage had 1,265 HTTP 503 responses and one client read error.
+Of the 503 responses, 1,262 reported required persistence as unavailable.
+No arrivals were dropped. Accounting drained with no pending or unsafe state.
+The observed fact count and charge delta agree with the successful requests and
+the precheck; all four scopes agree. The official economic gate remains failed
+because not all requests succeeded. Do not treat that observation as a pass.
+
+The subsequent maintenance check failed because PostgreSQL could not enlarge a
+shared-memory segment to 67,145,728 bytes. The test database had no declared
+`/dev/shm` allocation. Native process-loss and rollout recovery were not reached.
+The next fixture mounts and verifies a 256-MiB memory-backed `/dev/shm` volume
+within the unchanged four-GiB database limit. This corrects a proven maintenance
+resource fault. It is not yet a proven fix for the persistence errors. Bounded
+database and gateway logs are retained before cluster cleanup on the next run.
+
+The runtime image and performance code remained fixed throughout the sequence.
+Only ordinary regression tests and documentation changed during the run. Stage
+commit metadata differs; the saved source comparison confirms that the runtime,
+migrations, chart, generator, and performance harness did not change.
 
 ### Functional readiness
 

@@ -63,8 +63,20 @@ This is a reproduction configuration, not a production installation recipe.
 The current comparison uses eight VM CPUs and the same 12 GiB RAM. PostgreSQL
 has a four-CPU, four-GiB limit, 512 MiB shared buffers, and a four-GiB WAL limit;
 durability remains enabled. Its initial ten-minute 500 RPS check passed at
-p95 82.15 ms and p99 145.51 ms. The final four-tier and native recovery results
-are still required. This is not a production hardware minimum.
+p95 82.15 ms and p99 145.51 ms. The final 50, 100, and 200 RPS stages passed,
+but final 500 RPS failed at 99.58% success and p95/p99 276.52/592.63 ms.
+The database maintenance check then failed from insufficient shared memory.
+Native process-loss and rollout checks were not reached. This is not a passing
+release qualification or a production hardware minimum.
+
+For a containerized PostgreSQL service, declare dynamic shared-memory capacity
+as well as RAM and shared buffers. The next test fixture verifies a 256-MiB
+memory-backed `/dev/shm` volume within the four-GiB database memory limit.
+The volume is an upper bound, not preallocated memory. Parallel queries and
+maintenance can need this space; `shared_buffers` is a separate setting.
+See [PostgreSQL memory settings](https://www.postgresql.org/docs/15/runtime-config-resource.html)
+and [Kubernetes memory-backed volumes](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir).
+Check maintenance under retained production-size history before setting capacity.
 
 Pod limits do not add physical CPU capacity: the sum of these limits exceeds the
 shared VM's six CPUs. At 1,000 RPS the VM was 99.11% busy. Increasing only a pool,
