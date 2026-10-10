@@ -65,9 +65,21 @@ async def test_unsupported_hard_capability_never_pays_for_classification(client,
         billing.reserve.assert_not_awaited()
 
 
-async def test_model_reload_during_classification_does_not_change_pinned_answer(client, test_app):
+async def test_model_reload_during_classification_does_not_change_pinned_answer(
+    client, test_app, monkeypatch
+):
+    from src.router.selection import service
+
     calls = []
+    decisions = []
     policy = None
+    original_observe = service.observe_selector_decision
+
+    def observe(decision):
+        decisions.append((decision.cause.value, decision.latency_ms, type(decision.usage).__name__))
+        original_observe(decision)
+
+    monkeypatch.setattr(service, "observe_selector_decision", observe)
 
     def handle(request):
         model = json.loads(request.content)["model"]
@@ -87,9 +99,11 @@ async def test_model_reload_during_classification_does_not_change_pinned_answer(
         billing, policy = configure(test_app, upstream)
         response = await client.post("/v1/chat/completions", headers=HEADERS, json=BODY)
         assert response.status_code == 200, response.text
+        assert [decision[0] for decision in decisions] == ["classified"], decisions
         assert calls == ["classifier", "quality"]
         response = await client.post("/v1/chat/completions", headers=HEADERS, json=BODY)
         assert response.status_code == 200, response.text
+        assert [decision[0] for decision in decisions] == ["classified", "classified"], decisions
         assert calls == ["classifier", "quality", "classifier", "quality-new"]
         assert billing.reserve.await_count == 2
 
