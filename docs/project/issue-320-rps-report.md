@@ -214,11 +214,36 @@ the original failed result.
 All 109 related real-database checks then passed, including the twelve new cold
 append and failure-policy cases, exact replay, journal workers, compact receipts,
 and event publication. All thirteen execution-policy checks passed. Fresh and
-upgrade migration checks and fixed-image load checks remain required. Install
+published v0.3.1 upgrade migration checks passed, as did shared-feature upgrade
+and model-identity recovery. Install
 the migration before rollout; API startup does not apply it. If rollback is
 needed, use a new reviewed migration to restore this function's prior setting.
 Do not remove or change the applied migration, disable a foreign key, or relax
 a request limit.
+
+The corrected image `d62715d0`, built from `609bad89`, passed all five offline
+image checks. Its new 60-second 500 RPS warm-up had 30,000/30,000 successes.
+The following 600-second stage had 300,000/300,000 successes, no HTTP or client
+errors, and no dropped arrivals. Its p95 was 99.07 ms and its p99 was 235.10 ms.
+Queue growth was -0.031722/second. All performance and exact-accounting gates
+passed. Accounting drained in 0.505 seconds with no pending or unsafe state.
+The four scope totals matched the exact `2.100007` measured charge, including
+one precheck. Redis used 6.000053 core round trips per request.
+
+The database retained 330,025 journal rows. It recorded 13,596 sequential
+journal row reads, compared with 317,253,358 in the earlier failed preparation
+window. These are different workload sizes, not a controlled speed ratio.
+Some internal database calls still timed out; recovery preserved all accepted
+charges and successful responses. The cause of those shorter waits is not proved.
+
+Maintenance and process-loss client checks passed. The rollout check then
+failed because Helm returned while four new ready API pods and one old ready
+API pod still existed. The test counted five instead of four. A regression test
+reproduced this race. The corrected test waits for each deployment to complete
+its rollout, then requires the same exact pod counts, readiness, changed pod
+identities, client behavior, and charges. Incomplete rollouts still fail.
+All 128 affected tool checks passed. Keep the original failed recovery record.
+This selected-tier result is not the final four-rate release qualification.
 
 ### Functional readiness
 
