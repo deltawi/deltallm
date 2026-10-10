@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from time import perf_counter
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -7,6 +9,7 @@ import pytest
 
 from src.auth.external_client import ExternalClientResolver
 from src.auth.external_config import ExternalAuthSettings
+from src.auth.external_errors import ExternalAuthUnavailable
 from src.db.catalog.logical_models import LogicalModelRepository
 from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.named_credentials import NamedCredentialRepository
@@ -21,11 +24,40 @@ pytestmark = pytest.mark.postgres
 external_database = fixtures.external_database
 
 
+def install_session_diagnostics(service):
+    lookup = service.get_context_for_session
+
+    async def observed(token):
+        started = perf_counter()
+        try:
+            return await lookup(token)
+        except ExternalAuthUnavailable as error:
+            cause = error.__cause__
+            code = getattr(cause, "code", None)
+            if (
+                not isinstance(code, str)
+                or len(code) != 5
+                or code[0] != "P"
+                or not code[1:].isdigit()
+            ):
+                code = None
+            logging.getLogger(__name__).warning(
+                "External customer fixture phase=session_validation cause=%s code=%s elapsed_ms=%.3f",
+                type(cause).__name__,
+                code,
+                (perf_counter() - started) * 1000,
+            )
+            raise
+
+    service.get_context_for_session = observed
+
+
 async def install_customer(fixture, app, client):
     await enable(fixture)
     exchange, sessions, _ = services(fixture)
     exchange.identities.sessions.external = sessions
     response = await exchange.exchange(proof(fixture), "customer-assets")
+    install_session_diagnostics(exchange.identities)
     app.state.platform_identity_service = exchange.identities
     app.state.external_auth_runtime = SimpleNamespace(
         client_resolver=ExternalClientResolver(

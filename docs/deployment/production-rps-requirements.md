@@ -46,7 +46,8 @@ recovery migration and use the corrected image, as described in the
 
 ## Measured reference topology
 
-The latest test used a dedicated Linux arm64 VM with six CPUs and 12 GiB RAM.
+The original complete series used a dedicated Linux arm64 VM with six CPUs and
+12 GiB RAM.
 Its two-node kind cluster shared that VM; it did not have two separate hardware
 failure domains. The generator, synthetic provider, monitoring, PostgreSQL and
 Redis also used the VM.
@@ -59,6 +60,12 @@ Redis also used the VM.
 | PostgreSQL and Redis | One pod each, test services only | 0.1 / 2 cores each | 128 MiB / 1 GiB each |
 
 This is a reproduction configuration, not a production installation recipe.
+The current comparison uses eight VM CPUs and the same 12 GiB RAM. PostgreSQL
+has a four-CPU, four-GiB limit, 512 MiB shared buffers, and a four-GiB WAL limit;
+durability remains enabled. Its initial ten-minute 500 RPS check passed at
+p95 82.15 ms and p99 145.51 ms. The final four-tier and native recovery results
+are still required. This is not a production hardware minimum.
+
 Pod limits do not add physical CPU capacity: the sum of these limits exceeds the
 shared VM's six CPUs. At 1,000 RPS the VM was 99.11% busy. Increasing only a pool,
 pod limit or HPA maximum does not establish that this bottleneck is removed.

@@ -272,3 +272,35 @@ def test_untrusted_peer_cannot_control_client_ip():
         resolver.resolve("10.0.0.5", "garbage")
     with pytest.raises(ValueError):
         resolver.resolve("10.0.0.5", ",".join(["10.0.0.6"] * 17))
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_customer_fixture_diagnostics_preserve_result_and_do_not_log_tokens(
+    caplog, unavailable
+):
+    from prisma.errors import TransactionExpiredError
+    from src.auth.external_errors import ExternalAuthUnavailable
+    from tests.db.test_external_customer_assets import install_session_diagnostics
+
+    context = customer()
+    failure = ExternalAuthUnavailable()
+    failure.__cause__ = TransactionExpiredError("test-only private transaction detail")
+
+    async def lookup(token):
+        assert token == "test-only-private-session-token"
+        if unavailable:
+            raise failure
+        return context
+
+    service = SimpleNamespace(get_context_for_session=lookup)
+    install_session_diagnostics(service)
+    if unavailable:
+        with pytest.raises(ExternalAuthUnavailable) as raised:
+            await service.get_context_for_session("test-only-private-session-token")
+        assert raised.value is failure
+        assert "cause=TransactionExpiredError" in caplog.text
+        assert "phase=session_validation" in caplog.text
+    else:
+        assert await service.get_context_for_session("test-only-private-session-token") is context
+        assert not caplog.records
+    assert "test-only-private" not in caplog.text
