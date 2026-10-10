@@ -19,6 +19,7 @@ from tests.performance.run_gateway_concurrency import generator_evidence_failure
 from tests.performance.run_native_qualification import (
     latency_and_queue_gates,
     qualification_schedule,
+    stage_seconds,
     qualification_values,
 )
 from tests.performance import native_qualification_economics as economics
@@ -32,6 +33,20 @@ def test_full_qualification_keeps_both_four_tier_series():
     phases, rates = qualification_schedule(30, None)
     assert phases == (("short", 30), ("qualification", 600))
     assert rates == (50, 100, 200, 500)
+
+
+def test_normal_high_rate_stability_observation_is_longer_not_a_weaker_limit():
+    assert [stage_seconds("short", rate, 30, diagnostic=False) for rate in (50, 100, 200, 500)] == [
+        30,
+        30,
+        30,
+        600,
+    ]
+    assert [
+        stage_seconds("qualification", rate, 600, diagnostic=False) for rate in (50, 100, 200, 500)
+    ] == [600, 600, 600, 600]
+    assert stage_seconds("short", 500, 30, diagnostic=True) == 30
+    assert stage_seconds("short", 1000, 60, diagnostic=True) == 60
 
 
 def test_upper_tier_diagnostic_never_repeats_lower_tiers_or_runs_long_stages():
@@ -396,6 +411,118 @@ async def test_economic_gate_requires_exact_charge_and_every_scope(monkeypatch, 
     )
     assert result["passed"] is (problem is None)
     assert result["expected_exact_charge_delta"] == str(charge)
+
+
+@pytest.mark.parametrize("extra_fact", [0, 1])
+async def test_warmup_has_no_precheck_and_rejects_an_extra_charge(monkeypatch, extra_fact):
+    charge = Decimal("0.000007") * (10 + extra_fact)
+    after = {
+        "facts": 10 + extra_fact,
+        "fact_charge": str(charge),
+        "unsafe_windows": 0,
+        "legacy_spend_rows": 0,
+    }
+    rows = [
+        {"scope_type": name, "committed": str(charge), "reserved": "0", "provisional": "0"}
+        for name in ("api_key", "user", "team", "organization")
+    ]
+    monkeypatch.setattr(economics, "accounting_snapshot", AsyncMock(return_value=after))
+    result = await economics.reconcile_native(
+        SimpleNamespace(query_raw=AsyncMock(return_value=rows)),
+        before={"facts": 0, "fact_charge": "0"},
+        successes=10,
+        all_successful=True,
+        precheck_count=0,
+    )
+    assert result["precheck_count"] == 0
+    assert result["passed"] is (extra_fact == 0)
+    assert result["expected_exact_charge_delta"] == "0.000070"
+
+
+@pytest.mark.parametrize("precheck_count", [-1, 2, True, 0.0])
+async def test_economic_gate_rejects_invalid_precheck_counts(precheck_count):
+    with pytest.raises(ValueError, match="Precheck count"):
+        await economics.reconcile_native(
+            None, before={}, successes=10, all_successful=True, precheck_count=precheck_count
+        )
+
+
+@pytest.mark.parametrize("problem", [None, "responses", "generator", "drain", "economics"])
+async def test_same_rate_warmup_keeps_raw_evidence_and_exact_economic_gates(
+    tmp_path, monkeypatch, problem
+):
+    @asynccontextmanager
+    async def database():
+        yield "db"
+
+    stage = tmp_path / "qualification-500rps"
+    events = []
+    cluster = SimpleNamespace(event=lambda *args, **options: events.append((args, options)))
+    run = SimpleNamespace(target_count=30000)
+
+    async def generate(*args, **options):
+        options["output"].mkdir(parents=True)
+        return run
+
+    generator = AsyncMock(side_effect=generate)
+    reconcile = AsyncMock(return_value={"passed": problem != "economics"})
+    monkeypatch.setattr(qualification, "local_database", database)
+    monkeypatch.setattr(qualification, "accounting_snapshot", AsyncMock(return_value={"facts": 0}))
+    monkeypatch.setattr(qualification, "run_cluster_generator", generator)
+    monkeypatch.setattr(
+        qualification,
+        "summarize",
+        lambda *args, **options: {"success_count": 29999 if problem == "responses" else 30000},
+    )
+    monkeypatch.setattr(
+        qualification,
+        "generator_evidence_failures",
+        lambda *args, **options: ["generator_drops"] if problem == "generator" else [],
+    )
+    monkeypatch.setattr(
+        qualification, "wait_native_drain", AsyncMock(return_value={"passed": problem != "drain"})
+    )
+    monkeypatch.setattr(qualification, "reconcile_native", reconcile)
+    capture = AsyncMock(return_value={"available": True})
+    monkeypatch.setattr(qualification, "capture_unsettled_operations", capture)
+    result = await qualification.warm_stage(
+        cluster, "image:sealed", ["http://api"] * 4, stage=stage, rate=500
+    )
+    assert generator.call_args.kwargs == {"rate": 500, "duration": 60, "output": stage / "warmup"}
+    assert result["passed"] is (problem is None)
+    assert json.loads((stage / "warmup.json").read_text()) == result
+    assert reconcile.call_args.kwargs["precheck_count"] == 0
+    assert reconcile.call_args.kwargs["all_successful"] is (problem != "responses")
+    assert capture.await_count == int(problem == "drain")
+    assert len(events) == 1
+
+
+async def test_failed_warmup_stops_before_measured_load_and_retains_the_failed_stage(
+    tmp_path, monkeypatch
+):
+    from tests.performance.native_qualification_failures import QualificationStageStopped
+
+    stage = tmp_path / "qualification-500rps"
+    stage.mkdir()
+    monkeypatch.setattr(qualification, "warm_stage", AsyncMock(return_value={"passed": False}))
+    measure = AsyncMock()
+    monkeypatch.setattr(qualification, "measure", measure)
+    with pytest.raises(QualificationStageStopped, match="Warm-up failed") as stopped:
+        await qualification.run_stage(
+            SimpleNamespace(output=tmp_path),
+            "image:sealed",
+            ["http://api"] * 4,
+            api_ports=[1, 2, 3, 4],
+            worker_ports=[5, 6, 7],
+            manifest=tmp_path / "manifest.json",
+            rate=500,
+            duration=600,
+            phase="qualification",
+        )
+    assert measure.await_count == 0
+    assert not stopped.value.report["passed"]
+    assert not stopped.value.report["measurement_started"]
+    assert json.loads((stage / "qualification.json").read_text()) == stopped.value.report
 
 
 @pytest.mark.parametrize(

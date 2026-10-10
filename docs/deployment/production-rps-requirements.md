@@ -31,7 +31,10 @@ release qualification or a production hardware minimum.
 
 The [release-readiness PR](https://github.com/deltawi/deltallm/pull/351) records
 the current fixed-candidate checks and their evidence. That qualification uses
-one image for the short and ten-minute 50/100/200/500 RPS stages. It also checks
+one image for initial checks and ten-minute 50/100/200/500 RPS stages. A fixed
+60-second same-rate warm-up precedes each measured stage. The initial 500 RPS
+stability check also lasts ten minutes. Warm-up requests are checked separately;
+all latency, growth, success, and financial limits remain unchanged. It also checks
 ordinary clients without request-ID headers, exact accounting, process recovery,
 and a same-image Helm rollout. Use the recorded final result, not an interim
 passing stage, before making a release capacity claim.

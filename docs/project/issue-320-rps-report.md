@@ -74,9 +74,24 @@ that the method rejects small real growth and does not create growth from
 a sampling-phase change.
 
 These calculations diagnose the measurement. They do not change past pass/fail
-records or create a release certificate. A new complete series uses 30-second
-short stages, all four 600-second stages, one unchanged final image, and native
-recovery checks. Its report records the measurement method explicitly.
+records or create a release certificate. The first new-method 30-second series
+passed 50, 100, and 200 RPS, but failed 500 RPS growth at +0.089038/second.
+All 15,000 requests succeeded, p95 was 54.05 ms, p99 was 82.12 ms, and accounting
+was exact. That failed decision remains unchanged.
+
+The next normal series has a fixed 60-second warm-up at the same rate before
+each measured stage. Warm-up samples and exact financial checks are retained
+separately. The initial 50, 100, and 200 RPS stages remain 30 seconds. The initial
+500 RPS observation is extended to 600 seconds. The final four stages remain
+600 seconds each. There is no cooling pause inside any measured stage. Between
+stages, the runner saves samples and requires accounting to drain. All limits
+and cold-start functional checks remain active.
+
+This longer observation is necessary because short slices of the passing
+eight-CPU ten-minute diagnostic gave both positive and negative slopes. Even
+its last 60 seconds gave +0.052789/second, although the full time-weighted slope
+was +0.001844/second. Warm-up alone does not prove stable capacity. The new
+complete series and native recovery checks are still required.
 
 ### Functional readiness
 
@@ -100,7 +115,8 @@ skipped. All 33 affected tests also passed with the smaller CI Prisma pool.
 Earlier CI reporting-startup failures did not reproduce in these checks. The
 latest complete CI run passed all required jobs, including capacity and recovery.
 The cause of the earlier failures is not proved. Bounded test diagnostics remain
-in place. Final CI for the stronger installed-image checks and the complete
+in place. Full CI also passed for the stronger installed-image checks and the
+time-weighted measurement. Final CI for the warm-up change and the complete
 eight-CPU qualification are still required before release approval.
 
 The synthetic provider does not validate a real provider's quotas, service

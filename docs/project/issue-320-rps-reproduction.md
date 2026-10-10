@@ -9,9 +9,14 @@ The original upgrade is merged. Its source branch was
 commit and evidence recorded there for current qualification. The following
 historical bundles do not qualify the later merged release image.
 
-Current qualification uses the unchanged normal runner without
-`--diagnostic-rates`. It checks ordinary clients before arrivals, then short and
-600-second stages at 50, 100, 200, and 500 RPS. It ends with native process-loss
+Current qualification uses the normal runner without `--diagnostic-rates`.
+It checks ordinary clients before load, then runs a fixed 60-second same-rate
+warm-up before each measured stage. The initial 50, 100, and 200 RPS stages use
+`--short-seconds`; the initial 500 RPS observation uses 600 seconds. All four
+final stages use 600 seconds. Warm-up samples and exact charges are checked
+separately and are not included in measured latency or success counts. No
+cooling pause occurs inside a measured stage. The runner saves samples and
+requires accounting to drain between stages. It ends with native process-loss
 and same-image Helm rollout checks. Keep all gates active and retain failed
 attempts. A selected-tier diagnostic is not a release qualification.
 
@@ -183,9 +188,11 @@ private kubeconfig. It checks source/image identity, primes native accounting,
 and proves generator capacity before gateway arrivals. Gateway load runs inside
 the cluster against four per-API services; it does not use a port-forward.
 
-The normal schedule runs short 50/100/200/500 stages, then 600-second stages at
-each rate only if the short gates permit them. Any short failure stops the long
-series. Preserve nonzero exits, manifests, stage JSON, raw samples, metrics,
+For historical source `7d4fbe71`, the normal schedule runs short 50/100/200/500
+stages, then 600-second stages at each rate only if the short gates permit them.
+The current release runner uses the longer initial 500 RPS observation and
+fixed warm-up described above. Any initial failure stops the final series.
+Preserve nonzero exits, manifests, stage JSON, raw samples, metrics,
 resource counters, dependency snapshots, money reconciliation, and drain results.
 Do not edit a result or choose only passing attempts.
 

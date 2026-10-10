@@ -58,6 +58,7 @@ from tests.performance.native_recovery import verify_native_recovery
 from tests.performance.qualification_image_archive import platform_manifest_digest
 
 RATES = (50, 100, 200, 500)
+WARMUP_SECONDS = 60
 DIAGNOSTIC_RATES = (*RATES, 1000)
 REQUEST_SELECTOR = (
     "app.kubernetes.io/instance=gateway,app.kubernetes.io/component=accounting-request"
@@ -98,6 +99,12 @@ def merge_values(base: dict, overlay: dict) -> dict:
         else:
             base[key] = value
     return base
+
+
+def stage_seconds(phase: str, rate: int, seconds: int, *, diagnostic: bool) -> int:
+    # The strict high-rate stability limit needs the full observation window.
+    # Keep short selected diagnostics short; they never qualify a release.
+    return 600 if not diagnostic and phase == "short" and rate == 500 else seconds
 
 
 def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
@@ -344,6 +351,48 @@ async def generator_proof(cluster: LifecycleCluster, image: str) -> dict[str, ob
     return report
 
 
+async def warm_stage(
+    cluster: LifecycleCluster, image: str, endpoints: list[str], *, stage: Path, rate: int
+) -> dict[str, object]:
+    async with local_database() as db:
+        before = await accounting_snapshot(db)
+    run = await run_cluster_generator(
+        cluster,
+        image,
+        endpoints,
+        rate=rate,
+        duration=WARMUP_SECONDS,
+        output=stage / "warmup",
+    )
+    report = summarize(run, target_rate=rate)
+    failures = generator_evidence_failures(run, target_rate=rate)
+    all_successful = report["success_count"] == run.target_count
+    if not all_successful:
+        failures.append("warmup_not_all_successful")
+    async with local_database() as db:
+        drain = await wait_native_drain(db)
+        economics = await reconcile_native(
+            db,
+            before=before,
+            successes=report["success_count"],
+            all_successful=all_successful,
+            precheck_count=0,
+        )
+        unsettled = None if drain["passed"] else await capture_unsettled_operations(db)
+    report.update(
+        purpose="same-rate preparation; excluded from measured stage counts and latency gates",
+        duration_seconds=WARMUP_SECONDS,
+        failures=failures,
+        accounting_drain=drain,
+        accounting_reconciliation=economics,
+        accounting_failure_evidence=unsettled,
+        passed=not failures and drain["passed"] and economics["passed"],
+    )
+    (stage / "warmup.json").write_text(json.dumps(report, indent=2) + "\n")
+    cluster.event("qualification_warmup_completed", rate=rate, passed=report["passed"])
+    return report
+
+
 async def run_stage(
     cluster: LifecycleCluster,
     image: str,
@@ -357,6 +406,18 @@ async def run_stage(
     phase: str,
 ) -> dict[str, object]:
     stage = cluster.output / f"{phase}-{rate}rps"
+    warmup = await warm_stage(cluster, image, endpoints, stage=stage, rate=rate)
+    if not warmup["passed"]:
+        report = {
+            "phase": phase,
+            "target_rate_rps": rate,
+            "duration_seconds": duration,
+            "warmup": warmup,
+            "measurement_started": False,
+            "passed": False,
+        }
+        (stage / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")
+        raise QualificationStageStopped("Warm-up failed; measured load stopped", report)
     roles = {
         "api",
         "accounting_request",
@@ -417,11 +478,13 @@ async def run_stage(
     throughput_passed = gates["success_passed"] and not report["diagnostic_failures"]
     report.update(
         phase=phase,
+        warmup=warmup,
+        measurement_started=True,
         cpu_throttling={
             "before": cpu_before,
             "after": cpu_after,
             "deltas": cpu_counter_deltas(cpu_before, cpu_after),
-            "window": "includes warmup and artifact transfer; no reads inside arrivals",
+            "window": "includes precheck and artifact transfer; excludes warm-up; no reads inside arrivals",
         },
         request_path="four in-cluster per-pod services; one synchronized generator shard per API process",
         accounting_drain=drain,
@@ -524,7 +587,9 @@ async def exercise(
                         worker_ports=worker_ports,
                         manifest=manifest,
                         rate=rate,
-                        duration=duration,
+                        duration=stage_seconds(
+                            phase, rate, duration, diagnostic=diagnostic_rates is not None
+                        ),
                         phase=phase,
                     ),
                     output=cluster.output,
@@ -626,6 +691,13 @@ def main() -> None:
             else "native accounting fixed-image 50/100/200/500 RPS qualification"
         ),
         diagnostic_rates=diagnostic_rates,
+        warmup_seconds=WARMUP_SECONDS,
+        initial_stage_seconds={
+            str(rate): stage_seconds(
+                "short", rate, args.short_seconds, diagnostic=diagnostic_rates is not None
+            )
+            for rate in (RATES if diagnostic_rates is None else diagnostic_rates)
+        },
         release_eligible=False,
         docker_environment=environment,
     )
