@@ -1,12 +1,18 @@
 # Issue 320: upgrade results and merge status
 
-Updated: 9 October 2026. PR target: `main`.
-Source branch: `codex/issue-320-main-integration`.
+Historical results through 9 October 2026. Original PR target: `main`.
+Original source branch: `codex/issue-320-main-integration`.
+
+The upgrade is now merged. The current release checks are in
+[PR #351](https://github.com/deltawi/deltallm/pull/351). That PR records one fixed
+candidate image, full CI, ordinary native client requests, the sustained four-tier
+series, and recovery checks. Use its final report to assess the corrected release.
+The older results below are not a certificate for the current release image.
 
 For production sizing, provider quotas, role separation and required release
 checks, use [Production requirements for RPS targets](../deployment/production-rps-requirements.md).
 
-## Status
+## Historical status before the release checks
 
 The upgrade includes bounded admission and dependency capacity, native financial
 accounting, recovery and reporting, deployment role separation, and provider
