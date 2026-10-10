@@ -14,6 +14,30 @@ from tests.test_accounting_allocator_bounds_postgres import (
     assert_bounded_allocator_plan,
     assert_bounded_window_plan,
 )
+from tests.test_accounting_read_model_frontier_postgres import HISTORY_INSERT_ROWS, retain
+
+
+@pytest.mark.parametrize("start,end", [(1, 40_000), (40_001, 300_000), (7, 8)])
+@pytest.mark.parametrize("analyze", [False, True])
+async def test_frontier_history_setup_preserves_every_row_with_bounded_inserts(start, end, analyze):
+    connection = SimpleNamespace(execute=AsyncMock())
+    await retain(SimpleNamespace(_connection=connection), start, end, analyze)
+    calls = connection.execute.await_args_list
+    inserts = [call.args for call in calls if call.args[0].startswith("INSERT INTO")]
+    assert HISTORY_INSERT_ROWS == 10_000
+    assert inserts[0][1] == start and inserts[-1][2] == end
+    assert sum(last - first + 1 for _, first, last in inserts) == end - start + 1
+    for index, (query, first, last) in enumerate(inserts):
+        assert 1 <= last - first + 1 <= HISTORY_INSERT_ROWS
+        assert "repeat('x',512)" in query
+        if index:
+            assert first == inserts[index - 1][2] + 1
+    assert calls[len(inserts)].args[1] == end
+    assert [call.args[0] for call in calls[len(inserts) + 1 :]] == (
+        ["ANALYZE deltallm_accounting_events", "ANALYZE deltallm_accounting_projection_checkpoints"]
+        if analyze
+        else []
+    )
 
 
 def message(value):
@@ -107,6 +131,9 @@ async def test_planner_probe_is_scoped_to_its_owned_connection(monkeypatch, plan
     monkeypatch.setattr(module.asyncpg, "connect", AsyncMock(return_value=connection))
     async with capture_accounting_plans("postgresql://localhost/disposable", planner=planner):
         pass
+    module.asyncpg.connect.assert_awaited_once_with(
+        "postgresql://localhost/disposable", timeout=5, command_timeout=5
+    )
     commands = [call.args[0] for call in connection.execute.await_args_list]
     assert ("SET jit=off" in commands) == (planner == "alternate_join")
     assert any("plan_cache_mode=" in command for command in commands)

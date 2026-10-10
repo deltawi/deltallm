@@ -73,9 +73,13 @@ jobs:
           --durations=25 --durations-min=0.5
 
   postgres-tests:
-    name: Python tests (postgres)
+    name: Python tests (postgres ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     services:
       postgres:
         image: postgres:15
@@ -142,7 +146,8 @@ jobs:
           DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
         run: >-
           uv run pytest -q -m postgres
-          --durations=25 --durations-min=0.5
+          --postgres-shard=${{ matrix.shard }}/2
+          --tb=short --durations=25 --durations-min=0.5
 
   redis-tests:
     name: Python tests (redis)

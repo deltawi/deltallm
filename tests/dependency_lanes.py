@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter
 from collections.abc import Iterable
@@ -25,6 +26,24 @@ _EXTERNAL_USAGE_PATTERNS = {
 
 class DependencyLaneError(ValueError):
     """Raised when a test cannot be assigned to one dependency lane safely."""
+
+
+def parse_postgres_shard(value: str) -> tuple[int, int]:
+    try:
+        index, count = (int(part) for part in value.split("/"))
+    except ValueError as exc:
+        raise ValueError("PostgreSQL shard must be INDEX/COUNT") from exc
+    if not 0 <= index < count <= 8:
+        raise ValueError("PostgreSQL shard requires 0 <= INDEX < COUNT <= 8")
+    return index, count
+
+
+def postgres_test_shard(nodeid: str, count: int) -> int:
+    if not 1 <= count <= 8:
+        raise ValueError("PostgreSQL shard count must be between 1 and 8")
+    # Keep a module and its scoped fixtures together on one isolated database.
+    module = nodeid.split("::", 1)[0]
+    return int.from_bytes(hashlib.sha256(module.encode()).digest(), "big") % count
 
 
 def classify_dependency_lane(
@@ -88,6 +107,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="report collected test counts for each dependency lane",
     )
+    group.addoption(
+        "--postgres-shard",
+        type=parse_postgres_shard,
+        default=None,
+        help="select INDEX/COUNT of PostgreSQL modules; requires -m postgres and isolated services",
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -95,7 +120,9 @@ def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    del config
+    shard = config.getoption("--postgres-shard")
+    if shard is not None and config.option.markexpr.strip() != "postgres":
+        raise pytest.UsageError("--postgres-shard requires the exact -m postgres selection")
     expected_by_path: dict[Path, str | None] = {}
     errors: list[str] = []
 
@@ -129,6 +156,21 @@ def pytest_collection_modifyitems(
     if errors:
         details = "\n".join(f"  - {error}" for error in errors)
         raise pytest.UsageError(f"invalid test dependency classification:\n{details}")
+
+    if shard is not None:
+        index, count = shard
+        selected: list[pytest.Item] = []
+        deselected: list[pytest.Item] = []
+        for item in items:
+            if (
+                item.get_closest_marker("postgres") is not None
+                and postgres_test_shard(item.nodeid, count) == index
+            ):
+                selected.append(item)
+            else:
+                deselected.append(item)
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
