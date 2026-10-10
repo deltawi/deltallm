@@ -36,8 +36,28 @@ sustained 500 RPS result. The unchanged limits are p95 at most 150 ms, p99 at mo
 300 ms, and growth at most +0.01 active requests per second.
 
 The runner stopped before process-loss and Helm-rollout recovery because the
-500 RPS performance gate failed. An eight-CPU capacity check is in progress with
-the same image and limits. It is a diagnosis, not a release certificate.
+500 RPS performance gate failed. A fresh eight-CPU diagnostic then passed with
+the same application image and limits:
+
+| Rate and duration | Successful / scheduled | p95 / p99 | Active-request growth per second | Exact accounting | Result |
+| --- | ---: | ---: | ---: | --- | --- |
+| 500 RPS, ten minutes | 300,000 / 300,000 | 65.42 / 91.27 ms | +0.001150 | Passed | Passed diagnostic |
+
+The VM still used 12 GiB RAM. The only capacity change was six to eight CPUs.
+There were no HTTP errors or dropped arrivals, and accounting drained. This
+supports the CPU-headroom diagnosis. It is not an application optimization or
+a release certificate. The database was fresh, and only the upper tier ran.
+The first complete eight-CPU attempt stopped after its 30-second ladder. The
+200 and 500 RPS stages failed the growth limit, although all requests succeeded,
+latency passed, and accounting was exact. At 200 RPS, sampled live requests
+varied from three to five. A small change over this short window produced a
+slope of +0.038261/second. This is not evidence of a financial backlog.
+
+The next normal series uses the runner's supported 60-second short stages,
+followed by the same four 600-second stages and native recovery checks. It keeps
+one final image, all thresholds, and the failed attempt's evidence. The longer
+short window reduces sensitivity to a few changing live requests; it does not
+replace or shorten sustained qualification.
 
 ### Functional readiness
 
@@ -46,9 +66,10 @@ application's supported features and its financial and access controls.
 
 | Area | Current evidence | Remaining release check |
 | --- | --- | --- |
-| Client request IDs and native reporting | 20 ordinary installed-image requests passed, including omitted and invalid headers; all seven processes were ready; charges were exact | Repeat after process loss and Helm rollout |
+| Client request IDs, complete streams, and native reporting | 24 installed-image completions passed, including four complete streams and omitted or invalid headers; charges were exact and all seven processes were ready | Repeat after process loss and Helm rollout |
+| Installed authentication, input validation, model visibility, and UI delivery | All 16 checks passed across the four API processes | Repeat after process loss and Helm rollout |
 | Application behavior, including streaming and access checks | 1,696 application tests passed locally | Keep all final application CI checks passing |
-| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed; all five opt-in cases passed separately | Resolve the repeated reporting-startup failure in CI |
+| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed; all five opt-in cases passed separately; both latest CI shards passed | Keep all final database CI checks passing |
 | Realtime clients | All four pinned official SDK cases passed locally | Keep final Realtime CI checks passing |
 | Redis limits and failure policies | 256 tests passed, including separate memory-pressure services | Keep all final Redis CI checks passing |
 | Install and upgrade migrations | Clean install, last-release upgrade, shared-feature upgrade, and model-identity recovery passed | Apply the forward reporting migration before the corrected image |
@@ -57,8 +78,11 @@ application's supported features and its financial and access controls.
 
 The full local database group in CI order passed: 504 passed and one opt-in case
 skipped. All 33 affected tests also passed with the smaller CI Prisma pool.
-These passes do not remove the repeated CI reporting-startup failure. That
-failure and the sustained 500 RPS gate still block release readiness.
+Earlier CI reporting-startup failures did not reproduce in these checks. The
+latest complete CI run passed all required jobs, including capacity and recovery.
+The cause of the earlier failures is not proved. Bounded test diagnostics remain
+in place. Final CI for the stronger installed-image checks and the complete
+eight-CPU qualification are still required before release approval.
 
 The synthetic provider does not validate a real provider's quotas, service
 availability, model behavior, or network delay. Qualify the actual production
