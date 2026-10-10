@@ -14,11 +14,11 @@ accounting. It does not represent long model replies, large bodies or streaming.
 
 | Target | Current evidence | Required before a production capacity claim |
 | --- | --- | --- |
-| 50 RPS | Fixed candidate passed 30 seconds and ten minutes on the six-CPU fixture | Complete the final release checks and test the real traffic mix |
-| 100 RPS | Same fixed candidate passed 30 seconds and ten minutes | Same checks, with measured provider and dependency headroom |
-| 200 RPS | Same fixed candidate passed 30 seconds and ten minutes | Same checks, including peak concurrency and worker catch-up |
-| 500 RPS | Six-CPU series failed ten-minute latency and growth limits; the same image passed a fresh ten-minute eight-CPU diagnostic | Pass functional recovery and all four normal stages in the final setup |
-| 1,000 RPS | Latest 30-second diagnostic failed | Resolve or isolate CPU saturation, then repeat the diagnostic and sustained tests |
+| 50 RPS | Earlier candidate passed ten minutes; append-corrected `d62715d0` image passed its 30-second initial stage | Complete the reporting-corrected image's final release checks and test the real traffic mix |
+| 100 RPS | Earlier candidate passed ten minutes; append-corrected image passed its 30-second initial stage | Same checks, with measured provider and dependency headroom |
+| 200 RPS | Earlier candidate passed ten minutes; append-corrected image passed its 30-second initial stage | Same checks, including peak concurrency and worker catch-up |
+| 500 RPS | Append-corrected image passed one diagnostic at p95/p99 58.90/93.74 ms, but failed the next retained-history stage at 99.705% success | Pass the reporting-corrected image's functional recovery and all four normal stages |
+| 1,000 RPS | Earlier 30-second diagnostic failed; the reporting-corrected image has not been tested at this rate | Repeat only after the current sustained 500 RPS and functional gates pass |
 
 The fixed candidate's six-CPU series is not a passing release qualification. There is no
 verified production hardware minimum for each tier. Earlier RPS results do not
@@ -29,7 +29,7 @@ p95 65.42 ms, and p99 91.27 ms. It kept 12 GiB RAM and all original limits.
 Its database was fresh. Do not use this selected-tier result as the complete
 release qualification or a production hardware minimum.
 
-The [release-readiness PR](https://github.com/deltawi/deltallm/pull/351) records
+The [release-readiness follow-up](https://github.com/deltawi/deltallm/pull/352) records
 the current fixed-candidate checks and their evidence. That qualification uses
 one image for initial checks and ten-minute 50/100/200/500 RPS stages. A fixed
 60-second same-rate warm-up precedes each measured stage. The initial 500 RPS
@@ -43,6 +43,9 @@ The unchanged `v0.3.1` pre-release must not become Latest. Its native reporting
 can stop after a valid client request with no request-ID header. Apply the forward
 recovery migration and use the corrected image, as described in the
 [accounting runbook](accounting-v2.md#request-ids-and-blocked-reporting-records).
+The published v0.3.2 pre-release has that reporting correction, but does not
+include the follow-up startup, cold-append, and cached-reporting corrections. No published release
+has the complete current qualification evidence.
 
 ## Measured reference topology
 
@@ -60,7 +63,7 @@ Redis also used the VM.
 | PostgreSQL and Redis | One pod each, test services only | 0.1 / 2 cores each | 128 MiB / 1 GiB each |
 
 This is a reproduction configuration, not a production installation recipe.
-The current comparison uses eight VM CPUs and the same 12 GiB RAM. PostgreSQL
+The earlier database comparison used eight VM CPUs and the same 12 GiB RAM. PostgreSQL
 has a four-CPU, four-GiB limit, 512 MiB shared buffers, and a four-GiB WAL limit;
 durability remains enabled. Its initial ten-minute 500 RPS check passed at
 p95 82.15 ms and p99 145.51 ms. The final 50, 100, and 200 RPS stages passed,
@@ -70,13 +73,28 @@ Native process-loss and rollout checks were not reached. This is not a passing
 release qualification or a production hardware minimum.
 
 For a containerized PostgreSQL service, declare dynamic shared-memory capacity
-as well as RAM and shared buffers. The next test fixture verifies a 256-MiB
+as well as RAM and shared buffers. The current test fixture verifies a 256-MiB
 memory-backed `/dev/shm` volume within the four-GiB database memory limit.
 The volume is an upper bound, not preallocated memory. Parallel queries and
 maintenance can need this space; `shared_buffers` is a separate setting.
 See [PostgreSQL memory settings](https://www.postgresql.org/docs/15/runtime-config-resource.html)
 and [Kubernetes memory-backed volumes](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir).
 Check maintenance under retained production-size history before setting capacity.
+
+The append-corrected fixed image uses runtime `609bad89`, which includes the forward
+cold-append migration. Its diagnostics use twelve VM CPUs and 12 GiB RAM, with
+the same four-CPU, four-GiB PostgreSQL limit and all durability settings enabled.
+One normal 500 RPS stage failed in a 2.65-second persistence-error interval;
+later diagnostics are not a substitute for the full sequence. Storage latency,
+not only CPU and connection counts, must fit the declared 250-ms accounting
+call budget. Keep fsync, synchronous commit, and full-page writes enabled.
+
+The reporting correction needs both forward migrations `20261010213000` and
+`20261010214000` before image rollout. They keep reporting queries indexed after
+empty-table statistics and cached calls. No production capacity improvement is
+claimed until the corrected image passes retained-history and release checks.
+Monitor analyze and vacuum progress, but do not make query bounds depend on
+fresh statistics. Keep all lease, generation, charge, and deadline checks active.
 
 Pod limits do not add physical CPU capacity: the sum of these limits exceeds the
 shared VM's six CPUs. At 1,000 RPS the VM was 99.11% busy. Increasing only a pool,

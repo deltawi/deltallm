@@ -5,7 +5,8 @@ The stored evidence is local. Do not assume that raw bundles are included in a P
 
 The original upgrade is merged. Its source branch was
 `codex/issue-320-main-integration`. The current release checks are in
-[PR #351](https://github.com/deltawi/deltallm/pull/351). Use the fixed candidate
+[PR #352](https://github.com/deltawi/deltallm/pull/352). PR #351 is merged.
+Use the fixed candidate
 commit and evidence recorded there for current qualification. The following
 historical bundles do not qualify the later merged release image.
 
@@ -26,6 +27,14 @@ GiB, with 512-MiB shared buffers and a four-GiB WAL limit. It verifies that
 `fsync`, synchronous commit, full-page writes, and autovacuum remain enabled.
 The connection bound stays 1,000. These are test settings, not production
 minimums. Earlier source bundles retain their earlier database allocations.
+The current fixture also verifies a 256-MiB memory-backed `/dev/shm` volume.
+Earlier fixed image `d62715d0` uses runtime `609bad89` and forward migration
+`20261010190000_accounting_append_cold_plans`. Current diagnostics use twelve
+VM CPUs and 12 GiB RAM. A selected-tier pass does not qualify all four rates.
+The next image adds reporting migrations `20261010213000` and `20261010214000`.
+Use its own recorded source and image identity; do not use the earlier image
+to test those changes. Keep the 60-second warm-ups, ten-minute stages, retained
+history, exact financial checks, and native recovery gates unchanged.
 
 ## Latest provider-pool source
 
