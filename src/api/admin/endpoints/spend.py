@@ -21,7 +21,7 @@ from src.billing.spend.spend_read import SpendReadSource, get_spend_read_source
 from src.db.billing.spend_components import external_request_sql
 from src.middleware.admin import require_any_admin_permission
 from src.providers.resolution import provider_from_model, resolve_provider
-from src.services.spend_reporting_cache import reporting_cache_ttl
+from src.services.reporting.spend_reporting_cache import reporting_cache_ttl
 from src.api.admin.spend_reporting_dependencies import (
     _resolve_reporting_visibility,
     _reporting_v2_enabled,
@@ -36,7 +36,7 @@ from src.db.runtime.reporting import (
     _run_reporting_transaction,
     _run_reporting_statement,
 )
-from src.services.spend_visibility import (
+from src.services.reporting.spend_visibility import (
     SPEND_VISIBILITY_PERMISSIONS,
     SpendVisibility,
     apply_spend_visibility,

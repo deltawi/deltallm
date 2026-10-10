@@ -39,7 +39,7 @@ from src.batch.webhooks.signing import (
     build_batch_webhook_headers,
 )
 from src.batch.webhooks.terminalization import BatchWebhookTerminalRecorder
-from src.services.audit_service import AuditService
+from src.services.audit.audit_service import AuditService
 
 logger = logging.getLogger(__name__)
 

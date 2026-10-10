@@ -5,8 +5,8 @@ from src.api.admin.selector_evaluation_route import SelectorEvaluationRoute
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
-from src.services.audit_service import require_audit_service
-from src.services.selector_evaluation import (
+from src.services.audit.audit_service import require_audit_service
+from src.services.routing.selector_evaluation import (
     SelectorEvaluationReport,
     SelectorEvaluationRequest,
     evaluate_selector,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from src.middleware.rate_limit import _extract_model, _model_limit
 from src.models.responses import UserAPIKeyAuth
-from src.services.limit_counter import RateLimitCheck
+from src.services.admission.limit_counter import RateLimitCheck
 
 
 class TestExtractModel:
@@ -162,19 +162,23 @@ class TestPerModelRateLimitChecks:
         org_rpm = _model_limit(org_model_rpm, model)
 
         if team_rpm is not None and team_id:
-            checks.append(RateLimitCheck(
-                scope="team_model_rpm",
-                entity_id=f"{team_id}:{model}",
-                limit=team_rpm,
-                amount=1,
-            ))
+            checks.append(
+                RateLimitCheck(
+                    scope="team_model_rpm",
+                    entity_id=f"{team_id}:{model}",
+                    limit=team_rpm,
+                    amount=1,
+                )
+            )
         if org_rpm is not None and org_id:
-            checks.append(RateLimitCheck(
-                scope="org_model_rpm",
-                entity_id=f"{org_id}:{model}",
-                limit=org_rpm,
-                amount=1,
-            ))
+            checks.append(
+                RateLimitCheck(
+                    scope="org_model_rpm",
+                    entity_id=f"{org_id}:{model}",
+                    limit=org_rpm,
+                    amount=1,
+                )
+            )
 
         assert len(checks) == 2
         assert checks[0].scope == "team_model_rpm"

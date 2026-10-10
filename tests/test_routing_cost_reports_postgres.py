@@ -8,7 +8,7 @@ from src.billing.charges.operation_reservation import ComponentState
 from src.billing.spend.spend import SpendTrackingService
 from src.db.billing.billing_operations import BillingOperationRepository
 from src.db.routing.routing_costs import routing_cost_observation, routing_cost_query
-from src.services.spend_visibility import SpendVisibility
+from src.services.reporting.spend_visibility import SpendVisibility
 from tests import test_billing_operations_postgres as operation_fixtures
 from tests.test_billing_operations_postgres import deadline
 from tests.test_soft_selector_operations_postgres import soft_operation

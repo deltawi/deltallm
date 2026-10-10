@@ -14,7 +14,7 @@ from src.db.mcp.mcp import (
 )
 from src.db.mcp.mcp_scope_policies import MCPScopePolicyRecord
 from src.mcp.capabilities import extract_tool_schemas
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetPrincipal,
     serialize_asset_access,

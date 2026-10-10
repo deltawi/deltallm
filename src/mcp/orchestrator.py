@@ -26,7 +26,7 @@ from src.models.requests import (
     ToolChatMessage,
 )
 from src.models.responses import UserAPIKeyAuth
-from src.services.audit_service import (
+from src.services.audit.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
     AuditService,

@@ -12,7 +12,7 @@ from src.batch.worker_types import BatchRoutingRuntime
 from src.models.requests import ChatCompletionRequest
 from src.router.runtime_generation import RoutingRuntimeGeneration
 from src.router.selection.runtime import SelectorExecutionFactory
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,

@@ -39,13 +39,16 @@ from src.models.platform_auth import (
     ResetPasswordRequest,
     ResetPasswordTokenResponse,
 )
-from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
+from src.services.identity.platform_identity_service import (
+    AccountInactiveError,
+    LoginSessionCreationError,
+)
 from src.api.auth_sessions import (
     auth_me as auth_me,
     router as session_router,
 )  # Compatibility export.
-from src.services.sso_state_store import SSOStateStoreError
-from src.services.master_session_service import (
+from src.services.identity.sso_state_store import SSOStateStoreError
+from src.services.identity.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
     MasterSessionStoreUnavailable,
 )

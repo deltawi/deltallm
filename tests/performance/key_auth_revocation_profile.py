@@ -26,7 +26,7 @@ from scripts.measure_gateway_load import (
     write_results,
 )
 from src.db.identity.key_repository import KeyRecord
-from src.services.key_service import KeyService
+from src.services.identity.keys.key_service import KeyService
 from tests.performance.routing_cache_profile import queue_slope
 
 
@@ -137,7 +137,7 @@ async def main(args):
     payload = {
         "before_revision": args.before,
         "after_source_sha256": sha256(
-            Path("src/services/key_auth_cache.py").read_bytes()
+            Path("src/services/identity/keys/key_auth_cache.py").read_bytes()
         ).hexdigest(),
         "results": results,
     }

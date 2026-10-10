@@ -9,7 +9,7 @@ from src.db.tiers.tier_records import (
     tier_version_select_sql,
     to_version_record,
 )
-from src.services.tiers import positive_int_or_none
+from src.services.tiers.tiers import positive_int_or_none
 
 
 class TierActivationConfigurationChangedError(ValueError):

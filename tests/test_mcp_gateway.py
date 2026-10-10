@@ -27,9 +27,9 @@ from src.mcp.models import MCPToolCallResult, MCPToolSchema
 from src.mcp.policy import MCPToolPolicyEnforcer
 from src.mcp.result_cache import MCPToolResultCache
 from src.models.responses import UserAPIKeyAuth
-from src.services.limit_counter import LimitCounter
-from src.services.creator_mcp_access import CreatorMCPAccessSnapshot
-from src.services.runtime_scopes import annotate_auth_metadata
+from src.services.admission.limit_counter import LimitCounter
+from src.services.access.creator_mcp_access import CreatorMCPAccessSnapshot
+from src.services.access.runtime_scopes import annotate_auth_metadata
 from tests.conftest import FakeRedis
 
 

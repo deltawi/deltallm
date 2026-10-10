@@ -13,8 +13,8 @@ from src.auth.sso_identity import (
     SSOIdentityAssertion,
     SSOSubjectSource,
 )
-from src.services.platform_identity_service import PlatformIdentityService
-from src.services.sso_account_service import SSOAccountService
+from src.services.identity.platform_identity_service import PlatformIdentityService
+from src.services.identity.sso_account_service import SSOAccountService
 from tests.db import test_sso_account_roles as sso_fixtures
 from tests.db.test_sso_account_roles import SSODatabases
 

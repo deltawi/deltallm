@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.sso_state_store import SSOStateStore
+from src.services.identity.sso_state_store import SSOStateStore
 
 
 class _Redis:

@@ -5,7 +5,10 @@ from fastapi import APIRouter, Request
 from src.api.admin.auth_scope import get_auth_scope
 from src.api.external_auth_edge import ExternalAuthRoute, external_runtime
 from src.auth.roles import Permission
-from src.services.key_revocation_status import KeyRevocationStatus, KeyRevocationStatusService
+from src.services.identity.keys.key_revocation_status import (
+    KeyRevocationStatus,
+    KeyRevocationStatusService,
+)
 
 router = APIRouter(tags=["keys"], route_class=ExternalAuthRoute)
 

@@ -30,8 +30,8 @@ from src.models.errors import (
 )
 from src.models.requests import EmbeddingRequest
 from src.router.context_policy import get_request_token_demand
-from src.services.key_service import KeyService
-from src.services.limit_counter import LimitCounter
+from src.services.identity.keys.key_service import KeyService
+from src.services.admission.limit_counter import LimitCounter
 
 
 class _AllowAllCallableTargetGrantService:

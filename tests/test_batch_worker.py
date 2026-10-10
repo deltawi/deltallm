@@ -36,8 +36,8 @@ from src.batch.worker_types import (
 from src.config import GeneralSettings
 from src.db.identity.key_repository import KeyRecord
 from src.guardrails.exceptions import GuardrailViolationError
-from src.services.key_service import KeyService
-from src.services.limit_counter import LimitCounter
+from src.services.identity.keys.key_service import KeyService
+from src.services.admission.limit_counter import LimitCounter
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import UserAPIKeyAuth

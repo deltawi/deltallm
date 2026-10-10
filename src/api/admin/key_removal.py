@@ -10,7 +10,7 @@ async def remove_key_with_required_audit(
     request: Request, scope: AuthScope, token_hash: str, *, deleted: bool
 ) -> dict[str, object]:
     from src.api.admin import key_mutations as keys
-    from src.services.key_removal import KeyRemovalService
+    from src.services.identity.keys.key_removal import KeyRemovalService
 
     runtime = request.app.state.external_auth_runtime
     notification = None

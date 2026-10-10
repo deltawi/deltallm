@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from src.services.callable_targets import CallableTarget
+from src.services.access.callable_targets import CallableTarget
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
-from src.services.routing_authorization import RoutingAuthorizationReconciler
+from src.services.access.routing_authorization import RoutingAuthorizationReconciler
 
 
 class _GrantReloader:

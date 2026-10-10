@@ -19,10 +19,10 @@ from src.metrics import (
     publish_batch_runtime_summary,
 )
 from src.models.responses import UserAPIKeyAuth
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.model_visibility import CallableTargetPolicyMode
-from src.services.tier_model_access import TierPolicyMode
-from src.services.tier_policy_service import TierPolicyService
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.model_visibility import CallableTargetPolicyMode
+from src.services.tiers.tier_model_access import TierPolicyMode
+from src.services.tiers.tier_policy_service import TierPolicyService
 
 if TYPE_CHECKING:
     from src.batch.create import BatchCreateSessionService
@@ -73,8 +73,7 @@ class BatchService:
         self.storage = storage
         active_backend = str(getattr(storage, "backend_name", "local") or "local").strip().lower()
         self.storage_registry = {
-            str(key).strip().lower(): value
-            for key, value in (storage_registry or {}).items()
+            str(key).strip().lower(): value for key, value in (storage_registry or {}).items()
         }
         self.storage_registry.setdefault(active_backend, storage)
         self.metadata_retention_days = metadata_retention_days
@@ -90,7 +89,9 @@ class BatchService:
         self.create_session_service = create_session_service
         self.model_group_resolver = model_group_resolver
 
-    def bind_create_session_service(self, create_session_service: "BatchCreateSessionService" | None) -> None:
+    def bind_create_session_service(
+        self, create_session_service: "BatchCreateSessionService" | None
+    ) -> None:
         self.create_session_service = create_session_service
 
     async def _refresh_batch_runtime_metrics(self) -> None:
@@ -102,7 +103,11 @@ class BatchService:
             return
 
     def _storage_for_backend(self, backend: str | None) -> BatchArtifactStorage:
-        normalized = str(backend or getattr(self.storage, "backend_name", "local") or "local").strip().lower()
+        normalized = (
+            str(backend or getattr(self.storage, "backend_name", "local") or "local")
+            .strip()
+            .lower()
+        )
         storage = self.storage_registry.get(normalized)
         if storage is None:
             raise HTTPException(
@@ -205,7 +210,9 @@ class BatchService:
             parsed.model,
         )
 
-    async def create_file(self, *, auth: UserAPIKeyAuth, upload: UploadFile, purpose: str) -> dict[str, Any]:
+    async def create_file(
+        self, *, auth: UserAPIKeyAuth, upload: UploadFile, purpose: str
+    ) -> dict[str, Any]:
         storage_key: str | None = None
         record = None
         backend = str(getattr(self.storage, "backend_name", "local") or "local")
@@ -216,7 +223,9 @@ class BatchService:
                 chunks=self._upload_chunks(upload),
             )
             if bytes_size <= 0:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty"
+                )
             filename = upload.filename or "batch.jsonl"
             record = await self.repository.create_file(
                 purpose=purpose,
@@ -232,7 +241,9 @@ class BatchService:
                 expires_at=datetime.now(tz=UTC) + timedelta(days=self.metadata_retention_days),
             )
             if record is None:
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable"
+                )
             return self.file_to_response(record)
         except Exception:
             if record is None and storage_key:
@@ -252,7 +263,9 @@ class BatchService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File access denied")
         backend = str(file_record.storage_backend or "unknown")
         try:
-            return await self._storage_for_backend(file_record.storage_backend).read_bytes(file_record.storage_key)
+            return await self._storage_for_backend(file_record.storage_backend).read_bytes(
+                file_record.storage_key
+            )
         except Exception as exc:
             increment_batch_artifact_failure(operation="read", backend=backend)
             logger.warning(

@@ -11,14 +11,14 @@ from uuid import uuid4
 import pytest
 from prisma import Prisma
 
-from src.services.platform_identity_service import (
+from src.services.identity.platform_identity_service import (
     AccountInactiveError,
     LoginResult,
     LoginSessionCreationError,
     PlatformIdentityService,
 )
 from src.auth.sso_identity import SSOIdentityOwnershipError
-from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
+from src.services.identity.self_registration_provisioning import SelfRegistrationProvisioningService
 from tests.services.test_self_registration_provisioning import _enabled_settings
 
 pytestmark = pytest.mark.postgres
@@ -441,7 +441,7 @@ async def test_default_memberships_preserve_concurrent_admin_edits(
     linked: bool,
     edit_timing: str,
 ) -> None:
-    import src.services.platform_identity_service as platform_module
+    import src.services.identity.platform_identity_service as platform_module
 
     await create_default_targets(databases)
     service = PlatformIdentityService(databases.login, salt="test-salt")
@@ -509,7 +509,7 @@ async def test_failure_after_org_membership_seed_rolls_back_login(
     monkeypatch: pytest.MonkeyPatch,
     error_type: type[BaseException],
 ) -> None:
-    import src.services.platform_identity_service as platform_module
+    import src.services.identity.platform_identity_service as platform_module
 
     await create_default_targets(databases)
 
@@ -666,7 +666,7 @@ async def test_email_match_must_still_belong_to_account_when_binding(
     monkeypatch: pytest.MonkeyPatch,
     existing_entrypoint: bool,
 ) -> None:
-    import src.services.sso_account_service as account_module
+    import src.services.identity.sso_account_service as account_module
 
     service = PlatformIdentityService(databases.login, salt="test-salt")
     account = await service.ensure_account(

@@ -12,13 +12,13 @@ from src.db.routing.callable_targets import CallableTargetBindingRecord
 from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
 from src.models.errors import PermissionDeniedError
 from src.models.responses import UserAPIKeyAuth
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.model_visibility import (
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     resolve_effective_model_allowlist,
     resolve_model_allowlist_resolution,
 )
-from src.services.tier_policy_service import resolve_tier_policy_unavailable_decision
+from src.services.tiers.tier_policy_service import resolve_tier_policy_unavailable_decision
 
 
 class _FakeCallableTargetBindingRepository:

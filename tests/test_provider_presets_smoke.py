@@ -8,7 +8,7 @@ import pytest
 from src.db.routing.callable_targets import CallableTargetBindingRecord
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.resolution import provider_presets, provider_supports_mode
-from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
+from src.services.access.asset_binding_mirror import reload_callable_target_grants_for_app
 
 _PROVIDER_API_BASES = {
     str(preset["provider"]): str(

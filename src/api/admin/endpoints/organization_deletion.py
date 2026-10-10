@@ -19,7 +19,7 @@ from src.db.organizations.deletion.organization_deletion_records import (
     OrganizationDeletionJobRecord,
 )
 from src.models.organization_lifecycle import ORGANIZATION_LIFECYCLE_PROTOCOL_VERSION
-from src.services.organization_deletion import (
+from src.services.organizations.deletion.organization_deletion import (
     OrganizationDeletionConflictError,
     OrganizationDeletionError,
     OrganizationDeletionNotFoundError,
@@ -27,7 +27,7 @@ from src.services.organization_deletion import (
     OrganizationDeletionUnavailableError,
     OrganizationDeletionValidationError,
 )
-from src.services.organization_deletion_types import OrganizationDeletionPlan
+from src.services.organizations.deletion.organization_deletion_types import OrganizationDeletionPlan
 
 router = APIRouter(tags=["Admin Organization Deletion"])
 _PLATFORM_ADMIN_DEPENDENCY = [Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]

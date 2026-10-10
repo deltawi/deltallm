@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.audit_retention import AuditRetentionConfig, AuditRetentionWorker
+from src.services.audit.audit_retention import AuditRetentionConfig, AuditRetentionWorker
 
 
 class FakeAuditRepository:
@@ -10,7 +10,9 @@ class FakeAuditRepository:
         self.deleted_payloads: list[str] = []
         self.deleted_events: list[str] = []
 
-    async def list_expired_payload_ids(self, *, default_retention_days: int, limit: int) -> list[str]:
+    async def list_expired_payload_ids(
+        self, *, default_retention_days: int, limit: int
+    ) -> list[str]:
         assert default_retention_days == 90
         assert limit == 500
         return ["pl-1", "pl-2"]

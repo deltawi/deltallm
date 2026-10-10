@@ -5,7 +5,7 @@ import hmac
 from fastapi import HTTPException, Request
 
 from src.auth.external_policy import EXTERNAL_SESSION_PREFIX
-from src.services.master_session_service import MASTER_SESSION_COOKIE_NAME
+from src.services.identity.master_session_service import MASTER_SESSION_COOKIE_NAME
 
 
 def carries_external_session(request: Request) -> bool:

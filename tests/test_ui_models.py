@@ -16,9 +16,11 @@ from src.router import (
     HealthCheckInProgressError,
     build_deployment_registry,
 )
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.callable_targets import CallableTarget
-from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.callable_targets import CallableTarget
+from src.services.access.organization_callable_target_sync import (
+    sync_auto_follow_organization_bindings,
+)
 from src.config_runtime.models import ModelMutationResult
 
 

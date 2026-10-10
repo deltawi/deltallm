@@ -541,9 +541,9 @@ src/api/admin/request_validation.py
 src/api/admin/route_group_contracts.py
 src/db/routing/route_policy_lifecycle.py
 src/router/policy_validation.py
-src/services/route_groups.py
-src/services/route_policy_publication.py
-src/services/route_group_cache_contract.py
+src/services/routing/route_groups.py
+src/services/routing/route_policy_publication.py
+src/services/routing/route_group_cache_contract.py
 src/metrics/route_group_cache.py
 tests/db/test_route_policy_publication_invariants.py
 tests/db/test_route_policy_repository.py

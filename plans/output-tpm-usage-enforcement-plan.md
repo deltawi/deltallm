@@ -184,13 +184,13 @@ Keep the current cohesive files and replace their responsibilities in place.
 
 | File or owner | Planned change |
 | --- | --- |
-| [Output types](../src/services/output_limit_types.py) | Keep bounded scopes. Remove allowance/reservation types. Add immutable policy, usage snapshot, and final accounting-event types. |
-| [Output preparation](../src/services/output_admission.py) | Prepare verified scopes only. Remove cap arithmetic and admission-owned retention/IDs. |
-| [Output Lua](../src/services/output_limit_lua.py) | Replace reserve/refund scripts with read-only output admission checks and final usage recording. |
-| [Redis output boundary](../src/services/output_limit_redis.py) | Parse v2 snapshots/receipts and map exhausted, unknown, and unavailable results. Replace settlement with accounting. |
-| [Rate contracts](../src/services/rate_limit_contracts.py) and [lease](../src/services/rate_limit_lease.py) | Replace output reservation with an optional policy/snapshot/context. Preserve parallel acquisition ownership. Allow unknown output remaining values. |
-| [LimitCounter](../src/services/limit_counter.py), [ordinary script](../src/services/rate_limit_admission_lua.py), [unified script](../src/services/tier_fair_share_admission_lua.py) | Update existing narrow output seams. Keep one admission transaction and the unchanged null-policy path. Do not add a new concern to the large counter file. |
-| [Output context](../src/services/output_token_context.py) | Admit once per caller request, assign each actual attempt an ID, record final evidence once, and remove repeated output-only reservation checks. |
+| [Output types](../src/services/admission/output_limit_types.py) | Keep bounded scopes. Remove allowance/reservation types. Add immutable policy, usage snapshot, and final accounting-event types. |
+| [Output preparation](../src/services/admission/output_admission.py) | Prepare verified scopes only. Remove cap arithmetic and admission-owned retention/IDs. |
+| [Output Lua](../src/services/admission/output_limit_lua.py) | Replace reserve/refund scripts with read-only output admission checks and final usage recording. |
+| [Redis output boundary](../src/services/admission/output_limit_redis.py) | Parse v2 snapshots/receipts and map exhausted, unknown, and unavailable results. Replace settlement with accounting. |
+| [Rate contracts](../src/services/admission/rate_limit_contracts.py) and [lease](../src/services/admission/rate_limit_lease.py) | Replace output reservation with an optional policy/snapshot/context. Preserve parallel acquisition ownership. Allow unknown output remaining values. |
+| [LimitCounter](../src/services/admission/limit_counter.py), [ordinary script](../src/services/admission/rate_limit_admission_lua.py), [unified script](../src/services/admission/tier_fair_share_admission_lua.py) | Update existing narrow output seams. Keep one admission transaction and the unchanged null-policy path. Do not add a new concern to the large counter file. |
+| [Output context](../src/services/admission/output_token_context.py) | Admit once per caller request, assign each actual attempt an ID, record final evidence once, and remove repeated output-only reservation checks. |
 | [Preflight](../src/chat/preflight.py), [rate policy](../src/rate_limit_policy.py), [middleware](../src/middleware/rate_limit.py) | Remove output-specific cap validation. Carry the verified policy and snapshot into the same context. |
 | [Executor](../src/chat/executor.py), [chat hop](../src/providers/chat_hop.py), [chat route](../src/routers/chat.py), [stream usage](../src/chat/stream_usage.py) | Remove cap qualification. Capture raw complete usage with one parse. Record before response completion and share cleanup ownership. |
 | [MCP](../src/chat/mcp_execution.py), [cache](../src/cache/middleware.py), [batch policy](../src/batch/policy.py), [worker persistence](../src/batch/worker_persistence.py) | Preserve existing lifecycle and fencing; use the new event contract. Zero-output paths have no accounting write. |

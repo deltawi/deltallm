@@ -7,7 +7,7 @@ from starlette.datastructures import State
 
 from src.readiness import HealthCheck
 from src.realtime.runtime import RealtimeRuntime
-from src.services.managed_asset_reconciliation import (
+from src.services.access.managed_asset_reconciliation import (
     ManagedAssetReconciliationHealth,
     ManagedAssetReconciliationService,
 )

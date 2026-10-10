@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
 from src.mcp.models import MCPBindingResolution
-from src.services.runtime_scopes import resolve_runtime_scope_context
+from src.services.access.runtime_scopes import resolve_runtime_scope_context
 
 if TYPE_CHECKING:
     from src.db.mcp.mcp import MCPRepository

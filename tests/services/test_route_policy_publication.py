@@ -12,7 +12,7 @@ from src.db.routing.route_policy_lifecycle import (
 from src.db.routing.route_groups import RouteGroupRepository
 from src.router.policy_validation import CURRENT_POLICY_SEMANTICS_VERSION, PolicyMemberInventoryItem
 from src.router.selection.policy import ensure_selector_activation_supported
-from src.services.route_policy_publication import (
+from src.services.routing.route_policy_publication import (
     RoutePolicyPublicationNotFoundError,
     RoutePolicyPublicationService,
 )

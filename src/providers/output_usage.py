@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Mapping
 
-from src.services.output_limit_types import complete_output_count
+from src.services.admission.output_limit_types import complete_output_count
 
 
 def compatible_output_count(payload: object) -> int | None:

@@ -9,7 +9,7 @@ import pytest
 
 from src.billing.spend.spend_preparation import prepare_spend_event
 from src.billing.spend.spend_read import SPEND_READ_SOURCE
-from src.services.spend_visibility import SpendVisibility, apply_spend_visibility
+from src.services.reporting.spend_visibility import SpendVisibility, apply_spend_visibility
 from src.db.organizations.deletion.organization_deletion_repository import (
     OrganizationDeletionRepository,
 )

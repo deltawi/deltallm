@@ -62,13 +62,16 @@ from src.routers.routing_decision import (
     update_served_route_decision,
 )
 from src.routers.utils import enforce_budget_if_configured
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,
     get_tier_policy_mode_from_app,
 )
-from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
+from src.services.admission.preflight_capacity import (
+    acquire_preflight_capacity,
+    release_preflight_capacity,
+)
 
 DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS = 600.0
 

@@ -12,8 +12,11 @@ from src.db.identity.external.external_auth_cleanup import ExternalAuthCleanupRe
 from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
 from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.models.external_auth import ExternalVersionRequest
-from src.services.external_auth_administration import ExternalAuthAdministration
-from src.services.external_auth_linking import ExternalAuthLinking, ExternalLinkApproval
+from src.services.identity.external.external_auth_administration import ExternalAuthAdministration
+from src.services.identity.external.external_auth_linking import (
+    ExternalAuthLinking,
+    ExternalLinkApproval,
+)
 from tests.db import external_auth_fixtures as fixtures
 from tests.db.test_external_auth_exchange import enable, make_new, proof, services
 

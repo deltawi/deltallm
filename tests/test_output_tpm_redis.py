@@ -11,9 +11,13 @@ from redis.asyncio import Redis
 
 from src.models.errors import RateLimitError, ServiceUnavailableError
 from src.models.output_limits import MAX_OUTPUT_TOKENS
-from src.services.limit_counter import LimitCounter, ParallelLimitCheck, RateLimitCheck
-from src.services.output_limit_types import OutputAccountingEvent, OutputPolicy, OutputScope
-from src.services.output_limit_redis import OutputUsageUnknownError
+from src.services.admission.limit_counter import LimitCounter, ParallelLimitCheck, RateLimitCheck
+from src.services.admission.output_limit_types import (
+    OutputAccountingEvent,
+    OutputPolicy,
+    OutputScope,
+)
+from src.services.admission.output_limit_redis import OutputUsageUnknownError
 
 pytestmark = [
     pytest.mark.redis,
@@ -249,8 +253,8 @@ async def test_corrupt_receipt_never_replays_accounting(redis_client, corruption
 
 
 async def test_noscript_recovery_and_lost_ack_replay(redis_client):
-    from src.services.output_limit_lua import OUTPUT_ACCOUNTING_LUA
-    from src.services.rate_limit_admission_lua import RATE_LIMIT_OUTPUT_LUA
+    from src.services.admission.output_limit_lua import OUTPUT_ACCOUNTING_LUA
+    from src.services.admission.rate_limit_admission_lua import RATE_LIMIT_OUTPUT_LUA
 
     await OUTPUT_ACCOUNTING_LUA.load(redis_client)
     await RATE_LIMIT_OUTPUT_LUA.load(redis_client)
@@ -268,8 +272,8 @@ async def test_noscript_recovery_and_lost_ack_replay(redis_client):
 async def test_lost_ack_preserves_answer_state_and_receipt_allows_safe_replay(redis_client):
     from types import SimpleNamespace
     from redis.exceptions import ConnectionError
-    from src.services.output_token_context import OutputTokenContext
-    from src.services.rate_limit_lease import RateLimitState
+    from src.services.admission.output_token_context import OutputTokenContext
+    from src.services.admission.rate_limit_lease import RateLimitState
 
     output = policy(uuid4().hex)
     counter = limiter(redis_client)

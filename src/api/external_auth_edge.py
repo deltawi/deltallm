@@ -16,7 +16,7 @@ from src.metrics.external_auth import external_auth_saturation
 from src.auth.external_errors import ExternalAuthError, ExternalAuthUnavailable
 from src.concurrency import CapacityGateFull, CapacityGateTimedOut
 from src.middleware.errors import proxy_error_response
-from src.services.external_auth_runtime import ExternalAuthRuntime
+from src.services.identity.external.external_auth_runtime import ExternalAuthRuntime
 
 T = TypeVar("T", bound=BaseModel)
 BODY_LIMIT = 16384

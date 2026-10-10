@@ -16,10 +16,10 @@ from src.models.errors import (
     AuthenticationUnavailableError,
     ServiceUnavailableError,
 )
-from src.services.auth_fallback import AuthFallbackLimits
+from src.services.identity.keys.auth_fallback import AuthFallbackLimits
 from src.models.responses import UserAPIKeyAuth
-from src.services.key_auth_cache import KeyAuthCache
-from src.services.key_service import KeyService
+from src.services.identity.keys.key_auth_cache import KeyAuthCache
+from src.services.identity.keys.key_service import KeyService
 
 pytestmark = [
     pytest.mark.redis,

@@ -18,13 +18,16 @@ from src.rate_limit_policy import estimate_tokens
 from src.router.context_policy import estimate_embedding_context_input_tokens
 from src.routers.utils import enforce_budget_if_configured
 from src.router.runtime_generation import RoutingRuntimeGeneration
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,
     get_tier_policy_mode_from_app,
 )
-from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
+from src.services.admission.preflight_capacity import (
+    acquire_preflight_capacity,
+    release_preflight_capacity,
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,12 +7,12 @@ import pytest
 from src.db.routing.route_groups import RouteGroupRecord
 from src.models.errors import PermissionDeniedError
 from src.models.responses import UserAPIKeyAuth
-from src.services.creator_model_access import CreatorModelAccessSnapshot
-from src.services.creator_route_group_access import (
+from src.services.access.creator_model_access import CreatorModelAccessSnapshot
+from src.services.access.creator_route_group_access import (
     CreatorRouteGroupAccessService,
     CreatorRouteGroupAccessSnapshot,
 )
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
     AssetGrant,
@@ -21,7 +21,7 @@ from src.services.managed_asset_access import (
     GovernanceSource,
     ManagedAsset,
 )
-from src.services.model_visibility import ensure_model_allowed
+from src.services.access.model_visibility import ensure_model_allowed
 
 
 def _policy(

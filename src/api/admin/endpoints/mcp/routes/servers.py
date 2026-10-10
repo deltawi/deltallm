@@ -74,7 +74,7 @@ from src.api.admin.endpoints.mcp.validators import (
     _validate_owner_scope_type,
     _validate_url,
 )
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,

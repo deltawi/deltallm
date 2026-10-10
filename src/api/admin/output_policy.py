@@ -17,7 +17,7 @@ from src.db.identity.output_policy import (
 from src.db.identity.output_policy import tier_version_has_output_policy
 from src.models.errors import InvalidRequestError
 from src.models.output_limits import validate_model_output_limits, validate_output_limit
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     get_tier_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,
 )

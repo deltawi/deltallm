@@ -12,9 +12,9 @@ from src.router.candidates import ROUTING_MODE_CONTEXT_KEY
 from src.router.initial_selection import require_initial_deployment
 from src.router.router import Deployment
 from src.router.runtime_generation import RoutingRuntimeGeneration, RoutingRuntimeGenerationStore
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.model_visibility import ensure_model_allowed
-from src.services.tier_policy_service import TierPolicyService
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.model_visibility import ensure_model_allowed
+from src.services.tiers.tier_policy_service import TierPolicyService
 
 
 @dataclass(frozen=True, slots=True)

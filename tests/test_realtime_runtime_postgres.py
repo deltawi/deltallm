@@ -31,9 +31,9 @@ from src.router import (
 )
 from src.router import CooldownManager, FailoverManager, FallbackConfig
 from src.router.runtime_generation import RoutingRuntimeGeneration, RoutingRuntimeGenerationStore
-from src.services.callable_targets import build_callable_target_catalog
-from src.services.key_service import KeyService
-from src.services.tier_policy_service import TierPolicyService
+from src.services.access.callable_targets import build_callable_target_catalog
+from src.services.identity.keys.key_service import KeyService
+from src.services.tiers.tier_policy_service import TierPolicyService
 from tests.test_telemetry_ingestion_db_integration import _connect_prisma
 from tests.test_stream_accounting_commit import loopback_gateway
 from tests.test_selector_charge_db_integration import _scope_totals
@@ -107,7 +107,7 @@ async def bootstrap(app, dependencies, profile):
         lifecycle_authorizer=state.organization_lifecycle_authorizer,
     )
     from src.db.routing.callable_targets import CallableTargetBindingRecord
-    from src.services.callable_target_grants import CallableTargetGrantService
+    from src.services.access.callable_target_grants import CallableTargetGrantService
     from tests.conftest import InMemoryCallableTargetBindingRepository
 
     state.callable_target_grant_service = CallableTargetGrantService(

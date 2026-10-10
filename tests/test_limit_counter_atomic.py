@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.models.errors import RateLimitError
-from src.services.limit_counter import LimitCounter, RateLimitCheck
+from src.services.admission.limit_counter import LimitCounter, RateLimitCheck
 
 
 @pytest.mark.asyncio

@@ -11,14 +11,14 @@ import logging
 from typing import TYPE_CHECKING, Literal
 
 from fastapi import HTTPException, Request
-from src.services.spend_reporting_cache import (
+from src.services.reporting.spend_reporting_cache import (
     ReportingLoadLimiter,
     ReportingQueryTimedOut,
     ReportingRefreshBusy,
     SpendReportingCache,
     SpendReportingCacheResult,
 )
-from src.services.spend_visibility import SpendVisibility, resolve_spend_visibility
+from src.services.reporting.spend_visibility import SpendVisibility, resolve_spend_visibility
 
 if TYPE_CHECKING:
     from src.api.admin.endpoints.common import AuthScope

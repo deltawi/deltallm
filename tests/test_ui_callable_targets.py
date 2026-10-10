@@ -13,8 +13,8 @@ from src.db.routing.callable_targets import CallableTargetBindingRecord
 from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
 from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRecord
 from src.governance.access_groups import normalize_access_group_key
-from src.services.asset_scopes import normalize_scope_type
-from src.services.callable_targets import CallableTarget
+from src.services.access.asset_scopes import normalize_scope_type
+from src.services.access.callable_targets import CallableTarget
 
 
 class _FakeMigrationDB:

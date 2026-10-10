@@ -12,8 +12,8 @@ from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner
 from src.db.runtime.allocation_config import DatabasePolicy
 from src.db.identity.key_repository import KeyRecord
 from src.models.errors import AuthenticationUnavailableError
-from src.services.auth_fallback import AuthFallbackLimits
-from src.services.key_service import KeyService
+from src.services.identity.keys.auth_fallback import AuthFallbackLimits
+from src.services.identity.keys.key_service import KeyService
 from tests import test_database_allocations_postgres as allocation_fixtures
 
 allocated_databases = allocation_fixtures.allocated_databases

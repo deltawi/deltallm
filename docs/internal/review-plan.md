@@ -30,8 +30,8 @@
 |--------|-------|----------------|
 | Auth System | `src/auth/*.py` | ~800 |
 | API Auth Middleware | `src/api/v1/endpoints/auth.py`, `src/middleware/auth.py` | ~400 |
-| Key Service | `src/services/key_service.py` | ~200 |
-| Platform Identity | `src/services/platform_identity_service.py` | ~300 |
+| Key Service | `src/services/identity/keys/key_service.py` | ~200 |
+| Platform Identity | `src/services/identity/platform_identity_service.py` | ~300 |
 | JWT Handler | `src/auth/jwt.py` | ~150 |
 | SSO Handler | `src/auth/sso.py` | ~300 |
 
@@ -156,7 +156,7 @@
 | Module | Files | Lines (approx) |
 |--------|-------|----------------|
 | Rate Limit Middleware | `src/middleware/rate_limit.py` | ~400 |
-| Limit Counter | `src/services/limit_counter.py` | ~300 |
+| Limit Counter | `src/services/admission/limit_counter.py` | ~300 |
 | Error Middleware | `src/middleware/errors.py` | ~200 |
 | Platform Auth Middleware | `src/middleware/platform_auth.py` | ~200 |
 | Admin Middleware | `src/middleware/admin.py` | ~150 |

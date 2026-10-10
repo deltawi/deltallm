@@ -8,9 +8,9 @@ from redis.exceptions import ConnectionError
 from src.audit.actions import AuditAction
 from src.auth.external_errors import ExternalAuthError, ExternalAuthUnavailable
 from src.db.identity.key_repository import KeyRepository
-from src.services.external_inference_keys import ExternalInferenceKeyService
-from src.services.key_removal import KeyRemovalService
-from src.services.key_service import KeyService
+from src.services.identity.external.external_inference_keys import ExternalInferenceKeyService
+from src.services.identity.keys.key_removal import KeyRemovalService
+from src.services.identity.keys.key_service import KeyService
 from tests.db import external_auth_fixtures as fixtures
 from tests.db.test_external_auth_exchange import enable, proof, services
 
@@ -166,7 +166,7 @@ async def test_key_removal_audit_failure_rolls_back_key_and_outbox(external_data
 
 
 async def test_revocation_status_is_private_and_bounded(external_database):
-    from src.services.key_revocation_status import KeyRevocationStatusService
+    from src.services.identity.keys.key_revocation_status import KeyRevocationStatusService
 
     fixture = external_database
     await enable(fixture)

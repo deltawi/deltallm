@@ -12,8 +12,8 @@ from src.db.catalog.prompt_registry import (
     PromptRegistryRepository,
     PromptResolvedRecord,
 )
-from src.services.prompt_registry import PromptReference, PromptRegistryService
-from src.services.prompt_singleflight import (
+from src.services.prompts.prompt_registry import PromptReference, PromptRegistryService
+from src.services.prompts.prompt_singleflight import (
     PromptSingleflight,
     PromptSingleflightOverloadedError,
     PromptSingleflightTimeoutError,

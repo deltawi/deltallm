@@ -12,9 +12,12 @@ from src.db.catalog.prompt_registry import (
     PromptVersionRecord,
 )
 from src.models.platform_auth import PlatformAuthContext
-from src.services.asset_ownership import normalize_owner_scope_type, owner_scope_from_metadata
-from src.services.asset_scopes import scope_lookup_candidates
-from src.services.managed_asset_access import (
+from src.services.access.asset_ownership import (
+    normalize_owner_scope_type,
+    owner_scope_from_metadata,
+)
+from src.services.access.asset_scopes import scope_lookup_candidates
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,

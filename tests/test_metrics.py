@@ -12,8 +12,8 @@ from src.metrics import (
     increment_provider_stream_validation_failure,
     increment_router_context_decision,
 )
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.prompt_registry import PromptRegistryService
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.prompts.prompt_registry import PromptRegistryService
 
 
 class _PromptMetricsRepository:

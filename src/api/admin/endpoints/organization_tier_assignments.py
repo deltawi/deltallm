@@ -13,16 +13,16 @@ from src.api.admin.endpoints.organization_tier_assignment_schemas import (
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
-from src.services.tier_admin_errors import (
+from src.services.tiers.tier_admin_errors import (
     TierAdminConflictError,
     TierAdminError,
     TierAdminNotFoundError,
     TierAdminUnavailableError,
     TierAdminValidationError,
 )
-from src.services.tier_assignment_admin import TierAssignmentAdminService
-from src.services.tier_assignment_admin_serialization import serialize_tier_assignment
-from src.services.tier_policy_invalidation import reload_tier_policy
+from src.services.tiers.tier_assignment_admin import TierAssignmentAdminService
+from src.services.tiers.tier_assignment_admin_serialization import serialize_tier_assignment
+from src.services.tiers.tier_policy_invalidation import reload_tier_policy
 
 router = APIRouter(tags=["Admin Organization Tier Assignments"])
 _PLATFORM_ADMIN_DEPENDENCY = [Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]

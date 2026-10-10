@@ -28,8 +28,8 @@ from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
 from src.api.admin.list_contracts import AdminListResponse, ModelListItem
-from src.services.admin_list_health import list_health_refs, list_health_snapshot
-from src.services.model_admin_listing import ModelSortKey, SortDirection, model_list_page
+from src.services.reporting.admin_list_health import list_health_refs, list_health_snapshot
+from src.services.models.model_admin_listing import ModelSortKey, SortDirection, model_list_page
 from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated
@@ -52,13 +52,13 @@ from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
     rebuild_routing_runtime_generation,
 )
-from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
-from src.services.creator_model_access import refresh_creator_model_access_for_app
-from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import (
+from src.services.access.asset_binding_mirror import reload_callable_target_grants_for_app
+from src.services.access.creator_model_access import refresh_creator_model_access_for_app
+from src.services.access.callable_targets import build_callable_target_catalog
+from src.services.models.model_deployments import (
     resolve_runtime_deltallm_params,
 )
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,
@@ -76,20 +76,22 @@ from src.services.managed_asset_access import (
     validate_model_credential_audience,
     namespace_creator_callable_key,
 )
-from src.services.model_identity import (
+from src.services.models.model_identity import (
     creator_api_model_id,
     normalize_creator_namespace,
     normalize_model_slug,
     suggested_creator_namespace,
 )
-from src.services.model_visibility import get_tier_policy_mode_from_app
-from src.services.named_credentials import (
+from src.services.access.model_visibility import get_tier_policy_mode_from_app
+from src.services.models.named_credentials import (
     canonicalize_named_credential_provider,
     merge_named_credential_params,
     redact_connection_config,
     resolve_named_credential_record,
 )
-from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
+from src.services.access.organization_callable_target_sync import (
+    sync_auto_follow_organization_bindings,
+)
 
 router = APIRouter(tags=["Models"])
 _MISSING = object()

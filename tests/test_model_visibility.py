@@ -15,11 +15,11 @@ from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
     with_authorization_snapshot,
 )
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.callable_targets import CallableTarget, build_callable_target_catalog
-from src.services.creator_model_access import CreatorModelAccessSnapshot
-from src.services.model_deployments import build_model_registry_from_config
-from src.services.model_visibility import (
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.callable_targets import CallableTarget, build_callable_target_catalog
+from src.services.access.creator_model_access import CreatorModelAccessSnapshot
+from src.services.models.model_deployments import build_model_registry_from_config
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     filter_visible_models,
     get_callable_target_policy_mode_from_app,
@@ -28,7 +28,7 @@ from src.services.model_visibility import (
     resolve_effective_model_allowlist,
     resolve_model_allowlist_resolution,
 )
-from src.services.route_groups import route_groups_from_config
+from src.services.routing.route_groups import route_groups_from_config
 
 _STRONG_TEST_MASTER_KEY = "StrongTestMasterKey2026SecureValue123"
 

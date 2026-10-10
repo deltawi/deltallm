@@ -10,7 +10,7 @@ from src.billing.charges.operation_reservation import ComponentState
 from src.billing.charges.selector_charge import SelectorPriceSnapshot, SelectorTokenReceipt
 from src.billing.spend.spend_read import SPEND_READ_SOURCE
 from src.db.routing.routing_cost_sql import routing_cost_sql
-from src.services.spend_visibility import SpendVisibility, apply_spend_visibility
+from src.services.reporting.spend_visibility import SpendVisibility, apply_spend_visibility
 
 
 @dataclass(frozen=True, slots=True)

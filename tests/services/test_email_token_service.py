@@ -8,7 +8,7 @@ import pytest
 
 from src.db.identity.email_tokens import EmailTokenRecord
 from src.email.models import EmailConfigurationError
-from src.services.email_token_service import EmailTokenService
+from src.services.email.email_token_service import EmailTokenService
 
 
 class FakeEmailTokenRepository:

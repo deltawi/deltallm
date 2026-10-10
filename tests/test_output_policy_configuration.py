@@ -13,8 +13,8 @@ from src.config_runtime.dynamic import (
     DynamicConfigRestartRequiredError,
     DynamicConfigValidationError,
 )
-from src.services.output_policy_configuration import validate_output_policy_configuration
-from src.services.tier_policy_service import TierPolicyService
+from src.services.admission.output_policy_configuration import validate_output_policy_configuration
+from src.services.tiers.tier_policy_service import TierPolicyService
 from tests.config.test_dynamic import FakeDB, FakeRedis
 
 

@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from src.redis_runtime import build_redis_client
-from src.services.prompt_registry import PromptRegistryService
+from src.services.prompts.prompt_registry import PromptRegistryService
 from tests.test_prompt_cache_performance import _CountingRepository
 
 pytestmark = pytest.mark.redis

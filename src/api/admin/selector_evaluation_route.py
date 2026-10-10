@@ -7,7 +7,7 @@ from starlette.responses import Response
 from src.api.admin.request_validation import PolicyBadRequestValidationRoute
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
-from src.services.selector_evaluation import MAX_EVALUATION_BYTES
+from src.services.routing.selector_evaluation import MAX_EVALUATION_BYTES
 
 
 class SelectorEvaluationRoute(PolicyBadRequestValidationRoute):

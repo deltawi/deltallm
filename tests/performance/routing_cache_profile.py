@@ -77,7 +77,7 @@ async def measure_case(case, label, output_dir, *, ingress=False):
 
         initialize_ingress(app, GeneralSettings(gateway_ingress_enabled=True), Settings())
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("src.services.key_service").setLevel(logging.WARNING)
+    logging.getLogger("src.services.identity.keys.key_service").setLevel(logging.WARNING)
     record = next(iter(app.state._test_repo.records.values()))
     record.rpm_limit, record.tpm_limit = 1000, 1_000_000
     app.state.cache_backend = InMemoryBackend(max_size=256)

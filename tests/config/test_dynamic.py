@@ -40,9 +40,9 @@ from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
 )
 from src.router.health import BackgroundHealthChecker
-from src.services.governance_invalidation import GovernanceInvalidationService
-from src.services.routing_authorization import RoutingAuthorizationReconciler
-from src.services.route_groups import StaleRouteGroupSnapshotError
+from src.services.invalidation.governance_invalidation import GovernanceInvalidationService
+from src.services.access.routing_authorization import RoutingAuthorizationReconciler
+from src.services.routing.route_groups import StaleRouteGroupSnapshotError
 
 
 class StaticSecretManager(BaseSecretManager):

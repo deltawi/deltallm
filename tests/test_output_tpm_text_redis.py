@@ -8,8 +8,8 @@ import httpx
 import pytest
 from redis.asyncio import Redis
 
-from src.services.limit_counter import LimitCounter
-from src.services.output_limit_types import OutputPolicy, OutputScope
+from src.services.admission.limit_counter import LimitCounter
+from src.services.admission.output_limit_types import OutputPolicy, OutputScope
 from tests.test_cache import (
     _enable_cache,
     _configure_groq_openai_compatible_chat_model,

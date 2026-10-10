@@ -15,10 +15,10 @@ from src.metrics import (
     set_tier_capacity_pool_saturation,
 )
 from src.models.errors import RateLimitError
-from src.services.output_limit_types import OutputPolicy
-from src.services.output_token_context import OutputTokenContext
-from src.services.rate_limit_lease import RateLimitLease, RateLimitState
-from src.services.limit_counter import (
+from src.services.admission.output_limit_types import OutputPolicy
+from src.services.admission.output_token_context import OutputTokenContext
+from src.services.admission.rate_limit_lease import RateLimitLease, RateLimitState
+from src.services.admission.limit_counter import (
     LegacyParallelLease,
     LimitCounter,
     ParallelLimitCheck,

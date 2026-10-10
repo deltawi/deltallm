@@ -7,7 +7,7 @@ import pytest
 
 from src.metrics.route_group_cache import RouteGroupCacheFailureReason
 from src.router.router import build_route_group_policies
-from src.services.route_groups import RouteGroupRuntimeCache
+from src.services.routing.route_groups import RouteGroupRuntimeCache
 from tests.services.test_route_groups import (
     _FakeRedis,
     _FakeRouteGroupRepository,
@@ -17,7 +17,7 @@ from tests.services.test_route_groups import (
 
 def test_cache_contract_structure_stays_bounded():
     root = Path(__file__).parents[2]
-    source = (root / "src/services/route_group_cache_contract.py").read_text()
+    source = (root / "src/services/routing/route_group_cache_contract.py").read_text()
     assert len(source.splitlines()) < 500
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

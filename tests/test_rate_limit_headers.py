@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from src.services.limit_counter import LimitCounter, RateLimitCheck, RateLimitResult
+from src.services.admission.limit_counter import LimitCounter, RateLimitCheck, RateLimitResult
 from src.middleware.rate_limit import (
     RateLimitState,
     _compute_rate_limit_state,

@@ -10,7 +10,7 @@ from src.api.admin.endpoints.common import emit_admin_mutation_audit
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
-from src.services.tier_capacity_fair_share import (
+from src.services.admission.tier_capacity_fair_share import (
     build_tier_capacity_dashboard,
     delete_temporary_capacity_boost,
     is_advanced_capacity_pool_strategy,
@@ -85,7 +85,9 @@ def _validate_boost_target(
             detail="Capacity pool does not use advanced fair-share",
         )
     members = getattr(snapshot, "capacity_pool_members", {}).get((pool_key, callable_key), ())
-    if require_active_member and not any(getattr(member, "organization_id", None) == organization_id for member in members):
+    if require_active_member and not any(
+        getattr(member, "organization_id", None) == organization_id for member in members
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Organization is not an active member of this capacity pool",

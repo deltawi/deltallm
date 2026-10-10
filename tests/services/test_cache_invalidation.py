@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 
 from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRecord
-from src.services.cache_invalidation import (
+from src.services.invalidation.cache_invalidation import (
     CacheInvalidationResult,
     CacheInvalidationService,
     CacheInvalidationWorker,
     CacheInvalidationWorkerConfig,
 )
-from src.services.cache_invalidation_errors import CacheInvalidationBackendUnavailable
+from src.services.invalidation.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 
 
 class _KeyService:
@@ -399,7 +399,7 @@ async def test_cache_invalidation_worker_completes_claimed_records() -> None:
 async def test_cache_invalidation_worker_skips_completion_log_when_completion_transition_misses(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("WARNING", logger="src.services.cache_invalidation_worker")
+    caplog.set_level("WARNING", logger="src.services.invalidation.cache_invalidation_worker")
     key_service = _KeyService()
     repository = _Repository(records=[_record()], complete_result=False)
     worker = CacheInvalidationWorker(
@@ -444,7 +444,7 @@ async def test_cache_invalidation_worker_retries_when_backend_unavailable() -> N
 async def test_cache_invalidation_worker_logs_retry_transition_miss_without_recording_retry(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("WARNING", logger="src.services.cache_invalidation_worker")
+    caplog.set_level("WARNING", logger="src.services.invalidation.cache_invalidation_worker")
     key_service = _KeyService(fail=True)
     repository = _Repository(
         records=[_record(attempt_count=1, max_attempts=3)],
@@ -542,7 +542,7 @@ async def test_cache_invalidation_worker_fails_when_record_times_out_at_max_atte
 async def test_cache_invalidation_worker_logs_failed_transition_miss_without_recording_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("WARNING", logger="src.services.cache_invalidation_worker")
+    caplog.set_level("WARNING", logger="src.services.invalidation.cache_invalidation_worker")
     key_service = _KeyService(fail=True)
     repository = _Repository(
         records=[_record(attempt_count=3, max_attempts=3)],

@@ -14,7 +14,7 @@ from src.billing.accounting.accounting_protocol import AccountingScope
 from src.auth.roles import OrganizationRole, Permission, validate_organization_role
 from src.api.admin.auth_scope import require_organization_directory_access
 from src.audit.actions import AuditAction
-from src.services.asset_binding_mirror import (
+from src.services.access.asset_binding_mirror import (
     callable_catalog,
     callable_target_access_group_binding_repository,
     callable_target_binding_repository,
@@ -56,36 +56,39 @@ from src.db.audit.repository import (
     AUDIT_PAYLOAD_RETENTION_DAYS_KEY,
 )
 from src.middleware.admin import require_admin_permission
-from src.services.asset_visibility_preview import (
+from src.services.access.asset_visibility_preview import (
     build_asset_visibility_preview,
     list_scope_route_group_bindings,
 )
-from src.services.organization_callable_target_sync import (
+from src.services.access.organization_callable_target_sync import (
     get_organization_auto_follow_catalog,
     organization_auto_follow_catalog,
     set_organization_auto_follow_catalog,
     with_organization_auto_follow_catalog,
 )
-from src.services.model_visibility import get_tier_policy_mode_from_app
-from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state
-from src.services.tier_admin_errors import (
+from src.services.access.model_visibility import get_tier_policy_mode_from_app
+from src.services.access.scoped_asset_access import (
+    build_scope_asset_access,
+    sync_scope_asset_access_state,
+)
+from src.services.tiers.tier_admin_errors import (
     TierAdminConflictError,
     TierAdminError,
     TierAdminNotFoundError,
     TierAdminUnavailableError,
 )
-from src.services.tier_assignment_admin import (
+from src.services.tiers.tier_assignment_admin import (
     _assignment_admin_error,
     _assignment_storage_error,
 )
-from src.services.tier_assignment_admin_payloads import normalize_assignment_create
-from src.services.tier_assignment_admin_serialization import serialize_tier_assignment
-from src.services.tier_assignment_cache_invalidation import (
+from src.services.tiers.tier_assignment_admin_payloads import normalize_assignment_create
+from src.services.tiers.tier_assignment_admin_serialization import serialize_tier_assignment
+from src.services.tiers.tier_assignment_cache_invalidation import (
     apply_best_effort_org_cache_invalidation,
     enqueue_org_tier_assignment_cache_invalidation,
 )
-from src.services.tier_policy_invalidation import reload_tier_policy
-from src.services.ui_authorization import build_organization_capabilities
+from src.services.tiers.tier_policy_invalidation import reload_tier_policy
+from src.services.ui.ui_authorization import build_organization_capabilities
 
 router = APIRouter(tags=["Admin Organizations"])
 logger = logging.getLogger(__name__)

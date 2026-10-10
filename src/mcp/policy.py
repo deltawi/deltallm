@@ -5,7 +5,7 @@ import logging
 
 from src.db.mcp.mcp import MCPToolPolicyRecord
 from src.models.errors import RateLimitError
-from src.services.limit_counter import LegacyParallelLease, LimitCounter
+from src.services.admission.limit_counter import LegacyParallelLease, LimitCounter
 
 from .exceptions import MCPRateLimitError
 

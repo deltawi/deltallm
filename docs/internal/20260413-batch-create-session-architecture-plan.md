@@ -776,7 +776,7 @@ Files:
 
 - `src/api/admin/endpoints/batches.py`
 - new admin endpoint module for create sessions if preferred
-- `src/services/ui_authorization.py`
+- `src/services/ui/ui_authorization.py`
 - admin UI files if UI support is desired in same phase
 
 Acceptance:
@@ -907,7 +907,7 @@ Add:
 
 - session-centric operator actions or route to a dedicated create-session admin module
 
-### `src/services/ui_authorization.py`
+### `src/services/ui/ui_authorization.py`
 
 Remove batch capability:
 

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.db.email.email_feedback import EmailSuppressionRecord
-from src.services.email_feedback_service import EmailFeedbackError, EmailFeedbackService
+from src.services.email.email_feedback_service import EmailFeedbackError, EmailFeedbackService
 
 
 def _config(**overrides):

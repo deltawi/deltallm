@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from src.db.identity.platform_passwords import PlatformPasswordRepository
-from src.services.platform_identity_service import PlatformIdentityService
+from src.services.identity.platform_identity_service import PlatformIdentityService
 from tests.db import external_auth_fixtures as fixtures
 from tests.db.test_external_customer_assets import install_customer
 

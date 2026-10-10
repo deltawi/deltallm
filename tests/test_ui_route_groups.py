@@ -35,11 +35,11 @@ from src.router.selection.policy import (
     ensure_selector_activation_supported,
 )
 from src.models.platform_auth import PlatformAuthContext
-from src.services.creator_route_group_access import CreatorRouteGroupAccessService
-from src.services.asset_ownership import owner_scope_from_metadata
-from src.services.asset_scopes import normalize_scope_type
-from src.services.callable_targets import build_callable_target_catalog
-from src.services.managed_asset_access import (
+from src.services.access.creator_route_group_access import CreatorRouteGroupAccessService
+from src.services.access.asset_ownership import owner_scope_from_metadata
+from src.services.access.asset_scopes import normalize_scope_type
+from src.services.access.callable_targets import build_callable_target_catalog
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,

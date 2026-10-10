@@ -21,8 +21,8 @@ from src.mcp.capabilities import extract_tool_schemas, namespace_tools
 from src.mcp.health import MCPHealthProbe
 from src.mcp.models import MCPToolSchema
 from src.models.platform_auth import PlatformAuthContext
-from src.services.creator_mcp_access import CreatorMCPAccessService
-from src.services.managed_asset_access import (
+from src.services.access.creator_mcp_access import CreatorMCPAccessService
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,

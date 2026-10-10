@@ -5,7 +5,7 @@ from contextlib import suppress
 import logging
 
 from src.rate_limit_policy import RateLimitLease
-from src.services.limit_counter import LimitCounter
+from src.services.admission.limit_counter import LimitCounter
 
 logger = logging.getLogger(__name__)
 _DEFAULT_MAX_REFRESH_INTERVAL_SECONDS = 60.0
@@ -80,7 +80,9 @@ class RateLimitLeaseRefresher:
             )
 
     def _has_refreshable_leases(self) -> bool:
-        return bool(self._lease.refreshable_parallel_leases or self._lease.refreshable_legacy_parallel_lease)
+        return bool(
+            self._lease.refreshable_parallel_leases or self._lease.refreshable_legacy_parallel_lease
+        )
 
     def _refreshable_ttls(self) -> list[int]:
         ttls = [max(1, int(lease.ttl_seconds)) for lease in self._lease.refreshable_parallel_leases]

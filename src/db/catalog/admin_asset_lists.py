@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from src.services.admin_list_health import ListHealthSnapshot
+from src.services.reporting.admin_list_health import ListHealthSnapshot
 
 ListDirection = Literal["asc", "desc"]
 GroupSortKey = Literal[

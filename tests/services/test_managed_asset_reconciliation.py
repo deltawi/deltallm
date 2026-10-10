@@ -4,7 +4,7 @@ from src.db.catalog.managed_assets import (
     ManagedAssetLinkHealth,
     ManagedAssetReconciliationResult,
 )
-from src.services.managed_asset_reconciliation import ManagedAssetReconciliationService
+from src.services.access.managed_asset_reconciliation import ManagedAssetReconciliationService
 
 
 class _Repository:

@@ -5,7 +5,10 @@ from typing import Any
 
 from src.batch import BatchRepository
 from src.batch.create.admin_service import BatchCreateSessionAdminService
-from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
+from src.batch.create.cleanup import (
+    BatchCreateSessionCleanupConfig,
+    BatchCreateSessionCleanupWorker,
+)
 from src.batch.create.promoter import BatchCreateSessionPromoter
 from src.batch.create.service import BatchCreateSessionService
 from src.batch.create.session_repository import BatchCreateSessionRepository
@@ -17,7 +20,7 @@ from src.bootstrap.batch_runtime.core import BatchCoreComponents
 from src.bootstrap.batch_runtime.runtime import BatchRuntime
 from src.bootstrap.batch_runtime.scheduler import batch_scheduler_active_enabled_for_creation
 from src.bootstrap.batch_runtime.settings import batch_runtime_setting
-from src.services.model_visibility import normalize_callable_target_policy_mode
+from src.services.access.model_visibility import normalize_callable_target_policy_mode
 
 
 def _build_create_session_staging_backend(

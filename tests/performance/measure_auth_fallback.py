@@ -15,8 +15,8 @@ from redis.asyncio import Redis
 from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner
 from src.db.runtime.allocation_config import DatabasePolicy
 from src.db.identity.key_repository import KeyRepository
-from src.services.auth_fallback import AuthFallbackLimits
-from src.services.key_service import KeyService
+from src.services.identity.keys.auth_fallback import AuthFallbackLimits
+from src.services.identity.keys.key_service import KeyService
 from tests.performance.gateway_concurrency_dependencies import (
     fixture_database_url,
     require_local_url,

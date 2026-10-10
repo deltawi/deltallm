@@ -25,7 +25,7 @@ from src.models.external_auth import (
     ExternalRuntimeBindingRequest,
     ExternalVersionRequest,
 )
-from src.services.external_auth_linking import ExternalLinkApproval
+from src.services.identity.external.external_auth_linking import ExternalLinkApproval
 
 router = APIRouter(
     prefix="/ui/api/external-auth",
@@ -41,7 +41,7 @@ diagnostics_router = APIRouter(
 
 @diagnostics_router.get("/ui/api/external-auth/status", response_model=ExternalAuthDiagnostics)
 async def external_auth_diagnostics(request: Request) -> ExternalAuthDiagnostics:
-    from src.services.external_auth_runtime import ExternalAuthRuntime
+    from src.services.identity.external.external_auth_runtime import ExternalAuthRuntime
 
     runtime = getattr(request.app.state, "external_auth_runtime", None)
     if not isinstance(runtime, ExternalAuthRuntime):

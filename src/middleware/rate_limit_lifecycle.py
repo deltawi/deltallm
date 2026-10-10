@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.middleware.rate_limit import _release_rate_limits
-from src.services.preflight_capacity import release_preflight_capacity
+from src.services.admission.preflight_capacity import release_preflight_capacity
 
 
 class RateLimitLeaseLifecycleMiddleware:

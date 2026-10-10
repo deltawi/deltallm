@@ -22,22 +22,22 @@ from src.rate_limit_policy import (
     build_rate_limit_checks,
     release_rate_limit_controls,
 )
-from src.services.limit_counter import (
+from src.services.admission.limit_counter import (
     LegacyParallelLease,
     LimitCounter,
     ParallelLimitCheck,
     ParallelLimitLease,
 )
-from src.services.tier_capacity_fair_share import (
+from src.services.admission.tier_capacity_fair_share import (
     fair_share_limit_hit_heatmap_key,
     fair_share_limit_hit_heatmap_rank_key,
     fair_share_limit_hit_total_key,
 )
-from src.services.tier_policy_models import (
+from src.services.tiers.tier_policy_models import (
     CompiledTierCapacityPoolPolicy,
     CompiledTierRateLimitDescriptor,
 )
-from src.services.tier_policy_service import resolve_tier_policy_unavailable_decision
+from src.services.tiers.tier_policy_service import resolve_tier_policy_unavailable_decision
 from tests.conftest import FakeRedis
 
 

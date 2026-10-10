@@ -7,8 +7,8 @@ import pytest
 
 from src.middleware.rate_limit import _check_and_acquire_rate_limits
 from src.models.errors import InvalidRequestError
-from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
-from src.services.limit_counter import LimitCounter
+from src.services.access.asset_binding_mirror import reload_callable_target_grants_for_app
+from src.services.admission.limit_counter import LimitCounter
 
 
 async def _multimodal_success_response(url: str, *args, **kwargs):  # noqa: ANN001, ANN202
@@ -134,7 +134,9 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
     client, test_app, monkeypatch
 ):
     clock = SimpleNamespace(now=1_700_000_010.0)
-    monkeypatch.setattr("src.services.limit_counter.time", SimpleNamespace(time=lambda: clock.now))
+    monkeypatch.setattr(
+        "src.services.admission.limit_counter.time", SimpleNamespace(time=lambda: clock.now)
+    )
 
     class RecordingLimitCounter(LimitCounter):
         def __init__(self) -> None:

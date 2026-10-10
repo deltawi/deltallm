@@ -10,7 +10,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
-from src.services.asset_binding_mirror import (
+from src.services.access.asset_binding_mirror import (
     delete_callable_target_binding_mirror,
     mirror_route_group_binding_to_callable_target,
     reload_callable_target_grants,
@@ -49,7 +49,7 @@ from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.db.routing.route_groups import RouteGroupRepository
 from src.db.catalog.admin_asset_lists import GroupSortKey, ListDirection
 from src.api.admin.list_contracts import AdminListResponse, GroupListItem
-from src.services.admin_list_health import list_health_refs, list_health_snapshot
+from src.services.reporting.admin_list_health import list_health_refs, list_health_snapshot
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_admin_permission, require_authenticated
 from src.router.policy_validation import (
@@ -64,32 +64,32 @@ from src.router.route_group_validation import (
 from src.router.selection.policy import RouteSelectorActivationUnsupportedError
 from src.router import RoutingStrategy
 from src.router.runtime_generation import require_routing_runtime_generation
-from src.services.asset_ownership import (
+from src.services.access.asset_ownership import (
     apply_owner_scope_to_metadata,
     normalize_owner_scope_type,
     owner_scope_from_metadata,
     public_metadata_without_owner_scope,
 )
-from src.services.asset_scopes import normalize_scope_type
-from src.services.organization_callable_target_sync import (
+from src.services.access.asset_scopes import normalize_scope_type
+from src.services.access.organization_callable_target_sync import (
     maybe_disable_organization_auto_follow_for_scope_mutation,
 )
-from src.services.route_policy_simulation import (
+from src.services.routing.route_policy_simulation import (
     RoutePolicySimulationInvalidError,
     RoutePolicySimulationNotFoundError,
     RoutePolicySimulationService,
     RoutePolicySimulationUnavailableError,
 )
-from src.services.route_policy_publication import (
+from src.services.routing.route_policy_publication import (
     RoutePolicyPublicationNotFoundError,
     RoutePolicyPublicationService,
 )
-from src.services.route_group_refresh import refresh_route_group_runtime
-from src.services.route_group_mutations import RouteGroupMutationService
-from src.services.creator_route_group_access import (
+from src.services.routing.route_group_refresh import refresh_route_group_runtime
+from src.services.routing.route_group_mutations import RouteGroupMutationService
+from src.services.access.creator_route_group_access import (
     refresh_creator_route_group_access_for_app,
 )
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,
@@ -101,7 +101,7 @@ from src.services.managed_asset_access import (
     validate_grant_subject_for_principal,
     namespace_creator_callable_key,
 )
-from src.services.model_identity import (
+from src.services.models.model_identity import (
     creator_route_group_key,
     generate_compact_asset_code,
     normalize_route_group_slug,
@@ -111,8 +111,8 @@ from src.api.admin.endpoints.managed_assets import (
     asset_principal_for_request,
     parse_asset_access_input,
 )
-from src.services.selector_inventory import policy_deployment_inventory
-from src.services.route_groups import RouteGroupRuntimeCache
+from src.services.routing.selector_inventory import policy_deployment_inventory
+from src.services.routing.route_groups import RouteGroupRuntimeCache
 
 router = APIRouter(tags=["Admin Route Groups"])
 policy_router = APIRouter(

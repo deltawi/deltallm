@@ -33,12 +33,12 @@ from src.router import (
     build_deployment_registry,
     build_route_group_policies,
 )
-from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import (
+from src.services.access.callable_targets import build_callable_target_catalog
+from src.services.models.model_deployments import (
     bootstrap_model_deployments_from_config,
     load_model_registry,
 )
-from src.services.route_groups import load_route_group_snapshot_result
+from src.services.routing.route_groups import load_route_group_snapshot_result
 from src.router.route_group_validation import (
     deployment_modes_by_id,
     resolve_route_group_modes_for_registry,

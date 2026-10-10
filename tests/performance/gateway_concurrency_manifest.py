@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.database_settings import DatabaseAllocationSettings
 from src.spend_operation_settings import SpendOperationAllocation, SpendOperationSettings
 from src.ingress import IngressLimits
-from src.services.auth_fallback import AuthFallbackLimits
+from src.services.identity.keys.auth_fallback import AuthFallbackLimits
 from tests.performance.gateway_source_identity import source_sha256
 from src.request_work_settings import RequestWorkSettings, resolve_request_work_settings
 from src.redis_runtime import RedisLimits

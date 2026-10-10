@@ -12,7 +12,7 @@ from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.db.billing.billing_operation_recovery import BillingOperationRecovery
 from src.db.billing.billing_operations import BillingOperationRepository
-from src.services.spend_visibility import SpendVisibility
+from src.services.reporting.spend_visibility import SpendVisibility
 from tests import test_billing_operations_postgres as billing_fixtures
 from tests.test_batch_completion_outbox import _build_record
 from tests.test_billing_operations_postgres import deadline

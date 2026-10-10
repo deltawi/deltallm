@@ -4,8 +4,8 @@ import pytest
 
 from src.db.mcp.mcp import MCPServerRecord
 from src.models.responses import UserAPIKeyAuth
-from src.services.creator_mcp_access import CreatorMCPAccessService, CreatorMCPAccessSnapshot
-from src.services.managed_asset_access import (
+from src.services.access.creator_mcp_access import CreatorMCPAccessService, CreatorMCPAccessSnapshot
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
     AssetGrant,

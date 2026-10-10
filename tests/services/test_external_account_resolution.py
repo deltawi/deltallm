@@ -15,8 +15,8 @@ from src.auth.sso_identity import (
     SSOIdentityOwnershipError,
     SSOSubjectSource,
 )
-from src.services.platform_identity_service import PlatformIdentityService
-from src.services.sso_account_service import SSOAccountResolution, SSOAccountService
+from src.services.identity.platform_identity_service import PlatformIdentityService
+from src.services.identity.sso_account_service import SSOAccountResolution, SSOAccountService
 from tests.services.test_platform_identity_service import TransactionalFakePlatformIdentityDB
 
 

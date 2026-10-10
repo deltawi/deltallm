@@ -8,7 +8,7 @@ import yaml
 from src.config import GeneralSettings, Settings
 from src.config_runtime.dynamic import DynamicConfigManager, DynamicConfigRestartRequiredError
 from src.ingress import IngressLimits
-from src.services.auth_fallback import AuthFallbackLimits
+from src.services.identity.keys.auth_fallback import AuthFallbackLimits
 from src.config_startup import startup_field_values
 
 pytestmark = pytest.mark.hermetic

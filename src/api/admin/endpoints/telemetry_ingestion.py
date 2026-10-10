@@ -14,7 +14,7 @@ from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.db.audit.repository import AuditRepository
 from src.middleware.admin import require_admin_permission
-from src.services.telemetry_replay import TelemetryReplayService
+from src.services.audit.telemetry_replay import TelemetryReplayService
 
 router = APIRouter(tags=["Admin Telemetry Ingestion"])
 

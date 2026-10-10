@@ -18,12 +18,12 @@ from src.db.organizations.deletion.organization_deletion_worker_repository impor
     OrganizationDeletionWorkerRepository,
 )
 from src.organization_deletion_migrations import verify_readiness
-from src.services.organization_deletion import OrganizationDeletionService
-from src.services.organization_deletion_worker import (
+from src.services.organizations.deletion.organization_deletion import OrganizationDeletionService
+from src.services.organizations.deletion.organization_deletion_worker import (
     OrganizationDeletionWorker,
     OrganizationDeletionWorkerConfig,
 )
-from src.services.organization_lifecycle import OrganizationLifecycleAuthorizer
+from src.services.organizations.organization_lifecycle import OrganizationLifecycleAuthorizer
 
 logger = logging.getLogger(__name__)
 _WORKER_BOOT_ID = uuid4().hex[:12]

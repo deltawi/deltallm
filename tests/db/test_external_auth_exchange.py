@@ -16,12 +16,12 @@ from src.auth.external_errors import ExternalAuthError, ExternalAuthUnavailable
 from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.db.identity.platform_memberships import seed_organization_membership, seed_team_membership
 from src.db.audit.repository import AuditRepository
-from src.services.audit_service import AuditIngestionConfig, AuditService
-from src.services.external_auth_audit import ExternalAuthAudit
-from src.services.external_auth_exchange import ExternalAuthExchange
-from src.services.external_auth_revocation import ExternalAuthRevocation
-from src.services.external_auth_sessions import ExternalSessionService
-from src.services.platform_identity_service import PlatformIdentityService
+from src.services.audit.audit_service import AuditIngestionConfig, AuditService
+from src.services.identity.external.external_auth_audit import ExternalAuthAudit
+from src.services.identity.external.external_auth_exchange import ExternalAuthExchange
+from src.services.identity.external.external_auth_revocation import ExternalAuthRevocation
+from src.services.identity.external.external_auth_sessions import ExternalSessionService
+from src.services.identity.platform_identity_service import PlatformIdentityService
 from tests.db import external_auth_fixtures as fixtures
 from tests.db.external_auth_fixtures import ExternalDatabase
 

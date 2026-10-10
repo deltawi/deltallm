@@ -12,7 +12,7 @@ from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner, Data
 from src.db.runtime.allocation_config import DatabasePolicy
 from src.db.identity.key_repository import KeyRepository
 from src.models.errors import AuthenticationError, AuthenticationUnavailableError
-from src.services.key_service import KeyService
+from src.services.identity.keys.key_service import KeyService
 
 pytestmark = pytest.mark.postgres
 

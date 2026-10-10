@@ -13,7 +13,10 @@ from src.models.requests import ChatCompletionRequest, FunctionToolDefinition, T
 from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
 from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.healthcheck import HealthProbeResult
-from src.services.master_session_service import MASTER_SESSION_COOKIE_NAME, MasterSessionStatus
+from src.services.identity.master_session_service import (
+    MASTER_SESSION_COOKIE_NAME,
+    MasterSessionStatus,
+)
 
 
 @pytest.mark.parametrize("role", [None, "org_user", "org_admin", "team_admin", "platform_admin"])

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.db.catalog.admin_asset_lists import GroupSortKey, ListDirection, list_asset_rows
-from src.services.admin_list_health import ListHealthSnapshot
+from src.services.reporting.admin_list_health import ListHealthSnapshot
 
 from src.db.routing.route_group_identity import (
     RouteGroupIdentity,
@@ -33,7 +33,7 @@ from src.router.route_group_validation import (
     deployment_modes_by_id,
     validate_route_group_member_modes,
 )
-from src.services.asset_ownership import owner_scope_from_metadata
+from src.services.access.asset_ownership import owner_scope_from_metadata
 
 __all__ = [
     "RouteGroupBindingRecord",

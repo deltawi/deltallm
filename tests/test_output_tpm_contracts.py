@@ -6,22 +6,22 @@ import pytest
 
 from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.output_limits import validate_output_limit
-from src.services.limit_counter import LimitCounter
-from src.services.output_limit_types import (
+from src.services.admission.limit_counter import LimitCounter
+from src.services.admission.output_limit_types import (
     OutputPolicy,
     OutputSnapshot,
     OutputScope,
     complete_output_count,
 )
-from src.services.output_token_context import OutputTokenContext
-from src.services.rate_limit_lease import RateLimitState
+from src.services.admission.output_token_context import OutputTokenContext
+from src.services.admission.rate_limit_lease import RateLimitState
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import UserAPIKeyAuth
 from src.providers.openai import OpenAIAdapter
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.bedrock import BedrockAdapter
-from src.services.output_limit_types import output_scopes
+from src.services.admission.output_limit_types import output_scopes
 import asyncio
 import httpx
 import anyio
@@ -42,7 +42,7 @@ def test_output_policy_accepts_only_null_or_bounded_positive_integers(value):
     "payload", [{}, {"max_tokens": 10}, {"max_completion_tokens": 20}, {"n": 2}]
 )
 def test_policy_is_independent_of_generation_parameters(payload):
-    from src.services.output_admission import prepare_output_policy
+    from src.services.admission.output_admission import prepare_output_policy
 
     auth = UserAPIKeyAuth(api_key="key", key_output_tpm_limit=100)
     assert prepare_output_policy(auth) == OutputPolicy((OutputScope("key_output_tpm", "key", 100),))
@@ -167,7 +167,7 @@ async def test_direct_cancellation_during_accounting_retries_the_same_event():
 
 async def test_shielded_accounting_has_a_bounded_cleanup_timeout(monkeypatch):
     monkeypatch.setattr(
-        "src.services.output_token_context.OUTPUT_COORDINATION_TIMEOUT_SECONDS", 0.01
+        "src.services.admission.output_token_context.OUTPUT_COORDINATION_TIMEOUT_SECONDS", 0.01
     )
 
     async def account(event):
@@ -326,7 +326,7 @@ def test_enabled_policy_with_missing_identity_fails_closed():
 
 async def test_null_policy_uses_original_admission_command():
     redis = SimpleNamespace(eval=AsyncMock(return_value=[1, 0, 1]), evalsha=AsyncMock())
-    from src.services.limit_counter import RateLimitCheck
+    from src.services.admission.limit_counter import RateLimitCheck
 
     await LimitCounter(redis_client=redis).check_rate_limits_atomic(
         [RateLimitCheck("key_rpm", "key", 10, 1)]
@@ -350,7 +350,7 @@ async def test_coordination_timeout_is_bounded_and_never_penalizes_provider():
 
 
 def test_unknown_usage_retry_after_survives_http_dialects_and_batch():
-    from src.services.output_limit_redis import OutputUsageUnknownError
+    from src.services.admission.output_limit_redis import OutputUsageUnknownError
     from src.middleware.errors import proxy_error_response, anthropic_proxy_error_response
     from src.middleware.rate_limit import build_rate_limit_headers
     from src.batch.retry import classify_batch_retry

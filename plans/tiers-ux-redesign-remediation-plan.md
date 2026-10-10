@@ -901,11 +901,11 @@ Expected core modifications:
 - `src/db/tiers/tier_version_repository.py`
 - `src/db/tiers/tier_version_clone_repository.py`
 - `src/db/tiers/tier_policy_repository.py`
-- `src/services/tier_admin.py` and tier admin error/payload/serialization modules
+- `src/services/tiers/tier_admin.py` and tier admin error/payload/serialization modules
 - `src/api/admin/endpoints/tier_schemas.py`
 - `src/api/admin/endpoints/tiers.py`
 - `src/config.py` and `config.example.yaml` for the temporary compatibility-enforcement rollout setting
-- `src/services/callable_targets.py`
+- `src/services/access/callable_targets.py`
 - `src/api/admin/endpoints/callable_targets.py`
 - `ui/src/lib/api.ts`
 - `ui/src/lib/tiers.ts` and focused new tier workspace helpers

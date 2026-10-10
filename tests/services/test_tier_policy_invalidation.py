@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.services.tier_policy_invalidation import reload_tier_policy_for_app
+from src.services.tiers.tier_policy_invalidation import reload_tier_policy_for_app
 
 
 class _FakeGovernanceInvalidation:

@@ -9,7 +9,7 @@ import pytest
 
 from src.db.email.email import EmailOutboxRecord
 from src.email.models import EmailDeliveryError, EmailDeliveryResult, PreparedEmail
-from src.services.email_outbox_service import (
+from src.services.email.email_outbox_service import (
     EmailOutboxService,
     EmailOutboxWorker,
     EmailWorkerConfig,

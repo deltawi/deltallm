@@ -21,7 +21,7 @@ from src.config_runtime.dynamic import DynamicConfigPostCommitApplyError
 from src.config_runtime.loader import deep_merge
 from src.db.catalog.ui_branding_assets import UIBrandingAssetRepository
 from src.models.platform_auth import PlatformAuthContext
-from src.services.ui_branding_assets import UIBrandingAssetService, validate_branding_asset
+from src.services.ui.ui_branding_assets import UIBrandingAssetService, validate_branding_asset
 
 
 _URL_CASES = json.loads(

@@ -13,7 +13,7 @@ from src.models.errors import InvalidRequestError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
 from src.rate_limit_policy import estimate_tokens
-from src.services.output_admission import prepare_output_policy
+from src.services.admission.output_admission import prepare_output_policy
 from src.middleware.rate_limit import (
     _release_rate_limits,
     acquire_parallel_limits_for_payload,
@@ -22,14 +22,20 @@ from src.middleware.rate_limit import (
 from src.metrics import observe_request_phase
 from src.routers.routing_decision import set_prompt_provenance
 from src.router.runtime_generation import RoutingRuntimeGeneration
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,
     get_tier_policy_mode_from_app,
 )
-from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
-from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
+from src.services.prompts.prompt_registry import (
+    apply_route_preferences_to_metadata,
+    parse_prompt_reference,
+)
+from src.services.admission.preflight_capacity import (
+    acquire_preflight_capacity,
+    release_preflight_capacity,
+)
 
 
 @dataclass(frozen=True, slots=True)

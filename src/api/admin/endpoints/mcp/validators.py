@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException, status
 
 from src.api.admin.endpoints.common import optional_int
-from src.services.mcp_migration import (
+from src.services.access.mcp_migration import (
     ORGANIZATION_ROLLOUT_STATES as MCP_MIGRATION_ROLLOUT_STATES,
     ROLLOUT_STATE_ALIASES as MCP_MIGRATION_ROLLOUT_STATE_ALIASES,
 )

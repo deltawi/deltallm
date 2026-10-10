@@ -6,7 +6,7 @@ import pytest
 from src.bootstrap.readiness import collect_workers, dependency_probes, worker_inventory
 from src.bootstrap.asset_readiness import AUTHORIZATION_OWNERS
 from src.config import AppConfig, GeneralSettings, Settings
-from src.services.managed_asset_reconciliation import ManagedAssetReconciliationHealth
+from src.services.access.managed_asset_reconciliation import ManagedAssetReconciliationHealth
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
 
 

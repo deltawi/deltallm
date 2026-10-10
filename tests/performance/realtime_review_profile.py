@@ -41,7 +41,7 @@ from src.router.candidates import AttemptCapacity
 from src.router.cooldown import CooldownManager
 from src.router.health_state import DeploymentHealthRef
 from src.router.state import RedisStateBackend
-from src.services.limit_counter import LimitCounter, ParallelLimitCheck
+from src.services.admission.limit_counter import LimitCounter, ParallelLimitCheck
 
 RATE, SECONDS = 20, 5
 

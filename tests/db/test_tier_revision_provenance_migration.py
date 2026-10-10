@@ -10,7 +10,7 @@ from src.db.tiers.tier_records import (
     to_tier_creation_request_record,
     to_version_record,
 )
-from src.services.tier_admin_serialization import serialize_tier_version
+from src.services.tiers.tier_admin_serialization import serialize_tier_version
 from tests.db.tier_migration_helpers import cleanup
 from tests.db.tier_migration_helpers import connect_prisma
 from tests.db.tier_migration_helpers import require_tier_schema

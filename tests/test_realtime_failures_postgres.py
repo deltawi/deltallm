@@ -13,7 +13,7 @@ from websockets.asyncio.server import serve
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.realtime.routing import resolve_realtime_target
 from src.router.candidates import AttemptCapacity
-from src.services.limit_counter import _parallel_lease_key
+from src.services.admission.limit_counter import _parallel_lease_key
 from tests import test_realtime_runtime_postgres as fixtures
 from tests.test_stream_accounting_commit import loopback_gateway
 

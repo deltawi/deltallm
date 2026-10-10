@@ -11,7 +11,7 @@ import httpx
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
-from src.services.output_limit_types import complete_output_count
+from src.services.admission.output_limit_types import complete_output_count
 from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
 from src.providers.base import (
     ProviderAdapter,

@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from src.router.runtime_generation import RoutingRuntimeAppliedState
-from src.services.governance_invalidation import (
+from src.services.invalidation.governance_invalidation import (
     GovernanceInvalidationApplyError,
     GovernanceInvalidationService,
 )

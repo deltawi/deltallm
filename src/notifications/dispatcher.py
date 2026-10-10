@@ -15,8 +15,8 @@ from src.notifications.types import (
     NotificationChannel,
     NotificationMessage,
 )
-from src.services.audit_service import AuditEventInput, AuditService, enqueue_audit_event
-from src.services.notification_recipients import NotificationRecipients
+from src.services.audit.audit_service import AuditEventInput, AuditService, enqueue_audit_event
+from src.services.email.notification_recipients import NotificationRecipients
 
 logger = logging.getLogger(__name__)
 

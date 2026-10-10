@@ -11,8 +11,8 @@ from src.chat.stream_response import DeadlineStreamingResponse
 from src.models.errors import TimeoutError
 from src.router.execution import ManagedFailoverResult, RequestDeadline
 from src.router.router import Deployment
-from src.services.output_token_context import OutputTokenContext
-from src.services.rate_limit_lease import RateLimitState
+from src.services.admission.output_token_context import OutputTokenContext
+from src.services.admission.rate_limit_lease import RateLimitState
 from tests.test_output_tpm_contracts import snapshot
 from types import SimpleNamespace
 

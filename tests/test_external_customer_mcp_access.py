@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from src.auth.external_client import ExternalClientResolver
 from src.auth.external_config import ExternalAuthSettings
 from src.auth.external_policy import CUSTOMER_PERMISSION_CEILING
-from src.services.creator_mcp_access import CreatorMCPAccessService
+from src.services.access.creator_mcp_access import CreatorMCPAccessService
 from tests.test_external_customer_scope import customer
 from tests.test_ui_mcp import (
     _FakeBindingPolicyListQueryClient,

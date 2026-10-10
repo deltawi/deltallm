@@ -38,10 +38,10 @@ from src.router.route_group_validation import (
     deployment_modes_by_id,
     resolve_route_group_modes_for_registry,
 )
-from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import load_model_registry
-from src.services.routing_authorization import RoutingAuthorizationReconciler
-from src.services.route_groups import (
+from src.services.access.callable_targets import build_callable_target_catalog
+from src.services.models.model_deployments import load_model_registry
+from src.services.access.routing_authorization import RoutingAuthorizationReconciler
+from src.services.routing.route_groups import (
     RouteGroupRuntimeCache,
     StaleRouteGroupSnapshotError,
     load_route_group_snapshot_result,

@@ -7,8 +7,11 @@ from src.middleware.external_auth import require_unmixed_external_auth, external
 from src.middleware.platform_auth import get_master_session_status, get_platform_auth_context
 from src.models.external_auth import ExternalWorkspaceResponse
 from src.models.platform_auth import CurrentSessionResponse
-from src.services.master_session_service import MASTER_SESSION_COOKIE_NAME, MasterSessionStatus
-from src.services.ui_authorization import build_ui_access, effective_permissions_for_context
+from src.services.identity.master_session_service import (
+    MASTER_SESSION_COOKIE_NAME,
+    MasterSessionStatus,
+)
+from src.services.ui.ui_authorization import build_ui_access, effective_permissions_for_context
 
 router = APIRouter(tags=["auth"])
 _AUTH_SERVICE_UNAVAILABLE_HEADERS = {

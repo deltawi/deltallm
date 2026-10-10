@@ -50,7 +50,7 @@ from src.metrics import (
     publish_batch_runtime_summary,
 )
 from src.middleware.admin import require_admin_permission
-from src.services.ui_authorization import (
+from src.services.ui.ui_authorization import (
     build_archived_batch_webhook_capabilities,
     build_batch_capabilities,
 )

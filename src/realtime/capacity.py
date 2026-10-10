@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.models.responses import UserAPIKeyAuth
-from src.services.output_admission import prepare_output_policy
+from src.services.admission.output_admission import prepare_output_policy
 from src.rate_limit_policy import (
     RateLimitLease,
     acquire_parallel_limit_controls,
@@ -16,7 +16,11 @@ from src.realtime.errors import RealtimeError
 from src.realtime.routing import RealtimeRoute, RealtimeRouting
 from src.router.candidates import AttemptCapacity, AttemptCapacityLimit, AttemptPermit
 from src.router.strategies import usage_limits_for_deployment
-from src.services.limit_counter import LimitCounter, ParallelLimitCheck, ParallelLimitLease
+from src.services.admission.limit_counter import (
+    LimitCounter,
+    ParallelLimitCheck,
+    ParallelLimitLease,
+)
 from src.tier_rate_limit_policy import build_tier_limit_controls
 
 

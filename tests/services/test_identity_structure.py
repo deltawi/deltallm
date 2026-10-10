@@ -12,11 +12,11 @@ ROOT = Path(__file__).parents[2] / "src"
     "module",
     [
         "db/identity/platform_sessions.py",
-        "services/platform_session_service.py",
-        "services/sso_account_service.py",
+        "services/identity/platform_session_service.py",
+        "services/identity/sso_account_service.py",
         "auth/sso_identity.py",
         "db/identity/platform_passwords.py",
-        "services/platform_password_change.py",
+        "services/identity/platform_password_change.py",
         "db/organizations/team_directory.py",
     ],
 )
@@ -40,6 +40,6 @@ def test_session_and_account_boundaries_have_one_bounded_owner(module: str) -> N
 
 
 def test_identity_facade_does_not_reintroduce_session_sql() -> None:
-    source = (ROOT / "services/platform_identity_service.py").read_text()
+    source = (ROOT / "services/identity/platform_identity_service.py").read_text()
     assert len(source.splitlines()) < 800
     assert "deltallm_platformsession" not in source

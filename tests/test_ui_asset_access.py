@@ -12,7 +12,7 @@ from src.db.routing.callable_target_policies import CallableTargetScopePolicyRec
 from src.db.routing.callable_targets import CallableTargetBindingRecord
 from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRecord
 from src.governance.access_groups import normalize_access_group_key
-from src.services.callable_targets import CallableTarget
+from src.services.access.callable_targets import CallableTarget
 
 
 class _FakeScopeDB:

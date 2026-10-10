@@ -9,10 +9,10 @@ from src.auth.external_assertions import ExternalAssertionVerifier
 from src.auth.external_crypto import ExternalCryptoExecutor
 from src.bootstrap.status import BootstrapStatus
 from src.config import AppConfig, resolve_external_auth_database_settings
-from src.services.external_auth_admission import ExternalAuthAdmission
-from src.services.external_auth_audit import ExternalAuthAudit
-from src.services.external_auth_runtime import ExternalAuthRuntime
-from src.services.limit_counter import LimitCounter
+from src.services.identity.external.external_auth_admission import ExternalAuthAdmission
+from src.services.identity.external.external_auth_audit import ExternalAuthAudit
+from src.services.identity.external.external_auth_runtime import ExternalAuthRuntime
+from src.services.admission.limit_counter import LimitCounter
 
 
 async def init_external_auth_runtime(app: FastAPI, cfg: AppConfig) -> ExternalAuthRuntime | None:

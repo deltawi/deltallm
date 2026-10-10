@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.db.routing.routing_runtime import RoutingRuntimeRevisionRepository
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
     AssetGrant,

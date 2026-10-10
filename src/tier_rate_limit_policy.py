@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from src.models.errors import ServiceUnavailableError
-from src.services.limit_counter import ParallelLimitCheck, RateLimitCheck
-from src.services.tier_capacity_fair_share import (
+from src.services.admission.limit_counter import ParallelLimitCheck, RateLimitCheck
+from src.services.admission.tier_capacity_fair_share import (
     TierFairShareCheck,
     is_advanced_capacity_pool_strategy,
 )
-from src.services.tier_policy_service import resolve_tier_policy_unavailable_decision
+from src.services.tiers.tier_policy_service import resolve_tier_policy_unavailable_decision
 
 RateLimitMode = Literal["sync", "batch"]
 
@@ -179,9 +179,7 @@ def _build_tier_controls_from_service(
 
     parallel_checks = [
         check
-        for check in (
-            _model_parallel_limit_check(model_policy, organization_id, callable_key),
-        )
+        for check in (_model_parallel_limit_check(model_policy, organization_id, callable_key),)
         if check is not None
     ]
 
@@ -266,7 +264,9 @@ def _capacity_pool_fair_share_check(
         tpm_capacity=_positive_int_or_none(getattr(pool_policy, "tpm_capacity", None)),
         request_amount=1,
         token_amount=max(0, int(tokens)),
-        strategy=str(getattr(pool_policy, "strategy", "weighted_fair") or "weighted_fair").strip().lower(),
+        strategy=str(getattr(pool_policy, "strategy", "weighted_fair") or "weighted_fair")
+        .strip()
+        .lower(),
         saturation_threshold=getattr(pool_policy, "saturation_threshold", None),
         burst_multiplier=getattr(pool_policy, "burst_multiplier", None),
     )
@@ -391,7 +391,9 @@ def _pool_parallel_limit_check(
     if limit is None:
         return None
     pool_key = _normalize_id(getattr(pool_policy, "pool_key", None)) or fallback_pool_key
-    callable_key = _normalize_id(getattr(pool_policy, "callable_key", None)) or fallback_callable_key
+    callable_key = (
+        _normalize_id(getattr(pool_policy, "callable_key", None)) or fallback_callable_key
+    )
     return ParallelLimitCheck(
         scope="tier_pool_model_parallel",
         entity_id=f"{pool_key}:{callable_key}",

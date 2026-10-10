@@ -13,8 +13,8 @@ from src.bootstrap.status import BootstrapStatus
 from src.db.audit.repository import AuditRepository
 from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.redis_namespace import build_redis_channel
-from src.services.audit_retention import AuditRetentionConfig, AuditRetentionWorker
-from src.services.audit_service import AuditIngestionConfig, AuditService
+from src.services.audit.audit_retention import AuditRetentionConfig, AuditRetentionWorker
+from src.services.audit.audit_service import AuditIngestionConfig, AuditService
 
 
 @dataclass

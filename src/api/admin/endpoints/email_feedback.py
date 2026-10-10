@@ -10,7 +10,7 @@ from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
 from src.middleware.admin import require_admin_permission
-from src.services.email_feedback_service import EmailFeedbackError
+from src.services.email.email_feedback_service import EmailFeedbackError
 
 router = APIRouter(tags=["Email Feedback"])
 
@@ -35,7 +35,10 @@ def _serialize_suppression(record) -> dict[str, Any]:  # noqa: ANN001
 async def handle_resend_email_webhook(request: Request) -> dict[str, Any]:
     service = getattr(request.app.state, "email_feedback_service", None)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Email feedback service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email feedback service unavailable",
+        )
     raw_body = await request.body()
     try:
         outcome = await service.handle_resend_webhook(headers=request.headers, raw_body=raw_body)
@@ -52,28 +55,46 @@ async def handle_resend_email_webhook(request: Request) -> dict[str, Any]:
     }
 
 
-@router.get("/ui/api/email/suppressions", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def list_email_suppressions(request: Request, search: str | None = None, limit: int = 100) -> dict[str, Any]:
+@router.get(
+    "/ui/api/email/suppressions",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def list_email_suppressions(
+    request: Request, search: str | None = None, limit: int = 100
+) -> dict[str, Any]:
     repository = getattr(request.app.state, "email_feedback_repository", None)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Email feedback repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email feedback repository unavailable",
+        )
     records = await repository.list_suppressions(limit=limit, search=search)
     return {"data": [_serialize_suppression(record) for record in records], "count": len(records)}
 
 
-@router.delete("/ui/api/email/suppressions/{email_address}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete(
+    "/ui/api/email/suppressions/{email_address}",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def delete_email_suppression(request: Request, email_address: str) -> dict[str, bool]:
     request_start = perf_counter()
     repository = getattr(request.app.state, "email_feedback_repository", None)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Email feedback repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email feedback repository unavailable",
+        )
     normalized_email = unquote(email_address).strip().lower()
     if not normalized_email or "@" not in normalized_email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="valid email_address is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="valid email_address is required"
+        )
 
     authorization = request.headers.get("Authorization")
     x_master_key = request.headers.get("X-Master-Key")
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.PLATFORM_ADMIN)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.PLATFORM_ADMIN
+    )
 
     deleted = await repository.remove_suppression(normalized_email)
     response = {"deleted": deleted}

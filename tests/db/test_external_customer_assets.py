@@ -12,8 +12,8 @@ from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.named_credentials import NamedCredentialRepository
 from src.db.identity.key_repository import KeyRepository
 from src.db.catalog.model_deployments import ModelDeploymentRepository
-from src.services.creator_model_access import CreatorModelAccessService
-from src.services.key_service import KeyService
+from src.services.access.creator_model_access import CreatorModelAccessService
+from src.services.identity.keys.key_service import KeyService
 from tests.db import external_auth_fixtures as fixtures
 from tests.db.test_external_auth_exchange import enable, proof, services
 

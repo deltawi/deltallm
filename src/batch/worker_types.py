@@ -10,14 +10,14 @@ if TYPE_CHECKING:
 from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
-from src.services.output_token_context import OutputTokenContext
+from src.services.admission.output_token_context import OutputTokenContext
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.router.runtime_generation import RoutingRuntimeGenerationStore
 from src.router.router import Router
 from src.router.failover import FailoverManager
 from src.router.selection.reachability import selector_reachable_groups
-from src.services.creator_model_access import CreatorModelAccessSnapshot
-from src.services.creator_route_group_access import CreatorRouteGroupAccessSnapshot
+from src.services.access.creator_model_access import CreatorModelAccessSnapshot
+from src.services.access.creator_route_group_access import CreatorRouteGroupAccessSnapshot
 
 
 BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR = "artifact_validation_failed"

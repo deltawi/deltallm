@@ -6,7 +6,7 @@ import asyncio
 import os
 
 from src.db.identity.key_repository import KeyRepository
-from src.services.key_service import KeyService
+from src.services.identity.keys.key_service import KeyService
 from tests.performance.gateway_concurrency_dependencies import local_database
 
 MODEL = "concurrency-fixture"

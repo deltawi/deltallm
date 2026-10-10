@@ -22,8 +22,8 @@ from src.realtime.contracts import AdmittedRealtime, RealtimeRequest, TextSocket
 from src.realtime.controls import prepare_session, validate_controls
 from src.realtime.errors import RealtimeError
 from src.realtime.routing import RealtimeRoute, RealtimeRouting
-from src.services.key_service import KeyService
-from src.services.runtime_scopes import resolve_runtime_scope_context
+from src.services.identity.keys.key_service import KeyService
+from src.services.access.runtime_scopes import resolve_runtime_scope_context
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from redis.asyncio import Redis
 
-from src.services.limit_counter import LimitCounter, _legacy_parallel_key
+from src.services.admission.limit_counter import LimitCounter, _legacy_parallel_key
 from tests.batch import test_chat_fallback_lifetime as fixtures
 
 pytestmark = pytest.mark.redis

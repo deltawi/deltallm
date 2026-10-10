@@ -12,7 +12,7 @@ from src.router.selection.policy import (
     RouteSelectorActivationUnsupportedError,
 )
 from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
-from src.services.route_groups import (
+from src.services.routing.route_groups import (
     ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES,
     ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
     RouteGroupRuntimeCache,

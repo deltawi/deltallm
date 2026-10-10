@@ -4,7 +4,7 @@ import pytest
 
 from src.db.organizations.organization_mutation_guard import OrganizationMutationGuardRepository
 from src.models.organization_lifecycle import OrganizationLifecycleState
-from src.services.organization_mutation_policy import (
+from src.services.organizations.organization_mutation_policy import (
     OrganizationMutationInactiveError,
     OrganizationMutationNotFoundError,
     OrganizationMutationPolicy,

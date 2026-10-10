@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from src.db.catalog.named_credentials import NamedCredentialRecord
 from src.models.platform_auth import PlatformAuthContext
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,
@@ -13,7 +13,7 @@ from src.services.managed_asset_access import (
     ManagedAsset,
     resolve_asset_capabilities,
 )
-from src.services.named_credentials import connection_fingerprint
+from src.services.models.named_credentials import connection_fingerprint
 
 
 class _FakeNamedCredentialRepository:

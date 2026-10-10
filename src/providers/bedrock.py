@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.services.output_limit_types import complete_output_count
+from src.services.admission.output_limit_types import complete_output_count
 
 import json
 import time
