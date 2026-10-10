@@ -6,6 +6,7 @@ import yaml
 from src.bootstrap.capacity_contract import DeploymentCapacityContract
 from src.config import AppConfig, Settings, resolve_database_settings
 from src.deployment_capacity_report import CapacityReport
+from src.deployment_capacity_settings import DeploymentCapacitySettings
 from tests.helm.test_batch_worker_split import (
     HELM_CHART_DIR,
     _by_kind_and_name,
@@ -166,7 +167,18 @@ def test_native_role_is_selected_without_extended_capacity():
         general = _config_yaml(_by_kind_and_name(documents, "ConfigMap", name))["general_settings"]
         assert general["deployment_capacity_role"] == role
         assert general["accounting_execution_mode"] == "local_journal"
-        assert "deployment_capacity_path" not in general
+        # Helm can omit a null default or keep it. Neither must require a report.
+        capacity_settings = DeploymentCapacitySettings.model_validate(general)
+        assert capacity_settings.deployment_capacity_path is None
+        pod = _by_kind_and_name(documents, "Deployment", name.removesuffix("-config"))["spec"][
+            "template"
+        ]["spec"]
+        assert "capacity" not in {volume["name"] for volume in pod["volumes"]}
+        assert all(
+            mount["name"] != "capacity"
+            for container in pod["containers"]
+            for mount in container["volumeMounts"]
+        )
 
 
 @pytest.mark.parametrize(
