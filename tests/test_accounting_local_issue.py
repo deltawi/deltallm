@@ -287,7 +287,7 @@ async def test_empty_issue_has_no_side_effect_and_oversized_batch_fails():
 
 
 def test_issue_commit_and_both_store_mutations_have_no_await():
-    root = Path(__file__).resolve().parents[1] / "src" / "billing"
+    root = Path(__file__).resolve().parents[1] / "src/billing/accounting/permits"
     for filename, method in (
         ("accounting_local_issue.py", "commit"),
         ("accounting_local_cursors.py", "_commit_issue"),

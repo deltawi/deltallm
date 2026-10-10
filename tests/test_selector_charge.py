@@ -392,7 +392,7 @@ async def test_selector_receipt_dependency_failure_is_not_a_selector_safe_defaul
 
 
 def test_legacy_spend_preparation_is_one_bounded_io_free_mapping_seam() -> None:
-    root = Path(__file__).parents[1] / "src/billing"
+    root = Path(__file__).parents[1] / "src/billing/spend"
     source = (root / "spend_preparation.py").read_text()
     assert len(source.splitlines()) < 200
     for node in ast.walk(ast.parse(source)):
