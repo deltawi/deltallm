@@ -180,10 +180,27 @@ failure. A read-only observer was then added to a separate diagnostic. Its
 preparation window passed 30,000/30,000 with exact accounting; no long lock wait
 or lock cycle was captured. The failure cause is not yet proved.
 
+A further observed preparation window had 29,980/30,000 successes, no HTTP
+errors, and 20 dropped arrivals. The final drain and exact charges passed.
+Latency rose mainly from seconds 5 to 15. No accounting query exceeded 100 ms
+in the saved half-second observations. Those observations do not exclude
+shorter waits or unsampled work. Further measured load stopped. The next selected
+diagnostic adds fixed 20-second non-blocking profiles of one owned API process.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the
 application's supported features and its financial and access controls.
+
+Cold startup exposed a separate readiness defect. The admission monitor ended
+startup after its first negative dependency observation, before the existing
+startup deadline expired. The correction signals startup only after a positive
+observation. It keeps one bounded monitor, the same polling and caller deadline,
+and immediate runtime degradation when a dependency fails. It accepts no
+requests before readiness. Four regression cases failed before the correction;
+87 affected startup, shutdown, and selector checks then passed. Installed-image
+recovery and full CI for this new runtime remain required. This is not a claimed
+fix for the distinct persistence or latency failures.
 
 | Area | Current evidence | Remaining release check |
 | --- | --- | --- |
