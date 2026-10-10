@@ -93,6 +93,29 @@ its last 60 seconds gave +0.052789/second, although the full time-weighted slope
 was +0.001844/second. Warm-up alone does not prove stable capacity. The new
 complete series and native recovery checks are still required.
 
+The first full-window warm-up series failed its initial 500 RPS growth check.
+It had 300,000/300,000 successes, exact charges, p95 115.03 ms, p99 270.27 ms,
+and growth +0.034164/second. Accounting drained in 0.80 seconds. Mean latency
+rose from 46.80 ms in the first minute to 101.88 ms in the last minute. The
+final four stages and native recovery did not run. Full CI passed on that
+harness, `d7ef36f8`. This is still a failed local qualification.
+
+A separate larger-database trial went directly to 500 RPS after functional
+checks. It failed during preparation: 22,333/30,000 successes, 2,601 HTTP 503
+responses, 346 client timeouts, and 4,720 dropped arrivals. PostgreSQL recorded
+lock and statement timeouts, followed by terminal replay conflicts. There were
+306 unresolved operations after the drain deadline, but no unsafe budget
+windows. The measured ten-minute stage and recovery did not run. The trial is
+not an established fix and remains failed evidence.
+
+The next comparison uses the normal gradual preparation and a declared native
+database fixture: four-CPU and four-GiB limits, 512-MiB shared buffers, and a
+four-GiB WAL limit. It keeps the 1,000-connection bound, `fsync`, synchronous
+commit, full-page writes, and autovacuum enabled. The runner verifies and saves
+those live settings before load. Application replicas, limits, deadlines,
+financial controls, and performance gates remain unchanged. This test allocation
+is not a production minimum or proof that the slowdown is fixed.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the
@@ -115,9 +138,10 @@ skipped. All 33 affected tests also passed with the smaller CI Prisma pool.
 Earlier CI reporting-startup failures did not reproduce in these checks. The
 latest complete CI run passed all required jobs, including capacity and recovery.
 The cause of the earlier failures is not proved. Bounded test diagnostics remain
-in place. Full CI also passed for the stronger installed-image checks and the
-time-weighted measurement. Final CI for the warm-up change and the complete
-eight-CPU qualification are still required before release approval.
+in place. Full CI also passed for the stronger installed-image checks, the
+time-weighted measurement, and the warm-up change. Final CI for the declared
+database fixture and complete eight-CPU qualification are still required
+before release approval.
 
 The synthetic provider does not validate a real provider's quotas, service
 availability, model behavior, or network delay. Qualify the actual production

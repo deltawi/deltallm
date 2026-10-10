@@ -20,6 +20,13 @@ requires accounting to drain between stages. It ends with native process-loss
 and same-image Helm rollout checks. Keep all gates active and retain failed
 attempts. A selected-tier diagnostic is not a release qualification.
 
+The current native runner declares and records PostgreSQL fixture resources
+and live settings in `database-fixture.json`. Its limits are four CPUs and four
+GiB, with 512-MiB shared buffers and a four-GiB WAL limit. It verifies that
+`fsync`, synchronous commit, full-page writes, and autovacuum remain enabled.
+The connection bound stays 1,000. These are test settings, not production
+minimums. Earlier source bundles retain their earlier database allocations.
+
 ## Latest provider-pool source
 
 The 8 October revised-adapter bundle is `artifacts/http-pool-20261008/`.

@@ -91,7 +91,7 @@ def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkey
             "" if command[1] == "ps" else '{"cpu_count":6,"memory_bytes":12000000000}'
         ),
     )
-    for name in ("install_capacity_dependencies", "install_resource_metrics", "prime_database"):
+    for name in ("install_native_dependencies", "install_resource_metrics", "prime_database"):
         monkeypatch.setattr(qualification, name, lambda *args: None)
     monkeypatch.setattr(qualification, "preload_images", lambda *args: "metrics:fixture")
     monkeypatch.setattr(qualification, "qualification_values", lambda *args: tmp_path / "values")
@@ -380,6 +380,51 @@ def test_qualification_profile_and_generator_keep_fixed_bounded_topology(tmp_pat
         assert "--expect-fixed-one-token" in container["args"]
         assert "--bypass-cache" in container["args"]
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [None, "fsync", "synchronous_commit", "full_page_writes", "autovacuum", "max_connections"],
+)
+def test_native_database_fixture_has_explicit_resources_and_preserves_durability(
+    tmp_path, monkeypatch, unsafe
+):
+    observed = {
+        "shared_buffers": "512MB",
+        "max_wal_size": "4GB",
+        "max_connections": "1000",
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "autovacuum": "on",
+    }
+    if unsafe:
+        observed[unsafe] = "2000" if unsafe == "max_connections" else "off"
+    commands = []
+
+    def kubectl(*arguments, **options):
+        commands.append(arguments)
+        return SimpleNamespace(stdout=json.dumps(observed))
+
+    base = []
+    monkeypatch.setattr(
+        qualification, "install_capacity_dependencies", lambda *args: base.append(args)
+    )
+    cluster = SimpleNamespace(output=tmp_path, kubectl=kubectl, event=lambda *args, **options: None)
+    if unsafe:
+        with pytest.raises(RuntimeError, match="settings do not match"):
+            qualification.install_native_dependencies(cluster, "image:sealed")
+        assert not (tmp_path / "database-fixture.json").exists()
+    else:
+        qualification.install_native_dependencies(cluster, "image:sealed")
+        saved = json.loads((tmp_path / "database-fixture.json").read_text())
+        assert saved["observed"] == observed
+    assert base == [(cluster, "image:sealed")]
+    patch = json.loads(commands[0][-1])["spec"]["template"]["spec"]["containers"][0]
+    assert patch["resources"]["limits"] == {"cpu": "4", "memory": "4Gi"}
+    assert "max_connections=1000" in patch["args"]
+    assert {"fsync=on", "synchronous_commit=on", "full_page_writes=on"}.issubset(patch["args"])
+    assert commands[1] == ("rollout", "status", "deployment/postgres", "--timeout=180s")
 
 
 @pytest.mark.parametrize(

@@ -275,6 +275,81 @@ def preload_images(cluster: LifecycleCluster) -> str:
     return metrics_image
 
 
+def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
+    install_capacity_dependencies(cluster, image)
+    settings = {
+        "resources": {
+            "requests": {"cpu": "1", "memory": "1Gi"},
+            "limits": {"cpu": "4", "memory": "4Gi"},
+        },
+        "args": [
+            "-c",
+            "shared_preload_libraries=pg_stat_statements",
+            "-c",
+            "max_connections=1000",
+            "-c",
+            "shared_buffers=512MB",
+            "-c",
+            "max_wal_size=4GB",
+            "-c",
+            "fsync=on",
+            "-c",
+            "synchronous_commit=on",
+            "-c",
+            "full_page_writes=on",
+        ],
+    }
+    cluster.kubectl(
+        "patch",
+        "deployment/postgres",
+        "--type=strategic",
+        "-p",
+        json.dumps(
+            {"spec": {"template": {"spec": {"containers": [{"name": "postgres", **settings}]}}}}
+        ),
+    )
+    cluster.kubectl("rollout", "status", "deployment/postgres", "--timeout=180s")
+    names = (
+        "shared_buffers",
+        "max_wal_size",
+        "max_connections",
+        "fsync",
+        "synchronous_commit",
+        "full_page_writes",
+        "autovacuum",
+    )
+    query = (
+        "SELECT json_build_object("
+        + ",".join(f"'{name}',current_setting('{name}')" for name in names)
+        + ");"
+    )
+    observed = json.loads(
+        cluster.kubectl(
+            "exec",
+            "deployment/postgres",
+            "--",
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-At",
+            "-c",
+            query,
+            timeout=10,
+        ).stdout
+    )
+    expected = dict(zip(names, ("512MB", "4GB", "1000", "on", "on", "on", "on"), strict=True))
+    if observed != expected:
+        raise RuntimeError(
+            "Native qualification database settings do not match the declared fixture"
+        )
+    (cluster.output / "database-fixture.json").write_text(
+        json.dumps({"container": settings, "observed": observed}, indent=2) + "\n"
+    )
+    cluster.event("native_database_fixture_verified", **observed)
+
+
 def pin_api_services(cluster: LifecycleCluster, pods: list[str]) -> list[str]:
     if len(pods) != 4:
         raise RuntimeError("Qualification requires exactly four ready API processes")
@@ -705,7 +780,7 @@ def main() -> None:
     (cluster.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     with cluster.owned(args.image):
         metrics_image = preload_images(cluster)
-        install_capacity_dependencies(cluster, args.image)
+        install_native_dependencies(cluster, args.image)
         install_resource_metrics(cluster, metrics_image)
         values = qualification_values(cluster, args.image)
         prime_database(cluster, values)
