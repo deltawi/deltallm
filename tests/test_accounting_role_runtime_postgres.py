@@ -199,12 +199,13 @@ async def test_request_role_without_actual_projection_presence_cannot_start(acco
     )
     runtime = build_accounting_request_runtime(clients[0], config, lifecycle())
     try:
-        with pytest.raises(RuntimeError, match="dependencies are not ready"):
+        with pytest.raises(TimeoutError, match="did not become ready before its startup deadline"):
             await runtime.start(expires_at=deadline())
         assert runtime.service.terminals.task is None
         assert runtime.monitor.worker_health.state is not WorkerState.READY
     finally:
         await runtime.close(expires_at=deadline())
+    assert runtime.monitor.task is not None and runtime.monitor.task.done()
 
 
 async def test_native_projection_role_renews_recurring_budget_before_admission(accounting_db):
