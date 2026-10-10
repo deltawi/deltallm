@@ -8,6 +8,7 @@ import sys
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import httpx
 import pytest
 import yaml
 from src.config import GeneralSettings
@@ -91,10 +92,11 @@ def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkey
             "" if command[1] == "ps" else '{"cpu_count":6,"memory_bytes":12000000000}'
         ),
     )
-    for name in ("install_capacity_dependencies", "install_resource_metrics", "prime_database"):
+    for name in ("install_native_dependencies", "install_resource_metrics", "prime_database"):
         monkeypatch.setattr(qualification, name, lambda *args: None)
     monkeypatch.setattr(qualification, "preload_images", lambda *args: "metrics:fixture")
     monkeypatch.setattr(qualification, "qualification_values", lambda *args: tmp_path / "values")
+    monkeypatch.setattr(qualification, "collect_native_logs", lambda *args: None)
     exercise = AsyncMock(return_value=[{"passed": True} for _ in rates])
     monkeypatch.setattr(qualification, "exercise", exercise)
     monkeypatch.setattr(
@@ -132,6 +134,47 @@ deltallm_python_gc_pause_seconds_count{generation="private"} 99
 """)
     assert len(selected) == 8
     assert "private" not in repr(selected)
+
+
+@pytest.mark.parametrize(
+    "error,reason",
+    [
+        (httpx.ReadTimeout("private token"), "http_timeout"),
+        (httpx.ConnectError("private token"), "http_connection"),
+        (TimeoutError("private token"), "deadline"),
+        (UnicodeError("private token"), "decode"),
+        (ValueError("private token"), "parse"),
+        (RuntimeError("private token"), "unknown"),
+    ],
+)
+def test_metric_failure_classification_preserves_only_bounded_reason(error, reason):
+    assert metrics.scrape_failure_reason(error) == reason
+    records = metrics._encode_metric_records(
+        [None], [metrics.MetricSource("http://fixture/metrics", "api", 0)], 1.0, [reason]
+    )
+    saved = json.loads(records[0].line)
+    assert saved["error"] == "scrape_failed" and saved["error_reason"] == reason
+    assert "private" not in records[0].line and "fixture" not in records[0].line
+    assert records[0].values is None
+
+
+def test_metric_http_status_failure_does_not_export_response_or_url():
+    request = httpx.Request("GET", "http://fixture/private-token")
+    response = httpx.Response(503, request=request, text="private token")
+    assert (
+        metrics.scrape_failure_reason(
+            httpx.HTTPStatusError("private token", request=request, response=response)
+        )
+        == "http_status"
+    )
+
+
+@pytest.mark.parametrize("reasons", [["private token"], ["unknown", "unknown"]])
+def test_metric_failure_encoding_rejects_unbounded_or_misaligned_classifications(reasons):
+    with pytest.raises(ValueError, match="classifications are invalid"):
+        metrics._encode_metric_records(
+            [None], [metrics.MetricSource("http://fixture/metrics", "api", 0)], 1.0, reasons
+        )
 
 
 def test_cpu_counters_are_complete_and_deltas_do_not_hide_missing_data():
@@ -380,6 +423,114 @@ def test_qualification_profile_and_generator_keep_fixed_bounded_topology(tmp_pat
         assert "--expect-fixed-one-token" in container["args"]
         assert "--bypass-cache" in container["args"]
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [None, "fsync", "synchronous_commit", "full_page_writes", "autovacuum", "max_connections"],
+)
+def test_native_database_fixture_has_explicit_resources_and_preserves_durability(
+    tmp_path, monkeypatch, unsafe
+):
+    observed = {
+        "shared_buffers": "512MB",
+        "max_wal_size": "4GB",
+        "max_connections": "1000",
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "autovacuum": "on",
+    }
+    if unsafe:
+        observed[unsafe] = "2000" if unsafe == "max_connections" else "off"
+    commands = []
+
+    def kubectl(*arguments, **options):
+        commands.append(arguments)
+        if "df" in arguments:
+            return SimpleNamespace(
+                stdout="Filesystem 1B-blocks Used Available Use% Mounted on\n"
+                "shm 268435456 0 268435456 0% /dev/shm\n"
+            )
+        return SimpleNamespace(stdout=json.dumps(observed))
+
+    base = []
+    monkeypatch.setattr(
+        qualification, "install_capacity_dependencies", lambda *args: base.append(args)
+    )
+    cluster = SimpleNamespace(output=tmp_path, kubectl=kubectl, event=lambda *args, **options: None)
+    if unsafe:
+        with pytest.raises(RuntimeError, match="settings do not match"):
+            qualification.install_native_dependencies(cluster, "image:sealed")
+        assert not (tmp_path / "database-fixture.json").exists()
+    else:
+        qualification.install_native_dependencies(cluster, "image:sealed")
+        saved = json.loads((tmp_path / "database-fixture.json").read_text())
+        assert saved["observed"] == observed
+        assert saved["shared_memory_bytes"] == 256 * 1024 * 1024
+    assert base == [(cluster, "image:sealed")]
+    pod = json.loads(commands[0][-1])["spec"]["template"]["spec"]
+    patch = pod["containers"][0]
+    assert patch["resources"]["limits"] == {"cpu": "4", "memory": "4Gi"}
+    assert patch["volumeMounts"] == [{"name": "postgres-shm", "mountPath": "/dev/shm"}]
+    assert pod["volumes"] == [
+        {"name": "postgres-shm", "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}}
+    ]
+    assert "max_connections=1000" in patch["args"]
+    assert {"fsync=on", "synchronous_commit=on", "full_page_writes=on"}.issubset(patch["args"])
+    assert commands[1] == ("rollout", "status", "deployment/postgres", "--timeout=180s")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_native_log_collection_is_bounded_and_does_not_replace_failures(tmp_path, failure):
+    commands = []
+
+    def kubectl(*arguments, **options):
+        commands.append((arguments, options))
+        if failure:
+            raise RuntimeError("private diagnostic detail")
+        return SimpleNamespace(stdout="x" * (3 * 1024 * 1024), stderr="")
+
+    qualification.collect_native_logs(SimpleNamespace(output=tmp_path, kubectl=kubectl))
+    assert len(commands) == 2
+    for arguments, options in commands:
+        assert "--tail=5000" in arguments
+        assert options == {"check": False, "timeout": 20}
+    for name in ("postgres", "gateway"):
+        saved = (tmp_path / f"native-final-{name}.log").read_text()
+        assert len(saved) <= 2 * 1024 * 1024
+        assert "private diagnostic detail" not in saved
+        if failure:
+            assert saved == "Log collection failed: RuntimeError\n"
+
+
+@pytest.mark.parametrize("capacity", [67108864, 536870912])
+def test_native_database_fixture_rejects_wrong_shared_memory_capacity(
+    tmp_path, monkeypatch, capacity
+):
+    observed = {
+        "shared_buffers": "512MB",
+        "max_wal_size": "4GB",
+        "max_connections": "1000",
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "autovacuum": "on",
+    }
+
+    def kubectl(*arguments, **options):
+        if "df" in arguments:
+            return SimpleNamespace(
+                stdout="Filesystem 1B-blocks Used Available Use% Mounted on\n"
+                f"shm {capacity} 0 {capacity} 0% /dev/shm\n"
+            )
+        return SimpleNamespace(stdout=json.dumps(observed))
+
+    monkeypatch.setattr(qualification, "install_capacity_dependencies", lambda *args: None)
+    cluster = SimpleNamespace(output=tmp_path, kubectl=kubectl, event=lambda *args, **options: None)
+    with pytest.raises(RuntimeError, match="shared-memory capacity does not match"):
+        qualification.install_native_dependencies(cluster, "image:sealed")
+    assert not (tmp_path / "database-fixture.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -652,9 +803,14 @@ async def test_native_recovery_waits_for_restarts_and_requires_a_full_rollout(
         output = tmp_path
         rolled = False
         calls = []
+        completed_roles = set()
 
         def kubectl(self, *arguments, **options):
             self.calls.append(arguments)
+            if arguments[:2] == ("rollout", "status"):
+                assert options["timeout"] == 190
+                assert arguments[-1] == "--timeout=180s"
+                self.completed_roles.add(arguments[2])
             if arguments[0] != "get":
                 return SimpleNamespace(stdout="")
             role = arguments[3].split("component=", 1)[1]
@@ -672,6 +828,15 @@ async def test_native_recovery_waits_for_restarts_and_requires_a_full_rollout(
                 }
                 for index in range(recovery.ROLES[role])
             ]
+            deployment = "deployment/gateway-deltallm" + ("" if role == "api" else "-" + role)
+            if self.rolled and deployment not in self.completed_roles:
+                # Helm can return while the last old ready pod still exists.
+                items.append(
+                    {
+                        "metadata": {"name": role + "-retiring", "uid": role + "-old"},
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                    }
+                )
             return SimpleNamespace(stdout=json.dumps({"items": items}))
 
         def kill_container(self, name):
@@ -706,4 +871,41 @@ async def test_native_recovery_waits_for_restarts_and_requires_a_full_rollout(
     waits = [call for call in cluster.calls if call[0] == "wait"]
     assert len(waits) == 6
     assert sum("restartCount" in call[1] for call in waits) == 3
+    assert cluster.completed_roles == {
+        "deployment/gateway-deltallm",
+        "deployment/gateway-deltallm-accounting-request",
+        "deployment/gateway-deltallm-accounting-worker",
+    }
     assert len(overrides) == 6 and all("image" not in argument for argument in overrides)
+
+
+@pytest.mark.parametrize("failed_role", ["api", "accounting-request", "accounting-worker"])
+async def test_native_recovery_rejects_an_incomplete_rollout(tmp_path, monkeypatch, failed_role):
+    from tests.performance import native_recovery as recovery
+
+    pods = {
+        role: [
+            {
+                "metadata": {"name": role + "-pod", "uid": role + "-old"},
+                "status": {"containerStatuses": [{"restartCount": 0}]},
+            }
+        ]
+        for role in recovery.ROLES
+    }
+    failing_deployment = "deployment/gateway-deltallm" + (
+        "" if failed_role == "api" else "-" + failed_role
+    )
+
+    def kubectl(*arguments, **options):
+        if arguments[:3] == ("rollout", "status", failing_deployment):
+            raise TimeoutError("The fixture rollout did not complete")
+
+    cluster = SimpleNamespace(output=tmp_path, kubectl=kubectl, kill_container=lambda name: name)
+    check = AsyncMock()
+    monkeypatch.setattr(recovery, "role_pods", lambda owner: pods)
+    monkeypatch.setattr(recovery, "check_clients", check)
+    monkeypatch.setattr(recovery, "capacity_release", lambda *arguments: None)
+    with pytest.raises(TimeoutError, match="rollout did not complete"):
+        await recovery.verify_native_recovery(cluster, tmp_path / "values.yaml")
+    assert check.await_count == 1
+    assert not (tmp_path / "native-recovery.json").exists()

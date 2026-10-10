@@ -88,6 +88,16 @@ async def verify_native_recovery(cluster: LifecycleCluster, values: Path) -> Non
     for prefix in ("", "accountingRequest.", "accountingWorker."):
         overrides.extend(["--set-string", prefix + "podAnnotations.release-readiness=verified"])
     await asyncio.to_thread(capacity_release, cluster, values, *overrides)
+    for role in ROLES:
+        deployment = "deployment/gateway-deltallm" + ("" if role == "api" else "-" + role)
+        await asyncio.to_thread(
+            cluster.kubectl,
+            "rollout",
+            "status",
+            deployment,
+            "--timeout=180s",
+            timeout=190,
+        )
     rolled = await asyncio.to_thread(role_pods, cluster)
     old_uids = {pod["metadata"]["uid"] for pods in restarted.values() for pod in pods}
     new_uids = {pod["metadata"]["uid"] for pods in rolled.values() for pod in pods}

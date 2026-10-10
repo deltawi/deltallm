@@ -7,6 +7,7 @@ from collections import Counter
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 
 RATES = (50, 100, 200, 500)
@@ -72,6 +73,36 @@ def summarize_stage(path: Path, root: Path) -> dict[str, object]:
     }
 
 
+def summarize_preparation(path: Path, root: Path) -> dict[str, object]:
+    report = json.loads(path.read_text())
+    rate, run_id = report["target_rate_rps"], report["run_id"]
+    if rate not in RATES or not isinstance(run_id, str) or not re.fullmatch("[0-9a-f]{32}", run_id):
+        raise ValueError("Preparation evidence requires a supported rate and run identity")
+    raw = path.parent / "warmup" / f"gateway-load-{run_id}.jsonl.gz"
+    if not raw.is_file() or raw.is_symlink():
+        raise ValueError("Preparation evidence requires its original raw samples")
+    return {
+        "campaign": path.relative_to(root).parts[0],
+        "stage": path.parent.name,
+        "purpose": "same-rate warm-up; not a measured qualification stage",
+        "original_report": path.relative_to(root).as_posix(),
+        "original_report_sha256": checksum(path),
+        "raw_samples": raw.relative_to(root).as_posix(),
+        "raw_samples_sha256": checksum(raw),
+        "started_at": report["started_at"],
+        "rate_rps": rate,
+        "duration_seconds": report["duration_seconds"],
+        "target_count": report["target_count"],
+        "success_count": report["success_count"],
+        "status_counts": report["status_counts"],
+        "error_counts": report["error_counts"],
+        "generator_dropped_count": report["generator_dropped_count"],
+        "accounting_reconciliation_passed": report["accounting_reconciliation"]["passed"],
+        "accounting_drain_passed": report["accounting_drain"]["passed"],
+        "passed": report["passed"],
+    }
+
+
 def markdown(rows: list[dict[str, object]]) -> str:
     lines = [
         "# Saved qualification stages from 50 to 500 RPS",
@@ -124,8 +155,24 @@ def export_evidence(source: Path, output: Path, retain: tuple[str, ...]) -> dict
     paths = sorted(source.rglob("qualification.json"))
     if not 1 <= len(paths) <= 512:
         raise ValueError("Expected between one and 512 saved qualification stages")
-    rows = [summarize_stage(path, source) for path in paths]
+    rows = []
+    for path in paths:
+        report = json.loads(path.read_text())
+        if report.get("measurement_started") is False:
+            warmup = path.parent / "warmup.json"
+            if (
+                report["passed"] is not False
+                or not warmup.is_file()
+                or json.loads(warmup.read_text()) != report["warmup"]
+            ):
+                raise ValueError("An unmeasured stage must preserve its failed preparation")
+        else:
+            rows.append(summarize_stage(path, source))
     rows.sort(key=lambda row: (row["started_at"], row["campaign"], row["stage"]))
+    preparations = [
+        summarize_preparation(path, source) for path in sorted(source.rglob("warmup.json"))
+    ]
+    preparations.sort(key=lambda row: (row["started_at"], row["campaign"], row["stage"]))
     for name in retain:
         if Path(name).name != name or not (source / name).is_dir():
             raise ValueError("Retained campaign names must identify existing source directories")
@@ -140,9 +187,31 @@ def export_evidence(source: Path, output: Path, retain: tuple[str, ...]) -> dict
         "counts_by_rate": {str(rate): counts[rate] for rate in RATES},
         "retained_campaigns": list(retain),
         "stages": rows,
+        "preparation_count": len(preparations),
+        "preparations": preparations,
     }
     (output / "all-runs.json").write_text(json.dumps(index, indent=2) + "\n")
-    (output / "all-runs.md").write_text(markdown(rows))
+    preparation_text = ""
+    if preparations:
+        lines = [
+            "",
+            "## Same-rate warm-ups",
+            "",
+            "These are preparation windows, not measured qualification stages.",
+            "A failed warm-up stops later measurement. Original reports and raw checksums",
+            "remain in the JSON index, including attempts with no measured stage.",
+            "",
+            "| Campaign and stage | RPS | Success / target | Warm-up result |",
+            "| --- | ---: | ---: | --- |",
+        ]
+        for row in preparations:
+            lines.append(
+                f"| `{row['campaign']}/{row['stage']}` | {row['rate_rps']} | "
+                f"{row['success_count']} / {row['target_count']} | "
+                f"{'PASS' if row['passed'] else 'FAIL'} |"
+            )
+        preparation_text = "\n".join(lines) + "\n"
+    (output / "all-runs.md").write_text(markdown(rows) + preparation_text)
     inventory = [
         {
             "path": path.relative_to(output).as_posix(),

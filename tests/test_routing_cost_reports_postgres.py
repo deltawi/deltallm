@@ -147,8 +147,34 @@ async def test_reports_filter_other_tenants_before_page_and_use_stable_cursor(op
     assert older == []
 
 
+def assert_bounded_index(node, index_name, *, max_rows, max_loops, columns):
+    assert node["Node Type"] in {"Index Scan", "Bitmap Heap Scan"}, node
+    assert node["Actual Rows"] <= max_rows, node
+    assert node["Actual Loops"] <= max_loops, node
+    assert node.get("Rows Removed by Filter", 0) == 0, node
+    assert node.get("Rows Removed by Index Recheck", 0) == 0, node
+    assert node.get("Lossy Heap Blocks", 0) == 0, node
+    assert node.get("Shared Hit Blocks", 0) + node.get("Shared Read Blocks", 0) <= (
+        32 * max_loops
+    ), node
+    index = node
+    if node["Node Type"] == "Bitmap Heap Scan":
+        assert len(node.get("Plans", [])) == 1, node
+        index = node["Plans"][0]
+        assert index["Node Type"] == "Bitmap Index Scan", index
+        # Bitmap probes include old tuple versions from reserve and dispatch.
+        # Bound that physical work separately from the one visible row.
+        assert index["Actual Rows"] <= 32 * max_rows, index
+        assert index["Actual Loops"] <= max_loops, index
+    assert index["Index Name"] == index_name, index
+    assert all(column in index.get("Index Cond", "") for column in columns), index
+    return index_name
+
+
+@pytest.mark.parametrize("planner", ["auto", "bitmap"])
 async def test_report_page_uses_existing_scope_time_index_at_representative_cardinality(
     operation_db,
+    planner,
 ):
     db, _, charge = operation_db
     await reserve(db, charge)
@@ -165,7 +191,14 @@ async def test_report_page_uses_existing_scope_time_index_at_representative_card
     )
     await db.execute_raw("ANALYZE deltallm_billing_operations")
     query = query_for(charge, limit=10)
-    rows = await db.query_raw("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query.sql, *query.params)
+    async with db.tx(timeout=timedelta(seconds=5)) as tx:
+        if planner == "bitmap":
+            # Keep sequential scans available. Prove the alternative indexed plan.
+            await tx.execute_raw("SET LOCAL enable_indexscan=off")
+            await tx.execute_raw("SET LOCAL enable_indexonlyscan=off")
+        rows = await tx.query_raw(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query.sql, *query.params
+        )
     report = rows[0]["QUERY PLAN"][0]
     pending, nodes = [report["Plan"]], []
     while pending:
@@ -178,21 +211,31 @@ async def test_report_page_uses_existing_scope_time_index_at_representative_card
     assert len(operation_nodes) == 2
     page = next(node for node in operation_nodes if node["Alias"] != "ns")
     selector = next(node for node in operation_nodes if node["Alias"] == "ns")
-    assert page["Node Type"] == "Index Scan"
-    assert page["Index Name"] == "deltallm_billing_operations_org_time_idx"
+    page_index = assert_bounded_index(
+        page,
+        "deltallm_billing_operations_org_time_idx",
+        max_rows=1,
+        max_loops=1,
+        columns=("organization_id", "created_at"),
+    )
     assert page["Actual Rows"] == 1
-    assert selector["Node Type"] == "Index Scan"
-    assert selector["Index Name"] == "deltallm_billing_operations_pkey"
-    assert selector["Actual Rows"] <= 1
-    assert selector["Actual Loops"] <= 11
+    selector_index = assert_bounded_index(
+        selector,
+        "deltallm_billing_operations_pkey",
+        max_rows=1,
+        max_loops=11,
+        columns=("operation_id",),
+    )
     assert report["Plan"]["Actual Rows"] <= 11
     print(
         json.dumps(
             {
                 "execution_ms": report["Execution Time"],
-                "operation_index": page["Index Name"],
+                "planner": planner,
+                "operation_scan": page["Node Type"],
+                "operation_index": page_index,
                 "operation_rows": page["Actual Rows"],
-                "selector_index": selector["Index Name"],
+                "selector_index": selector_index,
             }
         )
     )

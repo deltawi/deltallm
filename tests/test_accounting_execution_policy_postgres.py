@@ -27,6 +27,18 @@ accounting_db = _accounting_db
 
 FUNCTION_POLICIES = (
     (
+        "deltallm_accounting_claim_read_model(text,bigint,text,uuid,integer,integer)",
+        {"plan_cache_mode=force_custom_plan"},
+    ),
+    (
+        "deltallm_accounting_read_model_progress(text,bigint)",
+        {"plan_cache_mode=force_custom_plan"},
+    ),
+    (
+        "deltallm_accounting_recover_read_model_claim(text,bigint,text,uuid,integer)",
+        {"plan_cache_mode=force_custom_plan"},
+    ),
+    (
         "deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)",
         {"jit=off"},
     ),
@@ -44,6 +56,10 @@ FUNCTION_POLICIES = (
     ),
     (
         "deltallm_accounting_claim_terminal_journal(bigint,text,uuid,integer,integer)",
+        {"plan_cache_mode=force_custom_plan"},
+    ),
+    (
+        "deltallm_accounting_append_terminal_journal(bigint,jsonb,text[],text[])",
         {"plan_cache_mode=force_custom_plan"},
     ),
     (

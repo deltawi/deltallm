@@ -3,10 +3,10 @@
 Historical results through 9 October 2026. Original PR target: `main`.
 Original source branch: `codex/issue-320-main-integration`.
 
-The upgrade is now merged. The current release checks are in
-[PR #351](https://github.com/deltawi/deltallm/pull/351). That PR records one fixed
-candidate image, full CI, ordinary native client requests, the sustained four-tier
-series, and recovery checks. Use its final report to assess the corrected release.
+The upgrade and the request-identity fix are now merged. All required PR checks
+passed for [PR #351](https://github.com/deltawi/deltallm/pull/351), merged at
+`0c622b47`. Native qualification and the declared database fixture remain under
+test. Use the complete qualification report to assess the corrected release.
 The older results below are not a certificate for the current release image.
 
 ## Fixed-candidate checks on 10 October 2026
@@ -93,17 +93,251 @@ its last 60 seconds gave +0.052789/second, although the full time-weighted slope
 was +0.001844/second. Warm-up alone does not prove stable capacity. The new
 complete series and native recovery checks are still required.
 
+The first full-window warm-up series failed its initial 500 RPS growth check.
+It had 300,000/300,000 successes, exact charges, p95 115.03 ms, p99 270.27 ms,
+and growth +0.034164/second. Accounting drained in 0.80 seconds. Mean latency
+rose from 46.80 ms in the first minute to 101.88 ms in the last minute. The
+final four stages and native recovery did not run. Full CI passed on that
+harness, `d7ef36f8`. This is still a failed local qualification.
+
+A separate larger-database trial went directly to 500 RPS after functional
+checks. It failed during preparation: 22,333/30,000 successes, 2,601 HTTP 503
+responses, 346 client timeouts, and 4,720 dropped arrivals. PostgreSQL recorded
+lock and statement timeouts, followed by terminal replay conflicts. There were
+306 unresolved operations after the drain deadline, but no unsafe budget
+windows. The measured ten-minute stage and recovery did not run. The trial is
+not an established fix and remains failed evidence.
+
+The next comparison uses the normal gradual preparation and a declared native
+database fixture: four-CPU and four-GiB limits, 512-MiB shared buffers, and a
+four-GiB WAL limit. It keeps the 1,000-connection bound, `fsync`, synchronous
+commit, full-page writes, and autovacuum enabled. The runner verifies and saves
+those live settings before load. Application replicas, limits, deadlines,
+financial controls, and performance gates remain unchanged. This test allocation
+is not a production minimum or proof that the slowdown is fixed.
+
+The normal preparation comparison passed all four initial stages. The initial
+ten-minute 500 RPS check had 300,000/300,000 successes, p95 82.15 ms, p99 145.51 ms,
+and growth +0.001469/second. Exact accounting and complete drain passed. It used
+the unchanged verified image `88e5a59c` and the declared four-CPU, four-GiB
+PostgreSQL fixture in the eight-CPU VM. This is a better steady-state result than
+the six-CPU series, not an application optimization or a production minimum.
+The final sequence on the same retained database did not pass:
+
+| Rate | Successes / arrivals | p95 / p99 | Growth / second | Decision |
+| --- | --- | --- | --- | --- |
+| 50 RPS | 30,000 / 30,000 | 21.97 / 25.59 ms | -0.000015 | Passed |
+| 100 RPS | 60,000 / 60,000 | 22.30 / 26.09 ms | +0.000028 | Passed |
+| 200 RPS | 120,000 / 120,000 | 25.74 / 42.40 ms | -0.000161 | Passed |
+| 500 RPS | 298,734 / 300,000 | 276.52 / 592.63 ms | +0.028375 | Success, latency, and growth limits exceeded |
+
+The final 500 RPS stage had 1,265 HTTP 503 responses and one client read error.
+Of the 503 responses, 1,262 reported required persistence as unavailable.
+No arrivals were dropped. Accounting drained with no pending or unsafe state.
+The observed fact count and charge delta agree with the successful requests and
+the precheck; all four scopes agree. The official economic gate remains failed
+because not all requests succeeded. Do not treat that observation as a pass.
+
+The subsequent maintenance check failed because PostgreSQL could not enlarge a
+shared-memory segment to 67,145,728 bytes. The test database had no declared
+`/dev/shm` allocation. Native process-loss and rollout recovery were not reached.
+The next fixture mounts and verifies a 256-MiB memory-backed `/dev/shm` volume
+within the unchanged four-GiB database limit. This corrects a proven maintenance
+resource fault. It is not yet a proven fix for the persistence errors. Bounded
+database and gateway logs are retained before cluster cleanup on the next run.
+
+The runtime image and performance code remained fixed throughout the sequence.
+Only ordinary regression tests and documentation changed during the run. Stage
+commit metadata differs; the saved source comparison confirms that the runtime,
+migrations, chart, generator, and performance harness did not change.
+
+The next selected-tier check with the declared shared-memory volume also failed.
+Its first 600-second 500 RPS stage had 264,684/300,000 successes, 31,904 HTTP 503
+responses, and 3,412 dropped arrivals. p95/p99 were 2,041.15/2,199.21 ms.
+Most 503 responses reported no healthy deployment (30,927); 946 reported required
+persistence as unavailable. A provider-unavailable error was also recorded.
+Metric reads failed for part of the window, but later direct reads from every
+owned endpoint succeeded. The reason for the original metric failures was not
+retained. The next runner records a fixed error category without URLs or payloads.
+
+One operation remained provisional after the 180-second drain deadline. Each
+scope held `0.024582`; there were no unsafe windows or pending terminal/reporting
+records. The runner correctly stopped further load and recovery. PostgreSQL
+also recorded a statement timeout while the grant-reconciliation worker tried
+to lock a budget window. That record does not prove the earlier provider or
+metric-read failure cause. This is failed diagnostic evidence, not a capacity
+certificate. The next comparison keeps the image, database, request limits,
+deadlines, and gates unchanged and increases only VM CPU capacity from eight
+to twelve cores. It does not stop other workloads or establish a production minimum.
+
+The twelve-CPU check failed during its first 60-second preparation window:
+20,569/30,000 successes, 4,186 required-persistence 503 responses, and 5,245
+dropped arrivals. No measured stage ran. The subsequent drain passed with no
+pending or unsafe state. Successful charges and all four scope totals match.
+Database logs show journal materialization waiting for grant locks and journal
+append waiting for a foreign-key row lock. More CPU alone did not correct this
+failure. A read-only observer was then added to a separate diagnostic. Its
+preparation window passed 30,000/30,000 with exact accounting; no long lock wait
+or lock cycle was captured. The failure cause is not yet proved.
+
+A further observed preparation window had 29,980/30,000 successes, no HTTP
+errors, and 20 dropped arrivals. The final drain and exact charges passed.
+Latency rose mainly from seconds 5 to 15. No accounting query exceeded 100 ms
+in the saved half-second observations. Those observations do not exclude
+shorter waits or unsampled work. Further measured load stopped. The next selected
+diagnostic adds fixed 20-second non-blocking profiles of one owned API process.
+
+The startup-corrected image `d7aa9008` passed the installed functional checks,
+but its 500 RPS warm-up failed: 22,054/30,000 successes, 4,513 HTTP 503 responses,
+276 client read timeouts, and 3,157 dropped arrivals. The 180-second drain failed
+with 240 unsettled operations and eight open grants. No unsafe windows were
+found. No measured stage or native recovery ran. Its database recorded
+317,253,358 sequential journal row reads for 22,382 stored journal rows.
+Those totals alone do not identify a specific query or prove a lock cycle.
+
+A real-database regression check now reproduces a retained-history scan in the
+append function's prior-operation lookup. It first collects empty-table
+statistics and compiles the lookup. After history grows, the cached plan reads
+and rejects 40,007 rows for one absent operation. The same check without the
+initial statistics snapshot passed. This explains why an analyzed-history test
+alone did not expose the defect.
+
+Forward migration `20261010190000_accounting_append_cold_plans` selects custom
+plans for this one function, as the existing claim and materialize functions
+already do. It changes no SQL validation, foreign key, lock order, charge,
+replay identity, or timeout. It adds no index or network call. All eight planner
+and statistics cases passed in the diagnostic trial after this setting changed.
+Full financial regression checks, migration checks, CI, and a new fixed-image
+upper-tier run must pass before this is a claimed qualification fix. Preserve
+the original failed result.
+
+All 109 related real-database checks then passed, including the twelve new cold
+append and failure-policy cases, exact replay, journal workers, compact receipts,
+and event publication. All thirteen execution-policy checks passed. Fresh and
+published v0.3.1 upgrade migration checks passed, as did shared-feature upgrade
+and model-identity recovery. Install
+the migration before rollout; API startup does not apply it. If rollback is
+needed, use a new reviewed migration to restore this function's prior setting.
+Do not remove or change the applied migration, disable a foreign key, or relax
+a request limit.
+
+The corrected image `d62715d0`, built from `609bad89`, passed all five offline
+image checks. Its new 60-second 500 RPS warm-up had 30,000/30,000 successes.
+The following 600-second stage had 300,000/300,000 successes, no HTTP or client
+errors, and no dropped arrivals. Its p95 was 99.07 ms and its p99 was 235.10 ms.
+Queue growth was -0.031722/second. All performance and exact-accounting gates
+passed. Accounting drained in 0.505 seconds with no pending or unsafe state.
+The four scope totals matched the exact `2.100007` measured charge, including
+one precheck. Redis used 6.000053 core round trips per request.
+
+The database retained 330,025 journal rows. It recorded 13,596 sequential
+journal row reads, compared with 317,253,358 in the earlier failed preparation
+window. These are different workload sizes, not a controlled speed ratio.
+Some internal database calls still timed out; recovery preserved all accepted
+charges and successful responses. The cause of those shorter waits is not proved.
+
+Maintenance and process-loss client checks passed. The rollout check then
+failed because Helm returned while four new ready API pods and one old ready
+API pod still existed. The test counted five instead of four. A regression test
+reproduced this race. The corrected test waits for each deployment to complete
+its rollout, then requires the same exact pod counts, readiness, changed pod
+identities, client behavior, and charges. Incomplete rollouts still fail.
+All 128 affected tool checks passed. Keep the original failed recovery record.
+This selected-tier result is not the final four-rate release qualification.
+
+The next normal run used the same image and twelve-CPU fixture, from clean
+harness `25305952`. Its initial 50/100/200 RPS stages passed. The initial
+600-second 500 RPS stage failed: 298,845/300,000 successes, with 1,155
+`spend_persistence_unavailable` responses and no client errors or dropped
+arrivals. Its p95/p99 were 59.43/97.66 ms. Queue growth was +0.001329/second.
+Latency and growth passed, but success was 99.615%, below the required 99.9%.
+All failed responses occurred in one 2.65-second window across the four APIs.
+
+Accounting drained in 0.620 seconds with no pending or unsafe state. Facts and
+all four scope totals match successful requests. The official economic gate
+still fails for a mixed-success stage. Do not relax it or call this a pass.
+The final sustained series, maintenance, and recovery did not run.
+Several accounting operations recorded errors in the same sampled interval.
+The existing five-second snapshots do not identify the blocking owner or prove
+a host, network, or database cause. The next diagnostic samples live database
+waits at a bounded higher rate, only at 500 RPS, without a profiler or changed
+application limits. Retain both the passing and failed results.
+
+The first live-wait diagnostic stage passed on the same fixed image:
+300,000/300,000 requests, no errors or drops, p95 58.90 ms, p99 93.74 ms,
+and growth +0.006406/second. Exact charges matched all four scopes. Drain
+completed in 0.607 seconds with no pending or unsafe state. These latency
+numbers are better than the preceding 99.07/235.10-ms selected-tier result,
+but this is still a diagnostic, not a four-tier release certificate.
+The second stage on the same database failed: 299,115/300,000 successes,
+with 885 required-persistence 503 responses in one three-second interval.
+p95/p99 were 70.73/144.44 ms, and growth was +0.004364/second. Both latency
+and growth passed. Drain completed in 0.783 seconds with no pending or unsafe
+state. Successful charges matched all four scopes, but success and the official
+economic gate failed. Maintenance and native recovery did not run.
+
+The read-only samples observed append and claim calls waiting on WAL writes
+for more than 250 ms. Those waits occurred in a passing stage. They do not,
+by themselves, prove the cause of the earlier HTTP failures. Initial and
+retained reporting query plans show no JIT compilation. PostgreSQL data
+already uses a direct ext4 volume, not the container overlay. Do not claim
+that more CPU, another volume, or a JIT setting resolves the failure.
+
+### Cached reporting plans
+
+A separate real-database check reproduced a history scan in the reporting claim
+path. It collects statistics while the event table is
+empty, caches calls, then adds 40,000 retained rows without refreshing statistics.
+Automatic and generic plans then scan the table 64 times. Each scan rejects
+40,000 rows. Calls take about 400–500 ms without JIT. With custom plans, the
+same query uses indexed probes and takes about two ms. Two regression cases
+failed before the correction, including history from an earlier generation.
+
+Forward migration `20261010213000_accounting_reporting_cold_plans` moves the
+existing three queries to database functions with function-local custom plans.
+It preserves generation checks, leases, checkpoint fencing, page and byte limits,
+and the 250-ms call budget. Each method still makes one database call. No index,
+global database setting, financial rule, or network call is added. The caller's
+plan setting is restored after success and failure.
+
+The real-schema checks found a token-type error in the first draft. Checkpoint
+tokens are text, not the UUID type used by the old temporary test table. Forward
+migration `20261010214000_accounting_reporting_token_boundary` makes the UUID
+comparison with stored text explicit. The applied migration and token values
+remain unchanged. The fixture now uses the production text type.
+
+All 81 related database checks passed after that correction, including all 28
+cold-plan and failure-policy cases, startup, lost-reply recovery, and concurrent
+checkpoint claims. Fresh installation, v0.3.1 upgrade, shared-feature upgrade,
+and model-identity recovery migration checks passed. Install both migrations
+before the new image. An older image can use its original queries on the expanded
+database. Do not remove an applied migration to roll back the image.
+
+These checks prove the cached-plan defect and its correction. They do not prove
+that it caused every HTTP failure. Wider tests, final CI, a new fixed image,
+retained-history load, and all functional recovery checks remain required.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the
 application's supported features and its financial and access controls.
+
+Cold startup exposed a separate readiness defect. The admission monitor ended
+startup after its first negative dependency observation, before the existing
+startup deadline expired. The correction signals startup only after a positive
+observation. It keeps one bounded monitor, the same polling and caller deadline,
+and immediate runtime degradation when a dependency fails. It accepts no
+requests before readiness. Four regression cases failed before the correction;
+87 affected startup, shutdown, and selector checks then passed. Installed-image
+recovery and full CI for this new runtime remain required. This is not a claimed
+fix for the distinct persistence or latency failures.
 
 | Area | Current evidence | Remaining release check |
 | --- | --- | --- |
 | Client request IDs, complete streams, and native reporting | 24 installed-image completions passed, including four complete streams and omitted or invalid headers; charges were exact and all seven processes were ready | Repeat after process loss and Helm rollout |
 | Installed authentication, input validation, model visibility, and UI delivery | All 16 checks passed across the four API processes | Repeat after process loss and Helm rollout |
 | Application behavior, including streaming and access checks | 1,696 application tests passed locally | Keep all final application CI checks passing |
-| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed; all five opt-in cases passed separately; both latest CI shards passed | Keep all final database CI checks passing |
+| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed locally; all five opt-in cases passed separately; latest CI failed five reporting-startup cases | Resolve the startup cause and pass both final database CI shards |
 | Realtime clients | All four pinned official SDK cases passed locally | Keep final Realtime CI checks passing |
 | Redis limits and failure policies | 256 tests passed, including separate memory-pressure services | Keep all final Redis CI checks passing |
 | Install and upgrade migrations | Clean install, last-release upgrade, shared-feature upgrade, and model-identity recovery passed | Apply the forward reporting migration before the corrected image |
@@ -113,11 +347,32 @@ application's supported features and its financial and access controls.
 The full local database group in CI order passed: 504 passed and one opt-in case
 skipped. All 33 affected tests also passed with the smaller CI Prisma pool.
 Earlier CI reporting-startup failures did not reproduce in these checks. The
-latest complete CI run passed all required jobs, including capacity and recovery.
+complete CI run at `8aef2d04` passed all required jobs, including capacity and recovery.
 The cause of the earlier failures is not proved. Bounded test diagnostics remain
-in place. Full CI also passed for the stronger installed-image checks and the
-time-weighted measurement. Final CI for the warm-up change and the complete
-eight-CPU qualification are still required before release approval.
+in place. Full CI also passed for the stronger installed-image checks, the
+time-weighted measurement, and the warm-up change. CI run `38084399149` at
+`25305952` then failed five reporting-startup cases. Claim calls reached the
+existing 250-ms limit; their cause is not proved. All other required jobs
+passed. Final CI and complete normal qualification are still required before
+release approval.
+
+Main's post-merge CI run `38070825615` has one failed routing-cost query-plan
+check. PostgreSQL selected a bitmap heap scan; the test requires a plain index
+scan. The follow-up check retains the exact required indexes and row and loop
+bounds. It also checks bounded blocks and rejects lossy scans, large index
+probes, and history filtering. It must pass with both the default planner and
+an explicit bitmap plan. All other required main CI jobs passed. This failure
+still blocks release approval until the follow-up checks pass.
+
+The first follow-up default-plan case passed. Its forced bitmap case returned
+one visible row from three physical tuple versions left by reservation and
+dispatch. The check now bounds physical probes separately while keeping the
+one-visible-row, exact-index, loop, and block limits. PostgreSQL shard 0 also had
+one external-customer permission check return unavailable (503), not denial
+(403). No unauthorized change was accepted. Test-only diagnostics now preserve
+the cause class, bounded Prisma code, and elapsed time without session tokens.
+The expected denial and all application deadlines remain unchanged. These
+failures remain in the saved evidence; the next complete CI result is required.
 
 The synthetic provider does not validate a real provider's quotas, service
 availability, model behavior, or network delay. Qualify the actual production

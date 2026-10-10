@@ -275,6 +275,130 @@ def preload_images(cluster: LifecycleCluster) -> str:
     return metrics_image
 
 
+def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
+    install_capacity_dependencies(cluster, image)
+    settings = {
+        "resources": {
+            "requests": {"cpu": "1", "memory": "1Gi"},
+            "limits": {"cpu": "4", "memory": "4Gi"},
+        },
+        "volumeMounts": [{"name": "postgres-shm", "mountPath": "/dev/shm"}],
+        "args": [
+            "-c",
+            "shared_preload_libraries=pg_stat_statements",
+            "-c",
+            "max_connections=1000",
+            "-c",
+            "shared_buffers=512MB",
+            "-c",
+            "max_wal_size=4GB",
+            "-c",
+            "fsync=on",
+            "-c",
+            "synchronous_commit=on",
+            "-c",
+            "full_page_writes=on",
+        ],
+    }
+    cluster.kubectl(
+        "patch",
+        "deployment/postgres",
+        "--type=strategic",
+        "-p",
+        json.dumps(
+            {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{"name": "postgres", **settings}],
+                            "volumes": [
+                                {
+                                    "name": "postgres-shm",
+                                    "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"},
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        ),
+    )
+    cluster.kubectl("rollout", "status", "deployment/postgres", "--timeout=180s")
+    names = (
+        "shared_buffers",
+        "max_wal_size",
+        "max_connections",
+        "fsync",
+        "synchronous_commit",
+        "full_page_writes",
+        "autovacuum",
+    )
+    query = (
+        "SELECT json_build_object("
+        + ",".join(f"'{name}',current_setting('{name}')" for name in names)
+        + ");"
+    )
+    observed = json.loads(
+        cluster.kubectl(
+            "exec",
+            "deployment/postgres",
+            "--",
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-At",
+            "-c",
+            query,
+            timeout=10,
+        ).stdout
+    )
+    expected = dict(zip(names, ("512MB", "4GB", "1000", "on", "on", "on", "on"), strict=True))
+    if observed != expected:
+        raise RuntimeError(
+            "Native qualification database settings do not match the declared fixture"
+        )
+    shared_memory = cluster.kubectl(
+        "exec", "deployment/postgres", "--", "df", "-B1", "/dev/shm", timeout=10
+    ).stdout.splitlines()
+    if len(shared_memory) != 2 or len(shared_memory[1].split()) != 6:
+        raise RuntimeError("Native qualification database shared-memory evidence is invalid")
+    capacity = int(shared_memory[1].split()[1])
+    if capacity != 256 * 1024 * 1024:
+        raise RuntimeError("Native qualification database shared-memory capacity does not match")
+    (cluster.output / "database-fixture.json").write_text(
+        json.dumps(
+            {"container": settings, "observed": observed, "shared_memory_bytes": capacity}, indent=2
+        )
+        + "\n"
+    )
+    cluster.event("native_database_fixture_verified", **observed)
+
+
+def collect_native_logs(cluster: LifecycleCluster) -> None:
+    """Keep bounded dependency and gateway logs before the owned cluster is removed."""
+    for name, arguments in (
+        ("postgres", ("deployment/postgres",)),
+        ("gateway", ("-l", "app.kubernetes.io/instance=gateway", "--all-containers", "--prefix")),
+    ):
+        try:
+            result = cluster.kubectl(
+                "logs",
+                *arguments,
+                "--tail=5000",
+                "--request-timeout=5s",
+                "--pod-running-timeout=5s",
+                check=False,
+                timeout=20,
+            )
+            payload = (result.stdout + result.stderr)[-2 * 1024 * 1024 :]
+        except Exception as error:
+            # A failed diagnostic must not replace the original test failure.
+            payload = "Log collection failed: " + type(error).__name__ + "\n"
+        (cluster.output / f"native-final-{name}.log").write_text(payload)
+
+
 def pin_api_services(cluster: LifecycleCluster, pods: list[str]) -> list[str]:
     if len(pods) != 4:
         raise RuntimeError("Qualification requires exactly four ready API processes")
@@ -565,7 +689,12 @@ async def exercise(
         manifest = await server_manifest(cluster, image, api, request + projection, cluster.output)
         vm_cpus = int(cluster.run("docker", "info", "--format", "{{.NCPU}}", timeout=30).stdout)
         declared = read_manifest(manifest).model_copy(
-            update={"memory_limit_mib": 1024, "host_cpu_count": vm_cpus}
+            update={
+                "memory_limit_mib": 1024,
+                "host_cpu_count": vm_cpus,
+                "postgres_cpu_limit_cores": 4.0,
+                "postgres_memory_limit_mib": 4096,
+            }
         )
         manifest.write_text(declared.model_dump_json(indent=2) + "\n")
         proof = await generator_proof(cluster, image)
@@ -705,19 +834,22 @@ def main() -> None:
     (cluster.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     with cluster.owned(args.image):
         metrics_image = preload_images(cluster)
-        install_capacity_dependencies(cluster, args.image)
+        install_native_dependencies(cluster, args.image)
         install_resource_metrics(cluster, metrics_image)
         values = qualification_values(cluster, args.image)
         prime_database(cluster, values)
-        results = asyncio.run(
-            exercise(
-                cluster,
-                values,
-                args.image,
-                short_seconds=args.short_seconds,
-                diagnostic_rates=diagnostic_rates,
+        try:
+            results = asyncio.run(
+                exercise(
+                    cluster,
+                    values,
+                    args.image,
+                    short_seconds=args.short_seconds,
+                    diagnostic_rates=diagnostic_rates,
+                )
             )
-        )
+        finally:
+            collect_native_logs(cluster)
     manifest["qualification_passed"] = diagnostic_rates is None and all(
         result["passed"] for result in results
     )
