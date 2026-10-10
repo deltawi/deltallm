@@ -293,6 +293,8 @@ def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
             "-c",
             "max_wal_size=4GB",
             "-c",
+            "wal_compression=lz4",
+            "-c",
             "fsync=on",
             "-c",
             "synchronous_commit=on",
@@ -328,6 +330,7 @@ def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
         "shared_buffers",
         "max_wal_size",
         "max_connections",
+        "wal_compression",
         "fsync",
         "synchronous_commit",
         "full_page_writes",
@@ -354,7 +357,9 @@ def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
             timeout=10,
         ).stdout
     )
-    expected = dict(zip(names, ("512MB", "4GB", "1000", "on", "on", "on", "on"), strict=True))
+    expected = dict(
+        zip(names, ("512MB", "4GB", "1000", "lz4", "on", "on", "on", "on"), strict=True)
+    )
     if observed != expected:
         raise RuntimeError(
             "Native qualification database settings do not match the declared fixture"

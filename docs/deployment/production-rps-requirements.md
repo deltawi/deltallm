@@ -17,7 +17,7 @@ accounting. It does not represent long model replies, large bodies or streaming.
 | 50 RPS | Earlier candidate passed ten minutes; append-corrected `d62715d0` image passed its 30-second initial stage | Complete the reporting-corrected image's final release checks and test the real traffic mix |
 | 100 RPS | Earlier candidate passed ten minutes; append-corrected image passed its 30-second initial stage | Same checks, with measured provider and dependency headroom |
 | 200 RPS | Earlier candidate passed ten minutes; append-corrected image passed its 30-second initial stage | Same checks, including peak concurrency and worker catch-up |
-| 500 RPS | Append-corrected image passed one diagnostic at p95/p99 58.90/93.74 ms, but failed the next retained-history stage at 99.705% success | Pass the reporting-corrected image's functional recovery and all four normal stages |
+| 500 RPS | Reporting-corrected image passed two ten-minute diagnostics, including retained history, with LZ4 WAL compression; full release checks remain pending | Pass the same image's functional recovery and all four normal stages |
 | 1,000 RPS | Earlier 30-second diagnostic failed; the reporting-corrected image has not been tested at this rate | Repeat only after the current sustained 500 RPS and functional gates pass |
 
 The fixed candidate's six-CPU series is not a passing release qualification. There is no
@@ -95,6 +95,23 @@ empty-table statistics and cached calls. No production capacity improvement is
 claimed until the corrected image passes retained-history and release checks.
 Monitor analyze and vacuum progress, but do not make query bounds depend on
 fresh statistics. Keep all lease, generation, charge, and deadline checks active.
+
+The reporting-corrected image `8c9e5e24` passed two selected ten-minute 500 RPS
+stages with PostgreSQL LZ4 WAL compression. The retained-history stage had
+300,000 successes, no errors or drops, p95/p99 82.59/157.36 ms, exact charges,
+and complete drain. The current qualification fixture declares and verifies
+`wal_compression=lz4`; the pinned PostgreSQL build supports LZ4. This changes
+only the test database profile, not application defaults or financial controls.
+Keep `fsync`, synchronous commit, full-page writes, and autovacuum enabled.
+
+Compression reduced first-stage WAL volume by only about 2.5%. It is not a
+proved sole fix or a complete release certificate. Measure storage latency,
+checkpoint sync time, CPU headroom, and retained-history behavior together.
+Compression costs CPU but preserves recovery safety; see
+[PostgreSQL WAL settings](https://www.postgresql.org/docs/15/runtime-config-wal.html).
+The operator owns the external database setting and must qualify its exact
+storage and workload. A two-core API pod limit does not make one Python event
+loop use two cores. Size replicas for usable process CPU, not only pod limits.
 
 Pod limits do not add physical CPU capacity: the sum of these limits exceeds the
 shared VM's six CPUs. At 1,000 RPS the VM was 99.11% busy. Increasing only a pool,
