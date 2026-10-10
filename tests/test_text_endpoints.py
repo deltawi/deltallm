@@ -13,7 +13,7 @@ from src.routers.text_adapters import responses_to_chat_request
 class _AlwaysBudgetExceeded:
     async def check_budgets(self, **kwargs):
         del kwargs
-        from src.billing.budget import BudgetExceeded
+        from src.billing.budgets.budget import BudgetExceeded
 
         raise BudgetExceeded(entity_type="key", entity_id="k1", spend=10.0, max_budget=5.0)
 

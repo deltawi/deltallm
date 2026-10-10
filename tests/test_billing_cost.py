@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from src.billing.audio_usage import normalize_speech_usage, normalize_transcription_usage
-from src.billing.cost import ModelPricing, completion_cost, compute_billing_result, get_model_pricing
-from src.billing.pricing import normalize_gateway_cache_hit_usage, pricing_from_model_info
+from src.billing.charges.audio_usage import normalize_speech_usage, normalize_transcription_usage
+from src.billing.pricing.cost import (
+    ModelPricing,
+    completion_cost,
+    compute_billing_result,
+    get_model_pricing,
+)
+from src.billing.pricing.pricing import normalize_gateway_cache_hit_usage, pricing_from_model_info
 
 
 def test_completion_cost_uses_default_pricing() -> None:
@@ -49,7 +54,10 @@ def test_get_model_pricing_prefix_match() -> None:
 
 
 def test_completion_cost_unknown_model_returns_zero() -> None:
-    assert completion_cost(model="unknown-model", usage={"prompt_tokens": 10, "completion_tokens": 1}) == 0.0
+    assert (
+        completion_cost(model="unknown-model", usage={"prompt_tokens": 10, "completion_tokens": 1})
+        == 0.0
+    )
 
 
 def test_batch_cost_uses_batch_absolute_pricing_over_sync() -> None:
@@ -96,7 +104,9 @@ def test_batch_cost_uses_multiplier_when_absolute_missing() -> None:
 
 
 def test_normalize_gateway_cache_hit_usage_marks_full_prompt_cached() -> None:
-    usage = normalize_gateway_cache_hit_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    usage = normalize_gateway_cache_hit_usage(
+        {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+    )
     assert usage["prompt_tokens_cached"] == 10
 
 

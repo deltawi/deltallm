@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.db.mcp import MCPRepository, MCPServerRecord
+from src.db.mcp.mcp import MCPRepository, MCPServerRecord
 from src.mcp.registry import MCPRegistryService
 
 
@@ -51,7 +51,9 @@ class _FakeRepository(MCPRepository):
             return None
         return self.server
 
-    async def update_server_capabilities(self, server_id: str, *, capabilities_json, capabilities_etag=None):  # noqa: ANN001, ANN201
+    async def update_server_capabilities(
+        self, server_id: str, *, capabilities_json, capabilities_etag=None
+    ):  # noqa: ANN001, ANN201
         if server_id != self.server.mcp_server_id:
             return None
         self.server = _server(
@@ -83,7 +85,9 @@ async def test_store_server_capabilities_populates_l1_and_l2_cache() -> None:
     redis = _FakeRedis()
     registry = MCPRegistryService(repository, redis_client=redis)
 
-    updated = await registry.store_server_capabilities(repository.server.mcp_server_id, capabilities={"tools": [{"name": "search"}]})
+    updated = await registry.store_server_capabilities(
+        repository.server.mcp_server_id, capabilities={"tools": [{"name": "search"}]}
+    )
 
     assert updated is not None
     cached = await registry.get_server_capabilities(updated)
@@ -108,7 +112,9 @@ async def test_invalidate_server_clears_l1_and_l2_cache() -> None:
     repository = _FakeRepository()
     redis = _FakeRedis()
     registry = MCPRegistryService(repository, redis_client=redis)
-    await registry.store_server_capabilities(repository.server.mcp_server_id, capabilities={"tools": [{"name": "search"}]})
+    await registry.store_server_capabilities(
+        repository.server.mcp_server_id, capabilities={"tools": [{"name": "search"}]}
+    )
 
     await registry.invalidate_server("github")
 
@@ -121,7 +127,9 @@ async def test_invalidate_all_clears_known_redis_entries() -> None:
     repository = _FakeRepository()
     redis = _FakeRedis()
     registry = MCPRegistryService(repository, redis_client=redis)
-    await registry.store_server_capabilities(repository.server.mcp_server_id, capabilities={"tools": [{"name": "search"}]})
+    await registry.store_server_capabilities(
+        repository.server.mcp_server_id, capabilities={"tools": [{"name": "search"}]}
+    )
 
     await registry.invalidate_all()
 

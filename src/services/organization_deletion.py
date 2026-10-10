@@ -6,10 +6,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.audit.actions import AuditAction
-from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
-from src.db.organization_deletion_records import OrganizationDeletionJobRecord
-from src.db.organization_deletion_repository import OrganizationDeletionRepository
-from src.db.organization_deletion_worker_repository import (
+from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.organizations.deletion.organization_deletion_records import (
+    OrganizationDeletionJobRecord,
+)
+from src.db.organizations.deletion.organization_deletion_repository import (
+    OrganizationDeletionRepository,
+)
+from src.db.organizations.deletion.organization_deletion_worker_repository import (
     OrganizationDeletionWorkerRepository,
 )
 from src.services.organization_deletion_audit import (

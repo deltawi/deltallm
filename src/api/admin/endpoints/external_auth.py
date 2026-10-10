@@ -10,7 +10,7 @@ from src.api.external_auth_edge import (
     read_external_body,
 )
 from src.auth.external_contracts import ExternalPurpose
-from src.db.external_auth_records import (
+from src.db.identity.external.external_auth_records import (
     ExternalBindingRecord,
     ExternalIntegrationRecord,
     ExternalSubjectRecord,

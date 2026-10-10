@@ -11,13 +11,13 @@ ROOT = Path(__file__).parents[2] / "src"
 @pytest.mark.parametrize(
     "module",
     [
-        "db/platform_sessions.py",
+        "db/identity/platform_sessions.py",
         "services/platform_session_service.py",
         "services/sso_account_service.py",
         "auth/sso_identity.py",
-        "db/platform_passwords.py",
+        "db/identity/platform_passwords.py",
         "services/platform_password_change.py",
-        "db/team_directory.py",
+        "db/organizations/team_directory.py",
     ],
 )
 def test_session_and_account_boundaries_have_one_bounded_owner(module: str) -> None:

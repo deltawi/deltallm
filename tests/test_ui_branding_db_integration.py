@@ -14,7 +14,7 @@ from src.config_runtime.dynamic import (
     DynamicConfigPersistenceError,
     DynamicConfigPostCommitApplyError,
 )
-from src.db.ui_branding_assets import UIBrandingAssetRepository
+from src.db.catalog.ui_branding_assets import UIBrandingAssetRepository
 from src.services.ui_branding_assets import UIBrandingAssetService, validate_branding_asset
 
 try:

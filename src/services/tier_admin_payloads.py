@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from src.db.tiers import TierCapacityPoolRecord, TierModelPolicyRecord, TierRecord
+from src.db.tiers.tiers import TierCapacityPoolRecord, TierModelPolicyRecord, TierRecord
 from src.models.output_limits import validate_output_limit
 from src.models.errors import InvalidRequestError
 from src.services.tier_admin_errors import TierAdminValidationError

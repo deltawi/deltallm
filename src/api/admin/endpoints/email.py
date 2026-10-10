@@ -10,7 +10,7 @@ from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
 from src.middleware.admin import require_admin_permission
-from src.db.repositories import AuditRepository
+from src.db.audit.repository import AuditRepository
 from src.services.email_outbox_service import enqueue_succeeded
 from src.services.telemetry_replay import TelemetryReplayService
 

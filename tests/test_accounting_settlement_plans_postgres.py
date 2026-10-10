@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_local_leases import LocalPermitReturn
+from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes
 from tests.test_accounting_journal_plans_postgres import seed_journal_history

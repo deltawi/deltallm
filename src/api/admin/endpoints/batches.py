@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from src.auth.roles import Permission
 from src.api.admin.batch_access import require_operator_batch_access
-from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value, get_auth_scope
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    to_json_value,
+    get_auth_scope,
+)
 from src.audit.actions import AuditAction
 from src.batch.error_sanitization import sanitize_batch_item_error_fields
 from src.batch.repository import BatchRepository
@@ -37,7 +42,7 @@ from src.batch.scheduling import (
 )
 from src.batch.webhooks.operations import serialize_batch_webhook_delivery
 from src.config_runtime.dynamic import DynamicConfigPersistenceError, DynamicConfigValidationError
-from src.db.repositories import AuditRepository
+from src.db.audit.repository import AuditRepository
 from src.metrics import (
     collect_batch_scheduler_status_metrics,
     increment_batch_repair_action,
@@ -50,9 +55,7 @@ from src.services.ui_authorization import (
     build_batch_capabilities,
 )
 
-router = APIRouter(
-    tags=["Admin Batches"], dependencies=[Depends(require_operator_batch_access)]
-)
+router = APIRouter(tags=["Admin Batches"], dependencies=[Depends(require_operator_batch_access)])
 logger = logging.getLogger(__name__)
 SCHEDULER_FLOW_LIST_DEFAULT_LIMIT = 200
 SCHEDULER_FLOW_LIST_MAX_LIMIT = 1000
@@ -107,7 +110,9 @@ def _repair_action_metric(action: str) -> Iterator[None]:
 def _batch_repository_or_503(request: Request) -> BatchRepository:
     repository = getattr(request.app.state, "batch_repository", None)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Batch repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Batch repository unavailable"
+        )
     return repository
 
 
@@ -174,7 +179,9 @@ def _scheduler_policy_fields(
                         or 1
                     ),
                 ),
-                queue_entered_at=queue_entered_at if isinstance(queue_entered_at, datetime) else None,
+                queue_entered_at=queue_entered_at
+                if isinstance(queue_entered_at, datetime)
+                else None,
                 last_scheduled_at=(
                     row.get("last_scheduled_at")
                     if isinstance(row.get("last_scheduled_at"), datetime)
@@ -208,7 +215,9 @@ def _redacted_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) -
     if not normalized_scope_id:
         return None
     if normalized_scope_type == "api_key":
-        return _display_tenant_scope_id(scope_type=normalized_scope_type, scope_id=normalized_scope_id)
+        return _display_tenant_scope_id(
+            scope_type=normalized_scope_type, scope_id=normalized_scope_id
+        )
     if normalized_scope_type == "anonymous" and normalized_scope_id == "anonymous":
         return "anonymous"
     digest = hashlib.sha256(normalized_scope_id.encode("utf-8")).hexdigest()
@@ -216,13 +225,19 @@ def _redacted_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) -
     return f"{label}:{digest[:12]}"
 
 
-def _model_capacity_resolver_or_503(request: Request, repository: BatchRepository) -> BatchModelCapacityResolver:
+def _model_capacity_resolver_or_503(
+    request: Request, repository: BatchRepository
+) -> BatchModelCapacityResolver:
     resolver = getattr(request.app.state, "batch_model_capacity_resolver", None)
     if resolver is not None:
         return resolver
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     if general_settings is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable"
+        )
     return BatchModelCapacityResolver(
         repository=repository,
         config=BatchModelCapacityConfig.from_settings(general_settings),
@@ -236,9 +251,13 @@ def _tenant_fair_share_config_or_503(request: Request) -> BatchTenantFairShareCo
     config = getattr(request.app.state, "batch_tenant_fair_share_config", None)
     if config is not None:
         return config
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     if general_settings is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable"
+        )
     return BatchTenantFairShareConfig.from_settings(general_settings)
 
 
@@ -246,7 +265,9 @@ def _dynamic_config_or_503(request: Request):  # noqa: ANN202
     dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
     update_config = getattr(dynamic_config, "update_config", None)
     if dynamic_config is None or not callable(update_config):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
+        )
     return dynamic_config
 
 
@@ -287,9 +308,13 @@ def _capacity_snapshot_response(snapshot) -> dict[str, Any]:  # noqa: ANN001
 
 
 def _scheduler_status_response(request: Request) -> dict[str, Any]:
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     if general_settings is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable"
+        )
     modes = resolve_scheduler_modes_from_settings(general_settings)
     model_capacity = BatchModelCapacityConfig.from_settings(general_settings)
     fair_share = BatchTenantFairShareConfig.from_settings(general_settings)
@@ -365,7 +390,11 @@ def _scheduler_status_response(request: Request) -> dict[str, Any]:
             else getattr(general_settings, "embeddings_batch_scheduler_claim_mode", "job_fifo")
         ),
         "strict_model_homogeneity_enabled": bool(
-            getattr(general_settings, "embeddings_batch_scheduler_strict_model_homogeneity_enabled", False)
+            getattr(
+                general_settings,
+                "embeddings_batch_scheduler_strict_model_homogeneity_enabled",
+                False,
+            )
         ),
         "model_capacity": {
             "enabled": model_capacity.enabled,
@@ -462,17 +491,18 @@ async def _enforce_batch_update_scope(  # noqa: ANN001
     job: dict[str, Any],
 ) -> dict[str, str | None]:
     team_id = str(job.get("created_by_team_id") or "").strip() or None
-    organization_id = str(
-        job.get("organization_id") or job.get("created_by_organization_id") or ""
-    ).strip() or None
+    organization_id = (
+        str(job.get("organization_id") or job.get("created_by_organization_id") or "").strip()
+        or None
+    )
     if organization_id is None and team_id:
         org_rows = await db.query_raw(
             "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
             team_id,
         )
-        organization_id = str(
-            (org_rows[0] if org_rows else {}).get("organization_id") or ""
-        ).strip() or None
+        organization_id = (
+            str((org_rows[0] if org_rows else {}).get("organization_id") or "").strip() or None
+        )
 
     ownership = {
         "created_by_team_id": team_id,
@@ -513,7 +543,9 @@ async def _enforce_webhook_delivery_scope(
     )
 
 
-def _append_batch_scope_clause(*, clauses: list[str], params: list[Any], scope, job_alias: str = "") -> bool:  # noqa: ANN001
+def _append_batch_scope_clause(
+    *, clauses: list[str], params: list[Any], scope, job_alias: str = ""
+) -> bool:  # noqa: ANN001
     if scope.is_platform_admin:
         return True
 
@@ -522,12 +554,16 @@ def _append_batch_scope_clause(*, clauses: list[str], params: list[Any], scope, 
     scope_clauses: list[str] = []
 
     if scope.team_ids:
-        team_placeholders = ", ".join(f"${len(params) + index + 1}" for index in range(len(scope.team_ids)))
+        team_placeholders = ", ".join(
+            f"${len(params) + index + 1}" for index in range(len(scope.team_ids))
+        )
         params.extend(scope.team_ids)
         scope_clauses.append(f"{team_column} IN ({team_placeholders})")
 
     if scope.org_ids:
-        org_placeholders = ", ".join(f"${len(params) + index + 1}" for index in range(len(scope.org_ids)))
+        org_placeholders = ", ".join(
+            f"${len(params) + index + 1}" for index in range(len(scope.org_ids))
+        )
         params.extend(scope.org_ids)
         scope_clauses.append(
             f"({org_column} IN ({org_placeholders}) "
@@ -551,14 +587,19 @@ async def list_batches(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
 
     clauses: list[str] = []
     params: list[Any] = []
 
     if not _append_batch_scope_clause(clauses=clauses, params=params, scope=scope, job_alias="j."):
-        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+        return {
+            "data": [],
+            "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+        }
 
     if search:
         params.append(f"%{search}%")
@@ -608,48 +649,55 @@ async def list_batches(
         failed = int(r.get("failed_items") or 0)
         masked_key = _mask_api_key(r.get("created_by_api_key"))
         scheduler_policy_fields = _scheduler_policy_fields(r, size_aging_config=size_aging_config)
-        data.append({
-            "batch_id": r.get("batch_id"),
-            "endpoint": r.get("endpoint"),
-            "status": r.get("status"),
-            "model": r.get("model"),
-            "total_items": total_items,
-            "completed_items": completed,
-            "failed_items": failed,
-            "cancelled_items": int(r.get("cancelled_items") or 0),
-            "in_progress_items": int(r.get("in_progress_items") or 0),
-            "scheduler_version": r.get("scheduler_version"),
-            "scheduling_model": r.get("scheduling_model"),
-            "scheduling_model_group": r.get("scheduling_model_group"),
-            "scheduling_endpoint": r.get("scheduling_endpoint"),
-            "tenant_scope_type": r.get("tenant_scope_type"),
-            "tenant_scope_id": _display_tenant_scope_id(
-                scope_type=r.get("tenant_scope_type"),
-                scope_id=r.get("tenant_scope_id"),
-            ),
-            "service_tier": r.get("service_tier"),
-            "estimated_work_units": int(r.get("estimated_work_units") or 0),
-            "remaining_work_units": int(r.get("remaining_work_units") or 0),
-            "size_class": r.get("size_class"),
-            "queue_entered_at": to_json_value(r.get("queue_entered_at")),
-            "first_claimed_at": to_json_value(r.get("first_claimed_at")),
-            "last_claimed_at": to_json_value(r.get("last_claimed_at")),
-            "last_scheduled_at": to_json_value(r.get("last_scheduled_at")),
-            **scheduler_policy_fields,
-            "total_cost": float(r.get("total_cost") or 0),
-            "created_by_api_key": masked_key,
-            "created_by_team_id": r.get("created_by_team_id"),
-            "created_by_organization_id": r.get("created_by_organization_id"),
-            "team_alias": r.get("team_alias"),
-            "created_at": to_json_value(r.get("created_at")),
-            "started_at": to_json_value(r.get("started_at")),
-            "completed_at": to_json_value(r.get("completed_at")),
-            "capabilities": build_batch_capabilities(scope, r),
-        })
+        data.append(
+            {
+                "batch_id": r.get("batch_id"),
+                "endpoint": r.get("endpoint"),
+                "status": r.get("status"),
+                "model": r.get("model"),
+                "total_items": total_items,
+                "completed_items": completed,
+                "failed_items": failed,
+                "cancelled_items": int(r.get("cancelled_items") or 0),
+                "in_progress_items": int(r.get("in_progress_items") or 0),
+                "scheduler_version": r.get("scheduler_version"),
+                "scheduling_model": r.get("scheduling_model"),
+                "scheduling_model_group": r.get("scheduling_model_group"),
+                "scheduling_endpoint": r.get("scheduling_endpoint"),
+                "tenant_scope_type": r.get("tenant_scope_type"),
+                "tenant_scope_id": _display_tenant_scope_id(
+                    scope_type=r.get("tenant_scope_type"),
+                    scope_id=r.get("tenant_scope_id"),
+                ),
+                "service_tier": r.get("service_tier"),
+                "estimated_work_units": int(r.get("estimated_work_units") or 0),
+                "remaining_work_units": int(r.get("remaining_work_units") or 0),
+                "size_class": r.get("size_class"),
+                "queue_entered_at": to_json_value(r.get("queue_entered_at")),
+                "first_claimed_at": to_json_value(r.get("first_claimed_at")),
+                "last_claimed_at": to_json_value(r.get("last_claimed_at")),
+                "last_scheduled_at": to_json_value(r.get("last_scheduled_at")),
+                **scheduler_policy_fields,
+                "total_cost": float(r.get("total_cost") or 0),
+                "created_by_api_key": masked_key,
+                "created_by_team_id": r.get("created_by_team_id"),
+                "created_by_organization_id": r.get("created_by_organization_id"),
+                "team_alias": r.get("team_alias"),
+                "created_at": to_json_value(r.get("created_at")),
+                "started_at": to_json_value(r.get("started_at")),
+                "completed_at": to_json_value(r.get("completed_at")),
+                "capabilities": build_batch_capabilities(scope, r),
+            }
+        )
 
     return {
         "data": data,
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -659,14 +707,23 @@ async def batch_summary(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
 
     clauses: list[str] = []
     params: list[Any] = []
 
     if not _append_batch_scope_clause(clauses=clauses, params=params, scope=scope):
-        return {"total": 0, "queued": 0, "in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0}
+        return {
+            "total": 0,
+            "queued": 0,
+            "in_progress": 0,
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+        }
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -695,13 +752,20 @@ async def batch_summary(
     }
 
 
-@router.get("/ui/api/batches/feature-status", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
+@router.get(
+    "/ui/api/batches/feature-status",
+    dependencies=[Depends(require_admin_permission(Permission.KEY_READ))],
+)
 async def batch_feature_status(
     request: Request,
 ) -> dict[str, bool]:
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     return {
-        "embeddings_batch_enabled": bool(getattr(general_settings, "embeddings_batch_enabled", False)),
+        "embeddings_batch_enabled": bool(
+            getattr(general_settings, "embeddings_batch_enabled", False)
+        ),
     }
 
 
@@ -877,7 +941,9 @@ async def refresh_batch_scheduler_flows(
     )
     repository = _batch_repository_or_503(request)
     config = _tenant_fair_share_config_or_503(request)
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     if general_settings is None:
         size_aging_config = BatchSizeAgingConfig()
         size_aware_scheduling_enabled = False
@@ -1019,7 +1085,9 @@ async def get_batch(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
 
     rows = await db.query_raw(
@@ -1089,9 +1157,7 @@ async def get_batch(
             after_line_number,
             fetch_limit,
         )
-    item_rows_page = [
-        sanitize_batch_item_error_fields(dict(r)) for r in item_rows[:items_limit]
-    ]
+    item_rows_page = [sanitize_batch_item_error_fields(dict(r)) for r in item_rows[:items_limit]]
     has_more_items = len(item_rows) > items_limit
     next_after_line_number = (
         int(item_rows_page[-1].get("line_number"))
@@ -1107,8 +1173,7 @@ async def get_batch(
         else []
     )
     safe_webhook_deliveries = [
-        to_json_value(serialize_batch_webhook_delivery(delivery))
-        for delivery in webhook_deliveries
+        to_json_value(serialize_batch_webhook_delivery(delivery)) for delivery in webhook_deliveries
     ]
 
     return {
@@ -1124,7 +1189,8 @@ async def get_batch(
         "in_progress_items": int(job.get("in_progress_items") or 0),
         "created_by_api_key": masked_key,
         "created_by_team_id": job.get("created_by_team_id"),
-        "created_by_organization_id": job.get("created_by_organization_id") or job.get("organization_id"),
+        "created_by_organization_id": job.get("created_by_organization_id")
+        or job.get("organization_id"),
         "team_alias": job.get("team_alias"),
         "created_at": to_json_value(job.get("created_at")),
         "started_at": to_json_value(job.get("started_at")),
@@ -1158,7 +1224,9 @@ async def get_batch_costs(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
     job = await _load_batch_scope_row(db, batch_id)
     await _enforce_batch_update_scope(db=db, scope=scope, job=job)
@@ -1188,7 +1256,9 @@ async def get_batch_item(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
     job = await _load_batch_scope_row(db, batch_id)
     await _enforce_batch_update_scope(db=db, scope=scope, job=job)
@@ -1222,14 +1292,19 @@ async def cancel_batch(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
     job = await _load_batch_scope_row(db, batch_id)
     await _enforce_batch_update_scope(db=db, scope=scope, job=job)
 
     terminal = {"completed", "failed", "cancelled", "expired"}
     if job.get("status") in terminal:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot cancel batch in '{job.get('status')}' status")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot cancel batch in '{job.get('status')}' status",
+        )
 
     updated = await db.query_raw(
         """
@@ -1241,7 +1316,11 @@ async def cancel_batch(
         """,
         batch_id,
     )
-    return {"batch_id": batch_id, "status": dict(updated[0]).get("status") if updated else job.get("status"), "cancel_requested": True}
+    return {
+        "batch_id": batch_id,
+        "status": dict(updated[0]).get("status") if updated else job.get("status"),
+        "cancel_requested": True,
+    }
 
 
 @router.get("/ui/api/batches/{batch_id}/webhook-deliveries")
@@ -1293,8 +1372,7 @@ async def get_batch_webhook_deliveries(
             )
         ),
         "data": [
-            to_json_value(serialize_batch_webhook_delivery(delivery))
-            for delivery in deliveries
+            to_json_value(serialize_batch_webhook_delivery(delivery)) for delivery in deliveries
         ],
     }
 
@@ -1369,9 +1447,7 @@ async def replay_batch_webhook_delivery(
                 "batch_id": batch_id,
                 "replayed": True,
                 "previous_attempt_count": replayed.previous_attempt_count,
-                "delivery": to_json_value(
-                    serialize_batch_webhook_delivery(replayed.record)
-                ),
+                "delivery": to_json_value(serialize_batch_webhook_delivery(replayed.record)),
             }
             await emit_admin_mutation_audit(
                 request=request,
@@ -1413,13 +1489,17 @@ async def retry_batch_finalization(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
     job = await _load_batch_scope_row(db, batch_id)
     await _enforce_batch_update_scope(db=db, scope=scope, job=job)
     if job.get("status") != "finalizing":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Batch is not in 'finalizing' status")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Batch is not in 'finalizing' status"
+        )
     with _repair_action_metric("retry_finalization"):
         updated = await repository.retry_finalization_now(batch_id)
         if updated is None:
@@ -1448,7 +1528,9 @@ async def requeue_stale_batch_items(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
     job = await _load_batch_scope_row(db, batch_id)
@@ -1472,7 +1554,12 @@ async def requeue_stale_batch_items(
         request_payload={"batch_id": batch_id},
         response_payload=response,
     )
-    logger.info("batch repair requeue-stale batch_id=%s items=%s actor=%s", batch_id, requeued, scope.account_id)
+    logger.info(
+        "batch repair requeue-stale batch_id=%s items=%s actor=%s",
+        batch_id,
+        requeued,
+        scope.account_id,
+    )
     return response
 
 
@@ -1485,14 +1572,19 @@ async def mark_batch_failed(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
     job = await _load_batch_scope_row(db, batch_id)
     await _enforce_batch_update_scope(db=db, scope=scope, job=job)
     terminal = {"completed", "failed", "cancelled", "expired"}
     if job.get("status") in terminal:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot fail batch in '{job.get('status')}' status")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot fail batch in '{job.get('status')}' status",
+        )
     reason = str(payload.reason or "").strip() or "Marked failed by operator"
     provider_error = encode_operator_failed_reason(reason)
     with _repair_action_metric("mark_failed"):
@@ -1520,5 +1612,11 @@ async def mark_batch_failed(
         request_payload={"batch_id": batch_id, "reason": reason},
         response_payload=response,
     )
-    logger.warning("batch repair mark-failed batch_id=%s items=%s actor=%s reason=%s", batch_id, failed_items, scope.account_id, reason)
+    logger.warning(
+        "batch repair mark-failed batch_id=%s items=%s actor=%s reason=%s",
+        batch_id,
+        failed_items,
+        scope.account_id,
+        reason,
+    )
     return response

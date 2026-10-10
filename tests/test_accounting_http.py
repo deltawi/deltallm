@@ -5,15 +5,15 @@ import asyncio
 import httpx
 import pytest
 
-from src.billing.accounting_auth import (
+from src.billing.accounting.transport.accounting_auth import (
     ACCOUNTING_SIGNATURE_HEADER,
     ACCOUNTING_TIMESTAMP_HEADER,
     accounting_signature,
     verify_accounting_signature,
 )
-from src.billing.accounting_http import AccountingHttpTransport
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.outbound.network_policy import OutboundNetworkPolicy
 
 

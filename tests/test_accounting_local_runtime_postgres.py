@@ -6,20 +6,23 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_journal_runtime import JournalProcessingWorker, JournalWorkerConfig
+from src.billing.accounting.journal.accounting_journal_runtime import (
+    JournalProcessingWorker,
+    JournalWorkerConfig,
+)
 from tests.accounting_adapters.journal_terminal import JournalTerminalPersistence
-from src.billing.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_local_returns import LocalReturnWorker
-from src.billing.accounting_local_runtime import LocalAccountingRuntime
-from src.billing.accounting_local_service import LocalAccountingService
-from src.billing.accounting_local_terminal import LocalTerminalOwner
-from src.billing.accounting_terminal_receipts import JournalReceipt
-from src.db.accounting_journal import AccountingJournalRepository
-from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
-from src.db.accounting_local_leases import AccountingLocalLeaseRepository
-from src.db.accounting_protocol import AccountingProtocolRepository
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
+from src.billing.accounting.accounting_local_runtime import LocalAccountingRuntime
+from src.billing.accounting.accounting_local_service import LocalAccountingService
+from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
+from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
+from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.db.accounting.permits.accounting_local_leases import AccountingLocalLeaseRepository
+from src.db.accounting.accounting_protocol import AccountingProtocolRepository
 from tests.test_accounting_journal_postgres import counts
 from tests.test_accounting_local_leases_postgres import deadline
 from tests.test_accounting_local_service import handle

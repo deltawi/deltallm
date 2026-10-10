@@ -6,7 +6,7 @@ import pytest
 
 from src.auth.external_contracts import ExternalPurpose
 from src.auth.external_errors import ExternalAuthError
-from src.db.external_auth_subjects import ExternalSubjectRepository
+from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
 from tests.db import external_auth_fixtures as fixtures
 from tests.db.test_external_auth_administration import admin, version
 from tests.db.test_external_auth_exchange import enable, proof, services

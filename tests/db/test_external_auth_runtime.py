@@ -14,7 +14,7 @@ from src.api.external_auth import router
 from src.auth.external_config import ExternalAuthSettings
 from src.bootstrap.external_auth import init_external_auth_runtime
 from src.config import AppConfig, GeneralSettings, Settings, resolve_database_settings
-from src.db.repositories import AuditRepository
+from src.db.audit.repository import AuditRepository
 from src.services.audit_service import AuditIngestionConfig, AuditService
 from src.services.platform_identity_service import PlatformIdentityService
 from tests.auth.test_external_assertions import settings_for
@@ -130,8 +130,8 @@ async def test_owned_runtime_exchange_replay_readiness_and_shutdown(external_dat
 async def test_durable_revocation_worker_recovers_and_denies_all_auth_paths(external_database):
     from uuid import uuid4
     from redis.exceptions import ConnectionError as RedisConnectionError
-    from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
-    from src.db.repositories import KeyRepository
+    from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+    from src.db.identity.key_repository import KeyRepository
     from src.services.cache_invalidation_worker import CacheInvalidationWorker
     from src.services.key_service import KeyService
     from src.services.key_removal import KeyRemovalService
@@ -211,7 +211,7 @@ async def test_rollback_preview_apply_and_retry_reconcile_all_exact_cache_versio
     import json
     from uuid import uuid4
     from scripts.external_auth_rollback import main
-    from src.db.repositories import KeyRepository
+    from src.db.identity.key_repository import KeyRepository
     from src.models.responses import UserAPIKeyAuth
     from src.services.key_auth_cache import KeyAuthCache
     from src.services.key_removal import KeyRemovalService

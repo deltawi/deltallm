@@ -10,15 +10,15 @@ from prisma import Prisma
 from prisma.errors import RawQueryError
 
 from scripts.benchmarks.ingestion_database import ingestion_database
-from src.billing.operation_reservation import BillingOperationUnavailable
-from src.billing.spend_operations import (
+from src.billing.charges.operation_reservation import BillingOperationUnavailable
+from src.billing.spend.spend_operations import (
     OperationAttempt,
     OperationHandle,
     OperationPrincipal,
     SpendOperationIntent,
 )
-from src.db.spend_ingestion import SpendIngestionRepository
-from src.db.spend_operations import SpendOperationRepository
+from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.billing.spend_operations import SpendOperationRepository
 
 pytestmark = pytest.mark.postgres
 

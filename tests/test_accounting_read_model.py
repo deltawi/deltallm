@@ -6,13 +6,19 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_read_model_claims import ReadModelClaim, ReadModelWorkerConfig
-from src.billing.accounting_read_model_health import ReadModelHealth, ReadModelProgress
-from src.billing.accounting_read_model_runtime import ReadModelProcessingWorker
+from src.billing.accounting.reporting.accounting_read_model_claims import (
+    ReadModelClaim,
+    ReadModelWorkerConfig,
+)
+from src.billing.accounting.health.accounting_read_model_health import (
+    ReadModelHealth,
+    ReadModelProgress,
+)
+from src.billing.accounting.reporting.accounting_read_model_runtime import ReadModelProcessingWorker
 from src.concurrency import CapacityGateFull
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
-from src.db.accounting_read_model import AccountingReadModelRepository
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.accounting.reporting.accounting_read_model import AccountingReadModelRepository
 from src.telemetry.lifecycle import WorkerState
 
 

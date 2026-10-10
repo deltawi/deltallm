@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.budget import BudgetEnforcementService
+from src.billing.budgets.budget import BudgetEnforcementService
 from tests.test_billing import CombinedBudgetDB
 
 

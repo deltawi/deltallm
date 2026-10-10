@@ -11,7 +11,7 @@ from src.api.admin.spend_reporting_dependencies import (
     _resolve_reporting_visibility,
     _run_uncached_reporting_response,
 )
-from src.db.routing_costs import routing_cost_query
+from src.db.routing.routing_costs import routing_cost_query
 from src.middleware.admin import require_any_admin_permission
 from src.services.routing_cost_reports import RoutingCostPage, load_routing_cost_page
 from src.services.spend_visibility import SPEND_VISIBILITY_PERMISSIONS

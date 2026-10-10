@@ -72,7 +72,7 @@ async def measure(args, case):
             ) = 1_000_000_000
     if model_scopes:
         from types import SimpleNamespace
-        from src.db.tiers import TierModelPolicyRecord, TierPolicyLoadResult
+        from src.db.tiers.tiers import TierModelPolicyRecord, TierPolicyLoadResult
         from src.services.tier_policy_service import TierPolicyService
         from tests.services.test_tier_policy_compiler import _assignment
 

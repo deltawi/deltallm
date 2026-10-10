@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.accounting_read_model_claims import ReadModelWorkerConfig
-from src.billing.accounting_read_model_runtime import ReadModelProcessingWorker
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.billing.accounting.reporting.accounting_read_model_claims import ReadModelWorkerConfig
+from src.billing.accounting.reporting.accounting_read_model_runtime import ReadModelProcessingWorker
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.telemetry.lifecycle import WorkerState
 from tests.test_accounting_journal_runtime import Persistence as JournalPersistence, worker
 from tests.test_accounting_read_model import Persistence as ReportPersistence

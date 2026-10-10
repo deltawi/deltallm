@@ -11,7 +11,7 @@ from src.config import (
 )
 from src.spend_operation_settings import SpendOperationAllocation
 from src.database_settings import DatabaseAllocationSettings
-from src.db.allocation_config import resolve_allocation_settings
+from src.db.runtime.allocation_config import resolve_allocation_settings
 from src.redis_runtime import RedisLimits, startup_setting
 from src.bootstrap.capacity_contract import DeploymentCapacityContract
 from src.bootstrap.accounting_config import read_accounting_settings

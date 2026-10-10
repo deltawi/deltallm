@@ -2,9 +2,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.billing.accounting_protocol import ReserveDecision
-from src.billing.accounting_service import AccountingProtocolService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.accounting.accounting_protocol import ReserveDecision
+from src.billing.accounting.accounting_service import AccountingProtocolService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.cache import CacheKeyBuilder, InMemoryBackend, NoopCacheMetrics, StreamingCacheHandler
 from tests.test_accounting_request_path import _AccountingRepository
 from tests.test_cache import _refresh_runtime_registry

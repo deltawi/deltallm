@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.db.budget_notifications import (
+from src.db.billing.budget_notifications import (
     BudgetNotificationRepository,
     BudgetThresholdScanUnavailable,
 )
@@ -17,7 +17,7 @@ def dependencies(monkeypatch):
     db = SimpleNamespace(query_raw=AsyncMock(return_value=rows))
     reads = SimpleNamespace(balances=AsyncMock())
     monkeypatch.setattr(
-        "src.db.budget_notifications.AccountingBudgetReadRepository", lambda db: reads
+        "src.db.billing.budget_notifications.AccountingBudgetReadRepository", lambda db: reads
     )
     return db, reads, BudgetNotificationRepository(db)
 

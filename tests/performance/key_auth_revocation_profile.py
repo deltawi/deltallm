@@ -25,7 +25,7 @@ from scripts.measure_gateway_load import (
     summarize,
     write_results,
 )
-from src.db.repositories import KeyRecord
+from src.db.identity.key_repository import KeyRecord
 from src.services.key_service import KeyService
 from tests.performance.routing_cache_profile import queue_slope
 

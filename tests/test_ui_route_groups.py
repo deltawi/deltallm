@@ -8,15 +8,15 @@ from urllib.parse import quote
 from fastapi import FastAPI
 import pytest
 
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.prompt_registry import PromptResolvedRecord
-from src.db.route_policy_lifecycle import (
+from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.catalog.prompt_registry import PromptResolvedRecord
+from src.db.routing.route_policy_lifecycle import (
     RoutePolicyValidationContext,
     RoutePolicyWriteResult,
     StoredRoutePolicyDocument,
 )
-from src.db.route_groups import RouteGroupRepository
-from src.db.route_groups import (
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.routing.route_groups import (
     RouteGroupBindingRecord,
     RouteGroupMemberRecord,
     RouteGroupRecord,
@@ -687,7 +687,7 @@ class _FakeManagedAssetAccessRepository:
         del changed_by_account_id
         current = self.policies[policy.asset.asset_id]
         if current.asset.policy_version != expected_policy_version:
-            from src.db.managed_assets import ManagedAssetPolicyConflictError
+            from src.db.catalog.managed_assets import ManagedAssetPolicyConflictError
 
             raise ManagedAssetPolicyConflictError("asset policy changed")
         updated = AssetAccessPolicy(

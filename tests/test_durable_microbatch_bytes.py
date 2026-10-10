@@ -4,7 +4,11 @@ import asyncio
 
 import pytest
 
-from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull, DurableMicrobatcher
+from src.billing.accounting.durable_microbatch import (
+    DurableBatchClosed,
+    DurableBatchFull,
+    DurableMicrobatcher,
+)
 
 
 def owner(handler, **overrides):

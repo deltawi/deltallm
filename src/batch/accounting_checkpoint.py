@@ -12,13 +12,13 @@ from pydantic import Field, model_validator
 from src.batch.public_errors import BatchPublicError, BatchPublicErrorCode
 from src.batch.selector_checkpoint import BatchSelectorClaim
 from src.batch.selector_identity import batch_selector_operation_id
-from src.billing.accounting_local_leases import LocalAccountingHandle
-from src.billing.accounting_protocol import (
+from src.billing.accounting.permits.accounting_local_leases import LocalAccountingHandle
+from src.billing.accounting.accounting_protocol import (
     AccountingFinalization,
     AccountingOperationHandle,
     AccountingOutcome,
 )
-from src.billing.selector_charge import FrozenBillingContract
+from src.billing.charges.selector_charge import FrozenBillingContract
 
 CHECKPOINT_MAX_BYTES = 65_536
 PROOF_MAX_BYTES = 24_576

@@ -5,14 +5,14 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_local_terminal import (
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.journal.accounting_local_terminal import (
     LocalTerminalOwner,
     freeze_local_terminals,
     validated_terminal_acks,
 )
-from src.billing.accounting_protocol import AccountingOutcome
-from src.billing.durable_microbatch import DurableBatchFull
+from src.billing.accounting.accounting_protocol import AccountingOutcome
+from src.billing.accounting.durable_microbatch import DurableBatchFull
 from tests.test_accounting_local_issue import deadline
 from tests.test_accounting_local_leases import terminal
 from tests.test_accounting_local_receipts import acknowledgement
@@ -214,9 +214,9 @@ async def test_store_validates_the_whole_batch_before_removal(failure):
 
 
 async def test_expiry_after_ack_preparation_cannot_remove_any_proof(monkeypatch):
-    from src.billing import accounting_local_terminal
-    from src.db.accounting_calls import AccountingProtocolUnavailable
-    from src.db.telemetry_acceptance import AcceptanceFailure
+    from src.billing.accounting.journal import accounting_local_terminal
+    from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+    from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 
     values, receipts, persistence, owner = state()
     charge = receipts.retained_bytes

@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from src.db.tiers import (
+from src.db.tiers.tiers import (
     TierCapacityPoolRecord,
     TierModelPolicyRecord,
     TierPolicyAssignmentRecord,

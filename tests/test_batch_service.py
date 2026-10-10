@@ -15,8 +15,8 @@ from src.batch.models import (
 )
 from src.batch.service import OPENAI_BATCH_STATUS_VALUES, BatchService
 from src.metrics.batch import deltallm_batch_artifact_failures_metric
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
 

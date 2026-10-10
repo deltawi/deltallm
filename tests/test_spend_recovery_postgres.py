@@ -10,13 +10,13 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.spend import SpendTrackingService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.billing.spend_operations import OperationPrincipal
-from src.billing.spend_reconciliation import SpendOperationResolution
-from src.db.spend_ingestion import SpendIngestionRepository, SpendOutboxRecord
-from src.db.spend_operations import SpendOperationRepository
-from src.db.spend_reconciliation import SpendReconciliationRepository
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend.spend_operations import OperationPrincipal
+from src.billing.spend.spend_reconciliation import SpendOperationResolution
+from src.db.billing.spend_ingestion import SpendIngestionRepository, SpendOutboxRecord
+from src.db.billing.spend_operations import SpendOperationRepository
+from src.db.billing.spend_reconciliation import SpendReconciliationRepository
 from tests.test_spend_operations_postgres import accept, begin, deadline, handle, payload, row
 from tests.test_telemetry_ingestion_db_integration import _connect_prisma
 
@@ -141,8 +141,8 @@ async def test_unknown_reconciliation_is_atomic_audited_and_idempotent(economic_
 _CHILD = """
 import asyncio, json, sys
 from prisma import Prisma
-from src.billing.spend_operations import OperationHandle
-from src.db.spend_operations import SpendOperationRepository
+from src.billing.spend.spend_operations import OperationHandle
+from src.db.billing.spend_operations import SpendOperationRepository
 async def main():
     data=json.loads(sys.stdin.readline())
     db=Prisma(datasource={"url":data["url"]})
@@ -208,7 +208,7 @@ async def test_process_death_retains_intent_or_recoverable_receipt(economic_oper
 
 
 async def test_cleaned_settled_event_cannot_be_dispatched_again(economic_operation):
-    from src.billing.operation_reservation import BillingOperationUnavailable
+    from src.billing.charges.operation_reservation import BillingOperationUnavailable
 
     db, operation = economic_operation
     repo = SpendOperationRepository(db)
@@ -225,8 +225,8 @@ async def test_cleaned_settled_event_cannot_be_dispatched_again(economic_operati
 
 async def test_reconciliation_audit_failure_rolls_back_receipt(economic_operation, monkeypatch):
     from unittest.mock import AsyncMock
-    from src.billing.operation_reservation import BillingOperationUnavailable
-    from src.db.repositories import AuditRepository
+    from src.billing.charges.operation_reservation import BillingOperationUnavailable
+    from src.db.audit.repository import AuditRepository
 
     db, operation = economic_operation
     repo = SpendOperationRepository(db)
@@ -254,7 +254,7 @@ async def test_reconciliation_audit_failure_rolls_back_receipt(economic_operatio
 
 
 async def test_reconciliation_cannot_cross_tenant_scope(economic_operation):
-    from src.billing.operation_reservation import BillingOperationUnavailable
+    from src.billing.charges.operation_reservation import BillingOperationUnavailable
 
     db, operation = economic_operation
     repo = SpendOperationRepository(db)

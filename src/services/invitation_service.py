@@ -13,10 +13,10 @@ from src.auth.roles import (
     validate_organization_role,
     validate_team_role,
 )
-from src.db.email import EmailOutboxRepository
-from src.db.email_feedback import EmailFeedbackRepository
-from src.db.email_tokens import EmailTokenRepository
-from src.db.invitations import InvitationRepository, PlatformInvitationRecord
+from src.db.email.email import EmailOutboxRepository
+from src.db.email.email_feedback import EmailFeedbackRepository
+from src.db.identity.email_tokens import EmailTokenRepository
+from src.db.identity.invitations import InvitationRepository, PlatformInvitationRecord
 from src.services.email_token_service import EmailTokenService
 from src.services.email_outbox_service import EmailOutboxService
 from src.services.organization_mutation_policy import OrganizationMutationPolicy

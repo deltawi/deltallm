@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from src.billing.tier_pricing import (
+from src.billing.pricing.tier_pricing import (
     attach_pricing_metadata,
     resolve_token_billing_result,
 )

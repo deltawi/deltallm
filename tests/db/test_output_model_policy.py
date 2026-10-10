@@ -7,9 +7,9 @@ from uuid import uuid4
 import pytest
 
 from src.api.admin.output_policy import schedule_output_policy_invalidation
-from src.db.key_repository import KeyRepository
-from src.db.output_policy import OutputPolicyChange, persist_output_policy
-from src.db.tiers import TierModelPolicyRecord, TierRepository
+from src.db.identity.key_repository import KeyRepository
+from src.db.identity.output_policy import OutputPolicyChange, persist_output_policy
+from src.db.tiers.tiers import TierModelPolicyRecord, TierRepository
 from src.services.key_service import KeyService
 from tests.conftest import FakeRedis
 from tests.db.tier_migration_helpers import (

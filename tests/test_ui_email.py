@@ -6,7 +6,7 @@ import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.audit.actions import AuditAction
-from src.db.email_feedback import EmailSuppressionRecord
+from src.db.email.email_feedback import EmailSuppressionRecord
 from src.services.email_feedback_service import EmailFeedbackError, EmailFeedbackOutcome
 
 

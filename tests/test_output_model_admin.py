@@ -74,7 +74,7 @@ async def test_model_limit_update_omit_clear_and_transaction_rollback(client, te
 
 
 async def test_tier_output_bulk_contract_and_clear(client, test_app):
-    from src.db.tiers import TierModelPolicyRecord
+    from src.db.tiers.tiers import TierModelPolicyRecord
 
     repository = _FakeTierRepository()
     repository.seed_tier()

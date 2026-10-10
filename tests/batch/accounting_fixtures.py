@@ -4,14 +4,16 @@ from uuid import uuid4
 
 from src.batch.accounting_checkpoint import BatchAccountingCheckpoint
 from src.batch.selector_identity import batch_selector_operation_id
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     AccountingAttribution,
     AccountingAttempt,
     AccountingOperationHandle,
     AccountingReservation,
     request_fingerprint,
 )
-from src.billing.accounting_terminal_preparation import prepare_accounting_uncertain
+from src.billing.accounting.journal.accounting_terminal_preparation import (
+    prepare_accounting_uncertain,
+)
 
 
 def checkpoint_for(claim, *, generation=7):

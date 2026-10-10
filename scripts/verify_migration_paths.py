@@ -123,7 +123,7 @@ def _verify_image_history(database_url: str) -> None:
 import asyncio
 from datetime import timedelta
 from prisma import Prisma
-from src.db.migration_status import verify_migration_status
+from src.db.runtime.migration_status import verify_migration_status
 async def verify():
     db = Prisma()
     try:

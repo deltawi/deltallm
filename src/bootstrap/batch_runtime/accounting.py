@@ -8,7 +8,7 @@ from starlette.datastructures import State
 from src.batch.accounting_native import NativeBatchBilling
 from src.batch.repositories.accounting_repository import BatchAccountingRepository
 from src.batch.repository import BatchRepository
-from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.bootstrap.accounting_config import read_accounting_settings
 from src.config import GeneralSettings
 from src.services.tier_policy_service import TierPolicyService

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from src.db.tiers import (
+from src.db.tiers.tiers import (
     TierCapacityPoolRecord,
     TierModelPolicyRecord,
     TierPolicyAssignmentRecord,
@@ -46,9 +46,7 @@ def compile_tier_policy_snapshot(
     )
 
     assignments = tuple(
-        assignment
-        for assignment in inputs.assignments
-        if _assignment_is_active(assignment, now)
+        assignment for assignment in inputs.assignments if _assignment_is_active(assignment, now)
     )
     active_version_ids = {
         assignment.effective_tier_version_id
@@ -136,10 +134,7 @@ def compile_tier_policy_snapshot(
         capacity_pool_policy=MappingProxyType(capacity_pool_policy),
         capacity_pool_members=MappingProxyType(capacity_pool_members),
         org_tier_keys=MappingProxyType(
-            {
-                org_id: tuple(sorted(tier_keys))
-                for org_id, tier_keys in org_tier_keys.items()
-            }
+            {org_id: tuple(sorted(tier_keys)) for org_id, tier_keys in org_tier_keys.items()}
         ),
         org_has_explicit_tier_policy=frozenset(explicit_orgs),
         assignment_count=len(assignments),
@@ -200,7 +195,11 @@ def _policy_rank(policy: CompiledTierModelPolicy) -> tuple[int, int, int, int, s
 
 
 def _assignment_is_active(assignment: TierPolicyAssignmentRecord, now: datetime) -> bool:
-    if not assignment.enabled or not assignment.organization_id or not assignment.effective_tier_version_id:
+    if (
+        not assignment.enabled
+        or not assignment.organization_id
+        or not assignment.effective_tier_version_id
+    ):
         return False
     if str(assignment.tier_version_status or "").strip().lower() != "active":
         return False
@@ -223,7 +222,11 @@ def _next_transition_at(
         candidates.append(provided_at)
 
     for assignment in assignments:
-        if not assignment.enabled or not assignment.organization_id or not assignment.effective_tier_version_id:
+        if (
+            not assignment.enabled
+            or not assignment.organization_id
+            or not assignment.effective_tier_version_id
+        ):
             continue
         if str(assignment.tier_version_status or "").strip().lower() != "active":
             continue
@@ -255,10 +258,7 @@ def _snapshot_etag(
 
 def _record_dict(record: Any) -> dict[str, Any]:
     if is_dataclass(record):
-        return {
-            field.name: _etag_value(getattr(record, field.name))
-            for field in fields(record)
-        }
+        return {field.name: _etag_value(getattr(record, field.name)) for field in fields(record)}
     payload: dict[str, Any] = {}
     for key, value in getattr(record, "__dict__", {}).items():
         payload[key] = _etag_value(value)

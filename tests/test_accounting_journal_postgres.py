@@ -8,11 +8,14 @@ from uuid import uuid4
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.accounting_journal import journal_batch
-from src.billing.accounting_local_leases import LocalPermitReturn, LocalPermitFinalization
-from src.billing.accounting_protocol import PreissuedPermitAllocation
-from src.db.accounting_journal import AccountingJournalRepository
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.billing.accounting.journal.accounting_journal import journal_batch
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalPermitReturn,
+    LocalPermitFinalization,
+)
+from src.billing.accounting.accounting_protocol import PreissuedPermitAllocation
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_local_leases_postgres import deadline, funded, owner, terminal
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_preissued_permit_bank import fresh

@@ -3,16 +3,16 @@ from __future__ import annotations
 from src.audit.actions import AuditAction
 from src.auth.external_config import ExternalAuthSettings
 from src.auth.external_errors import ExternalAuthError
-from src.db.external_auth_bindings import ExternalBindingRepository
-from src.db.external_auth_integrations import ExternalIntegrationRepository
-from src.db.external_auth_provisioning import ExternalProvisioningRepository
-from src.db.external_auth_records import (
+from src.db.identity.external.external_auth_bindings import ExternalBindingRepository
+from src.db.identity.external.external_auth_integrations import ExternalIntegrationRepository
+from src.db.identity.external.external_auth_provisioning import ExternalProvisioningRepository
+from src.db.identity.external.external_auth_records import (
     ExternalBindingRecord,
     ExternalIntegrationRecord,
     ExternalSubjectRecord,
 )
-from src.db.external_auth_subjects import ExternalSubjectRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.models.external_auth import ExternalVersionRequest
 from src.services.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit
 

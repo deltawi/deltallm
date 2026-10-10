@@ -1,4 +1,5 @@
 """Admin MCP server routes."""
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -21,8 +22,8 @@ from src.api.admin.endpoints.managed_assets import (
 )
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.managed_assets import ManagedAssetAccessRepository
-from src.db.mcp import MCPRepository, MCPServerRecord
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.mcp.mcp import MCPRepository, MCPServerRecord
 from src.mcp.exceptions import MCPError
 from src.middleware.admin import require_authenticated
 
@@ -210,23 +211,35 @@ async def list_mcp_servers(
     )
     policy_by_id = {policy.asset.asset_id: policy for policy in policies}
     if scope.is_platform_admin:
-        servers, total = await registry.list_servers(search=search, enabled=enabled, limit=limit, offset=offset)
+        servers, total = await registry.list_servers(
+            search=search, enabled=enabled, limit=limit, offset=offset
+        )
         return {
             "data": [
                 _serialize_server(
                     server,
-                    capabilities=_server_view_capabilities(server, manage_scope=manage_scope, is_visible=True),
+                    capabilities=_server_view_capabilities(
+                        server, manage_scope=manage_scope, is_visible=True
+                    ),
                     policy=policy_by_id.get(str(server.managed_asset_id or "")),
                     principal=principal,
                 )
                 for server in servers
             ],
-            "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+            "pagination": {
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + limit < total,
+            },
         }
 
     accessible_asset_ids = list(policy_by_id)
     if not legacy_scope.org_ids and not legacy_scope.team_ids and not accessible_asset_ids:
-        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+        return {
+            "data": [],
+            "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+        }
 
     db = _db_or_503(request)
     clauses: list[str] = []
@@ -321,7 +334,12 @@ async def list_mcp_servers(
             )
             for server in servers
         ],
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -338,7 +356,11 @@ async def create_mcp_server(
     scope = get_auth_scope(request, authorization, x_master_key)
     principal = asset_principal_for_request(request)
     access_repository = _access_repository(request)
-    if access_repository is not None and not principal.is_platform_admin and principal.account_id is None:
+    if (
+        access_repository is not None
+        and not principal.is_platform_admin
+        and principal.account_id is None
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authenticated account is required",
@@ -346,9 +368,7 @@ async def create_mcp_server(
 
     server_key = _normalize_server_key(payload.get("server_key"))
     try:
-        server_key = _normalize_server_key(
-            namespace_creator_callable_key(server_key, principal)
-        )
+        server_key = _normalize_server_key(namespace_creator_callable_key(server_key, principal))
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     name = str(payload.get("name") or "").strip()
@@ -357,7 +377,10 @@ async def create_mcp_server(
     auth_mode = _normalize_auth_mode(payload.get("auth_mode"))
     existing = await repository.get_server_by_key(server_key)
     if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An MCP server with this server_key already exists")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An MCP server with this server_key already exists",
+        )
     if access_repository is None:
         legacy_scope = get_auth_scope(
             request,
@@ -563,7 +586,9 @@ async def get_mcp_server(
     }
 
 
-@router.get("/ui/api/mcp-servers/{server_id}/operations", dependencies=[Depends(require_authenticated)])
+@router.get(
+    "/ui/api/mcp-servers/{server_id}/operations", dependencies=[Depends(require_authenticated)]
+)
 async def get_mcp_server_operations(
     request: Request,
     server_id: str,
@@ -708,24 +733,36 @@ async def update_mcp_server(
         write=True,
     )
     if "owner_scope_type" in payload or "owner_scope_id" in payload:
-        requested_owner_scope_type = _validate_owner_scope_type(payload.get("owner_scope_type", existing.owner_scope_type))
+        requested_owner_scope_type = _validate_owner_scope_type(
+            payload.get("owner_scope_type", existing.owner_scope_type)
+        )
         requested_owner_scope_id = (
             _normalize_scope_id(payload.get("owner_scope_id"), field_name="owner_scope_id")
             if payload.get("owner_scope_id") is not None
             else existing.owner_scope_id
         )
-        if requested_owner_scope_type != existing.owner_scope_type or requested_owner_scope_id != existing.owner_scope_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MCP server ownership cannot be changed")
+        if (
+            requested_owner_scope_type != existing.owner_scope_type
+            or requested_owner_scope_id != existing.owner_scope_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MCP server ownership cannot be changed",
+            )
     auth_mode = _normalize_auth_mode(payload.get("auth_mode", existing.auth_mode))
     updated = await repository.update_server(
         server_id,
         name=str(payload.get("name", existing.name) or "").strip() or existing.name,
-        description=str(payload.get("description")).strip() if payload.get("description") is not None else existing.description,
+        description=str(payload.get("description")).strip()
+        if payload.get("description") is not None
+        else existing.description,
         transport=_normalize_transport(payload.get("transport", existing.transport)),
         base_url=_validate_url(payload.get("base_url", existing.base_url)),
         enabled=bool(payload.get("enabled", existing.enabled)),
         auth_mode=auth_mode,
-        auth_config=_validate_auth_config(auth_mode, payload.get("auth_config", existing.auth_config or {})),
+        auth_config=_validate_auth_config(
+            auth_mode, payload.get("auth_config", existing.auth_config or {})
+        ),
         forwarded_headers_allowlist=_normalize_allowlist(
             payload.get("forwarded_headers_allowlist", existing.forwarded_headers_allowlist or [])
         ),
@@ -815,7 +852,10 @@ async def delete_mcp_server(
     return response
 
 
-@router.post("/ui/api/mcp-servers/{server_id}/refresh-capabilities", dependencies=[Depends(require_authenticated)])
+@router.post(
+    "/ui/api/mcp-servers/{server_id}/refresh-capabilities",
+    dependencies=[Depends(require_authenticated)],
+)
 async def refresh_mcp_server_capabilities(
     request: Request,
     server_id: str,
@@ -864,7 +904,9 @@ async def refresh_mcp_server_capabilities(
     return response
 
 
-@router.post("/ui/api/mcp-servers/{server_id}/health-check", dependencies=[Depends(require_authenticated)])
+@router.post(
+    "/ui/api/mcp-servers/{server_id}/health-check", dependencies=[Depends(require_authenticated)]
+)
 async def health_check_mcp_server(
     request: Request,
     server_id: str,

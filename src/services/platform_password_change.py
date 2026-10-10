@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from src.db.platform_passwords import PlatformPasswordRepository
+from src.db.identity.platform_passwords import PlatformPasswordRepository
 
 
 class PlatformPasswordChangeService:

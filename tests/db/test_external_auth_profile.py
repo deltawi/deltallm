@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.external_auth_cleanup import ExternalAuthCleanupRepository
-from src.db.external_auth_sessions import ExternalSessionRepository
+from src.db.identity.external.external_auth_cleanup import ExternalAuthCleanupRepository
+from src.db.identity.external.external_auth_sessions import ExternalSessionRepository
 from tests.db import external_auth_fixtures as fixtures
 from tests.db.test_external_auth_exchange import enable, proof, services
 

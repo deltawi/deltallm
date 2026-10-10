@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     AccountingOutcome,
     AccountingScope,
     BudgetWindowRef,
@@ -17,7 +17,7 @@ from src.billing.accounting_protocol import (
     ReserveDecision,
 )
 from tests.accounting_adapters.permit_repository import AccountingPermitRepository
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_protocol_postgres import (
     _create_window,
     _finalization,

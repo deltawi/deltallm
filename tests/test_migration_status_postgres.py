@@ -5,7 +5,7 @@ from uuid import uuid4
 from prisma import Prisma
 import pytest
 
-from src.db.migration_status import MigrationVerificationError, verify_migration_status
+from src.db.runtime.migration_status import MigrationVerificationError, verify_migration_status
 
 pytestmark = [pytest.mark.postgres, pytest.mark.asyncio]
 

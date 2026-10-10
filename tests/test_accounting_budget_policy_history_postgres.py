@@ -7,17 +7,20 @@ import json
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.accounting_local_leases import LocalPermitFinalization, LocalPermitReturn
-from src.billing.accounting_protocol import (
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalPermitFinalization,
+    LocalPermitReturn,
+)
+from src.billing.accounting.accounting_protocol import (
     AccountingAttempt,
     AccountingOperationHandle,
     AccountingOutcome,
     AccountingScope,
     ReserveDecision,
 )
-from src.billing.spend import SpendTrackingService
-from src.billing.budget import budget_read_period
-from src.db.accounting_budget_reads import AccountingBudgetReadRepository
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.budgets.budget import budget_read_period
+from src.db.accounting.accounting_budget_reads import AccountingBudgetReadRepository
 from tests.accounting_read_model_fixtures import reporting_finalization, reporting_handle
 from tests.test_accounting_budget_regressions_postgres import issuer, materialize, organization
 from tests.test_accounting_local_leases_postgres import deadline, owner

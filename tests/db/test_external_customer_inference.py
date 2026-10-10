@@ -7,7 +7,7 @@ import pytest
 
 from src.api.admin.endpoints.models import _rebuild_runtime_registry
 from src.config import AppConfig
-from src.billing.budget import BudgetEnforcementService
+from src.billing.budgets.budget import BudgetEnforcementService
 from src.services.creator_model_access import refresh_creator_model_access_for_app
 from src.services.model_deployments import load_model_registry
 from tests.db import external_auth_fixtures as fixtures

@@ -37,8 +37,8 @@ activation point only after PR 4 supplies the complete safe execution path.
 | File route-group and router settings | `src/route_group_config.py` |
 | Selector activation guard and routing fingerprint | `src/router/selection/policy.py` |
 | Route-policy normalization and group/member validation | `src/router/policy_validation.py` |
-| Policy history, publish, and rollback transactions | `src/db/route_policy_lifecycle.py` |
-| Immutable database runtime snapshot | `src/db/route_groups.py` |
+| Policy history, publish, and rollback transactions | `src/db/routing/route_policy_lifecycle.py` |
+| Immutable database runtime snapshot | `src/db/routing/route_groups.py` |
 | Projection, prompt, exact parser, decision, and request-local lifecycle | `src/router/selection/` |
 | Shared direct chat resolution, signing/send/translation, bounded response | `src/providers/chat_upstream.py`, `src/providers/chat_hop.py`, existing adapters |
 | Classifier-only request preparation, concrete target, and usage receipt | `src/router/selection/provider.py` |
@@ -539,7 +539,7 @@ Both `uv run ruff check` and `uv run ruff format --check` passed on these 19 Pyt
 src/api/admin/endpoints/route_groups.py
 src/api/admin/request_validation.py
 src/api/admin/route_group_contracts.py
-src/db/route_policy_lifecycle.py
+src/db/routing/route_policy_lifecycle.py
 src/router/policy_validation.py
 src/services/route_groups.py
 src/services/route_policy_publication.py
@@ -780,7 +780,7 @@ The approved pass-through charging policy now has an isolated, typed receipt-to-
 This is **partial PR 3 implementation**, not completed durable selector execution or permission
 to activate the feature.
 
-- `src/billing/selector_charge.py` owns immutable pricing, reported token receipt, frozen
+- `src/billing/charges/selector_charge.py` owns immutable pricing, reported token receipt, frozen
   attribution, deterministic UUIDv5 child identity (`selector:v1` within the server operation
   UUID), and mapping to the existing spend payload. Customer charge equals provider cost.
   Unknown/unattempted usage is not a billable receipt. Missing rates, invalid counts, unsupported
@@ -805,7 +805,7 @@ to activate the feature.
   updates. Database statement/lock-deadline and integration evidence remain open. No production
   request calls this method, so selector-free request dependency counts are unchanged.
 - Spend preparation was extracted from the oversized writer into
-  `src/billing/spend_preparation.py`; the original method delegates to the single mapper.
+  `src/billing/spend/spend_preparation.py`; the original method delegates to the single mapper.
   Its historical dynamic outbox representation is a named compatibility boundary, not a new
   domain interface. Keep it bounded and remove that dynamic shape when accepted spend events
   migrate together to a typed representation. The new receipt contract has no dynamic fields

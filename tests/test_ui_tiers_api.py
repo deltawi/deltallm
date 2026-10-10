@@ -9,7 +9,7 @@ import pytest
 
 from src.audit.actions import AuditAction
 from src.auth.roles import OrganizationRole, PlatformRole
-from src.db.tiers import (
+from src.db.tiers.tiers import (
     TierActivationActiveVersionChangedError,
     TierActivationConfigurationChangedError,
     TierBootstrapIdempotencyConflictError,

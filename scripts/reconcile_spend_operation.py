@@ -4,11 +4,11 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from src.billing.spend_reconciliation import SpendOperationResolution
+from src.billing.spend.spend_reconciliation import SpendOperationResolution
 from src.config import DatabaseConnectionSettings
-from src.db.allocation_config import DatabasePolicy
-from src.db.client import PrismaClientManager
-from src.db.spend_reconciliation import SpendReconciliationRepository
+from src.db.runtime.allocation_config import DatabasePolicy
+from src.db.runtime.client import PrismaClientManager
+from src.db.billing.spend_reconciliation import SpendReconciliationRepository
 
 
 async def reconcile(args: argparse.Namespace) -> None:

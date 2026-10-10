@@ -7,9 +7,9 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.spend import SpendTrackingService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.db.spend_ingestion import SpendIngestionRepository
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.db.billing.spend_ingestion import SpendIngestionRepository
 from tests.test_selector_charge import make_selector_charge
 from tests.test_telemetry_ingestion_db_integration import _connect_prisma
 

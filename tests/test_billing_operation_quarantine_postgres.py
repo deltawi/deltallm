@@ -6,10 +6,10 @@ import json
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.spend import SpendTrackingService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.db.billing_operation_recovery import BillingOperationRecovery
-from src.db.billing_operations import BillingOperationRepository
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.db.billing.billing_operation_recovery import BillingOperationRecovery
+from src.db.billing.billing_operations import BillingOperationRepository
 from src.db.errors import is_record_specific_database_error
 from tests import billing_operation_fixtures as fixtures
 from tests.test_billing_operations_postgres import deadline, hold

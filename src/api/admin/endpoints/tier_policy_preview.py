@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from src.db.output_policy import read_organization_preview_limits
+from src.db.identity.output_policy import read_organization_preview_limits
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
 from src.services.tier_admin_errors import TierAdminError, TierAdminNotFoundError

@@ -15,14 +15,14 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.audit.actions import AuditAction
 from src.audit.delivery import AuditDeliveryClass, parse_audit_delivery_class
-from src.db.audit_ingestion import (
+from src.db.audit.audit_ingestion import (
     AuditIngestionRepository,
     AuditOutboxEnvelope,
     AuditOutboxRecord,
 )
-from src.db.client import is_prisma_transaction_client
+from src.db.runtime.client import is_prisma_transaction_client
 from src.db.errors import is_record_specific_database_error
-from src.db.repositories import AuditEventRecord, AuditPayloadRecord, AuditRepository
+from src.db.audit.repository import AuditEventRecord, AuditPayloadRecord, AuditRepository
 from src.metrics import (
     increment_audit_events_dropped,
     increment_audit_write_failure,
@@ -51,7 +51,7 @@ from src.telemetry.worker_idle import IdleWorkerPoll
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from src.db.prompt_registry import PromptRegistryRepository
+    from src.db.catalog.prompt_registry import PromptRegistryRepository
 
 
 class AuditIngestionPath(StrEnum):
@@ -884,7 +884,7 @@ class AuditService:
                 await self._safe_mark_durable_retry(record, exc)
 
     async def _commit_durable_records(self, records: list[AuditOutboxRecord]) -> None:
-        from src.db.prompt_registry import PromptRegistryRepository
+        from src.db.catalog.prompt_registry import PromptRegistryRepository
 
         claim_token = _shared_audit_claim_token(records)
         heartbeat = asyncio.create_task(

@@ -43,11 +43,11 @@ from src.api.admin.route_group_dependencies import (
     route_group_context,
     route_group_repository as _repository_or_503,
 )
-from src.db.prompt_registry import PromptRegistryRepository
-from src.db.managed_assets import ManagedAssetAccessRepository
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
-from src.db.route_groups import RouteGroupRepository
-from src.db.admin_asset_lists import GroupSortKey, ListDirection
+from src.db.catalog.prompt_registry import PromptRegistryRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.catalog.admin_asset_lists import GroupSortKey, ListDirection
 from src.api.admin.list_contracts import AdminListResponse, GroupListItem
 from src.services.admin_list_health import list_health_refs, list_health_snapshot
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list

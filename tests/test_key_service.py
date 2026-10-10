@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from src.db.repositories import KeyRecord, KeyRepository
+from src.db.identity.key_repository import KeyRecord, KeyRepository
 from src.metrics.prometheus import get_prometheus_registry
 from src.models.errors import AuthenticationError, ServiceUnavailableError
 from src.services.key_auth_cache import KeyAuthCache

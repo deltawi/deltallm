@@ -6,9 +6,9 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_journal_claims import JournalClaim, JournalFailure
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.billing.accounting.journal.accounting_journal_claims import JournalClaim, JournalFailure
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
 
 
 def deadline():

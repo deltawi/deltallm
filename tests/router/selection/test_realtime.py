@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from src.billing.operation_reservation import ComponentState, ReservedOperation
-from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.charges.operation_reservation import ComponentState, ReservedOperation
+from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.router.selection.runtime import SelectorExecutionFactory
 from tests.router.selection.provider_fixtures import registry, response_body
 from tests.test_routing_cache_identity import _enable_cache, _publish

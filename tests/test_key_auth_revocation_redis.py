@@ -10,7 +10,7 @@ import pytest
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
 
-from src.db.repositories import KeyRecord
+from src.db.identity.key_repository import KeyRecord
 from src.models.errors import (
     AuthenticationError,
     AuthenticationUnavailableError,

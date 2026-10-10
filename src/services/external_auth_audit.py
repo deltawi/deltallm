@@ -4,10 +4,10 @@ from dataclasses import asdict, dataclass
 from uuid import uuid4
 
 from src.audit.actions import AuditAction
-from src.db.platform_accounts import PlatformAccountDatabase
+from src.db.identity.platform_accounts import PlatformAccountDatabase
 from src.audit.delivery import AuditDeliveryClass
 from src.auth.external_errors import ExternalAuthUnavailable
-from src.db.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
+from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
 from src.services.audit_service import AuditEventInput, AuditService
 
 

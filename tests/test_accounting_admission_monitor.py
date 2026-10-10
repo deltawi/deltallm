@@ -4,15 +4,18 @@ import asyncio
 
 import pytest
 
-from src.billing.accounting_admission_monitor import AccountingAdmissionMonitor
-from src.billing.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting_native_observation import NativeAccountingObservation
-from src.billing.accounting_presence import ProjectionPresence
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
+from src.billing.accounting.health.accounting_admission_monitor import AccountingAdmissionMonitor
+from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting.health.accounting_native_observation import NativeAccountingObservation
+from src.billing.accounting.health.accounting_presence import ProjectionPresence
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
 from src.concurrency import CapacityGateFull
 from src.telemetry.lifecycle import WorkerState
-from src.billing.accounting_health import AccountingBacklogPolicy, AccountingBacklogProbe
+from src.billing.accounting.health.accounting_health import (
+    AccountingBacklogPolicy,
+    AccountingBacklogProbe,
+)
 from tests.test_accounting_health import Persistence as BacklogPersistence
 from tests.test_accounting_local_issuer import state as owners, items
 from tests.test_accounting_presence import Processing

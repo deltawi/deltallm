@@ -6,11 +6,11 @@ from uuid import uuid4
 import pytest
 from prisma import Prisma
 
-from src.db.admin_asset_lists import GroupSortKey, PromptSortKey, list_asset_rows
-from src.db.logical_models import LogicalModelRepository
-from src.db.prompt_registry import PromptRegistryRepository
-from src.db.repositories import ModelDeploymentRepository
-from src.db.route_groups import RouteGroupRepository
+from src.db.catalog.admin_asset_lists import GroupSortKey, PromptSortKey, list_asset_rows
+from src.db.catalog.logical_models import LogicalModelRepository
+from src.db.catalog.prompt_registry import PromptRegistryRepository
+from src.db.catalog.model_deployments import ModelDeploymentRepository
+from src.db.routing.route_groups import RouteGroupRepository
 from src.services.admin_list_health import ListHealthSnapshot
 
 pytestmark = pytest.mark.postgres

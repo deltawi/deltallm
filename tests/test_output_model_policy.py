@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.config import AppConfig
-from src.db.tiers import TierModelPolicyRecord, TierPolicyLoadResult
+from src.db.tiers.tiers import TierModelPolicyRecord, TierPolicyLoadResult
 from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.output_limits import validate_model_output_limits
 from src.models.responses import UserAPIKeyAuth

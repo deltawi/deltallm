@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.retry import classify_batch_retry
 from src.batch.worker_types import BatchRoutingRuntime
-from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.callbacks import CallbackManager
 from src.services.output_admission import prepare_output_policy

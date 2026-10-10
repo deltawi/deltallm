@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.billing.operation_reservation import BillingOperationUnavailable, ComponentState
-from src.db.billing_operations import BillingOperationRepository
+from src.billing.charges.operation_reservation import BillingOperationUnavailable, ComponentState
+from src.db.billing.billing_operations import BillingOperationRepository
 from tests.test_operation_reservation import make_operation
 
 

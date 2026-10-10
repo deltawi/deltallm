@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 
 from src.batch.scheduling import resolve_scheduler_modes_from_settings, scheduler_rollback_events
 from src.config import AppConfig, Settings
-from src.db.output_policy import OutputPolicyDatabase
+from src.db.identity.output_policy import OutputPolicyDatabase
 from src.config_runtime.loader import build_app_config, deep_merge
 from src.config_runtime.secrets import SecretResolver
 from src.metrics import increment_batch_scheduler_rollback, increment_config_reload

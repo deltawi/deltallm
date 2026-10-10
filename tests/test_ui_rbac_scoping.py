@@ -8,7 +8,7 @@ import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
-from src.billing.spend_read import SPEND_READ_SOURCE
+from src.billing.spend.spend_read import SPEND_READ_SOURCE
 from src.models.platform_auth import PlatformAuthContext
 
 
@@ -462,7 +462,7 @@ async def test_spend_logs_use_one_statement_with_the_shared_deadline(client, tes
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
     ticks = iter([100.0, 110.0])
-    monkeypatch.setattr("src.db.reporting.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("src.db.runtime.reporting.monotonic", lambda: next(ticks))
     monkeypatch.setattr(
         "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
@@ -1365,7 +1365,7 @@ async def test_reporting_query_does_not_start_after_connection_wait_exhausts_dea
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
     ticks = iter([100.0, 160.0])
-    monkeypatch.setattr("src.db.reporting.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("src.db.runtime.reporting.monotonic", lambda: next(ticks))
     monkeypatch.setattr(
         "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(

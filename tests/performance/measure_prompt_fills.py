@@ -16,9 +16,9 @@ from scripts.measure_gateway_load import (
     summarize,
     write_results,
 )
-from src.db.allocated_client import AllocatedPrisma, DatabaseOwner
-from src.db.allocation_config import DatabasePolicy
-from src.db.prompt_registry import PromptRegistryRepository
+from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner
+from src.db.runtime.allocation_config import DatabasePolicy
+from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.redis_runtime import build_redis_client
 from src.services.prompt_registry import PromptRegistryService
 from tests.performance.gateway_concurrency_dependencies import (

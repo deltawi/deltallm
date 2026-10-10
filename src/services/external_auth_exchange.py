@@ -15,13 +15,16 @@ from src.auth.sso_identity import (
     SSOIdentityAssertion,
     SSOSubjectSource,
 )
-from src.db.external_auth_assertions import ExternalAssertionRepository
-from src.db.external_auth_provisioning import ExternalAccountState, ExternalProvisioningRepository
-from src.db.external_auth_records import ExternalSubjectRecord
-from src.db.external_auth_sessions import ExternalSessionRepository
-from src.db.external_auth_subjects import ExternalSubjectRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
-from src.db.platform_accounts import PlatformAccountDatabase
+from src.db.identity.external.external_auth_assertions import ExternalAssertionRepository
+from src.db.identity.external.external_auth_provisioning import (
+    ExternalAccountState,
+    ExternalProvisioningRepository,
+)
+from src.db.identity.external.external_auth_records import ExternalSubjectRecord
+from src.db.identity.external.external_auth_sessions import ExternalSessionRepository
+from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.platform_accounts import PlatformAccountDatabase
 from src.models.external_auth import ExternalExchangeResponse
 from src.services.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit
 from src.services.external_auth_binding_policy import (

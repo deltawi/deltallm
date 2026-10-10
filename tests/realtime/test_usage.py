@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.realtime_usage import (
+from src.billing.charges.realtime_usage import (
     normalize_realtime_tokens,
     price_realtime_usage,
     realtime_usage_receipt,

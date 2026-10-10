@@ -201,7 +201,7 @@ class ModelInfo(BaseModel):
     def validate_cached_audio_price(cls, value: object) -> str | None:
         if value is None:
             return None
-        from src.billing.realtime_pricing import RealtimePrices
+        from src.billing.charges.realtime_pricing import RealtimePrices
 
         return str(
             RealtimePrices.from_model_info({"input_cost_per_audio_token_cache_hit": value}).rates[

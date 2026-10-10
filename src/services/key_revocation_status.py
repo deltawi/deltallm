@@ -5,8 +5,8 @@ from pydantic import BaseModel
 from typing import Literal
 
 from src.auth.external_errors import ExternalAuthError
-from src.db.external_auth_transactions import ExternalAuthTransactions
-from src.db.key_revocation_status import KeyRevocationStatusRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.key_revocation_status import KeyRevocationStatusRepository
 
 
 class KeyRevocationStatus(BaseModel):

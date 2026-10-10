@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import Request
 from src.api.admin.auth_scope import AuthScope
 from src.auth.roles import Permission
-from src.db.platform_accounts import PlatformAccountDatabase
+from src.db.identity.platform_accounts import PlatformAccountDatabase
 
 
 async def remove_key_with_required_audit(

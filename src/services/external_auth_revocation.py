@@ -6,9 +6,9 @@ from src.audit.actions import AuditAction
 from src.auth.external_config import ExternalAuthSettings
 from src.auth.external_contracts import ExternalPurpose, VerifiedExternalAssertion
 from src.auth.external_errors import ExternalAuthError
-from src.db.external_auth_sessions import ExternalSessionRepository
-from src.db.external_auth_subjects import ExternalSubjectRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.external.external_auth_sessions import ExternalSessionRepository
+from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.services.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit
 from src.services.external_auth_binding_policy import lock_external_binding, require_subject_binding
 

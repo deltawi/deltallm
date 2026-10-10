@@ -10,13 +10,13 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     PreissuedPermitAllocation,
     PreissuedPermitClaim,
     PreissuedPermitGrant,
     ReserveDecision,
 )
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from tests.accounting_adapters.permit_repository import AccountingPermitRepository
 from tests.test_accounting_protocol import reservation
 

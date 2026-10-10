@@ -56,7 +56,7 @@ Persisted API-key authentication is the supported policy source. JWT currently c
 
 | Existing owner | Change |
 | --- | --- |
-| [Prisma schema](../prisma/schema.prisma), [KeyRepository](../src/db/key_repository.py), [KeyService](../src/services/key_service.py), [auth DTO](../src/models/responses.py) | Four nullable fields, the same joined read, typed scope values, cache version, and existing invalidation. |
+| [Prisma schema](../prisma/schema.prisma), [KeyRepository](../src/db/identity/key_repository.py), [KeyService](../src/services/key_service.py), [auth DTO](../src/models/responses.py) | Four nullable fields, the same joined read, typed scope values, cache version, and existing invalidation. |
 | [Rate policy](../src/rate_limit_policy.py), [LimitCounter](../src/services/limit_counter.py), [unified admission Lua](../src/services/tier_fair_share_admission_lua.py) | Add output checks to both ordinary and unified admission. Existing tier and pool limits keep their current dimensions. |
 | [Text preflight](../src/chat/preflight.py), [request DTOs](../src/models/requests.py) | Resolve a bounded output allowance after request mutation and before final admission. |
 | [Executor](../src/chat/executor.py), [provider resolution](../src/providers/resolution.py), [provider receipts](../src/providers/token_receipt.py) | Enforce the same cap after provider translation/defaults. Capture output evidence before normalization can fill missing values with zero. |

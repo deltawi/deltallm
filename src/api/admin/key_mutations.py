@@ -6,8 +6,8 @@ from fastapi import HTTPException, Request, status
 from src.api.admin.auth_scope import AuthScope
 from src.api.admin.key_access_policy import _resolve_key_access_mode, _resolve_key_read_access_mode
 from src.auth.roles import Permission
-from src.db.key_access import KeyAccessRepository
-from src.db.platform_accounts import PlatformAccountDatabase
+from src.db.identity.key_access import KeyAccessRepository
+from src.db.identity.platform_accounts import PlatformAccountDatabase
 from src.services.key_notifications import KeyNotificationRecord
 from src.api.admin.organization_mutations import require_active_organization_mutation
 
@@ -83,7 +83,7 @@ async def _require_key_access(
     allow_self_service: bool = False,
 ) -> Literal["admin", "self_service"]:
     if scope.external_workspace is not None:
-        from src.db.external_inference_keys import ExternalInferenceKeyRepository
+        from src.db.identity.external.external_inference_keys import ExternalInferenceKeyRepository
 
         selected = await ExternalInferenceKeyRepository(db).select_owned(
             token_hash,

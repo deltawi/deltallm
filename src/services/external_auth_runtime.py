@@ -21,9 +21,9 @@ from src.auth.external_errors import (
 )
 from src.audit.actions import AuditAction
 from src.concurrency import BoundedCapacityGate, CapacityGateFull, CapacityGateTimedOut
-from src.db.external_auth_cleanup import ExternalAuthCleanupRepository
-from src.db.external_auth_integrations import ExternalIntegrationRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.external.external_auth_cleanup import ExternalAuthCleanupRepository
+from src.db.identity.external.external_auth_integrations import ExternalIntegrationRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.metrics.external_auth import (
     external_auth_cleanup,
     external_auth_cleanup_backlog,

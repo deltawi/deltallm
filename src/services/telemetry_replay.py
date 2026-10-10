@@ -5,11 +5,11 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from src.db.audit_ingestion import AuditIngestionRepository
-from src.db.client import is_prisma_transaction_client
-from src.db.email import EmailOutboxRepository
-from src.db.repositories import AuditRepository
-from src.db.spend_ingestion import SpendIngestionRepository
+from src.db.audit.audit_ingestion import AuditIngestionRepository
+from src.db.runtime.client import is_prisma_transaction_client
+from src.db.email.email import EmailOutboxRepository
+from src.db.audit.repository import AuditRepository
+from src.db.billing.spend_ingestion import SpendIngestionRepository
 from src.models.errors import ServiceUnavailableError
 
 

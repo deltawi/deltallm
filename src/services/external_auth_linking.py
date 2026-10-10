@@ -6,11 +6,11 @@ from src.audit.actions import AuditAction
 from src.auth.external_contracts import ExternalPurpose, VerifiedExternalAssertion
 from src.auth.external_errors import ExternalAuthError
 from src.auth.sso_identity import SSOAccountResolutionPolicy, SSOIdentityAssertion, SSOSubjectSource
-from src.db.external_auth_provisioning import ExternalProvisioningRepository
-from src.db.external_auth_records import ExternalSubjectRecord
-from src.db.external_auth_subjects import ExternalSubjectRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
-from src.db.platform_accounts import PlatformAccountDatabase
+from src.db.identity.external.external_auth_provisioning import ExternalProvisioningRepository
+from src.db.identity.external.external_auth_records import ExternalSubjectRecord
+from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.platform_accounts import PlatformAccountDatabase
 from src.services.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit
 from src.services.external_auth_binding_policy import (
     LockedExternalBinding,

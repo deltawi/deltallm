@@ -12,16 +12,19 @@ import httpx
 import pytest
 
 from src.api.internal_accounting import accounting_rpc_router
-from src.billing.accounting_auth import (
+from src.billing.accounting.transport.accounting_auth import (
     ACCOUNTING_SIGNATURE_HEADER,
     ACCOUNTING_TIMESTAMP_HEADER,
     accounting_signature,
 )
-from src.billing.accounting_health import AccountingBacklogPolicy, AccountingBacklogProbe
-from src.billing.accounting_http import AccountingHttpTransport
-from src.billing.accounting_local_wire import WireLocalGrant
-from src.billing.accounting_remote_leases import RemoteLocalLeasePersistence
-from src.billing.accounting_rpc_contracts import (
+from src.billing.accounting.health.accounting_health import (
+    AccountingBacklogPolicy,
+    AccountingBacklogProbe,
+)
+from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
+from src.billing.accounting.transport.accounting_local_wire import WireLocalGrant
+from src.billing.accounting.transport.accounting_remote_leases import RemoteLocalLeasePersistence
+from src.billing.accounting.transport.accounting_rpc_contracts import (
     LocalFundingReply,
     LocalFundingRequest,
     LocalReturnRequest,
@@ -31,9 +34,9 @@ from src.billing.accounting_rpc_contracts import (
     rpc_batch_bytes,
     rpc_request_bytes,
 )
-from src.billing.accounting_rpc_service import AccountingRpcService
-from src.billing.accounting_protocol import ReserveDecision
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
+from src.billing.accounting.accounting_protocol import ReserveDecision
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
 from tests.test_accounting_local_leases import (
@@ -277,7 +280,7 @@ async def test_projection_failure_stops_funding_but_keeps_returns_and_terminal_r
 async def test_terminal_queue_cannot_extend_the_transport_deadline():
     app, service, client, _ = await rpc_state()
     value = terminal()
-    from src.billing.accounting_local_wire import wire_local_terminals
+    from src.billing.accounting.transport.accounting_local_wire import wire_local_terminals
 
     request = LocalTerminalRequest.model_validate_json(
         rpc_request_bytes(

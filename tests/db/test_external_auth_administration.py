@@ -8,9 +8,9 @@ import pytest
 
 from src.auth.external_contracts import ExternalPurpose
 from src.auth.external_errors import ExternalAuthError
-from src.db.external_auth_cleanup import ExternalAuthCleanupRepository
-from src.db.external_auth_subjects import ExternalSubjectRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.external.external_auth_cleanup import ExternalAuthCleanupRepository
+from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.models.external_auth import ExternalVersionRequest
 from src.services.external_auth_administration import ExternalAuthAdministration
 from src.services.external_auth_linking import ExternalAuthLinking, ExternalLinkApproval
@@ -350,7 +350,7 @@ async def test_account_session_revocation_tombstones_external_parents(external_d
 
 
 async def test_bounded_rollback_revokes_legacy_children_and_retains_tombstones(external_database):
-    from src.db.external_auth_rollback import ExternalAuthRollbackRepository
+    from src.db.identity.external.external_auth_rollback import ExternalAuthRollbackRepository
 
     fixture = external_database
     await enable(fixture)

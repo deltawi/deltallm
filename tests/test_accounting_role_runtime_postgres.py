@@ -10,13 +10,13 @@ import pytest
 
 from src.accounting_settings import AccountingProtocolSettings
 from src.api.internal_accounting import accounting_rpc_router
-from src.billing.accounting_http import AccountingHttpTransport
+from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
 from src.bootstrap.accounting_local import build_api_accounting_runtime
 from src.bootstrap.accounting_role_builders import (
     build_accounting_projection_runtime,
     build_accounting_request_runtime,
 )
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.lifecycle_settings import LifecycleSettings
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.process_lifecycle import ProcessLifecycle

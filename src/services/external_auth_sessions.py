@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 
-from src.db.platform_sessions import PlatformSessionRepository
+from src.db.identity.platform_sessions import PlatformSessionRepository
 
 from src.audit.actions import AuditAction
 from src.auth.roles import ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
 from src.auth.external_policy import CUSTOMER_PERMISSION_CEILING
-from src.db.external_auth_sessions import ExternalSessionRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.external.external_auth_sessions import ExternalSessionRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.models.external_auth import ExternalWorkspaceContext
 from src.models.platform_auth import PlatformAuthContext
 from src.services.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit

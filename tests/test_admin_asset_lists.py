@@ -9,9 +9,9 @@ import pytest
 from fastapi import FastAPI
 
 from src.api.admin.list_contracts import AdminListResponse, ModelListItem
-from src.db.admin_asset_lists import list_asset_rows
-from src.db.logical_models import LogicalModelRecord
-from src.db.repositories import ModelDeploymentRepository
+from src.db.catalog.admin_asset_lists import list_asset_rows
+from src.db.catalog.logical_models import LogicalModelRecord
+from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.router.health_state import DeploymentHealthRef
 from src.router.state import RedisStateBackend
 from src.services.admin_list_health import (

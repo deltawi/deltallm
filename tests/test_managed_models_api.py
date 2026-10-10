@@ -7,9 +7,9 @@ from src.api.admin.endpoints.models import (
     _tier_visible_platform_model_names,
 )
 from src.config_runtime.models import ModelMutationResult
-from src.db.logical_models import LogicalModelRecord
-from src.db.named_credentials import NamedCredentialRecord
-from src.db.repositories import ModelDeploymentRecord
+from src.db.catalog.logical_models import LogicalModelRecord
+from src.db.catalog.named_credentials import NamedCredentialRecord
+from src.db.catalog.model_deployments import ModelDeploymentRecord
 from src.models.platform_auth import PlatformAuthContext
 from src.services.managed_asset_access import (
     AssetAccessPolicy,
@@ -73,11 +73,14 @@ def test_control_plane_platform_catalog_unions_effective_organization_tiers(test
     )
 
     assert visible == {"platform-a", "platform-b", "shared"}
-    assert _tier_visible_platform_model_names(
-        test_app,
-        AssetPrincipal(account_id="account-2"),
-        {"platform-a"},
-    ) == set()
+    assert (
+        _tier_visible_platform_model_names(
+            test_app,
+            AssetPrincipal(account_id="account-2"),
+            {"platform-a"},
+        )
+        == set()
+    )
 
 
 @pytest.mark.asyncio
@@ -114,14 +117,17 @@ async def test_model_list_hides_platform_models_outside_account_tiers(client, te
     assert no_tier_response.json()["data"] == []
 
     test_app.state.tier_policy_service.snapshot_stale = True
-    assert _tier_visible_platform_model_names(
-        test_app,
-        AssetPrincipal(
-            account_id="account-1",
-            organization_ids=frozenset({"org-a"}),
-        ),
-        {"platform-a"},
-    ) == set()
+    assert (
+        _tier_visible_platform_model_names(
+            test_app,
+            AssetPrincipal(
+                account_id="account-1",
+                organization_ids=frozenset({"org-a"}),
+            ),
+            {"platform-a"},
+        )
+        == set()
+    )
 
 
 def test_credential_owner_can_revoke_audience_scoped_binding() -> None:
@@ -197,10 +203,7 @@ class _ManagedAssetRepository:
         *,
         principal: AssetPrincipal | None = None,
     ) -> AssetAccessPolicy | None:
-        if (
-            asset_kind is AssetKind.NAMED_CREDENTIAL
-            and resource_id in self.named_credentials
-        ):
+        if asset_kind is AssetKind.NAMED_CREDENTIAL and resource_id in self.named_credentials:
             credential = self.named_credentials[resource_id]
             policy = self.policies.get(str(credential.managed_asset_id))
             if policy is None or principal is None:
@@ -375,9 +378,7 @@ class _ModelDeploymentRepository:
                     deployment_id=deployment_id,
                     model_name=model_name,
                     model_id=str(deployment.get("model_id") or "") or None,
-                    named_credential_id=(
-                        str(deployment.get("named_credential_id") or "") or None
-                    ),
+                    named_credential_id=(str(deployment.get("named_credential_id") or "") or None),
                     credential_binding_mode=(
                         str(deployment.get("credential_binding_mode") or "") or None
                     ),
@@ -611,9 +612,9 @@ async def test_creator_model_team_editor_and_owner_capabilities(client, test_app
         },
         managed_asset_id="asset-editor-credential",
     )
-    test_app.state.named_credential_repository.records[
-        editor_credential.credential_id
-    ] = editor_credential
+    test_app.state.named_credential_repository.records[editor_credential.credential_id] = (
+        editor_credential
+    )
     access_repository.add_named_credential(
         editor_credential,
         owner_account_id="team-editor",
@@ -831,7 +832,7 @@ async def test_platform_model_access_is_tier_managed_not_acl_managed(client, tes
     assert rejected_additional_deployment.status_code == 400
 
     rejected_update = await client.put(
-        f'/ui/api/assets/{access["managed_asset_id"]}/access',
+        f"/ui/api/assets/{access['managed_asset_id']}/access",
         headers={"Authorization": "Bearer mk-test"},
         json={
             "expected_policy_version": access["policy_version"],

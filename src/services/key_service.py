@@ -10,9 +10,9 @@ from redis.exceptions import RedisError
 from src.metrics.key_auth_cache import KeyAuthCacheFailureReason, record_key_auth_cache_failure
 from src.services.key_auth_cache import KeyAuthCache, KeyCacheLookup
 
-from src.db.key_repository import KeyTokenScope, read_key_tokens_for_scope
-from src.db.allocated_client import DatabaseUnavailableError
-from src.db.repositories import KeyRepository
+from src.db.identity.key_repository import KeyTokenScope, read_key_tokens_for_scope
+from src.db.runtime.allocated_client import DatabaseUnavailableError
+from src.db.identity.key_repository import KeyRepository
 from src.models.errors import (
     AuthenticationError,
     AuthenticationUnavailableError,

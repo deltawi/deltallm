@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from src.db.accounting_health import AccountingBacklogRepository
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.health.accounting_health import AccountingBacklogRepository
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes
 from tests.test_accounting_journal_plans_postgres import seed_journal_history

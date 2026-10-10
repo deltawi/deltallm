@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.api.admin.accounting_budget import apply_accounting_balances
-from src.billing.accounting_protocol import AccountingScope
+from src.billing.accounting.accounting_protocol import AccountingScope
 from src.auth.roles import OrganizationRole, Permission, validate_organization_role
 from src.api.admin.auth_scope import require_organization_directory_access
 from src.audit.actions import AuditAction
@@ -41,17 +41,20 @@ from src.api.admin.output_policy import (
     output_policy_change,
     schedule_output_policy_invalidation,
 )
-from src.db.output_policy import persist_output_policy
+from src.db.identity.output_policy import persist_output_policy
 from src.api.admin.organization_mutations import require_active_organization_mutation
-from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
-from src.db.callable_targets import CallableTargetBindingRepository
-from src.db.organization_admin import (
+from src.db.routing.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+from src.db.routing.callable_targets import CallableTargetBindingRepository
+from src.db.organizations.organization_admin import (
     OrganizationAdminRepository,
     OrganizationPersistenceValues,
 )
-from src.db.route_groups import RouteGroupRepository
-from src.db.team_directory import TeamDirectoryRepository
-from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.organizations.team_directory import TeamDirectoryRepository
+from src.db.audit.repository import (
+    AUDIT_METADATA_RETENTION_DAYS_KEY,
+    AUDIT_PAYLOAD_RETENTION_DAYS_KEY,
+)
 from src.middleware.admin import require_admin_permission
 from src.services.asset_visibility_preview import (
     build_asset_visibility_preview,

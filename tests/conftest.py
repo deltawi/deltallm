@@ -10,8 +10,8 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.repositories import KeyRecord
+from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.identity.key_repository import KeyRecord
 from src.router.runtime_generation import (
     RoutingRuntimeGeneration,
     RoutingRuntimeGenerationStore,

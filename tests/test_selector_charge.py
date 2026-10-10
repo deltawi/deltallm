@@ -13,20 +13,20 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from src.billing.selector_charge import (
+from src.billing.charges.selector_charge import (
     AcceptedSelectorCharge,
     SelectorChargeAttribution,
     SelectorPriceSnapshot,
     SelectorTokenReceipt,
 )
-from src.billing.spend import SpendTrackingService
-from src.billing.spend_ingestion import (
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend.spend_ingestion import (
     SelectorChargeUnavailableError,
     SpendIngestionConfig,
     SpendIngestionOverloadedError,
     SpendIngestionService,
 )
-from src.db.spend_ingestion import SpendEnqueueResult
+from src.db.billing.spend_ingestion import SpendEnqueueResult
 
 
 def make_selector_charge(**price_overrides: object) -> AcceptedSelectorCharge:
@@ -258,7 +258,7 @@ async def test_selector_ingress_never_falls_back_to_non_durable_billing(state: s
 
 def test_exact_charge_contract_is_small_typed_and_has_no_io_or_edge_dependencies() -> None:
     root = Path(__file__).parents[1]
-    source = (root / "src/billing/selector_charge.py").read_text()
+    source = (root / "src/billing/charges/selector_charge.py").read_text()
     assert len(source.splitlines()) < 500
     for node in ast.walk(ast.parse(source)):
         assert not isinstance(node, ast.AsyncFunctionDef)
@@ -392,7 +392,7 @@ async def test_selector_receipt_dependency_failure_is_not_a_selector_safe_defaul
 
 
 def test_legacy_spend_preparation_is_one_bounded_io_free_mapping_seam() -> None:
-    root = Path(__file__).parents[1] / "src/billing"
+    root = Path(__file__).parents[1] / "src/billing/spend"
     source = (root / "spend_preparation.py").read_text()
     assert len(source.splitlines()) < 200
     for node in ast.walk(ast.parse(source)):

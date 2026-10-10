@@ -8,7 +8,7 @@ from uuid import UUID, uuid4, uuid5
 import pytest
 from pydantic import ValidationError
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     AccountingAttribution,
     AccountingFinalization,
     AccountingOutcome,
@@ -19,26 +19,26 @@ from src.billing.accounting_protocol import (
     ReserveDecision,
     request_fingerprint,
 )
-from src.billing.accounting_projection import (
+from src.billing.accounting.reporting.accounting_projection import (
     AccountingCompatibilityProjector,
     AccountingProjectionConfig,
 )
-from src.billing.durable_microbatch import DurableBatchClosed, DurableMicrobatcher
-from src.billing.accounting_service import AccountingProtocolService
-from src.billing.accounting_finalization import (
+from src.billing.accounting.durable_microbatch import DurableBatchClosed, DurableMicrobatcher
+from src.billing.accounting.accounting_service import AccountingProtocolService
+from src.billing.accounting.accounting_finalization import (
     accounting_audit_envelope as _accounting_audit_envelope,
 )
-from src.db.accounting_projection import (
+from src.db.accounting.reporting.accounting_projection import (
     AccountingProjectionClaim,
     AccountingProjectionEvent,
     AccountingProjectionRepository,
 )
-from src.db.accounting_protocol import (
+from src.db.accounting.accounting_protocol import (
     AccountingProtocolRepository,
     AccountingProtocolUnavailable,
     AccountingResultFailure,
 )
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.metrics.prometheus import get_prometheus_registry
 
 

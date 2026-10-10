@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import Request
 
-from src.billing.tier_pricing import (
+from src.billing.pricing.tier_pricing import (
     attach_pricing_metadata,
     resolve_token_billing_result,
 )

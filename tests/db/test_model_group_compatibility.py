@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
 from src.services.model_deployments import build_model_registry_from_records
 from tests.db.tier_migration_helpers import connect_prisma
 

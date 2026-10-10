@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.route_groups import RouteGroupRecord
+from src.db.routing.route_groups import RouteGroupRecord
 from src.models.errors import PermissionDeniedError
 from src.models.responses import UserAPIKeyAuth
 from src.services.creator_model_access import CreatorModelAccessSnapshot
@@ -190,9 +190,7 @@ async def test_creator_route_group_snapshot_compiles_access_and_enabled_members(
         "org-group",
         "public-group",
     }
-    assert snapshot.visible_group_keys(UserAPIKeyAuth(api_key="sk-outsider")) == {
-        "public-group"
-    }
+    assert snapshot.visible_group_keys(UserAPIKeyAuth(api_key="sk-outsider")) == {"public-group"}
 
 
 @pytest.mark.asyncio
@@ -224,9 +222,7 @@ def test_creator_route_group_runtime_requires_group_and_every_member() -> None:
         groups_by_owner={},
         groups_by_team={"team-1": {"creator-group"}},
         groups_by_organization={},
-        member_model_names_by_group={
-            "creator-group": {"creator-model", "platform-model"}
-        },
+        member_model_names_by_group={"creator-group": {"creator-model", "platform-model"}},
         group_key_by_asset_id={"asset-group": "creator-group"},
     )
     model_snapshot = CreatorModelAccessSnapshot.create(

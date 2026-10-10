@@ -6,7 +6,7 @@ import json
 import pytest
 
 from src.config import AppConfig
-from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.db.routing.route_groups import RouteGroupRuntimeSnapshot
 from src.router.selection.policy import (
     RouteSelectorActivationState,
     RouteSelectorActivationUnsupportedError,

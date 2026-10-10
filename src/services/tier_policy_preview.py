@@ -10,12 +10,12 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from src.billing.audio_usage import billable_transcription_duration_seconds
-from src.billing.cost import (
+from src.billing.charges.audio_usage import billable_transcription_duration_seconds
+from src.billing.pricing.cost import (
     BillingResult,
     compute_billing_result,
 )
-from src.billing.tier_pricing import (
+from src.billing.pricing.tier_pricing import (
     PricingSource,
     resolve_deployment_tier_pricing,
     resolve_token_billing_result,

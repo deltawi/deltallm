@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from src.db.prompt_registry import PromptBindingRecord
+from src.db.catalog.prompt_registry import PromptBindingRecord
 from src.services.prompt_registry import PromptRegistryService
 from tests.test_prompt_cache_performance import _CountingRepository, _Redis
 

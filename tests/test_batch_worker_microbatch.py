@@ -19,7 +19,7 @@ from src.batch.embedding_microbatch import (
 )
 from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
-from src.db.repositories import KeyRecord
+from src.db.identity.key_repository import KeyRecord
 from src.models.errors import (
     BudgetExceededError,
     InvalidRequestError,

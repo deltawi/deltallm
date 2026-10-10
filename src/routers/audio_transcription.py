@@ -12,9 +12,9 @@ from fastapi.responses import JSONResponse
 
 from src.audio.elevenlabs_stt import execute_elevenlabs_stt
 from src.audio.transcription_formats import render_srt, render_vtt
-from src.billing.audio_usage import normalize_transcription_usage
-from src.billing.cost import compute_billing_result
-from src.billing.tier_pricing import attach_pricing_metadata
+from src.billing.charges.audio_usage import normalize_transcription_usage
+from src.billing.pricing.cost import compute_billing_result
+from src.billing.pricing.tier_pricing import attach_pricing_metadata
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
@@ -45,7 +45,7 @@ from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
-from src.billing.provider_allowance import ProviderRequestBounds
+from src.billing.charges.provider_allowance import ProviderRequestBounds
 from src.telemetry.spend_operation import (
     billing_write_context,
     durable_provider_call,

@@ -130,11 +130,11 @@
 **Scope**:
 | Module | Files | Lines (approx) |
 |--------|-------|----------------|
-| Spend Ledger | `src/billing/ledger.py` | ~300 |
-| Spend Tracking | `src/billing/spend.py` | ~400 |
-| Budget Enforcement | `src/billing/budget.py` | ~300 |
-| Cost Calculation | `src/billing/cost.py` | ~200 |
-| Alerts | `src/billing/alerts.py` | ~200 |
+| Spend Ledger | `src/billing/spend/ledger.py` | ~300 |
+| Spend Tracking | `src/billing/spend/spend.py` | ~400 |
+| Budget Enforcement | `src/billing/budgets/budget.py` | ~300 |
+| Cost Calculation | `src/billing/pricing/cost.py` | ~200 |
+| Alerts | `src/billing/budgets/alerts.py` | ~200 |
 
 **Checklist**:
 - [ ] Token counting is accurate for all providers
@@ -204,7 +204,7 @@
 | Admin Endpoints | `src/api/admin/endpoints/*.py` | ~1000 |
 | Admin Router | `src/api/admin/router.py` | ~200 |
 | Repositories | `src/db/repositories.py` | ~600 |
-| DB Client | `src/db/client.py` | ~200 |
+| DB Client | `src/db/runtime/client.py` | ~200 |
 
 **Checklist**:
 - [ ] All admin endpoints require proper authentication

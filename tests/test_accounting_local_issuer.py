@@ -4,13 +4,13 @@ import asyncio
 
 import pytest
 
-from src.billing.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_protocol import ReserveDecision
-from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull
-from src.billing.preissued_permits import PermitSubject
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.accounting_protocol import ReserveDecision
+from src.billing.accounting.durable_microbatch import DurableBatchClosed, DurableBatchFull
+from src.billing.accounting.permits.preissued_permits import PermitSubject
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_local_issue import deadline
 from tests.test_accounting_local_leases import grant, funding_row, terminal
 from tests.test_preissued_permit_bank import fresh

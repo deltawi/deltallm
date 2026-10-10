@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, TypeVar
 
-from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
 from src.services.creator_mcp_access import CreatorMCPAccessService
 from src.services.runtime_scopes import resolve_runtime_scope_context
@@ -131,7 +131,9 @@ class MCPGatewayService:
                     success=False,
                     latency_ms=int((perf_counter() - started) * 1000),
                 )
-                raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' is disabled by policy")
+                raise MCPPolicyDeniedError(
+                    f"MCP tool '{namespaced_tool_name}' is disabled by policy"
+                )
             if policy.require_approval and policy.require_approval != "never":
                 if policy.require_approval != "manual":
                     record_mcp_tool_call(
@@ -140,7 +142,9 @@ class MCPGatewayService:
                         success=False,
                         latency_ms=int((perf_counter() - started) * 1000),
                     )
-                    raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' uses an unsupported approval mode")
+                    raise MCPPolicyDeniedError(
+                        f"MCP tool '{namespaced_tool_name}' uses an unsupported approval mode"
+                    )
                 if self.approval_service is None:
                     record_mcp_tool_call(
                         server_key=server_key,
@@ -148,17 +152,19 @@ class MCPGatewayService:
                         success=False,
                         latency_ms=int((perf_counter() - started) * 1000),
                     )
-                    raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' requires approval, but the approval service is unavailable")
-                approval = await self.approval_service.authorize_execution(
-                        server=server_record_to_config(visible.server),
-                        tool_name=tool_name,
-                        policy=policy,
-                        auth=auth,
-                        arguments=arguments,
-                        request_headers=request_headers,
-                        request_id=request_id,
-                        correlation_id=correlation_id,
+                    raise MCPPolicyDeniedError(
+                        f"MCP tool '{namespaced_tool_name}' requires approval, but the approval service is unavailable"
                     )
+                approval = await self.approval_service.authorize_execution(
+                    server=server_record_to_config(visible.server),
+                    tool_name=tool_name,
+                    policy=policy,
+                    auth=auth,
+                    arguments=arguments,
+                    request_headers=request_headers,
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                )
                 if approval is None:
                     record_mcp_tool_call(
                         server_key=server_key,
@@ -166,7 +172,9 @@ class MCPGatewayService:
                         success=False,
                         latency_ms=int((perf_counter() - started) * 1000),
                     )
-                    raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' requires approval, but no approval record could be created")
+                    raise MCPPolicyDeniedError(
+                        f"MCP tool '{namespaced_tool_name}' requires approval, but no approval record could be created"
+                    )
                 if approval.status == "approved":
                     pass
                 elif approval.status == "rejected":
@@ -193,7 +201,11 @@ class MCPGatewayService:
                     )
 
         lease = None
-        cache_ttl = policy.result_cache_ttl_seconds if policy is not None and policy.result_cache_ttl_seconds else 0
+        cache_ttl = (
+            policy.result_cache_ttl_seconds
+            if policy is not None and policy.result_cache_ttl_seconds
+            else 0
+        )
         policy_timeout_ms = resolve_policy_timeout_ms(policy)
         server_config = server_record_to_config(visible.server)
         try:
@@ -203,6 +215,7 @@ class MCPGatewayService:
                     tool_name=tool_name,
                     policy=policy,
                 )
+
             async def _execute_tool_call() -> MCPToolCallResult:
                 result = None
                 if cache_ttl > 0 and self.result_cache is not None:
@@ -249,7 +262,10 @@ class MCPGatewayService:
                 tool_name=tool_name,
                 success=False,
                 latency_ms=int((perf_counter() - started) * 1000),
-                metadata={"scope_type": visible.binding.scope_type, "scope_id": visible.binding.scope_id},
+                metadata={
+                    "scope_type": visible.binding.scope_type,
+                    "scope_id": visible.binding.scope_id,
+                },
             )
             raise
         except Exception:
@@ -258,7 +274,10 @@ class MCPGatewayService:
                 tool_name=tool_name,
                 success=False,
                 latency_ms=int((perf_counter() - started) * 1000),
-                metadata={"scope_type": visible.binding.scope_type, "scope_id": visible.binding.scope_id},
+                metadata={
+                    "scope_type": visible.binding.scope_type,
+                    "scope_id": visible.binding.scope_id,
+                },
             )
             raise
         finally:
@@ -269,7 +288,10 @@ class MCPGatewayService:
             tool_name=tool_name,
             success=not result.is_error,
             latency_ms=int((perf_counter() - started) * 1000),
-            metadata={"scope_type": visible.binding.scope_type, "scope_id": visible.binding.scope_id},
+            metadata={
+                "scope_type": visible.binding.scope_type,
+                "scope_id": visible.binding.scope_id,
+            },
         )
         result_metadata = dict(result.metadata or {})
         result_metadata.update(
@@ -282,7 +304,9 @@ class MCPGatewayService:
         )
         return MCPToolCallResult(
             content=list(result.content),
-            structured_content=dict(result.structured_content) if isinstance(result.structured_content, dict) else result.structured_content,
+            structured_content=dict(result.structured_content)
+            if isinstance(result.structured_content, dict)
+            else result.structured_content,
             is_error=result.is_error,
             metadata=result_metadata,
         )
@@ -345,10 +369,7 @@ class MCPGatewayService:
         bound_server_ids = {binding.server_id for binding in resolved_bindings}
         for binding in resolved_bindings:
             server_id = binding.server_id
-            if (
-                server_id in creator_server_ids
-                and server_id not in visible_creator_server_ids
-            ):
+            if server_id in creator_server_ids and server_id not in visible_creator_server_ids:
                 continue
             server = (
                 self.governance_service.get_server(server_id)
@@ -402,20 +423,26 @@ class MCPGatewayService:
         visible_servers.sort(key=lambda item: item.server.server_key)
         return visible_servers
 
-    async def _visible_server_by_key(self, auth: UserAPIKeyAuth, server_key: str) -> VisibleMCPServer | None:
+    async def _visible_server_by_key(
+        self, auth: UserAPIKeyAuth, server_key: str
+    ) -> VisibleMCPServer | None:
         for visible in await self.list_visible_servers(auth):
             if visible.server.server_key == server_key:
                 return visible
         return None
 
-    async def _filtered_tools_for_server(self, auth: UserAPIKeyAuth, visible: VisibleMCPServer) -> list[NamespacedTool]:
+    async def _filtered_tools_for_server(
+        self, auth: UserAPIKeyAuth, visible: VisibleMCPServer
+    ) -> list[NamespacedTool]:
         all_tools = await self.registry.list_namespaced_tools(visible.server)
         allowed = set(visible.tool_names)
         filtered: list[NamespacedTool] = []
         for tool in all_tools:
             if tool.original_name not in allowed:
                 continue
-            policy = await self._effective_tool_policy(auth, visible.server.mcp_server_id, tool.original_name)
+            policy = await self._effective_tool_policy(
+                auth, visible.server.mcp_server_id, tool.original_name
+            )
             if policy is not None and not policy.enabled:
                 continue
             filtered.append(
@@ -431,7 +458,9 @@ class MCPGatewayService:
             )
         return filtered
 
-    async def resolve_tool_scope(self, auth: UserAPIKeyAuth, *, namespaced_tool_name: str) -> MCPResolvedToolScope | None:
+    async def resolve_tool_scope(
+        self, auth: UserAPIKeyAuth, *, namespaced_tool_name: str
+    ) -> MCPResolvedToolScope | None:
         try:
             server_key, tool_name = parse_namespaced_tool_name(namespaced_tool_name)
         except MCPToolNotFoundError:
@@ -474,7 +503,9 @@ class MCPGatewayService:
 
         filtered: list[NamespacedTool] = []
         for tool in candidate_tools:
-            policy = await self._effective_tool_policy(auth, server.mcp_server_id, tool.original_name)
+            policy = await self._effective_tool_policy(
+                auth, server.mcp_server_id, tool.original_name
+            )
             if policy is not None and not policy.enabled:
                 continue
             filtered.append(tool)

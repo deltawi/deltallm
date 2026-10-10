@@ -7,10 +7,10 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_local_leases import LocalDispatchPermit
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_local_terminal import LocalTerminalOwner
-from src.billing.accounting_local_wire import (
+from src.billing.accounting.permits.accounting_local_leases import LocalDispatchPermit
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
+from src.billing.accounting.transport.accounting_local_wire import (
     compact_local_batch,
     expand_compact_local_permits,
     restore_wire_terminals,

@@ -11,7 +11,7 @@ import pytest
 
 from src.audit.actions import AuditAction
 from src.auth.roles import OrganizationRole
-from src.db.tiers import OrganizationTierAssignmentRecord
+from src.db.tiers.tiers import OrganizationTierAssignmentRecord
 from src.models.platform_auth import PlatformAuthContext
 from src.services.cache_invalidation import CacheInvalidationService
 

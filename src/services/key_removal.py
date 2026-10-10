@@ -9,10 +9,10 @@ from redis.exceptions import RedisError
 
 from src.audit.actions import AuditAction
 from src.auth.external_errors import ExternalAuthUnavailable
-from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
-from src.db.external_auth_transactions import ExternalAuthTransactions
-from src.db.key_removal import KeyRemovalRepository
-from src.db.platform_accounts import PlatformAccountDatabase
+from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.key_removal import KeyRemovalRepository
+from src.db.identity.platform_accounts import PlatformAccountDatabase
 from src.services.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit
 from src.services.key_service import KeyService
 from src.services.cache_invalidation_errors import CacheInvalidationBackendUnavailable

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.tier_records import (
+from src.db.tiers.tier_records import (
     to_tier_creation_request_record,
     to_version_record,
 )

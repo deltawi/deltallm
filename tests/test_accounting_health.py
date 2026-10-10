@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from src.billing.accounting_health import (
+from src.billing.accounting.health.accounting_health import (
     MAX_RETAINED_BACKLOG_BYTES,
     AccountingBacklogPolicy,
     AccountingBacklogProbe,
     AccountingBacklogSnapshot,
 )
-from src.db.accounting_health import AccountingBacklogRepository
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting.health.accounting_health import AccountingBacklogRepository
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.telemetry.lifecycle import WorkerState
 from tests.test_preissued_permit_bytes import retained_object_bytes
 

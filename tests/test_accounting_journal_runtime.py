@@ -7,15 +7,15 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_journal_claims import JournalClaim, JournalFailure
-from src.billing.accounting_journal_runtime import (
+from src.billing.accounting.journal.accounting_journal_claims import JournalClaim, JournalFailure
+from src.billing.accounting.journal.accounting_journal_runtime import (
     MAX_RETAINED_CLAIM_BYTES,
     JournalProcessingWorker,
     JournalWorkerConfig,
 )
 from src.concurrency import CapacityGateFull
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
 from src.telemetry.lifecycle import WorkerState
 from src.metrics.prometheus import get_prometheus_registry
 from tests.test_preissued_permit_bytes import retained_object_bytes

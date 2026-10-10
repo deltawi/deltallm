@@ -9,7 +9,7 @@ from typing import Protocol
 from src.auth.external_policy import EXTERNAL_SESSION_PREFIX
 
 from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole
-from src.db.platform_sessions import PlatformSessionRepository
+from src.db.identity.platform_sessions import PlatformSessionRepository
 from src.models.platform_auth import PlatformAuthContext
 
 

@@ -8,9 +8,9 @@ import pytest
 from prisma import Prisma
 from prisma.errors import RawQueryError
 
-from src.db.allocated_client import AllocatedPrisma, DatabaseOwner, DatabaseUnavailableError
-from src.db.allocation_config import DatabasePolicy
-from src.db.repositories import KeyRepository
+from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner, DatabaseUnavailableError
+from src.db.runtime.allocation_config import DatabasePolicy
+from src.db.identity.key_repository import KeyRepository
 from src.models.errors import AuthenticationError, AuthenticationUnavailableError
 from src.services.key_service import KeyService
 
@@ -221,7 +221,7 @@ async def test_real_cancelled_query_keeps_capacity_until_native_statement_finish
 
 async def test_bootstrap_manager_verifies_native_deadlines_on_live_server(allocated_databases):
     from src.config import DatabaseConnectionSettings
-    from src.db.client import PrismaClientManager
+    from src.db.runtime.client import PrismaClientManager
 
     manager = PrismaClientManager()
     policy = DatabasePolicy("control", 1, 0.2, 1.3, 0.15, 2.5)

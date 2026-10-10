@@ -4,13 +4,13 @@ from dataclasses import dataclass
 
 from src.auth.external_contracts import VerifiedExternalAssertion
 from src.auth.external_errors import ExternalAuthError
-from src.db.external_auth_bindings import ExternalBindingRepository
-from src.db.external_auth_records import (
+from src.db.identity.external.external_auth_bindings import ExternalBindingRepository
+from src.db.identity.external.external_auth_records import (
     ExternalBindingRecord,
     ExternalIntegrationRecord,
     ExternalSubjectRecord,
 )
-from src.db.platform_accounts import PlatformAccountDatabase
+from src.db.identity.platform_accounts import PlatformAccountDatabase
 
 
 @dataclass(frozen=True, slots=True)

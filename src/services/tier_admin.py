@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from src.db.tiers import (
+from src.db.tiers.tiers import (
     TierActivationActiveVersionChangedError,
     TierActivationConfigurationChangedError,
     TierBootstrapIdempotencyConflictError,

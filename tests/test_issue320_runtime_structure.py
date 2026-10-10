@@ -9,10 +9,10 @@ import pytest
 ROOT = Path(__file__).parents[1]
 MODULES = (
     "telemetry/worker_idle.py",
-    "billing/accounting_journal_runtime.py",
-    "billing/accounting_read_model_runtime.py",
-    "billing/accounting_terminal_snapshots.py",
-    "billing/accounting_lane_group.py",
+    "billing/accounting/journal/accounting_journal_runtime.py",
+    "billing/accounting/reporting/accounting_read_model_runtime.py",
+    "billing/accounting/journal/accounting_terminal_snapshots.py",
+    "billing/accounting/accounting_lane_group.py",
     "router/success_completion.py",
     "runtime_logging.py",
     "bootstrap/metrics.py",

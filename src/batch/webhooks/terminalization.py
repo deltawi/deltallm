@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from src.batch.models import BatchWebhookOutboxRecord
 from src.batch.repository import BatchRepository
 from src.batch.webhooks.audit import persist_batch_webhook_terminal_audit
-from src.db.repositories import AuditRepository
+from src.db.audit.repository import AuditRepository
 from src.services.audit_service import AuditService
 
 

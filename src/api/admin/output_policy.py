@@ -8,9 +8,13 @@ from typing import Protocol, cast
 
 from fastapi import HTTPException, Request
 
-from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
-from src.db.output_policy import OutputPolicyChange, OutputPolicyDatabase, OutputPolicyScope
-from src.db.output_policy import tier_version_has_output_policy
+from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.identity.output_policy import (
+    OutputPolicyChange,
+    OutputPolicyDatabase,
+    OutputPolicyScope,
+)
+from src.db.identity.output_policy import tier_version_has_output_policy
 from src.models.errors import InvalidRequestError
 from src.models.output_limits import validate_model_output_limits, validate_output_limit
 from src.services.model_visibility import (

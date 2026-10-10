@@ -9,7 +9,7 @@ from src.config_runtime.dynamic import (
     DynamicConfigRestartRequiredError,
     DynamicConfigValidationError,
 )
-from src.db.tiers import TierModelPolicyRecord, TierRepository
+from src.db.tiers.tiers import TierModelPolicyRecord, TierRepository
 from src.services.output_policy_configuration import validate_output_policy_configuration
 from tests.config.test_dynamic import FakeRedis
 from tests.db.tier_migration_helpers import cleanup, connect_prisma, seed_tier, seed_tier_version

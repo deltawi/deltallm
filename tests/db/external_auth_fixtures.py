@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from prisma import Prisma
 import pytest
-from src.db.audit_ingestion import AuditIngestionRepository
+from src.db.audit.audit_ingestion import AuditIngestionRepository
 
 
 @dataclass(frozen=True)

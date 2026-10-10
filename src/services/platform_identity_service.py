@@ -20,10 +20,10 @@ from src.auth.sso_identity import (
     LoginSessionCreationError as LoginSessionCreationError,
     SSOIdentityAssertion,
 )
-from src.db.platform_accounts import ensure_platform_account
-from src.db.platform_sessions import PlatformSessionRepository
-from src.db.platform_passwords import PlatformPasswordRepository
-from src.db.platform_memberships import (
+from src.db.identity.platform_accounts import ensure_platform_account
+from src.db.identity.platform_sessions import PlatformSessionRepository
+from src.db.identity.platform_passwords import PlatformPasswordRepository
+from src.db.identity.platform_memberships import (
     lock_sso_default_team,
     seed_organization_membership,
     seed_team_membership,

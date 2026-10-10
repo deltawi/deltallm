@@ -11,18 +11,18 @@ from src.batch.accounting_native import NativeBatchBilling
 from src.batch.models import BatchItemCreate
 from src.batch.repository import BatchRepository
 from src.batch.repositories.accounting_repository import BatchAccountingRepository
-from src.billing.accounting_admission import (
+from src.billing.accounting.accounting_admission import (
     admit_accounting_reservation,
     reservation_audit_envelope,
 )
-from src.billing.accounting_finalization import accounting_audit_envelope
-from src.billing.accounting_protocol import AccountingAttempt, request_fingerprint
-from src.billing.accounting_terminal_preparation import prepare_accounting_charge
-from src.billing.operation_reservation import SoftSelectorOperation, token_price_allowance
-from src.billing.realtime_accounting_bounds import RealtimeCostBounds
-from src.billing.realtime_native import NativeRealtimeBilling
-from src.billing.selector_native import NativeSelectorBilling
-from src.db.realtime_billing import RealtimeBillingRepository
+from src.billing.accounting.accounting_finalization import accounting_audit_envelope
+from src.billing.accounting.accounting_protocol import AccountingAttempt, request_fingerprint
+from src.billing.accounting.journal.accounting_terminal_preparation import prepare_accounting_charge
+from src.billing.charges.operation_reservation import SoftSelectorOperation, token_price_allowance
+from src.billing.charges.realtime_accounting_bounds import RealtimeCostBounds
+from src.billing.charges.realtime_native import NativeRealtimeBilling
+from src.billing.charges.selector_native import NativeSelectorBilling
+from src.db.billing.realtime_billing import RealtimeBillingRepository
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import UserAPIKeyAuth
 from src.router.router import Deployment

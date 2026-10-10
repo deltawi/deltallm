@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.route_policy_dependencies import DEPENDENT_GROUPS_QUERY
+from src.db.routing.route_policy_dependencies import DEPENDENT_GROUPS_QUERY
 from tests.db.tier_migration_helpers import connect_prisma
 from tests.router.selection.independent_fixtures import independent_policy
 

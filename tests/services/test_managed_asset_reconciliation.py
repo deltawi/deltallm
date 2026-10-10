@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.db.managed_assets import (
+from src.db.catalog.managed_assets import (
     ManagedAssetLinkHealth,
     ManagedAssetReconciliationResult,
 )
@@ -48,9 +48,7 @@ async def test_reconciliation_drains_missing_links_before_reporting_ready() -> N
 
 
 async def test_reconciliation_reports_structural_mismatch_as_degraded() -> None:
-    repository = _Repository(
-        [ManagedAssetLinkHealth(kind_mismatches=1, orphaned_policies=2)]
-    )
+    repository = _Repository([ManagedAssetLinkHealth(kind_mismatches=1, orphaned_policies=2)])
     service = ManagedAssetReconciliationService(repository)
 
     health = await service.reconcile_now()

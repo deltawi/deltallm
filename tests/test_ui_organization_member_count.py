@@ -9,8 +9,11 @@ import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
-from src.db.accounting_budget_reads import AccountingBudgetBalance, AccountingBudgetReadRepository
-from src.billing.accounting_protocol import AccountingScope
+from src.db.accounting.accounting_budget_reads import (
+    AccountingBudgetBalance,
+    AccountingBudgetReadRepository,
+)
+from src.billing.accounting.accounting_protocol import AccountingScope
 
 
 class _OrganizationListDB:

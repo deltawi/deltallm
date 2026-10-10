@@ -23,7 +23,7 @@ from src.batch.completion_outbox import (
 )
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.batch.accounting_native import NativeBatchBilling
-from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.bootstrap.batch_runtime.accounting import build_native_batch_billing
 from src.batch.webhooks import BatchWebhookCipher
 from src.batch.webhooks.delivery import BatchWebhookHTTPSender

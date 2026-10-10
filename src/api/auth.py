@@ -13,8 +13,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from src.audit.actions import AuditAction
 from src.api.audit import emit_control_audit_event
-from src.db.email import EmailOutboxRepository
-from src.db.email_feedback import EmailFeedbackRepository
+from src.db.email.email import EmailOutboxRepository
+from src.db.email.email_feedback import EmailFeedbackRepository
 from src.middleware.platform_auth import (
     SESSION_COOKIE_NAME,
     get_configured_master_key,
@@ -24,7 +24,7 @@ from src.middleware.platform_auth import (
 from src.models.errors import RateLimitError
 from src.auth.roles import PlatformRole, TeamRole
 from src.auth.sso_identity import SSOIdentityAssertion, SSOIdentityOwnershipError
-from src.db.email_tokens import EmailTokenRepository
+from src.db.identity.email_tokens import EmailTokenRepository
 from src.models.platform_auth import (
     ChangePasswordRequest,
     ForgotPasswordRequest,

@@ -8,16 +8,20 @@ from uuid import UUID
 
 import pytest
 
-from src.billing.spend import PreparedSpendEvent, SpendTrackingService
-from src.billing.fallback_gate import BoundedFallbackGate, FallbackGateFull, FallbackGateTimedOut
+from src.billing.spend.spend import PreparedSpendEvent, SpendTrackingService
+from src.billing.budgets.fallback_gate import (
+    BoundedFallbackGate,
+    FallbackGateFull,
+    FallbackGateTimedOut,
+)
 from src.billing.money import canonical_money, money_string
-from src.billing.spend_ingestion import (
+from src.billing.spend.spend_ingestion import (
     SpendIngestionConfig,
     SpendIngestionOverloadedError,
     SpendIngestionService,
     _OutboxRecord,
 )
-from src.db.spend_ingestion import SpendIngestionRepository
+from src.db.billing.spend_ingestion import SpendIngestionRepository
 from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.telemetry.lifecycle import WorkerState
 

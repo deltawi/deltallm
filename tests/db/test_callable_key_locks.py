@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.callable_key_locks import lock_callable_keys
+from src.db.routing.callable_key_locks import lock_callable_keys
 
 
 class _CapturePrisma:

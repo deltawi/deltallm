@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.api.admin.accounting_budget import apply_accounting_balances
-from src.billing.accounting_protocol import AccountingScope
+from src.billing.accounting.accounting_protocol import AccountingScope
 from src.api.admin.endpoints.common import (
     AuthScope,
     db_or_503,
@@ -19,14 +19,14 @@ from src.api.admin.output_policy import (
     output_policy_change,
     schedule_output_policy_invalidation,
 )
-from src.db.output_policy import persist_output_policy
+from src.db.identity.output_policy import persist_output_policy
 from src.api.admin.organization_mutations import require_active_organization_mutation
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
-from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
-from src.db.callable_target_policies import CallableTargetScopePolicyRepository
-from src.db.callable_targets import CallableTargetBindingRepository
-from src.db.route_groups import RouteGroupRepository
+from src.db.routing.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+from src.db.routing.callable_target_policies import CallableTargetScopePolicyRepository
+from src.db.routing.callable_targets import CallableTargetBindingRepository
+from src.db.routing.route_groups import RouteGroupRepository
 from src.services.asset_binding_mirror import reload_callable_target_grants
 from src.services.asset_visibility_preview import build_asset_visibility_preview
 from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state

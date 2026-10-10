@@ -5,11 +5,11 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_protocol import AccountingOutcome
-from src.billing.accounting_recovery import RecoveryAction
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_journal import AccountingJournalRepository
-from src.db.accounting_recovery import AccountingRecoveryRepository
+from src.billing.accounting.accounting_protocol import AccountingOutcome
+from src.billing.accounting.journal.accounting_recovery import RecoveryAction
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
+from src.db.accounting.accounting_recovery import AccountingRecoveryRepository
 from tests.test_accounting_journal_postgres import at_ordinal
 from tests.test_accounting_journal_worker_postgres import worker
 from tests.test_accounting_local_leases_postgres import deadline, funded
@@ -165,7 +165,7 @@ async def test_compact_and_direct_receipts_charge_every_budget_scope_once(accoun
         generation=generation, worker_id="five-scopes", expires_at=deadline()
     )
     assert await processing.materialize(claim, expires_at=deadline()) == 1
-    from src.billing.accounting_local_leases import LocalPermitReturn
+    from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
 
     assert await repository.return_batch(
         [LocalPermitReturn(grant=grant, first_unused_ordinal=2)], expires_at=deadline()
@@ -199,7 +199,7 @@ async def test_zero_cost_compact_receipt_retains_capacity_and_closes_exactly(acc
         generation=generation, worker_id="zero-compact", expires_at=deadline()
     )
     assert await processing.materialize(claim, expires_at=deadline()) == 1
-    from src.billing.accounting_local_leases import LocalPermitReturn
+    from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
 
     await owner(db).return_batch(
         [LocalPermitReturn(grant=grant, first_unused_ordinal=1)], expires_at=deadline()

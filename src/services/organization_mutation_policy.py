@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.db.organization_mutation_guard import (
+from src.db.organizations.organization_mutation_guard import (
     OrganizationMutationGuardDatabase,
     OrganizationMutationGuardRepository,
 )

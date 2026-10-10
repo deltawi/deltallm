@@ -5,11 +5,11 @@ from dataclasses import dataclass
 import logging
 from typing import Protocol
 
-from src.db.callable_key_locks import lock_callable_keys
-from src.db.callable_targets import CallableTargetBindingRepository
-from src.db.repositories import ModelDeploymentRepository
-from src.db.route_groups import RouteGroupRepository
-from src.db.managed_assets import ManagedAssetAccessRepository
+from src.db.routing.callable_key_locks import lock_callable_keys
+from src.db.routing.callable_targets import CallableTargetBindingRepository
+from src.db.catalog.model_deployments import ModelDeploymentRepository
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from prisma.errors import RawQueryError
 
-from src.db.managed_assets import ManagedAssetAudienceNotFoundError
+from src.db.catalog.managed_assets import ManagedAssetAudienceNotFoundError
 from src.guardrails.exceptions import GuardrailViolationError
 from src.models.errors import (
     ApprovalRequiredError,
@@ -24,7 +24,7 @@ from src.middleware.error_responses import (
     anthropic_error_payload as anthropic_error_payload,
     anthropic_error_response as anthropic_error_response,
 )
-from src.billing.spend_operations import SpendPersistenceUnavailable
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import (
     maybe_log_proxy_error,
     maybe_log_request_validation_failure,

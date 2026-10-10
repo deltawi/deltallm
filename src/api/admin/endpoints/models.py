@@ -23,14 +23,14 @@ from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
-from src.db.logical_models import LogicalModelRecord, LogicalModelRepository
-from src.db.managed_assets import ManagedAssetAccessRepository
-from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
-from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.catalog.logical_models import LogicalModelRecord, LogicalModelRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
 from src.api.admin.list_contracts import AdminListResponse, ModelListItem
 from src.services.admin_list_health import list_health_refs, list_health_snapshot
 from src.services.model_admin_listing import ModelSortKey, SortDirection, model_list_page
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated
 from src.upstream_auth import (

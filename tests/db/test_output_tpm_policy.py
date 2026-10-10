@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.db.output_policy import OutputPolicyChange, persist_output_policy
+from src.db.identity.output_policy import OutputPolicyChange, persist_output_policy
 from src.config import AppConfig
-from src.db.key_repository import KeyRepository
+from src.db.identity.key_repository import KeyRepository
 from src.services.key_service import KeyService
 from src.services.output_policy_configuration import validate_output_policy_configuration
 from tests.db.tier_migration_helpers import connect_prisma, seed_organization
@@ -15,7 +15,7 @@ from src.api.admin.output_policy import (
     schedule_output_policy_invalidation,
     invalidate_output_policy_now,
 )
-from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.services.cache_invalidation_worker import (
     CacheInvalidationWorker,
     CacheInvalidationWorkerConfig,

@@ -6,14 +6,14 @@ import logging
 
 from pydantic import ValidationError
 
-from src.billing.operation_reservation import (
+from src.billing.charges.operation_reservation import (
     BillingOperationUnavailable,
     ComponentState,
     BillingOperation,
     OperationReservationStore,
     selector_receipt,
 )
-from src.billing.selector_charge import AcceptedSelectorCharge, SelectorTokenReceipt
+from src.billing.charges.selector_charge import AcceptedSelectorCharge, SelectorTokenReceipt
 from src.cache.execution_eligibility import ResponseCacheEligibility
 from src.router.selection.contracts import (
     ReportedSelectorUsage,

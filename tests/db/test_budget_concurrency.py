@@ -7,10 +7,17 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.budget import BudgetEnforcementService, BudgetExceeded, BudgetStateUnavailable
-from src.billing.ledger import SpendLedgerService
-from src.db.budget_notifications import BudgetNotificationRepository
-from src.db.budget_reconciliation import BudgetCounterChanged, BudgetReconciliationRepository
+from src.billing.budgets.budget import (
+    BudgetEnforcementService,
+    BudgetExceeded,
+    BudgetStateUnavailable,
+)
+from src.billing.spend.ledger import SpendLedgerService
+from src.db.billing.budget_notifications import BudgetNotificationRepository
+from src.db.billing.budget_reconciliation import (
+    BudgetCounterChanged,
+    BudgetReconciliationRepository,
+)
 from tests.test_telemetry_ingestion_db_integration import _connect_prisma
 
 pytestmark = pytest.mark.postgres
@@ -264,7 +271,7 @@ async def test_real_notification_full_capacity_sheds_without_growing(budget_db):
 @pytest.mark.asyncio
 async def test_real_prompt_top_lookup_bounds_equal_priority_bindings(budget_db):
     from tests.performance.measure_prompt_fills import binding_plan
-    from src.db.prompt_registry import PromptRegistryRepository
+    from src.db.catalog.prompt_registry import PromptRegistryRepository
 
     db, identity = budget_db
     try:

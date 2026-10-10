@@ -4,7 +4,7 @@ from typing import Literal
 from fastapi import HTTPException, status
 from src.api.admin.auth_scope import AuthScope
 from src.auth.roles import Permission
-from src.db.key_list_scope import (
+from src.db.identity.key_list_scope import (
     _append_in_predicate as _append_in_predicate,
     _append_key_list_scope_clause as _append_key_list_scope_clause,
     _ordered_unique_scope_ids as _ordered_unique_scope_ids,

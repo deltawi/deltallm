@@ -7,7 +7,7 @@ from redis.exceptions import ConnectionError
 
 from src.audit.actions import AuditAction
 from src.auth.external_errors import ExternalAuthError, ExternalAuthUnavailable
-from src.db.repositories import KeyRepository
+from src.db.identity.key_repository import KeyRepository
 from src.services.external_inference_keys import ExternalInferenceKeyService
 from src.services.key_removal import KeyRemovalService
 from src.services.key_service import KeyService

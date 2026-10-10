@@ -896,11 +896,11 @@ Expected core modifications:
 
 - `prisma/schema.prisma`
 - a new timestamped Prisma migration
-- `src/db/tier_records.py`
-- `src/db/tier_catalog_repository.py`
-- `src/db/tier_version_repository.py`
-- `src/db/tier_version_clone_repository.py`
-- `src/db/tier_policy_repository.py`
+- `src/db/tiers/tier_records.py`
+- `src/db/tiers/tier_catalog_repository.py`
+- `src/db/tiers/tier_version_repository.py`
+- `src/db/tiers/tier_version_clone_repository.py`
+- `src/db/tiers/tier_policy_repository.py`
 - `src/services/tier_admin.py` and tier admin error/payload/serialization modules
 - `src/api/admin/endpoints/tier_schemas.py`
 - `src/api/admin/endpoints/tiers.py`

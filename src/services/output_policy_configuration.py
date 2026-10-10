@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.config import AppConfig, Settings
-from src.db.output_policy import OutputPolicyDatabase, read_output_policy_presence
+from src.db.identity.output_policy import OutputPolicyDatabase, read_output_policy_presence
 from src.runtime_settings import resolve_general_setting
 
 

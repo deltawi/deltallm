@@ -13,9 +13,9 @@ from uuid import uuid4
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.external_auth import init_external_auth_runtime, external_auth_status
 from src.services.external_auth_runtime import ExternalAuthRuntime
-from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
-from src.db.email_tokens import EmailTokenRepository
-from src.db.invitations import InvitationRepository
+from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.identity.email_tokens import EmailTokenRepository
+from src.db.identity.invitations import InvitationRepository
 from src.auth import (
     CustomAuthManager,
     InMemoryUserRepository,
@@ -24,7 +24,7 @@ from src.auth import (
     SSOConfig,
     SSOProvider,
 )
-from src.db.repositories import KeyRepository
+from src.db.identity.key_repository import KeyRepository
 from src.services.cache_invalidation import (
     CacheInvalidationService,
     CacheInvalidationWorker,

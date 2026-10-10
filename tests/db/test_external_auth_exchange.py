@@ -13,9 +13,9 @@ from src.auth.external_contracts import (
     VerifiedExternalAssertion,
 )
 from src.auth.external_errors import ExternalAuthError, ExternalAuthUnavailable
-from src.db.external_auth_transactions import ExternalAuthTransactions
-from src.db.platform_memberships import seed_organization_membership, seed_team_membership
-from src.db.repositories import AuditRepository
+from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
+from src.db.identity.platform_memberships import seed_organization_membership, seed_team_membership
+from src.db.audit.repository import AuditRepository
 from src.services.audit_service import AuditIngestionConfig, AuditService
 from src.services.external_auth_audit import ExternalAuthAudit
 from src.services.external_auth_exchange import ExternalAuthExchange

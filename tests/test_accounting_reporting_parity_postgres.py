@@ -7,10 +7,12 @@ import json
 
 import pytest
 
-from src.billing.spend_preparation import prepare_spend_event
-from src.billing.spend_read import SPEND_READ_SOURCE
+from src.billing.spend.spend_preparation import prepare_spend_event
+from src.billing.spend.spend_read import SPEND_READ_SOURCE
 from src.services.spend_visibility import SpendVisibility, apply_spend_visibility
-from src.db.organization_deletion_repository import OrganizationDeletionRepository
+from src.db.organizations.deletion.organization_deletion_repository import (
+    OrganizationDeletionRepository,
+)
 from tests.test_accounting_local_leases_postgres import deadline
 from tests.test_accounting_protocol_postgres import accounting_db as _accounting_db
 from tests.test_accounting_read_model_postgres import next_page, repository, source
