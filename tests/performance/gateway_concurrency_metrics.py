@@ -26,6 +26,9 @@ MAX_SAMPLES_PER_SCRAPE = 10000
 MAX_SNAPSHOTS = 3602
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
 T = TypeVar("T")
+SCRAPE_FAILURE_REASONS = frozenset(
+    {"http_status", "http_timeout", "http_connection", "deadline", "decode", "parse", "unknown"}
+)
 MetricIdentity = tuple[str, tuple[tuple[str, str], ...]]
 HISTOGRAMS = (
     "deltallm_telemetry_acceptance_phase_seconds",
@@ -355,7 +358,16 @@ def _encode_metric_records(
     results: list[list[MetricValue] | None],
     sources: list[MetricSource],
     offset: float,
+    failure_reasons: list[str | None] | None = None,
 ) -> tuple[EncodedMetricRecord, ...]:
+    if failure_reasons is not None and (
+        len(failure_reasons) != len(results)
+        or any(
+            reason is not None and reason not in SCRAPE_FAILURE_REASONS
+            for reason in failure_reasons
+        )
+    ):
+        raise ValueError("metrics failure classifications are invalid")
     records: list[EncodedMetricRecord] = []
     for index, result in enumerate(results):
         source = sources[index]
@@ -366,6 +378,8 @@ def _encode_metric_records(
                 "source_role": source.role,
                 "source_process": source.process,
                 "error": "scrape_failed",
+                "error_reason": (failure_reasons[index] if failure_reasons is not None else None)
+                or "empty_metrics",
             }
             names = frozenset[str]()
             values = None
@@ -390,6 +404,23 @@ def _encode_metric_records(
             )
         )
     return tuple(records)
+
+
+def scrape_failure_reason(error: BaseException) -> str:
+    """Classify failure without exporting a URL, response body, or exception text."""
+    if isinstance(error, httpx.HTTPStatusError):
+        return "http_status"
+    if isinstance(error, httpx.TimeoutException):
+        return "http_timeout"
+    if isinstance(error, httpx.HTTPError):
+        return "http_connection"
+    if isinstance(error, TimeoutError):
+        return "deadline"
+    if isinstance(error, UnicodeError):
+        return "decode"
+    if isinstance(error, ValueError):
+        return "parse"
+    return "unknown"
 
 
 def _write_snapshot(file: TextIO, text: str) -> None:
@@ -543,6 +574,10 @@ class MetricsRecorder:
             return_exceptions=True,
         )
         safe_results = [None if isinstance(result, BaseException) else result for result in results]
+        failure_reasons = [
+            scrape_failure_reason(result) if isinstance(result, BaseException) else None
+            for result in results
+        ]
         sample_count = sum(len(result) for result in safe_results if result is not None)
         executor = (
             self._cpu_executor
@@ -555,6 +590,7 @@ class MetricsRecorder:
             safe_results,
             self.sources,
             perf_counter() - self.started,
+            failure_reasons,
         )
         lines: list[str] = []
         for index, record in enumerate(encoded):

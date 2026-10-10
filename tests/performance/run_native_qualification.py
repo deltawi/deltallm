@@ -689,7 +689,12 @@ async def exercise(
         manifest = await server_manifest(cluster, image, api, request + projection, cluster.output)
         vm_cpus = int(cluster.run("docker", "info", "--format", "{{.NCPU}}", timeout=30).stdout)
         declared = read_manifest(manifest).model_copy(
-            update={"memory_limit_mib": 1024, "host_cpu_count": vm_cpus}
+            update={
+                "memory_limit_mib": 1024,
+                "host_cpu_count": vm_cpus,
+                "postgres_cpu_limit_cores": 4.0,
+                "postgres_memory_limit_mib": 4096,
+            }
         )
         manifest.write_text(declared.model_dump_json(indent=2) + "\n")
         proof = await generator_proof(cluster, image)

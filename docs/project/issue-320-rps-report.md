@@ -151,6 +151,25 @@ Only ordinary regression tests and documentation changed during the run. Stage
 commit metadata differs; the saved source comparison confirms that the runtime,
 migrations, chart, generator, and performance harness did not change.
 
+The next selected-tier check with the declared shared-memory volume also failed.
+Its first 600-second 500 RPS stage had 264,684/300,000 successes, 31,904 HTTP 503
+responses, and 3,412 dropped arrivals. p95/p99 were 2,041.15/2,199.21 ms.
+Most 503 responses reported no healthy deployment (30,927); 946 reported required
+persistence as unavailable. A provider-unavailable error was also recorded.
+Metric reads failed for part of the window, but later direct reads from every
+owned endpoint succeeded. The reason for the original metric failures was not
+retained. The next runner records a fixed error category without URLs or payloads.
+
+One operation remained provisional after the 180-second drain deadline. Each
+scope held `0.024582`; there were no unsafe windows or pending terminal/reporting
+records. The runner correctly stopped further load and recovery. PostgreSQL
+also recorded a statement timeout while the grant-reconciliation worker tried
+to lock a budget window. That record does not prove the earlier provider or
+metric-read failure cause. This is failed diagnostic evidence, not a capacity
+certificate. The next comparison keeps the image, database, request limits,
+deadlines, and gates unchanged and increases only VM CPU capacity from eight
+to twelve cores. It does not stop other workloads or establish a production minimum.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the
