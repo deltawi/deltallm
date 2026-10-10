@@ -36,6 +36,7 @@ from src.api.admin import admin_router
 from src.middleware.rate_limit_headers import RateLimitHeaderMiddleware
 from src.middleware.rate_limit_lifecycle import RateLimitLeaseLifecycleMiddleware
 from src.middleware.ingress import IngressMiddleware
+from src.middleware.request_identity import RequestIdentityMiddleware
 from src.middleware.request_deadline import RequestDeadlineMiddleware
 from src.ingress import initialize_ingress
 from src.middleware.request_timing import RequestTimingMiddleware
@@ -151,6 +152,7 @@ def create_app(
     # This must wrap cache and route middleware so streaming rate-limit leases
     # remain owned until the final response body frame or a disconnect.
     app.add_middleware(RateLimitLeaseLifecycleMiddleware)
+    app.add_middleware(RequestIdentityMiddleware)
     app.add_middleware(IngressMiddleware)
     app.add_middleware(RequestDeadlineMiddleware)
     app.add_middleware(RequestTimingMiddleware)

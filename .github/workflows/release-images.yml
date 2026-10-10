@@ -108,6 +108,7 @@ jobs:
             > /dev/null
           helm lint /tmp/deltallm-chart \
             -f /tmp/deltallm-chart/values-production.yaml \
+            -f /tmp/deltallm-chart/values-capacity-fixture.yaml \
             --set image.tag="${RELEASE_TAG}" \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
@@ -115,6 +116,7 @@ jobs:
             --set runtime.redis.url="${VALID_REDIS_URL}"
           helm template deltallm /tmp/deltallm-chart \
             -f /tmp/deltallm-chart/values-production.yaml \
+            -f /tmp/deltallm-chart/values-capacity-fixture.yaml \
             --set image.tag="${RELEASE_TAG}" \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \

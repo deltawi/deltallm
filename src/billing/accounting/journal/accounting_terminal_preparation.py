@@ -12,6 +12,7 @@ from src.billing.accounting.accounting_protocol import (
     AccountingOutcome,
 )
 from src.billing.money import canonical_money, money_string
+from src.request_identity import valid_request_id
 
 
 def prepare_accounting_charge(
@@ -28,6 +29,9 @@ def prepare_accounting_charge(
     accepted["cost_exact"] = money_string(charge)
     accepted["spend_event_version"] = 2
     reservation = operation.reservation
+    # Non-HTTP callers also need a stable reporting ID across terminal retries.
+    if not valid_request_id(accepted.get("request_id")):
+        accepted["request_id"] = str(reservation.operation_id)
     return AccountingFinalization(
         protocol_generation=reservation.protocol_generation,
         operation_id=reservation.operation_id,

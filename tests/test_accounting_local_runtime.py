@@ -12,6 +12,8 @@ from src.lifecycle_settings import LifecycleSettings
 from src.process_lifecycle import ProcessLifecycle
 from src.shutdown import ShutdownOwner, shutdown_owner
 from src.telemetry.lifecycle import WorkerState
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from tests.test_accounting_local_issue import deadline
 from tests.test_accounting_local_issuer import items
 from tests.test_accounting_local_returns import Returns
@@ -126,6 +128,21 @@ async def test_startup_failure_cleans_owners_and_never_selects_the_service():
         await issuer.reserve_batch(items(1), expires_at=deadline())
     with pytest.raises(RuntimeError, match="not active"):
         _ = runtime.service
+
+
+async def test_startup_probe_preserves_database_error_and_stops_all_owners(caplog):
+    _, _, _, _, _, _, service, worker, runtime = state()
+    service._generation_probe.protocol_ready.side_effect = AccountingProtocolUnavailable(
+        AcceptanceFailure.CONNECTION
+    )
+    with pytest.raises(AccountingProtocolUnavailable) as raised:
+        await runtime.start(expires_at=deadline())
+    assert raised.value.reason == AcceptanceFailure.CONNECTION.value
+    assert "startup probe failed: reason=connection" in caplog.text
+    assert service._generation_probe.protocol_ready.await_count == 1
+    assert all(task.done() for task in runtime._queue_tasks)
+    assert worker.task.done()
+    assert runtime.worker_health.state is WorkerState.FAILED
 
 
 async def test_close_before_start_stops_issue_without_starting_admission_queues():
