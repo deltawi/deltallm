@@ -77,8 +77,15 @@ async def wait_native_drain(db: Prisma, *, timeout: float = 180) -> dict[str, ob
 
 
 async def reconcile_native(
-    db: Prisma, *, before: dict[str, int | str], successes: int, all_successful: bool
+    db: Prisma,
+    *,
+    before: dict[str, int | str],
+    successes: int,
+    all_successful: bool,
+    precheck_count: int = 1,
 ) -> dict[str, object]:
+    if type(precheck_count) is not int or precheck_count not in (0, 1):
+        raise ValueError("Precheck count must be zero or one")
     after = await accounting_snapshot(db)
     async with asyncio.timeout(5):
         rows = await db.query_raw(
@@ -88,11 +95,12 @@ async def reconcile_native(
             "WHERE protocol_name='primary' AND generation=1 ORDER BY scope_type LIMIT 65"
         )
     fact_charge = Decimal(str(after["fact_charge"]))
-    expected_delta = Decimal(successes + 1) * Decimal("0.000007")  # Includes measure's precheck.
+    expected_count = successes + precheck_count
+    expected_delta = Decimal(expected_count) * Decimal("0.000007")
     actual_delta = fact_charge - Decimal(str(before["fact_charge"]))
     charge_matches = actual_delta == expected_delta if all_successful else None
     count_matches = (
-        int(after["facts"]) - int(before["facts"]) == successes + 1 if all_successful else None
+        int(after["facts"]) - int(before["facts"]) == expected_count if all_successful else None
     )
     scopes = [
         {
@@ -124,6 +132,7 @@ async def reconcile_native(
         "safe_budget_state": after["unsafe_windows"] == 0,
         "before": before,
         "after": after,
+        "precheck_count": precheck_count,
         "expected_exact_charge_delta": str(expected_delta),
         "actual_exact_charge_delta": str(actual_delta),
         "successful_charge_count_matches": count_matches,
