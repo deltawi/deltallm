@@ -3,10 +3,10 @@
 Historical results through 9 October 2026. Original PR target: `main`.
 Original source branch: `codex/issue-320-main-integration`.
 
-The upgrade is now merged. The current release checks are in
-[PR #351](https://github.com/deltawi/deltallm/pull/351). That PR records one fixed
-candidate image, full CI, ordinary native client requests, the sustained four-tier
-series, and recovery checks. Use its final report to assess the corrected release.
+The upgrade and the request-identity fix are now merged. All required PR checks
+passed for [PR #351](https://github.com/deltawi/deltallm/pull/351), merged at
+`0c622b47`. Native qualification and the declared database fixture remain under
+test. Use the complete qualification report to assess the corrected release.
 The older results below are not a certificate for the current release image.
 
 ## Fixed-candidate checks on 10 October 2026
@@ -142,6 +142,14 @@ in place. Full CI also passed for the stronger installed-image checks, the
 time-weighted measurement, and the warm-up change. Final CI for the declared
 database fixture and complete eight-CPU qualification are still required
 before release approval.
+
+Main's post-merge CI run `38070825615` has one failed routing-cost query-plan
+check. PostgreSQL selected a bitmap heap scan; the test requires a plain index
+scan. The follow-up check retains the exact required indexes and row and loop
+bounds. It also checks bounded blocks and rejects lossy scans, large index
+probes, and history filtering. It must pass with both the default planner and
+an explicit bitmap plan. All other required main CI jobs passed. This failure
+still blocks release approval until the follow-up checks pass.
 
 The synthetic provider does not validate a real provider's quotas, service
 availability, model behavior, or network delay. Qualify the actual production

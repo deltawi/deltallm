@@ -95,6 +95,48 @@ def test_cost_aggregation_is_bounded():
         aggregate_routing_costs((cost(),) * 1001)
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [None, "sequential", "wrong_index", "many_rows", "many_blocks", "lossy", "filter"],
+)
+def test_report_plan_guard_keeps_exact_index_and_work_bounds(fault):
+    from tests.test_routing_cost_reports_postgres import assert_bounded_index
+
+    node = {
+        "Node Type": "Bitmap Heap Scan",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Shared Hit Blocks": 4,
+        "Plans": [
+            {
+                "Node Type": "Bitmap Index Scan",
+                "Index Name": "scope_time_idx",
+                "Index Cond": "organization_id = 'org' AND created_at > now()",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+            }
+        ],
+    }
+    if fault == "sequential":
+        node["Node Type"] = "Seq Scan"
+    elif fault == "wrong_index":
+        node["Plans"][0]["Index Name"] = "other_idx"
+    elif fault == "many_rows":
+        node["Plans"][0]["Actual Rows"] = 10000
+    elif fault == "many_blocks":
+        node["Shared Hit Blocks"] = 10000
+    elif fault == "lossy":
+        node["Lossy Heap Blocks"] = 1
+    elif fault == "filter":
+        node["Rows Removed by Filter"] = 10000
+    options = dict(max_rows=1, max_loops=1, columns=("organization_id", "created_at"))
+    if fault is None:
+        assert assert_bounded_index(node, "scope_time_idx", **options) == "scope_time_idx"
+    else:
+        with pytest.raises(AssertionError):
+            assert_bounded_index(node, "scope_time_idx", **options)
+
+
 def test_savings_baseline_uses_only_frozen_server_pricing_with_reported_answer_tokens():
     from tests.test_operation_reservation import make_operation
     from src.billing.charges.selector_charge import SelectorTokenReceipt
