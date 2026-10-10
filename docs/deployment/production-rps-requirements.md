@@ -14,13 +14,13 @@ accounting. It does not represent long model replies, large bodies or streaming.
 
 | Target | Current evidence | Required before a production capacity claim |
 | --- | --- | --- |
-| 50 RPS | Earlier image passed a 60-second stage | Pass ten-minute qualification on the release image and test the real traffic mix |
-| 100 RPS | Same earlier image passed a 60-second stage | Same checks, with measured provider and dependency headroom |
-| 200 RPS | Same earlier image passed a 60-second stage | Same checks, including peak concurrency and worker catch-up |
-| 500 RPS | Latest provider-pool image passed a 30-second confirmation | Pass sustained stability and all four normal stages on one image |
+| 50 RPS | Fixed candidate passed 30 seconds and ten minutes on the six-CPU fixture | Complete the final release checks and test the real traffic mix |
+| 100 RPS | Same fixed candidate passed 30 seconds and ten minutes | Same checks, with measured provider and dependency headroom |
+| 200 RPS | Same fixed candidate passed 30 seconds and ten minutes | Same checks, including peak concurrency and worker catch-up |
+| 500 RPS | Same candidate passed 30 seconds but failed ten-minute latency and growth limits | Pass sustained stability, functional recovery, and all four normal stages in the final setup |
 | 1,000 RPS | Latest 30-second diagnostic failed | Resolve or isolate CPU saturation, then repeat the diagnostic and sustained tests |
 
-These earlier results do not form one unchanged-image qualification. There is no
+The fixed candidate's six-CPU series is not a passing release qualification. There is no
 verified production hardware minimum for each tier. Earlier RPS results do not
 qualify a later release image.
 

@@ -64,10 +64,16 @@ async def complete(request: CompletionRequest):
                 "choices": [{"index": 0, "delta": {"content": "OK"}, "finish_reason": None}],
             }
             yield "data: " + json.dumps(chunk) + "\n\n"
-            # Fixed long stream exceeds the default 50-second response cutoff.
-            # Cancellation closes this generator; no terminal success is emitted.
+            # Only the named functional check gets a short, complete stream.
+            # Lifecycle checks retain their long stream and cancellation behavior.
             try:
-                await asyncio.sleep(300)
+                delay = (
+                    0.01
+                    if request.messages
+                    == [{"role": "user", "content": "Native complete stream fixture."}]
+                    else 300
+                )
+                await asyncio.sleep(delay)
             finally:
                 if len(stream_events) < 128:
                     stream_events.append(
