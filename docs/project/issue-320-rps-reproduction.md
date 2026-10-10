@@ -3,9 +3,17 @@
 Use this guide with the [results report](issue-320-rps-report.md).
 The stored evidence is local. Do not assume that raw bundles are included in a PR.
 
-PR target: `main`. The source branch is `codex/issue-320-main-integration`.
-Current main has unresolved integration conflicts. Do not use these earlier
-measurements as evidence that the combined source is qualified.
+The original upgrade is merged. Its source branch was
+`codex/issue-320-main-integration`. The current release checks are in
+[PR #351](https://github.com/deltawi/deltallm/pull/351). Use the fixed candidate
+commit and evidence recorded there for current qualification. The following
+historical bundles do not qualify the later merged release image.
+
+Current qualification uses the unchanged normal runner without
+`--diagnostic-rates`. It checks ordinary clients before arrivals, then short and
+600-second stages at 50, 100, 200, and 500 RPS. It ends with native process-loss
+and same-image Helm rollout checks. Keep all gates active and retain failed
+attempts. A selected-tier diagnostic is not a release qualification.
 
 ## Latest provider-pool source
 

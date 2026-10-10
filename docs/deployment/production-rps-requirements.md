@@ -20,10 +20,21 @@ accounting. It does not represent long model replies, large bodies or streaming.
 | 500 RPS | Latest provider-pool image passed a 30-second confirmation | Pass sustained stability and all four normal stages on one image |
 | 1,000 RPS | Latest 30-second diagnostic failed | Resolve or isolate CPU saturation, then repeat the diagnostic and sustained tests |
 
-These results do not form one unchanged-image qualification. There is no verified
-production hardware minimum for each tier. Main revision `14cf7871` is integrated.
-The draft upgrade must pass the combined auth, output-token, migration and release
-checks. Earlier RPS results do not qualify the merged image.
+These earlier results do not form one unchanged-image qualification. There is no
+verified production hardware minimum for each tier. Earlier RPS results do not
+qualify a later release image.
+
+The [release-readiness PR](https://github.com/deltawi/deltallm/pull/351) records
+the current fixed-candidate checks and their evidence. That qualification uses
+one image for the short and ten-minute 50/100/200/500 RPS stages. It also checks
+ordinary clients without request-ID headers, exact accounting, process recovery,
+and a same-image Helm rollout. Use the recorded final result, not an interim
+passing stage, before making a release capacity claim.
+
+The unchanged `v0.3.1` pre-release must not become Latest. Its native reporting
+can stop after a valid client request with no request-ID header. Apply the forward
+recovery migration and use the corrected image, as described in the
+[accounting runbook](accounting-v2.md#request-ids-and-blocked-reporting-records).
 
 ## Measured reference topology
 
