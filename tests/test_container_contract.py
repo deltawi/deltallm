@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tomllib
+import yaml
 
 from scripts.check_container_contract import railway_dockerfile
 from scripts.check_lifecycle_image import (
@@ -22,6 +23,20 @@ def test_generated_runtime_dependencies_match_the_frozen_lock():
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_release_production_chart_validation_has_explicit_provider_fixture_capacity():
+    workflow = yaml.safe_load(Path(".github/workflows/release-images.yml").read_text())
+    scripts = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if "run" in step
+    ]
+    validation = next(script for script in scripts if "helm lint /tmp/deltallm-chart" in script)
+    for section in validation.split("helm ")[1:]:
+        if "-f /tmp/deltallm-chart/values-production.yaml" in section:
+            assert "-f /tmp/deltallm-chart/values-capacity-fixture.yaml" in section
 
 
 def test_runtime_async_detector_is_locked_and_checked_in_the_actual_image():
