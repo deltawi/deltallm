@@ -53,6 +53,8 @@ from tests.performance.native_qualification_failures import (
     capture_unsettled_operations,
     record_stage_result,
 )
+from tests.performance.native_client_requests import verify_native_clients
+from tests.performance.native_recovery import verify_native_recovery
 from tests.performance.qualification_image_archive import platform_manifest_digest
 
 RATES = (50, 100, 200, 500)
@@ -496,6 +498,7 @@ async def exercise(
         ]
         for port in api_ports + worker_ports:
             await wait_edge(f"http://127.0.0.1:{port}")
+        await verify_native_clients(api_ports, worker_ports, cluster.output)
         manifest = await server_manifest(cluster, image, api, request + projection, cluster.output)
         vm_cpus = int(cluster.run("docker", "info", "--format", "{{.NCPU}}", timeout=30).stdout)
         declared = read_manifest(manifest).model_copy(
@@ -571,6 +574,7 @@ async def exercise(
             )
             + "\n"
         )
+        await verify_native_recovery(cluster, values)
         return results
 
 

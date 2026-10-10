@@ -80,9 +80,9 @@ class ComparisonEnvironment:
         finally:
             for name in reversed(self.containers):
                 logs = self.run(
-                    "docker", "logs", "--tail", "500", name, check=False, include_stderr=True
+                    "docker", "logs", "--tail", "5000", name, check=False, include_stderr=True
                 )
-                (self.output / (name + ".log")).write_text(logs)
+                (self.output / (name + ".log")).write_text(logs[-8 * 1024 * 1024 :])
                 self.run("docker", "rm", "--force", name, check=False)
             self.run("docker", "network", "rm", self.name, check=False)
 

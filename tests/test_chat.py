@@ -958,7 +958,10 @@ async def test_mcp_model_phases_keep_fallback_affinity_and_report_any_fallback(
         ("Bearer provider-key-fallback", True),
         ("Bearer provider-key", True),
     ]
-    assert gateway.tool_calls == [("docs.search", {"query": "delta"}, None)]
+    assert response.headers["x-request-id"]
+    assert gateway.tool_calls == [
+        ("docs.search", {"query": "delta"}, response.headers["x-request-id"])
+    ]
     assert response.headers["x-deltallm-route-deployment"] == primary.deployment_id
     assert response.headers["x-deltallm-route-fallback-used"] == "true"
     assert primary.deployment_id != fallback.deployment_id
@@ -1011,7 +1014,10 @@ async def test_mcp_tool_is_not_replayed_when_followup_model_retries(client, test
 
     assert response.status_code == 200
     assert upstream_phases == [False, True, True]
-    assert gateway.tool_calls == [("docs.search", {"query": "delta"}, None)]
+    assert response.headers["x-request-id"]
+    assert gateway.tool_calls == [
+        ("docs.search", {"query": "delta"}, response.headers["x-request-id"])
+    ]
     assert response.headers["x-deltallm-route-fallback-used"] == "false"
 
 

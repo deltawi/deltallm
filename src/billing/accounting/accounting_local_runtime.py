@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 
 from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
 from src.billing.accounting.accounting_local_service import LocalAccountingService
 from src.shutdown import cleanup_deadline
 from src.telemetry.lifecycle import WorkerHealth, WorkerState, stop_tasks_before_deadline
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+
+logger = logging.getLogger(__name__)
 
 
 class LocalAccountingRuntime:
@@ -89,7 +93,9 @@ class LocalAccountingRuntime:
                 raise RuntimeError("local accounting workers are not ready")
             self._state = WorkerState.READY
             self._started = True
-        except BaseException:
+        except BaseException as error:
+            if isinstance(error, AccountingProtocolUnavailable):
+                logger.error("Local accounting startup probe failed: reason=%s", error.reason)
             self._service.issuer.stop_admission()
             await self.close(expires_at=expires_at)
             self._state = WorkerState.FAILED
@@ -108,7 +114,10 @@ class LocalAccountingRuntime:
         )
         self._probe_task = task
         try:
-            return await _completed(task, expires_at) and task.result() is True
+            await _completed(task, expires_at)
+            # A database failure is not evidence that the generation is inactive.
+            # Keep its bounded error classification for startup diagnostics.
+            return task.done() and not task.cancelled() and task.result() is True
         finally:
             await stop_tasks_before_deadline((task,), deadline=expires_at, cancel_first=True)
 

@@ -124,6 +124,29 @@ before discovery. Error backoff and required health checks do not change.
 
 ## Database preparation
 
+### Request IDs and blocked reporting records
+
+HTTP ingress uses one request ID for accounting and response headers. A single
+caller ID is retained when it has 1 to 256 visible ASCII characters without
+spaces. Missing, empty, repeated, or invalid headers receive a generated ID.
+Caller correlation IDs do not replace the server's economic operation identity.
+Non-HTTP finalization uses the operation ID when no valid correlation ID exists.
+
+Apply migration `20261010130000_accounting_reporting_request_ids` before the
+corrected image. It changes only the reporting function. For an accepted event
+with a missing, null, or empty request ID, reporting uses the existing operation
+ID. The accepted event and its source hash remain unchanged. Charge, attribution,
+audit, fencing, and replay checks remain active. No second charge is created.
+
+Restart the corrected reporting workers and allow the blocked page to retry.
+Confirm that reporting drains and all API and accounting readiness checks pass
+before resuming normal traffic. Do not delete the event, reset a checkpoint, or
+clear budget holds to make recovery pass. Other invalid records still fail
+closed and require investigation. Keep applied migrations unchanged.
+
+The native qualification must include requests without `x-request-id`. A run
+that always supplies this header does not prove that normal clients are safe.
+
 ### Grant execution policy
 
 Apply migration `20261010083000_accounting_grant_execution_policy` before the

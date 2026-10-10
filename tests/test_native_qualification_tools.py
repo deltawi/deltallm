@@ -2,7 +2,7 @@
 
 import argparse
 import asyncio
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 import json
 import sys
 from decimal import Decimal
@@ -396,3 +396,72 @@ async def test_economic_gate_requires_exact_charge_and_every_scope(monkeypatch, 
     )
     assert result["passed"] is (problem is None)
     assert result["expected_exact_charge_delta"] == str(charge)
+
+
+@pytest.mark.parametrize(
+    "problem", [None, "http", "id", "preserved", "facts", "charge", "drain", "readiness"]
+)
+async def test_ordinary_client_gate_records_failures_before_load(tmp_path, monkeypatch, problem):
+    import httpx
+    from tests.performance import native_client_requests as clients
+    from src.request_identity import resolve_request_id
+
+    @asynccontextmanager
+    async def database():
+        yield object()
+
+    requests = []
+
+    def respond(request):
+        if request.method == "GET":
+            return httpx.Response(503 if problem == "readiness" else 200)
+        supplied = request.headers.get("x-request-id")
+        requests.append(supplied)
+        if problem == "http":
+            return httpx.Response(503, text="not JSON")
+        resolved = resolve_request_id(supplied)
+        if problem == "id":
+            resolved = ""
+        if problem == "preserved":
+            resolved = "other-valid-id"
+        return httpx.Response(
+            200,
+            headers={"x-request-id": resolved},
+            json={
+                "usage": {"completion_tokens": 1},
+                "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            },
+        )
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        clients.httpx,
+        "AsyncClient",
+        lambda **options: original_client(**options, transport=httpx.MockTransport(respond)),
+    )
+    monkeypatch.setattr(clients, "local_database", database)
+    monkeypatch.setattr(
+        clients,
+        "accounting_snapshot",
+        AsyncMock(
+            side_effect=[
+                {"facts": 0, "fact_charge": "0"},
+                {
+                    "facts": 19 if problem == "facts" else 20,
+                    "fact_charge": "0" if problem == "charge" else "0.000140",
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        clients, "wait_native_drain", AsyncMock(return_value={"passed": problem != "drain"})
+    )
+    if problem is None:
+        await clients.verify_native_clients([1, 2, 3, 4], [5, 6, 7], tmp_path)
+    else:
+        with pytest.raises(RuntimeError, match="Ordinary native client requests failed"):
+            await clients.verify_native_clients([1, 2, 3, 4], [5, 6, 7], tmp_path)
+    result = json.loads((tmp_path / "native-client-requests.json").read_text())
+    assert result["passed"] is (problem is None)
+    assert len(requests) == len(result["requests"]) == 20
+    assert requests.count(None) == 4
