@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from src.billing.operation_reservation import BillingOperationUnavailable
@@ -25,7 +25,17 @@ class RealtimeBillingRepository:
         self.db = db
         self.max_pending = max_pending
 
-    async def check_owner(self, context: RealtimeChargeContext) -> None:
+    @property
+    def requires_cost_bounds(self) -> bool:
+        return False
+
+    @property
+    def terminal_lifetime(self) -> timedelta | None:
+        return None
+
+    async def check_owner(
+        self, context: RealtimeChargeContext, *, budget_holds: bool = False
+    ) -> None:
         owner = context.attribution
         async with billing_transaction(self.db, _deadline()) as tx:
             rows = await tx.query_raw(
@@ -57,7 +67,7 @@ class RealtimeBillingRepository:
             )
         if not rows:
             raise RealtimeError("access_revoked", "Realtime access is unavailable")
-        if any(value is not None for value in rows[0].values()):
+        if not budget_holds and any(value is not None for value in rows[0].values()):
             # HTTP does not yet participate in shared holds. Do not pretend a
             # WebSocket-only reservation protects budgets shared with HTTP.
             raise RealtimeError(

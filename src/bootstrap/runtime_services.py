@@ -1,22 +1,38 @@
 from __future__ import annotations
 
+import asyncio
+from src.shutdown import BoundedExitStack, run_cleanup
 from dataclasses import dataclass
 import logging
 import os
 import socket
 from typing import Any
 
+from src.blocking_work import BlockingWorkExecutor
+from src.request_work_settings import resolve_request_work_settings
+from src.bootstrap.spend_operations import build_spend_operations
+from src.bootstrap.accounting import (
+    resolve_accounting_settings,
+    start_accounting_protocol,
+    start_accounting_projection,
+)
+from src.bootstrap.accounting_remote import RemoteAccountingOwner
+from src.bootstrap.accounting_role_config import validate_accounting_role
+from src.bootstrap.server_application import accounting_owner_id
+from src.deployment_capacity_settings import resolve_capacity_settings
+from src.redis_runtime import startup_setting as _runtime_setting
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.selector import configure_selector_execution
-from src.billing import (
-    AlertConfig,
-    AlertService,
-    BudgetEnforcementService,
-    SpendLedgerService,
-    SpendIngestionConfig,
-    SpendIngestionService,
-    SpendTrackingService,
-)
+from src.billing.alerts import AlertService
+from src.billing.budget import BudgetEnforcementService
+from src.billing.ledger import SpendLedgerService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend import SpendTrackingService
+from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
+from src.db.accounting_budget_reads import AccountingBudgetReadRepository
+from src.billing.accounting_projection import AccountingProjectionWorker
+from src.billing.accounting_service import AccountingProtocolService
+from src.db.budget_notifications import BudgetNotificationRepository
 from src.callbacks import CallbackManager
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
@@ -52,15 +68,31 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RuntimeServicesRuntime:
-    callback_manager: CallbackManager
-    governance_invalidation_service: GovernanceInvalidationService
+    callback_manager: CallbackManager | None = None
+    governance_invalidation_service: GovernanceInvalidationService | None = None
+    guardrail_executor: BlockingWorkExecutor | None = None
     tier_policy_service: Any | None = None
     spend_ingestion_service: SpendIngestionService | None = None
+    accounting_protocol_service: AccountingProtocolService | None = None
+    accounting_remote_owner: RemoteAccountingOwner | None = None
+    accounting_projection_worker: AccountingProjectionWorker | None = None
     prompt_registry_service: PromptRegistryService | None = None
+    budget_notification_worker: BudgetNotificationWorker | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
 async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
+    runtime = RuntimeServicesRuntime()
+    try:
+        return await _init_runtime_services(app, cfg, runtime)
+    except BaseException:
+        await shutdown_runtime_services(runtime)
+        raise
+
+
+async def _init_runtime_services(
+    app: Any, cfg: Any, runtime: RuntimeServicesRuntime
+) -> RuntimeServicesRuntime:
     app.state.callable_target_grant_service = CallableTargetGrantService(
         repository=getattr(app.state, "callable_target_binding_repository", None),
         policy_repository=getattr(app.state, "callable_target_scope_policy_repository", None),
@@ -135,6 +167,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             5.0,
         ),
     )
+    runtime.tier_policy_service = app.state.tier_policy_service
     resolved_tier_policy_mode = str(
         getattr(app.state.tier_policy_service, "mode", tier_policy_mode) or "disabled"
     )
@@ -162,7 +195,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     prompt_registry_service = PromptRegistryService(
         repository=app.state.prompt_registry_repository,
         route_group_repository=app.state.route_group_repository,
-        redis_client=app.state.redis,
+        redis_client=app.state.cache_redis,
         render_log_sink=getattr(app.state, "audit_service", None),
         l1_ttl_seconds=resolve_general_setting(
             general_settings, settings, "prompt_cache_l1_ttl_seconds", 30
@@ -207,10 +240,11 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             2.0,
         ),
     )
+    runtime.prompt_registry_service = prompt_registry_service
     app.state.prompt_registry_service = prompt_registry_service
     app.state.mcp_registry_service = MCPRegistryService(
         repository=app.state.mcp_repository,
-        redis_client=app.state.redis,
+        redis_client=app.state.cache_redis,
     )
     app.state.mcp_governance_service = MCPGovernanceService(
         repository=app.state.mcp_repository,
@@ -266,18 +300,30 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             None,
         ),
     )
+    runtime.governance_invalidation_service = app.state.governance_invalidation_service
     await app.state.governance_invalidation_service.start()
 
-    guardrail_registry = GuardrailRegistry()
+    request_work = resolve_request_work_settings(general_settings, app.state.settings)
+    guardrail_executor = BlockingWorkExecutor(
+        allocation="guardrail",
+        workers=request_work.guardrail_max_concurrency,
+        max_pending=request_work.guardrail_max_pending,
+        max_bytes=request_work.guardrail_max_bytes,
+        timeout_seconds=request_work.guardrail_timeout_seconds,
+        shutdown_seconds=request_work.guardrail_shutdown_seconds,
+    )
+    runtime.guardrail_executor = guardrail_executor
+    guardrail_registry = GuardrailRegistry(executor=guardrail_executor)
     if cfg.deltallm_settings.guardrails:
         guardrail_registry.load_from_config(cfg.deltallm_settings.guardrails)
     app.state.guardrail_registry = guardrail_registry
     app.state.guardrail_middleware = GuardrailMiddleware(
         registry=guardrail_registry,
-        cache_backend=app.state.redis,
+        cache_backend=app.state.cache_redis,
     )
 
-    callback_manager = CallbackManager()
+    callback_manager = CallbackManager(request_work)
+    runtime.callback_manager = callback_manager
     callback_manager.load_from_settings(
         success_callbacks=cfg.deltallm_settings.success_callback,
         failure_callbacks=cfg.deltallm_settings.failure_callback,
@@ -308,7 +354,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 
     notification_dispatcher = NotificationDispatcher(
         channels=channels,
-        redis_client=app.state.redis,
+        redis_client=app.state.cache_redis,
         audit_service=getattr(app.state, "audit_service", None),
         dedupe_ttl_seconds=budget_alert_ttl,
     )
@@ -322,7 +368,6 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         dispatcher=notification_dispatcher,
         recipient_resolver=app.state.notification_recipient_resolver,
         config_getter=lambda: getattr(app.state, "app_config", cfg),
-        config=AlertConfig(budget_alert_ttl=budget_alert_ttl),
     )
     spend_ingestion_mode = str(
         getattr(app.state, "spend_ingestion_mode", None)
@@ -334,19 +379,74 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         "client",
         None,
     )
+    accounting_db_client = getattr(
+        getattr(app.state, "accounting_postgres_manager", None),
+        "client",
+        None,
+    )
+    accounting_config = resolve_accounting_settings(general_settings, settings)
+    accounting_role = resolve_capacity_settings(general_settings, settings).deployment_capacity_role
+    validate_accounting_role(accounting_config, accounting_role)
+    if accounting_config.accounting_execution_mode == "local_journal":
+        owner = RemoteAccountingOwner(
+            accounting_config,
+            app.state.process_lifecycle,
+            role=accounting_role,
+            owner_id=accounting_owner_id(),
+        )
+        runtime.accounting_remote_owner = owner
+        app.state.accounting_remote_owner = owner
+        await owner.start(expires_at=asyncio.get_running_loop().time() + 5)
+        accounting_service = owner.service
+    else:
+        accounting_service = start_accounting_protocol(
+            accounting_config,
+            client=accounting_db_client,
+            owner_id=f"{socket.gethostname()}:{os.getpid()}:accounting-api",
+        )
+    runtime.accounting_protocol_service = accounting_service
+    app.state.accounting_protocol_service = accounting_service
+    app.state.accounting_budget_reads = (
+        AccountingBudgetReadRepository(app.state.prisma_manager.client)
+        if accounting_config.accounting_execution_mode == "local_journal"
+        else None
+    )
+    app.state.accounting_max_provider_attempts = accounting_config.accounting_max_provider_attempts
     if spend_ingestion_mode == "outbox" and telemetry_db_client is None:
         raise RuntimeError("spend outbox mode requires the dedicated telemetry database pool")
     spend_db_client = (
-        telemetry_db_client if spend_ingestion_mode == "outbox" else app.state.prisma_manager.client
+        telemetry_db_client
+        if spend_ingestion_mode == "outbox"
+        else app.state.foreground_prisma_manager.client
     )
+    spend_worker_enabled = bool(
+        _runtime_setting(
+            general_settings,
+            settings,
+            "spend_ingestion_worker_enabled",
+            True,
+        )
+    )
+    spend_worker_db_client = (
+        app.state.telemetry_worker_prisma_manager.client
+        if spend_ingestion_mode == "outbox" and spend_worker_enabled
+        else app.state.prisma_manager.client
+        if spend_ingestion_mode != "outbox"
+        else None
+    )
+    if spend_worker_enabled and spend_worker_db_client is None:
+        raise RuntimeError("Spend workers require their database allocation")
     app.state.spend_ledger_service = SpendLedgerService(spend_db_client)
     spend_writer = SpendTrackingService(
         db_client=spend_db_client,
         ledger=app.state.spend_ledger_service,
     )
     spend_ingestion_service = SpendIngestionService(
+        operations=None if accounting_service is not None else build_spend_operations(app.state),
         db_client=spend_db_client,
+        worker_db_client=spend_worker_db_client,
         writer=spend_writer,
+        accounting=accounting_service,
         config=SpendIngestionConfig(
             enabled=spend_ingestion_mode == "outbox",
             batch_size=int(
@@ -372,11 +472,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
                     general_settings, settings, "spend_ingestion_max_attempts", 10
                 )
             ),
-            worker_enabled=bool(
-                resolve_general_setting(
-                    general_settings, settings, "spend_ingestion_worker_enabled", True
-                )
-            ),
+            worker_enabled=spend_worker_enabled,
             max_pending_events=int(
                 resolve_general_setting(
                     general_settings, settings, "spend_ingestion_max_pending_events", 100_000
@@ -469,12 +565,43 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         ),
     )
     configure_selector_execution(app.state, spend_ingestion_service)
+    runtime.spend_ingestion_service = spend_ingestion_service
     await spend_ingestion_service.start()
     app.state.spend_tracking_service = spend_ingestion_service
+    projection_worker = await start_accounting_projection(
+        accounting_config,
+        client=getattr(getattr(app.state, "telemetry_worker_prisma_manager", None), "client", None),
+        owner_id=f"{socket.gethostname()}:{os.getpid()}:accounting-projection",
+        general=general_settings,
+        settings=settings,
+    )
+    runtime.accounting_projection_worker = projection_worker
+    app.state.accounting_projection_worker = projection_worker
+    budget_notification_repository = BudgetNotificationRepository(app.state.prisma_manager.client)
+    budget_notification_worker = None
+    notifications_enabled = bool(
+        _runtime_setting(general_settings, settings, "budget_notifications_enabled", False)
+    )
+    if notifications_enabled:
+        budget_notification_worker = BudgetNotificationWorker(
+            budget_notification_repository,
+            app.state.alert_service,
+            scan_accounting_thresholds=accounting_config.accounting_protocol_enabled,
+            alert_ttl_seconds=budget_alert_ttl,
+        )
+        runtime.budget_notification_worker = budget_notification_worker
+        app.state.budget_notification_worker = budget_notification_worker
+    budget_notification_producer = BudgetNotificationProducer(
+        budget_notification_repository,
+        enabled=lambda: (
+            notifications_enabled and app.state.alert_service.budget_notifications_enabled()
+        ),
+        ttl_seconds=budget_alert_ttl,
+    )
     app.state.budget_service = BudgetEnforcementService(
-        db_client=app.state.prisma_manager.client,
-        alert_service=app.state.alert_service,
-        query_mode=resolve_general_setting(
+        db_client=app.state.foreground_prisma_manager.client,
+        alert_service=budget_notification_producer,
+        query_mode=_runtime_setting(
             general_settings,
             settings,
             "budget_enforcement_query_mode",
@@ -499,33 +626,59 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         if callable(start_tier_policy_service):
             await start_tier_policy_service()
 
-    return RuntimeServicesRuntime(
-        callback_manager=callback_manager,
-        governance_invalidation_service=app.state.governance_invalidation_service,
-        tier_policy_service=app.state.tier_policy_service,
-        spend_ingestion_service=spend_ingestion_service,
-        prompt_registry_service=prompt_registry_service,
-        statuses=(
-            BootstrapStatus("callable_target_grants", "ready"),
-            BootstrapStatus("tier_policy", tier_policy_status),
-            BootstrapStatus("prompt_registry", "ready"),
-            BootstrapStatus("mcp_runtime", "ready"),
-            BootstrapStatus("guardrails", "ready"),
-            BootstrapStatus("callbacks", "ready"),
-            BootstrapStatus("billing", "ready"),
-        ),
+    runtime.statuses = (
+        BootstrapStatus("callable_target_grants", "ready"),
+        BootstrapStatus("tier_policy", tier_policy_status),
+        BootstrapStatus("prompt_registry", "ready"),
+        BootstrapStatus("mcp_runtime", "ready"),
+        BootstrapStatus("guardrails", "ready"),
+        BootstrapStatus("callbacks", "ready"),
+        BootstrapStatus("billing", "ready"),
     )
+    if budget_notification_worker is not None:
+        await budget_notification_worker.start()
+        lifecycle = getattr(app.state, "process_lifecycle", None)
+        if lifecycle is not None and budget_notification_worker.task is not None:
+            lifecycle.register_producer(
+                budget_notification_worker.stop, budget_notification_worker.task
+            )
+    return runtime
 
 
 async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
-    if runtime.spend_ingestion_service is not None:
-        await runtime.spend_ingestion_service.shutdown()
-    prompt_shutdown = getattr(runtime.prompt_registry_service, "shutdown", None)
-    if callable(prompt_shutdown):
-        await prompt_shutdown()
-    tier_policy_service = runtime.tier_policy_service
-    if tier_policy_service is not None and callable(getattr(tier_policy_service, "close", None)):
-        await tier_policy_service.close()
-    await runtime.governance_invalidation_service.close()
-    await runtime.callback_manager.shutdown()
-    await close_shared_client()
+    async with BoundedExitStack() as cleanup:
+        cleanup.push_async_callback(close_shared_client)
+        if runtime.callback_manager is not None:
+            cleanup.push_async_callback(runtime.callback_manager.shutdown)
+        if runtime.guardrail_executor is not None:
+            cleanup.push_async_callback(runtime.guardrail_executor.shutdown)
+        if runtime.governance_invalidation_service is not None:
+            cleanup.push_async_callback(runtime.governance_invalidation_service.close)
+        tier_policy_service = runtime.tier_policy_service
+        if tier_policy_service is not None and callable(
+            getattr(tier_policy_service, "close", None)
+        ):
+            cleanup.push_async_callback(tier_policy_service.close)
+        prompt_shutdown = getattr(runtime.prompt_registry_service, "shutdown", None)
+        if callable(prompt_shutdown):
+            cleanup.push_async_callback(prompt_shutdown)
+        if runtime.accounting_projection_worker is not None:
+            cleanup.push_async_callback(runtime.accounting_projection_worker.stop)
+        if runtime.accounting_remote_owner is not None:
+            cleanup.push_async_callback(runtime.accounting_remote_owner.close)
+        elif runtime.accounting_protocol_service is not None:
+            cleanup.push_async_callback(runtime.accounting_protocol_service.close)
+        # Independent bounded drains overlap, before dependencies close. Adding
+        # optional alerts must not add eleven seconds to the spend drain budget.
+        drains = [
+            run_cleanup(service.shutdown)
+            for service in (
+                runtime.budget_notification_worker,
+                runtime.spend_ingestion_service,
+            )
+            if service is not None
+        ]
+        results = await asyncio.gather(*drains, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result

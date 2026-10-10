@@ -11,7 +11,12 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
 
 from src.db.repositories import KeyRecord
-from src.models.errors import AuthenticationError, ServiceUnavailableError
+from src.models.errors import (
+    AuthenticationError,
+    AuthenticationUnavailableError,
+    ServiceUnavailableError,
+)
+from src.services.auth_fallback import AuthFallbackLimits
 from src.models.responses import UserAPIKeyAuth
 from src.services.key_auth_cache import KeyAuthCache
 from src.services.key_service import KeyService
@@ -291,7 +296,7 @@ async def test_service_cannot_restore_allow_after_database_snapshot_races_revoca
     release.set()
     with pytest.raises(AuthenticationError):
         await pending
-    assert service.primary_gate.active == 0
+    assert service.fallback.gate.active == 0
 
 
 async def test_redis_outage_uses_bounded_primary_reads_and_never_installs_cache():
@@ -303,14 +308,19 @@ async def test_redis_outage_uses_bounded_primary_reads_and_never_installs_cache(
         async def get_by_token(self, token):
             return KeyRecord(token=token, expires=datetime.now(UTC) + timedelta(seconds=60))
 
-    service = KeyService(Repository(), Offline(), auth_cache_ttl_seconds=60)
+    service = KeyService(
+        Repository(),
+        Offline(),
+        auth_cache_ttl_seconds=60,
+        fallback_limits=AuthFallbackLimits(max_active=4, max_waiters=0),
+    )
     auth = await service.get_auth_by_token_hash("primary-only")
-    assert auth.api_key == "primary-only" and service.primary_gate.active == 0
+    assert auth.api_key == "primary-only" and service.fallback.gate.active == 0
     for _ in range(4):
-        await service.primary_gate.acquire(timeout_seconds=0.01)
+        await service.fallback.gate.acquire(timeout_seconds=0.01)
     try:
-        with pytest.raises(ServiceUnavailableError):
+        with pytest.raises(AuthenticationUnavailableError):
             await service.get_auth_by_token_hash("saturated")
     finally:
         for _ in range(4):
-            await service.primary_gate.release()
+            await service.fallback.gate.release()

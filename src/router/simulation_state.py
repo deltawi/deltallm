@@ -84,6 +84,26 @@ class RoutingSimulationState:
                 self._cooldowns[item.deployment_id] = bool(loaded.get(item.deployment_id, False))
         return {item.deployment_id: self._cooldowns[item.deployment_id] for item in resolved}
 
+    async def get_health_and_cooldown_batch(
+        self, health_refs: list[HealthRefInput]
+    ) -> tuple[dict[str, dict[str, object]], dict[str, bool]]:
+        resolved = [coerce_health_ref(item) for item in health_refs]
+        missing = [
+            item
+            for item in resolved
+            if item.deployment_id not in self._health or item.deployment_id not in self._cooldowns
+        ]
+        if missing:
+            self._require_loading("health and cooldown", [item.deployment_id for item in missing])
+            health, cooldowns = await self._source.get_health_and_cooldown_batch(missing)
+            for item in missing:
+                self._health[item.deployment_id] = dict(health.get(item.deployment_id, {}))
+                self._cooldowns[item.deployment_id] = bool(cooldowns.get(item.deployment_id, False))
+        return (
+            {item.deployment_id: dict(self._health[item.deployment_id]) for item in resolved},
+            {item.deployment_id: self._cooldowns[item.deployment_id] for item in resolved},
+        )
+
     async def get_active_requests_batch(self, deployment_ids: list[str]) -> dict[str, int]:
         missing = [item for item in deployment_ids if item not in self._active]
         if missing:
@@ -179,6 +199,17 @@ class RoutingSimulationState:
         else:
             self._owned_attempts.pop(permit.deployment_id, None)
         return self._active.get(permit.deployment_id, 0) + current
+
+    async def complete_attempt_success(
+        self,
+        permit: AttemptPermit,
+        *,
+        latency_ms: float,
+        usage_counters: Mapping[str, int],
+    ) -> HealthTransitionResult:
+        del latency_ms, usage_counters
+        await self.release_attempt(permit)
+        return HealthTransitionResult(applied=False, state=DeploymentHealthState.HEALTHY)
 
     async def record_latency(self, deployment_id: str, latency_ms: float) -> None:
         del deployment_id, latency_ms

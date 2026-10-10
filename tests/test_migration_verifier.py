@@ -22,6 +22,127 @@ def test_database_url_for_replaces_only_database_path() -> None:
     )
 
 
+def test_accounting_verifier_requires_local_lease_schema_and_functions(monkeypatch) -> None:
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_protocol("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "local_dispatch",
+        "dispatch_expires_at",
+        "returned_exact",
+        "returned_operations",
+        "unknown_provisional_exact",
+        "deltallm_accounting_grant_local_dispatch_check",
+        "deltallm_accounting_allocate_local_permit_grant(bigint,text,uuid,integer,integer,jsonb)",
+        "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
+        "deltallm_accounting_return_local_permits(bigint,text,uuid,integer)",
+        "deltallm_accounting_return_local_permits_batch(bigint,text,jsonb)",
+        "deltallm_accounting_finalize_local_permit_batch(bigint,jsonb)",
+    ):
+        assert contract in sql
+
+
+def test_migration_verifier_checks_recovery_schema_indexes_and_financial_guards(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_recovery("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "PRIMARY KEY (protocol_name, generation)",
+        "confdeltype='c' AND confupdtype='r'",
+        "deltallm_accounting_grant_expiry_work_idx",
+        "deltallm_accounting_grant_drain_work_idx",
+        "WITH forward_scan AS MATERIALIZED",
+        "FROM unnest(inspected_ids) selected(grant_id)",
+        "last_expires_at=next_expires_at,last_grant_id=next_grant_id",
+        "reserved_exact=w.reserved_exact-d.allocated_exact",
+        "outstanding_count=p.outstanding_count-d.slots",
+    ):
+        assert contract in sql
+
+
+def test_migration_verifier_checks_the_partial_oldest_terminal_index_and_counters(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_health("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "deltallm_accounting_terminal_oldest_work_idx",
+        "(generation, accepted_at, sequence)",
+        "status <> ''completed''",
+        "pending_entries",
+        "pending_bytes",
+        "failed_entries",
+        "deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)",
+        "deltallm_accounting_ensure_grants_batch(bigint,text,integer,integer,jsonb)",
+        "deltallm_accounting_reserve_grant_batch(bigint,text,integer,integer,jsonb)",
+        "deltallm_accounting_finalize_grant_batch(bigint,jsonb)",
+        "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
+        "deltallm_accounting_backlog_snapshot(bigint)",
+        "deltallm_accounting_project_read_models(bigint,text,uuid,integer,bigint,bigint[])",
+        "p.proconfig @> ARRAY['jit=off']",
+        "deltallm_accounting_materialize_terminal_journal(bigint,text,uuid,bigint[])",
+        "p.proconfig @> ARRAY['plan_cache_mode=force_custom_plan']",
+        "accounting_terminal_commit_key_index",
+    ):
+        assert contract in sql
+
+
+def test_migration_verifier_checks_projection_presence_bounds_and_fences(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_presence("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "PRIMARY KEY (protocol_name, generation, slot)",
+        "confdeltype='c' AND confupdtype='r'",
+        "slot >= 0%slot <= 63",
+        "isfinite(expires_at)",
+        "NOT ready%owner_token IS NOT NULL",
+    ):
+        assert contract in sql
+
+
+def test_migration_verifier_checks_native_reporting_contracts(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_native_reporting(
+        "unused", "postgresql://localhost/test"
+    )
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "numeric_precision=38 AND numeric_scale=18",
+        "UNIQUE (accounting_sequence)",
+        "rollup_shard)",
+        "enable_seqscan=off",
+        "indisvalid AND indisready",
+    ):
+        assert contract in sql
+
+
+def test_migration_verifier_checks_each_bounded_window_funding_lookup(monkeypatch) -> None:
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_window_keysets(
+        "unused", "postgresql://localhost/test"
+    )
+    sql = execute.call_args.kwargs["sql"]
+    assert "w.window_id = ANY(ARRAY(" in sql
+    assert "w.window_id IN (" in sql
+    assert "lookup.window_id=ref->>'window_id' OFFSET 0" in sql
+    assert "AS is_replay OFFSET 0" in sql
+    assert "AND NOT replay.is_replay" in sql
+    assert "SELECT candidate.grant_id FROM candidate" in sql
+    for name in (
+        "deltallm_accounting_ensure_grants_batch",
+        "deltallm_accounting_allocate_permit_grants_batch",
+        "deltallm_accounting_allocate_local_permit_grants_batch",
+        "deltallm_accounting_permit_window_ids",
+    ):
+        assert name in sql
+
+
 @pytest.mark.parametrize(
     "database_name",
     (
@@ -195,9 +316,12 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     base_schema = tmp_path / "base" / "schema.prisma"
     base_schema.parent.mkdir()
     base_schema.touch()
-    state = SimpleNamespace(validated=False, installed_checks=0, final_checks=0)
+    state = SimpleNamespace(
+        validated=False, installed_checks=0, final_checks=0, recovery_checks=0, health_checks=0
+    )
     steps: list[str] = []
     created, dropped, recovery = Mock(), Mock(), Mock()
+    history = Mock()
     validation = Path("migrations") / verifier.SELECTOR_VALIDATION_MIGRATION / "migration.sql"
 
     def extract(base_ref: str, _destination: Path) -> Path:
@@ -214,6 +338,10 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             state.validated |= (schema.parent / validation).is_file()
 
     def execute(_prisma: str, *, schema: Path, database_url: str, sql: str) -> None:
+        if "accounting recovery cursor contract is missing" in sql:
+            state.recovery_checks += 1
+        if "accounting oldest terminal work index is missing" in sql:
+            state.health_checks += 1
         if "Batch checkpoint installation must commit before validation" in sql:
             assert not state.validated, "intermediate check cannot follow applied validation"
             state.installed_checks += 1
@@ -228,6 +356,7 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(verifier, "_db_execute", execute)
     monkeypatch.setattr(verifier, "_create_database", created)
     monkeypatch.setattr(verifier, "_drop_database", dropped)
+    monkeypatch.setattr(verifier, "_verify_image_history", history)
     monkeypatch.setattr(verifier, "_verify_model_identity_recovery_path", recovery)
     return SimpleNamespace(
         schema=base_schema,
@@ -236,8 +365,25 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         steps=steps,
         created=created,
         dropped=dropped,
+        history=history,
         recovery=recovery,
     )
+
+
+def test_model_identity_fixture_keeps_all_unchanged_prerequisite_migrations(tmp_path: Path) -> None:
+    verifier = verify_migration_paths
+    staged = verifier._stage_before_model_identity_migration(tmp_path / "prerequisites")
+    assert staged.read_bytes() == verifier.CURRENT_SCHEMA.read_bytes()
+    for original in (verifier.CURRENT_SCHEMA.parent / "migrations").iterdir():
+        copied = staged.parent / "migrations" / original.name
+        if original.is_dir():
+            assert copied.exists() == (original.name < verifier.MODEL_IDENTITY_MIGRATION)
+            if copied.exists():
+                assert (copied / "migration.sql").read_bytes() == (
+                    original / "migration.sql"
+                ).read_bytes()
+        else:
+            assert copied.read_bytes() == original.read_bytes()
 
 
 @pytest.mark.parametrize("base_state", ["before-install", "installed", "validated"])
@@ -264,7 +410,10 @@ def test_upgrade_verifier_handles_selector_migration_already_in_base(
     assert h.steps == ["base", *intermediate, "current", "final-check"]
     assert h.state.installed_checks == int(base_state != "validated")
     assert h.state.final_checks == 1
+    assert h.state.recovery_checks == 3
+    assert h.state.health_checks == 3
     assert h.created.call_count == h.dropped.call_count == 4
+    assert h.history.call_count == 4
     h.recovery.assert_called_once()
     assert h.dropped.call_args_list == list(reversed(h.created.call_args_list))
 

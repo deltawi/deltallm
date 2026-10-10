@@ -44,7 +44,17 @@ GET /health/readiness
 ```
 
 Returns `200` when all configured critical checks are ready and `503` when one is degraded.
-Depending on enabled features, checks can include PostgreSQL, Redis, telemetry storage, routing
+Database and critical Redis probes run concurrently, with one owned refresh per process,
+a one-second deadline and a one-second cache. Process drain and dead/stale required workers
+bypass cached dependency success.
+Missing required clients, capacity exhaustion, failures and timeouts return `503`.
+PostgreSQL checks include `database` for control capacity and `foreground_database` for
+API-key authentication and admission. Outbox mode also requires `telemetry_database`
+and `telemetry_worker_database`; legacy mode omits these disabled allocations.
+Settlement capacity is required when spend operation intents are enabled.
+Optional cache Redis clients do not gate readiness.
+
+Depending on enabled features, checks can also include routing
 reconciliation, spend/audit/email workers, batch webhook delivery, and organization lifecycle
 services.
 
@@ -53,9 +63,14 @@ services.
   "status": "ok",
   "checks": {
     "redis": true,
-    "database": true
+    "database": true,
+    "foreground_database": true
   },
-  "details": {}
+  "details": {
+    "redis": {"state": "ready"},
+    "database": {"state": "ready"},
+    "foreground_database": {"state": "ready"}
+  }
 }
 ```
 
@@ -103,3 +118,6 @@ monitoring proxy; do not route this path through a public wildcard ingress.
 
 See [Observability](../features/observability.md) for metrics and alerting guidance and
 [Security hardening](../security/hardening.md) for path isolation.
+
+See [Process lifecycle](../deployment/process-lifecycle.md) for configured worker expectations,
+probe hysteresis, drain rejection and the complete termination budget.

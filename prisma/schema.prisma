@@ -1,6 +1,7 @@
 generator client {
   provider                    = "prisma-client-py"
   interface                   = "asyncio"
+  recursive_type_depth        = -1
   enable_experimental_decimal = true
 }
 
@@ -67,6 +68,99 @@ model DeltaLLM_SpendLogEvents {
   @@map("deltallm_spendlog_events")
 }
 
+model DeltaLLM_AccountingUsageFactV2 {
+  event_id                  String   @id(map: "deltallm_accounting_usage_facts_v2_pkey")
+  accounting_sequence       BigInt   @unique(map: "deltallm_usage_facts_v2_sequence_key")
+  protocol_generation       BigInt
+  source_sha256             Bytes
+  operation_id              String
+  request_id                String
+  call_type                 String
+  api_key                   String
+  user_id                   String?
+  team_id                   String?
+  organization_id           String?
+  owner_account_id          String?
+  end_user_id               String?
+  model                     String
+  deployment_model          String?
+  provider                  String?
+  api_base                  String?
+  spend                     Float
+  provider_cost             Float?
+  spend_exact               Decimal  @db.Decimal(38, 18)
+  provider_cost_exact       Decimal? @db.Decimal(38, 18)
+  billing_unit              String?
+  pricing_tier              String?
+  total_tokens              Int      @default(0)
+  input_tokens              Int      @default(0)
+  output_tokens             Int      @default(0)
+  cached_input_tokens       Int      @default(0)
+  cached_output_tokens      Int      @default(0)
+  input_audio_tokens        Int      @default(0)
+  output_audio_tokens       Int      @default(0)
+  input_characters          Int      @default(0)
+  output_characters         Int      @default(0)
+  duration_seconds          Float    @default(0)
+  image_count               Int      @default(0)
+  rerank_units              Int      @default(0)
+  start_time                DateTime @db.Timestamptz(6)
+  end_time                  DateTime @db.Timestamptz(6)
+  latency_ms                Int?
+  cache_hit                 Boolean  @default(false)
+  cache_key                 String?
+  request_tags              String[]
+  unpriced_reason           String?
+  pricing_fields_used       Json?
+  usage_snapshot            Json?
+  metadata                  Json?
+  status                    String   @default("success")
+  http_status_code          Int?
+  error_type                String?
+  source_occurred_at        DateTime @db.Timestamptz(6)
+  projected_at              DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([organization_id, start_time, event_id], map: "deltallm_usage_facts_v2_org_time_id_idx")
+  @@index([owner_account_id, start_time, event_id], map: "deltallm_usage_facts_v2_owner_time_id_idx")
+  @@index([team_id, start_time, event_id], map: "deltallm_usage_facts_v2_team_time_id_idx")
+  @@index([api_key, start_time, event_id], map: "deltallm_usage_facts_v2_api_key_time_id_idx")
+  @@index([user_id, start_time, event_id], map: "deltallm_usage_facts_v2_user_time_id_idx")
+  @@index([model, start_time, event_id], map: "deltallm_usage_facts_v2_model_time_id_idx")
+  @@index([provider, start_time, event_id], map: "deltallm_usage_facts_v2_provider_time_id_idx")
+  @@index([start_time, event_id], map: "deltallm_usage_facts_v2_time_id_idx")
+  @@index([request_tags], type: Gin, map: "deltallm_usage_facts_v2_request_tags_gin_idx")
+  @@map("deltallm_accounting_usage_facts_v2")
+}
+
+model DeltaLLM_AccountingUsageRollupV2 {
+  bucket_kind              String
+  bucket_start             DateTime @db.Timestamptz(6)
+  organization_id          String   @default("")
+  team_id                  String   @default("")
+  user_id                  String   @default("")
+  owner_account_id         String   @default("")
+  api_key                  String   @default("")
+  model                    String   @default("")
+  provider                 String   @default("")
+  status                   String   @default("success")
+  rollup_shard             Int      @default(0) @db.SmallInt
+  request_count            BigInt   @default(0)
+  spend_exact              Decimal  @default(0) @db.Decimal(38, 18)
+  provider_cost_exact      Decimal  @default(0) @db.Decimal(38, 18)
+  total_tokens             BigInt   @default(0)
+  input_tokens             BigInt   @default(0)
+  output_tokens            BigInt   @default(0)
+  cached_input_tokens      BigInt   @default(0)
+  cached_output_tokens     BigInt   @default(0)
+  updated_at               DateTime @default(now()) @db.Timestamptz(6)
+
+  @@id([bucket_kind, bucket_start, organization_id, team_id, user_id, owner_account_id, api_key, model, provider, status, rollup_shard], map: "deltallm_usage_rollups_v2_pkey")
+  @@index([organization_id, bucket_kind, bucket_start], map: "deltallm_usage_rollups_v2_org_bucket_idx")
+  @@index([team_id, bucket_kind, bucket_start], map: "deltallm_usage_rollups_v2_team_bucket_idx")
+  @@index([owner_account_id, bucket_kind, bucket_start], map: "deltallm_usage_rollups_v2_owner_bucket_idx")
+  @@map("deltallm_accounting_usage_rollups_v2")
+}
+
 model DeltaLLM_TeamModelSpendCounter {
   team_id     String
   model       String
@@ -74,10 +168,30 @@ model DeltaLLM_TeamModelSpendCounter {
   spend_exact Decimal? @db.Decimal(38, 18)
   reserved_spend_exact Decimal @default(0) @db.Decimal(38, 18)
   updated_at  DateTime @updatedAt
+  reconciled_at DateTime?
 
   @@id([team_id, model])
   @@index([team_id], map: "deltallm_teammodelspend_team_idx")
   @@map("deltallm_teammodelspend")
+}
+
+model DeltaLLM_BudgetNotification {
+  organization DeltaLLM_OrganizationTable @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  organization_id String @id
+  notification_id String @unique
+  spend Decimal @db.Decimal(38, 18)
+  soft_budget Decimal @db.Decimal(38, 18)
+  hard_budget Decimal? @db.Decimal(38, 18)
+  status String @default("pending")
+  attempt_count Int @default(0)
+  available_at DateTime @default(now()) @db.Timestamptz(6)
+  dedupe_until DateTime @db.Timestamptz(6)
+  claim_token String?
+  lease_expires_at DateTime? @db.Timestamptz(6)
+  outcome String?
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("deltallm_budgetnotification")
 }
 
 model DeltaLLM_VerificationToken {
@@ -248,6 +362,7 @@ model DeltaLLM_OrganizationTable {
 
   tier_assignments DeltaLLM_OrganizationTierAssignment[]
   asset_grants     DeltaLLM_AssetGrant[] @relation("asset_grant_organization")
+  budget_notification DeltaLLM_BudgetNotification?
 
   @@index([lifecycle_state, updated_at], map: "deltallm_organizationtable_lifecycle_state_idx")
   @@map("deltallm_organizationtable")
@@ -703,9 +818,26 @@ model DeltaLLM_BillingOperation {
   created_at         DateTime  @default(now()) @db.Timestamptz
   updated_at         DateTime  @default(now()) @db.Timestamptz
 
+  accounting_protocol       String?
+  accounting_generation     BigInt?
+  accounting_partition      Int?
+  request_fingerprint       String?
+  accounting_state          String?
+  accounting_grant_id       String?
+  accounting_permit_ordinal Int?
+  accounting_grant_fence_token String? @db.Uuid
+  provisional_debit_exact   Decimal?  @db.Decimal(38, 18)
+  final_event_sequence      BigInt?
+
+  accounting_reservations DeltaLLM_AccountingReservation[]
+  accounting_events       DeltaLLM_AccountingEvent[]
+  accounting_grant        DeltaLLM_AccountingGrant? @relation(fields: [accounting_grant_id], references: [grant_id], onDelete: Restrict, onUpdate: Restrict)
+
   @@index([organization_id, created_at, operation_id], map: "deltallm_billing_operations_org_time_idx")
   @@index([created_at, operation_id], map: "deltallm_billing_operations_time_idx")
   @@index([team_id, created_at, operation_id], map: "deltallm_billing_operations_team_time_idx")
+  @@index([accounting_generation, accounting_state, expires_at, operation_id], map: "deltallm_billing_operations_accounting_recovery_idx")
+  @@unique([accounting_grant_id, accounting_permit_ordinal], map: "deltallm_billing_operation_permit_ordinal_key")
   @@map("deltallm_billing_operations")
 }
 
@@ -728,6 +860,278 @@ model DeltaLLM_RealtimeBillingIntent {
   @@map("deltallm_realtime_billing_intents")
 }
 
+model DeltaLLM_AccountingProtocol {
+  protocol_name                 String
+  generation                    BigInt
+  writer_version                Int
+  state                         String
+  partition_count               Int
+  max_outstanding_per_partition Int
+  activated_at                  DateTime? @db.Timestamptz
+  created_at                    DateTime  @default(now()) @db.Timestamptz
+  updated_at                    DateTime  @default(now()) @db.Timestamptz
+
+  partitions DeltaLLM_AccountingPartition[]
+  windows    DeltaLLM_AccountingBudgetWindow[]
+  grants     DeltaLLM_AccountingGrant[]
+  recovery_cursor DeltaLLM_AccountingRecoveryCursor?
+  projection_presence DeltaLLM_AccountingProjectionPresence[]
+
+  @@id([protocol_name, generation])
+  @@map("deltallm_accounting_protocols")
+}
+
+model DeltaLLM_AccountingPartition {
+  protocol_name      String
+  generation         BigInt
+  partition_id       Int
+  max_outstanding    Int
+  outstanding_count Int      @default(0)
+  updated_at         DateTime @default(now()) @db.Timestamptz
+
+  protocol DeltaLLM_AccountingProtocol @relation(fields: [protocol_name, generation], references: [protocol_name, generation], onDelete: Restrict, onUpdate: Restrict)
+  grants   DeltaLLM_AccountingGrant[]   @relation("AccountingGrantCapacityPartition")
+  terminal_capacity DeltaLLM_AccountingTerminalCapacity?
+
+  @@id([protocol_name, generation, partition_id])
+  @@map("deltallm_accounting_partitions")
+}
+
+model DeltaLLM_AccountingBudgetWindow {
+  window_id             String   @id @default(uuid())
+  protocol_name         String
+  generation            BigInt
+  scope_type             String
+  scope_id               String
+  period_key             String
+  currency               String   @default("USD")
+  policy_generation      BigInt
+  limit_exact            Decimal  @db.Decimal(38, 18)
+  committed_exact        Decimal  @default(0) @db.Decimal(38, 18)
+  reserved_exact         Decimal  @default(0) @db.Decimal(38, 18)
+  provisional_exact      Decimal  @default(0) @db.Decimal(38, 18)
+  window_starts_at       DateTime @db.Timestamptz
+  window_ends_at         DateTime @db.Timestamptz
+  renewal_spec           String?
+  renewal_anchor_day     Int?
+  created_at             DateTime @default(now()) @db.Timestamptz
+  updated_at             DateTime @default(now()) @db.Timestamptz
+
+  protocol    DeltaLLM_AccountingProtocol @relation(fields: [protocol_name, generation], references: [protocol_name, generation], onDelete: Restrict, onUpdate: Restrict)
+  reservations DeltaLLM_AccountingReservation[]
+  grants       DeltaLLM_AccountingGrantWindow[]
+
+  @@unique([protocol_name, generation, scope_type, scope_id, period_key], map: "deltallm_accounting_budget_window_scope_key")
+  @@index([protocol_name, generation, window_ends_at], map: "deltallm_accounting_budget_window_expiry_idx")
+  @@index([protocol_name, generation, scope_type, scope_id, window_ends_at, window_starts_at], map: "deltallm_accounting_window_subject_time_idx")
+  @@map("deltallm_accounting_budget_windows")
+}
+
+model DeltaLLM_AccountingGrant {
+  grant_id             String   @id
+  protocol_name        String
+  generation           BigInt
+  grantee_id           String
+  subject_key          String
+  accounting_partition Int
+  state                String
+  dispatch_mode        String   @default("assigned")
+  local_dispatch       Boolean  @default(false)
+  dispatch_expires_at  DateTime? @db.Timestamptz
+  fence_token          String?  @unique(map: "deltallm_accounting_grant_fence_token_key") @db.Uuid
+  unit_allowance_exact Decimal? @db.Decimal(38, 18)
+  allocated_exact      Decimal  @db.Decimal(38, 18)
+  consumed_exact       Decimal  @default(0) @db.Decimal(38, 18)
+  settled_exact        Decimal  @default(0) @db.Decimal(38, 18)
+  returned_exact       Decimal  @default(0) @db.Decimal(38, 18)
+  unknown_provisional_exact Decimal @default(0) @db.Decimal(38, 18)
+  operation_limit      Int
+  consumed_operations  Int      @default(0)
+  settled_operations   Int      @default(0)
+  returned_operations  Int      @default(0)
+  expires_at           DateTime @db.Timestamptz
+  reconciled_at        DateTime? @db.Timestamptz
+  created_at           DateTime @default(now()) @db.Timestamptz
+  updated_at           DateTime @default(now()) @db.Timestamptz
+
+  protocol   DeltaLLM_AccountingProtocol @relation(fields: [protocol_name, generation], references: [protocol_name, generation], onDelete: Restrict, onUpdate: Restrict)
+  capacity_partition DeltaLLM_AccountingPartition @relation("AccountingGrantCapacityPartition", fields: [protocol_name, generation, accounting_partition], references: [protocol_name, generation, partition_id], onDelete: Restrict, onUpdate: Restrict)
+  windows    DeltaLLM_AccountingGrantWindow[]
+  operations DeltaLLM_BillingOperation[]
+  reservations DeltaLLM_AccountingReservation[]
+
+  terminal_journal DeltaLLM_AccountingTerminalJournal[]
+
+  @@index([protocol_name, generation, grantee_id, subject_key, state, expires_at], map: "deltallm_accounting_grant_lookup_idx")
+  @@index([protocol_name, generation, state, expires_at], map: "deltallm_accounting_grant_reconcile_idx")
+  @@map("deltallm_accounting_grants")
+}
+
+model DeltaLLM_AccountingRecoveryCursor {
+  protocol_name String @default("primary")
+  generation BigInt
+  last_expires_at DateTime @default(dbgenerated("'1970-01-01 00:00:00+00'::timestamp with time zone")) @db.Timestamptz
+  last_grant_id String @default("")
+
+  protocol DeltaLLM_AccountingProtocol @relation(fields: [protocol_name, generation], references: [protocol_name, generation], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([protocol_name, generation])
+  @@map("deltallm_accounting_recovery_cursors")
+}
+
+model DeltaLLM_AccountingProjectionPresence {
+  protocol_name String @default("primary")
+  generation BigInt
+  slot Int
+  owner_token String? @db.Uuid
+  expires_at DateTime @default(dbgenerated("'1970-01-01 00:00:00+00'::timestamp with time zone")) @db.Timestamptz
+  ready Boolean @default(false)
+
+  protocol DeltaLLM_AccountingProtocol @relation(fields: [protocol_name, generation], references: [protocol_name, generation], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([protocol_name, generation, slot])
+  @@map("deltallm_accounting_projection_presence")
+}
+
+model DeltaLLM_AccountingTerminalCapacity {
+  protocol_name String @default("primary")
+  generation BigInt
+  accounting_partition Int
+  max_entries Int
+  max_bytes BigInt @default(67108864)
+  pending_entries Int @default(0)
+  pending_bytes BigInt @default(0)
+  failed_entries Int @default(0)
+
+  partition DeltaLLM_AccountingPartition @relation(fields: [protocol_name, generation, accounting_partition], references: [protocol_name, generation, partition_id], onDelete: Restrict, onUpdate: Restrict)
+  journal DeltaLLM_AccountingTerminalJournal[]
+
+  @@id([protocol_name, generation, accounting_partition])
+  @@map("deltallm_accounting_terminal_capacity")
+}
+
+model DeltaLLM_AccountingTerminalJournal {
+  sequence BigInt @id @default(autoincrement())
+  protocol_name String @default("primary")
+  generation BigInt
+  operation_id String @unique(map: "deltallm_accounting_terminal_journal_operation_id_key")
+  grant_id String
+  grantee_id String
+  fence_token String @db.Uuid
+  permit_ordinal Int
+  accounting_partition Int
+  allowance_exact Decimal @db.Decimal(38, 18)
+  outcome String
+  reservation_sha256 Bytes
+  finalization_sha256 Bytes
+  payload_bytes Int
+  status String @default("pending")
+  attempts Int @default(0)
+  lease_owner String?
+  lease_token String? @db.Uuid
+  lease_expires_at DateTime? @db.Timestamptz
+  materialized_event_sequence BigInt?
+  accepted_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @default(now()) @db.Timestamptz
+  completed_at DateTime? @db.Timestamptz
+  last_error_code String?
+  receipt_only Boolean @default(false)
+  committed_exact Decimal? @db.Decimal(38, 18)
+  provisional_exact Decimal? @db.Decimal(38, 18)
+  released_exact Decimal? @db.Decimal(38, 18)
+
+  capacity DeltaLLM_AccountingTerminalCapacity @relation(fields: [protocol_name, generation, accounting_partition], references: [protocol_name, generation, accounting_partition], onDelete: Restrict, onUpdate: Restrict)
+  grant DeltaLLM_AccountingGrant @relation(fields: [grant_id], references: [grant_id], onDelete: Restrict, onUpdate: Restrict)
+  payload DeltaLLM_AccountingTerminalPayload?
+
+  // Partial work indexes are declared in SQL. Prisma cannot express predicates.
+  @@unique([grant_id, permit_ordinal], map: "deltallm_accounting_terminal_journa_grant_id_permit_ordinal_key")
+  @@map("deltallm_accounting_terminal_journal")
+}
+
+model DeltaLLM_AccountingTerminalPayload {
+  journal_sequence BigInt @id
+  reservation_payload String
+  finalization_payload String
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  journal DeltaLLM_AccountingTerminalJournal @relation(fields: [journal_sequence], references: [sequence], onDelete: Cascade, onUpdate: Restrict)
+
+  @@map("deltallm_accounting_terminal_payloads")
+}
+
+model DeltaLLM_AccountingGrantWindow {
+  grant_id        String
+  window_id       String
+  allocated_exact Decimal @db.Decimal(38, 18)
+
+  grant  DeltaLLM_AccountingGrant      @relation(fields: [grant_id], references: [grant_id], onDelete: Restrict, onUpdate: Restrict)
+  window DeltaLLM_AccountingBudgetWindow @relation(fields: [window_id], references: [window_id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([grant_id, window_id])
+  @@index([window_id, grant_id], map: "deltallm_accounting_grant_window_idx")
+  @@map("deltallm_accounting_grant_windows")
+}
+
+model DeltaLLM_AccountingReservation {
+  operation_id       String
+  window_id          String
+  grant_id           String?
+  allowance_exact    Decimal  @db.Decimal(38, 18)
+  committed_exact    Decimal  @default(0) @db.Decimal(38, 18)
+  provisional_exact  Decimal  @default(0) @db.Decimal(38, 18)
+  released_exact     Decimal  @default(0) @db.Decimal(38, 18)
+  created_at         DateTime @default(now()) @db.Timestamptz
+  updated_at         DateTime @default(now()) @db.Timestamptz
+
+  operation DeltaLLM_BillingOperation       @relation(fields: [operation_id], references: [operation_id], onDelete: Restrict, onUpdate: Restrict)
+  window    DeltaLLM_AccountingBudgetWindow @relation(fields: [window_id], references: [window_id], onDelete: Restrict, onUpdate: Restrict)
+  grant     DeltaLLM_AccountingGrant?        @relation(fields: [grant_id], references: [grant_id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([operation_id, window_id])
+  @@index([window_id, operation_id], map: "deltallm_accounting_reservation_window_idx")
+  @@map("deltallm_accounting_reservations")
+}
+
+model DeltaLLM_AccountingEvent {
+  sequence             BigInt   @id @default(autoincrement())
+  event_id              String   @unique
+  protocol_name         String
+  generation            BigInt
+  accounting_partition  Int
+  operation_id          String
+  component_id          String
+  event_type            String
+  outcome               String?
+  payload_json          Json
+  audit_envelope_json   Json
+  occurred_at           DateTime @db.Timestamptz
+  created_at            DateTime @default(now()) @db.Timestamptz
+
+  operation DeltaLLM_BillingOperation @relation(fields: [operation_id], references: [operation_id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([operation_id, component_id, event_type], map: "deltallm_accounting_event_component_key")
+  @@index([protocol_name, generation, accounting_partition, sequence], map: "deltallm_accounting_event_projection_idx")
+  @@map("deltallm_accounting_events")
+}
+
+model DeltaLLM_AccountingProjectionCheckpoint {
+  projection_name       String
+  protocol_name         String
+  generation            BigInt
+  accounting_partition  Int
+  last_sequence         BigInt   @default(0)
+  lease_owner           String?
+  lease_token           String?
+  lease_expires_at      DateTime? @db.Timestamptz
+  last_error_code       String?
+  updated_at            DateTime @default(now()) @db.Timestamptz
+
+  @@id([projection_name, protocol_name, generation, accounting_partition])
+  @@index([lease_expires_at], map: "deltallm_accounting_projection_lease_idx")
+  @@map("deltallm_accounting_projection_checkpoints")
+}
+
 model DeltaLLM_SpendIngestionOutbox {
   event_id        String    @id
   event_type      String
@@ -747,6 +1151,12 @@ model DeltaLLM_SpendIngestionOutbox {
   replay_count    Int       @default(0)
   last_replayed_at DateTime?
   last_replayed_by String?
+
+  operation_owner      String?
+  operation_intent     Json?
+  operation_state      String?
+  operation_expires_at DateTime? @db.Timestamptz
+  operation_resolution Json?
 
   @@index([status, next_attempt_at], map: "deltallm_spendingestionoutbox_status_due_idx")
   @@index([lease_expires_at], map: "deltallm_spendingestionoutbox_lease_idx")
@@ -1454,6 +1864,40 @@ model DeltaLLM_TelemetryIngestionCapacity {
   @@map("deltallm_telemetry_ingestion_capacity")
 }
 
+// Inactive partition preparation. SQL constraints enforce fixed quota formulas,
+// prepared state and zero occupancy until a separately validated writer cutover.
+model DeltaLLM_TelemetryCapacityLayout {
+  queue_name       String   @id
+  epoch            BigInt
+  protocol_version Int      @default(2)
+  state            String   @default("prepared")
+  capacity         BigInt
+  required_reserve BigInt
+  partition_count  Int
+  created_at       DateTime @default(now())
+  partitions       DeltaLLM_TelemetryCapacityPartition[]
+
+  @@unique([queue_name, epoch, capacity, required_reserve, partition_count], map: "telemetry_layout_definition")
+  @@map("deltallm_telemetry_capacity_layout")
+}
+
+model DeltaLLM_TelemetryCapacityPartition {
+  queue_name         String
+  epoch              BigInt
+  partition_id       Int
+  capacity           BigInt
+  required_reserve   BigInt
+  partition_count    Int
+  quota              BigInt
+  best_effort_ceiling BigInt
+  pending_count      BigInt   @default(0)
+  updated_at         DateTime @default(now())
+  layout             DeltaLLM_TelemetryCapacityLayout @relation(fields: [queue_name, epoch, capacity, required_reserve, partition_count], references: [queue_name, epoch, capacity, required_reserve, partition_count], onDelete: Restrict, onUpdate: Restrict, map: "telemetry_partition_layout")
+
+  @@id([queue_name, partition_id], map: "telemetry_partition_pk")
+  @@map("deltallm_telemetry_capacity_partition")
+}
+
 model DeltaLLM_AuditIngestionOutbox {
   event_id              String   @id
   record_type           String
@@ -1698,6 +2142,7 @@ model DeltaLLM_BatchItem {
   status             String
   request_body       Json
   selector_checkpoint Json?
+  accounting_checkpoint Json?
   response_body      Json?
   error_body         Json?
   usage              Json?

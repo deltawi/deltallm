@@ -5,6 +5,8 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from src.api.admin.accounting_budget import apply_accounting_balances
+from src.billing.accounting_protocol import AccountingScope
 from src.api.admin.endpoints.common import (
     AuthScope,
     db_or_503,
@@ -116,6 +118,7 @@ async def get_user(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
             )
+    await apply_accounting_balances(request, [user], AccountingScope.USER)
     return user
 
 

@@ -95,9 +95,11 @@ An additional canonical production-image CI check is supplied in `plans/issue-34
 
 ## Deployment and rollback
 
-External auth adds a four-connection primary database pool to each API process. The slots reserve two mutations, one validation, and one maintenance operation. At 15 API pods, including rolling surge, the extra reservation is 60 connections. Include the main pool, telemetry pool, workers, migrations, monitoring, and other database clients in the total database budget.
+External auth adds a four-connection primary database pool to each API process. The slots reserve two mutations, one validation, and one maintenance operation. Count all API processes, including rolling surge and retiring pods. For example, 15 peak pods with one API process each require 60 extra connections. Include control, foreground, telemetry, worker, migration, and other database connections in the total.
 
-The Helm chart checks `externalAuthCapacity.maximumApiPods`, `otherReservedConnections`, and `postgresConnectionBudget` when the feature is enabled. The budget defaults to zero and must be certified for your deployment. Keep the feature off on batch workers. When using a separate batch worker role, set `api.config.general_settings.cache_invalidation_worker_enabled: true` explicitly; the split-worker default would otherwise disable it on the API. The capacity check includes worker peak replicas, rolling surge, and configured main/telemetry pool overrides. Reserve additional headroom for other clients and never size the database from the incremental 60-connection example alone.
+The Helm chart checks `externalAuthCapacity.maximumApiPods`, `otherReservedConnections`, and `postgresConnectionBudget` when the feature is enabled. The budget defaults to zero and must match your provisioned service. The check uses the shared `dependencyCapacity` report. This report includes the external-auth pool and its Prisma engine, every enabled role, rolling surge, and retiring pods. Both declared PostgreSQL limits must cover the total. Reserve headroom for other clients; do not use the 60-connection example as the total.
+
+Keep external auth off on batch and accounting workers. Enable audit, its durable outbox worker, and the cache invalidation worker on API pods. With separate batch workers, set `api.config.general_settings.cache_invalidation_worker_enabled: true` explicitly; the split-worker default disables it on the API.
 
 Stage enablement in this order:
 

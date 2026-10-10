@@ -42,6 +42,13 @@ deltallm_request_failures_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_optional_request_diagnostics_metric = Counter(
+    "deltallm_optional_request_diagnostics_total",
+    "Optional pre-dispatch diagnostics that do not require a durable write",
+    ["route", "reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_input_tokens_metric = Counter(
     "deltallm_input_tokens_total",
     "Total input tokens",
@@ -200,6 +207,23 @@ def increment_request_failure(*, model: str, api_provider: str, error_type: str)
         api_provider=sanitize_label(api_provider),
         error_type=sanitize_label(error_type),
     ).inc()
+
+
+def increment_optional_request_diagnostic(*, route: str, reason: str) -> None:
+    if reason not in {"client_rejection", "dependency_unavailable", "internal_error"}:
+        raise ValueError("unsupported optional request diagnostic reason")
+    if route not in {
+        "chat_completions",
+        "completions",
+        "responses",
+        "embeddings",
+        "images",
+        "audio",
+        "rerank",
+        "other",
+    }:
+        raise ValueError("unsupported optional request diagnostic route")
+    deltallm_optional_request_diagnostics_metric.labels(route=route, reason=reason).inc()
 
 
 def increment_provider_error_body_discard(*, reason: str) -> None:

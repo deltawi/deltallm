@@ -111,7 +111,17 @@ async def test_conflicting_receipt_does_not_replace_authoritative_facts(realtime
     conflict = replace(usage, usage=replace(usage.usage, output_text=999))
     with pytest.raises(BillingOperationUnavailable):
         await repository.accept(operation, context, conflict)
-    records = await ingestion(db)._claim_batch()
+    worker = ingestion(db)
+    await worker.realtime_recovery.recover()
+    # Millisecond rounding can put a new due time after the next instant.
+    # This case tests receipt conflicts, not the scheduler's due-time boundary.
+    await db.execute_raw(
+        "UPDATE deltallm_spend_ingestion_outbox "
+        "SET next_attempt_at=NOW()-INTERVAL '1 second' WHERE event_id=$1",
+        usage.receipt_id,
+    )
+    records = await worker._claim_batch()
+    assert [record.event_id for record in records] == [usage.receipt_id]
     assert Decimal(records[0].payload["cost_exact"]) == Decimal("0.0000839")
 
 

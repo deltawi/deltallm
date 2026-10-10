@@ -165,7 +165,7 @@ async def test_cache_write_outage_keeps_primary_authorization_without_local_cach
         auth = await service.get_auth_by_token_hash("owned")
         assert auth.owner_account_id == "owner"
 
-    assert repo.calls == 2 and redis.store == {} and service.primary_gate.active == 0
+    assert repo.calls == 2 and redis.store == {} and service.fallback.gate.active == 0
     assert registry.get_sample_value(metric, labels) == before + 2
     del repo.records["owned"]
     with pytest.raises(AuthenticationError):
@@ -187,7 +187,7 @@ async def test_invalid_cache_lookup_uses_primary_and_still_denies_deleted_key(
     del repo.records["owned"]
     with pytest.raises(AuthenticationError):
         await service.get_auth_by_token_hash("owned")
-    assert repo.calls == 2 and service.primary_gate.active == 0
+    assert repo.calls == 2 and service.fallback.gate.active == 0
 
 
 @pytest.mark.asyncio
@@ -208,7 +208,7 @@ async def test_revocation_during_primary_read_denies_atomic_cache_fill() -> None
     service = KeyService(repository=repo, redis_client=redis)
     with pytest.raises(AuthenticationError):
         await service.get_auth_by_token_hash("owned")
-    assert repo.calls == 1 and service.primary_gate.active == 0
+    assert repo.calls == 1 and service.fallback.gate.active == 0
     assert json.loads(redis.store["key:v7:owned"])["cache_kind"] == "revoked"
 
 
@@ -218,7 +218,7 @@ async def test_invalid_atomic_fill_does_not_allow_stale_primary_snapshot() -> No
     service = KeyService(repository=repo, redis_client=InvalidFillRedis())
     with pytest.raises(ServiceUnavailableError):
         await service.get_auth_by_token_hash("owned")
-    assert repo.calls == 1 and service.primary_gate.active == 0
+    assert repo.calls == 1 and service.fallback.gate.active == 0
 
 
 @pytest.mark.asyncio

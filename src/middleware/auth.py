@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hmac
+from typing import TYPE_CHECKING
+
 from fastapi import Depends, Header, HTTPException, Request, status
 from starlette.requests import HTTPConnection
 
+from src.config import Settings
 from src.models.errors import AuthenticationError
+from src.metrics.request_phases import measure_request_phase, request_route
 from src.models.responses import UserAPIKeyAuth
 from src.services.key_service import KeyService
 from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
@@ -14,10 +19,26 @@ from src.services.organization_lifecycle import (
 )
 from src.telemetry.event_identity import get_or_create_billing_event_id
 
+if TYPE_CHECKING:
+    from src.config_runtime.dynamic import DynamicConfigManager
+
 
 async def authenticate_request(
     request: HTTPConnection,
     authorization: str | None = None,
+) -> UserAPIKeyAuth:
+    phase = (
+        "authentication_recheck"
+        if isinstance(getattr(request.state, "user_api_key", None), UserAPIKeyAuth)
+        else "authentication"
+    )
+    with measure_request_phase(route=request_route(request.url.path), phase=phase):
+        return await _authenticate_request(request, authorization)
+
+
+async def _authenticate_request(
+    request: Request,
+    authorization: str | None,
 ) -> UserAPIKeyAuth:
     existing = getattr(request.state, "user_api_key", None)
     if isinstance(existing, UserAPIKeyAuth):
@@ -32,6 +53,8 @@ async def authenticate_request(
     raw_key = authorization.split(" ", 1)[1].strip()
     if not raw_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API key")
+    if len(raw_key) > 8192:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
     if _is_master_key(request, raw_key):
         auth = annotate_auth_metadata(
@@ -83,17 +106,15 @@ def auth_dependency() -> Depends:
 
 
 def _is_master_key(request: HTTPConnection, token: str) -> bool:
-    import hmac as _hmac
-
-    dcm = getattr(request.app.state, "dynamic_config_manager", None)
+    dcm: DynamicConfigManager | None = getattr(request.app.state, "dynamic_config_manager", None)
     if dcm is not None:
-        cfg = dcm.get_app_config()
-        configured = getattr(getattr(cfg, "general_settings", None), "master_key", None)
+        configured = dcm.get_master_key()
     else:
-        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+        settings: Settings | None = getattr(request.app.state, "settings", None)
+        configured = settings.master_key if settings is not None else None
     if not configured or not token:
         return False
-    return _hmac.compare_digest(token, configured)
+    return hmac.compare_digest(token, configured)
 
 
 async def _try_fallback_auth(request: HTTPConnection, raw_token: str) -> UserAPIKeyAuth | None:

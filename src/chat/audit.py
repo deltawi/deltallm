@@ -7,6 +7,7 @@ from fastapi import Request
 
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
+from src.billing.accounting_protocol import AccountingOperationHandle
 from src.services.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
@@ -53,6 +54,11 @@ async def emit_text_audit_event(
     output_tokens: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    if isinstance(
+        getattr(request.state, "spend_operation_handle", None),
+        AccountingOperationHandle,
+    ):
+        return
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
     if audit_service is None:
         return

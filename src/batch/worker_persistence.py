@@ -131,6 +131,13 @@ class WorkerPersistenceMixin:
         prepared: _PreparedEmbeddingItem | _PreparedChatItem,
         served_deployment: Any,
     ) -> PricingResolution:
+        if self.native_billing is not None:
+            pricing = self._require_native_execution(prepared).pricing
+            if pricing is None:
+                from src.batch.accounting_checkpoint import BatchAccountingUnavailable
+
+                raise BatchAccountingUnavailable()
+            return pricing
         return resolve_deployment_tier_pricing(
             auth=prepared.policy_auth,
             model=prepared.payload.model,
@@ -364,6 +371,8 @@ class WorkerPersistenceMixin:
             payload["microbatch_id"] = microbatch_id
         if isinstance(prepared, _PreparedChatItem) and prepared.selector is not None:
             payload["billing_event_id"] = str(prepared.selector.operation_id)
+        if self.native_billing is not None:
+            return self._require_native_execution(prepared).completion_payload(payload, usage)
         return payload
 
     async def _persist_completion_rows_with_outbox(

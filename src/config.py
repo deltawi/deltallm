@@ -22,6 +22,12 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
+from src.accounting_settings import AccountingProtocolSettings
+from src.database_settings import DatabaseAllocationSettings
+from src.spend_operation_settings import SpendOperationSettings
+from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
+from src.lifecycle_settings import LifecycleSettings
+from src.deployment_capacity_settings import DeploymentCapacitySettings
 from src.auth.external_config import ExternalAuthSettings
 from src.ui.config import UIMountSettings
 from src.chat_capabilities import ChatRoutingCapabilities
@@ -265,7 +271,7 @@ class DeltaLLMSettings(BaseModel):
     fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
     context_window_fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
     content_policy_fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
-    guardrails: list[GuardrailConfig] = Field(default_factory=list)
+    guardrails: list[GuardrailConfig] = Field(default_factory=list, max_length=MAX_GUARDRAILS)
     success_callback: list[str] = Field(default_factory=list)
     failure_callback: list[str] = Field(default_factory=list)
     callbacks: list[str] = Field(default_factory=list)
@@ -542,7 +548,14 @@ class UIBrandingUpdatePayload(BaseModel):
         return value.upper()
 
 
-class GeneralSettings(BaseModel):
+class GeneralSettings(
+    DatabaseAllocationSettings,
+    SpendOperationSettings,
+    AccountingProtocolSettings,
+    RequestWorkSettings,
+    LifecycleSettings,
+    DeploymentCapacitySettings,
+):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
@@ -569,6 +582,22 @@ class GeneralSettings(BaseModel):
     budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
     budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
     budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_ingress_control_max_active: int = Field(default=16, ge=1, le=1000)
+    gateway_ingress_control_max_buffered_bytes: int = Field(default=67108864, ge=1, le=4294967296)
+    auth_fallback_max_active: int = Field(default=8, ge=1, le=1000)
+    auth_fallback_max_waiters: int = Field(default=32, ge=0, le=10000)
+    auth_fallback_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    auth_fallback_timeout_seconds: float = Field(default=0.5, ge=0.01, le=30)
+    auth_fallback_cache_timeout_seconds: float = Field(default=0.1, ge=0.001, le=1)
+    auth_fallback_cache_max_bytes: int = Field(default=131072, ge=1024, le=1048576)
+    gateway_ingress_enabled: bool = False
+    gateway_ingress_max_active: int = Field(default=100, ge=1, le=100_000)
+    gateway_ingress_max_waiters: int = Field(default=0, ge=0, le=10_000)
+    gateway_ingress_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    gateway_ingress_max_body_bytes: int = Field(default=33_554_432, ge=1, le=1_073_741_824)
+    gateway_ingress_max_buffered_bytes: int = Field(default=67_108_864, ge=1, le=4_294_967_296)
+    gateway_ingress_body_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    gateway_ingress_health_max_active: int = Field(default=4, ge=1, le=100)
     gateway_preflight_capacity_enabled: bool = False
     gateway_preflight_global_max_parallel: int = Field(default=300, gt=0, le=100_000)
     gateway_preflight_org_max_parallel: int = Field(default=100, ge=0, le=100_000)
@@ -617,6 +646,16 @@ class GeneralSettings(BaseModel):
     redis_port: int = 6379
     redis_password: str | None = None
     redis_url: str | None = None
+    redis_bulk_url: SecretStr | None = None
+    redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_cache_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_critical_max_waiters: int = Field(default=64, ge=0, le=10000)
+    redis_cache_max_waiters: int = Field(default=0, ge=0, le=10000)
+    redis_bulk_max_waiters: int = Field(default=0, ge=0, le=10000)
+    redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
+    redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
+    redis_connect_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
     redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     cache_enabled: bool = False
     cache_backend: Literal["memory", "redis", "s3"] = "memory"
@@ -708,7 +747,7 @@ class GeneralSettings(BaseModel):
     governance_notifications_enabled: bool = False
     budget_notifications_enabled: bool = False
     key_lifecycle_notifications_enabled: bool = False
-    budget_alert_ttl_seconds: int = Field(default=3600, ge=60)
+    budget_alert_ttl_seconds: int = Field(default=3600, ge=60, le=2147483647)
     slack_alerting_enabled: bool = False
     slack_webhook_url: SecretStr | None = None
     slack_alert_kinds: list[str] = Field(default_factory=list)
@@ -1142,8 +1181,18 @@ class AppConfig(BaseModel):
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="DELTALLM_", extra="ignore")
+class Settings(
+    BaseSettings,
+    DatabaseAllocationSettings,
+    SpendOperationSettings,
+    AccountingProtocolSettings,
+    RequestWorkSettings,
+    LifecycleSettings,
+    DeploymentCapacitySettings,
+):
+    model_config = SettingsConfigDict(
+        env_prefix="DELTALLM_", extra="ignore", hide_input_in_errors=True
+    )
 
     external_auth: ExternalAuthSettings = Field(default_factory=ExternalAuthSettings)
     ui_mount: UIMountSettings = Field(default_factory=UIMountSettings)
@@ -1164,6 +1213,22 @@ class Settings(BaseSettings):
     budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
     budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
     budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_ingress_control_max_active: int = Field(default=16, ge=1, le=1000)
+    gateway_ingress_control_max_buffered_bytes: int = Field(default=67108864, ge=1, le=4294967296)
+    auth_fallback_max_active: int = Field(default=8, ge=1, le=1000)
+    auth_fallback_max_waiters: int = Field(default=32, ge=0, le=10000)
+    auth_fallback_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    auth_fallback_timeout_seconds: float = Field(default=0.5, ge=0.01, le=30)
+    auth_fallback_cache_timeout_seconds: float = Field(default=0.1, ge=0.001, le=1)
+    auth_fallback_cache_max_bytes: int = Field(default=131072, ge=1024, le=1048576)
+    gateway_ingress_enabled: bool = False
+    gateway_ingress_max_active: int = Field(default=100, ge=1, le=100_000)
+    gateway_ingress_max_waiters: int = Field(default=0, ge=0, le=10_000)
+    gateway_ingress_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    gateway_ingress_max_body_bytes: int = Field(default=33_554_432, ge=1, le=1_073_741_824)
+    gateway_ingress_max_buffered_bytes: int = Field(default=67_108_864, ge=1, le=4_294_967_296)
+    gateway_ingress_body_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    gateway_ingress_health_max_active: int = Field(default=4, ge=1, le=100)
     gateway_preflight_capacity_enabled: bool = False
     gateway_preflight_global_max_parallel: int = Field(default=300, gt=0, le=100_000)
     gateway_preflight_org_max_parallel: int = Field(default=100, ge=0, le=100_000)
@@ -1211,6 +1276,16 @@ class Settings(BaseSettings):
     prompt_singleflight_max_keys: int = Field(default=256, ge=1, le=10_000)
     prompt_singleflight_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     redis_url: str | None = None
+    redis_bulk_url: SecretStr | None = None
+    redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_cache_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_critical_max_waiters: int = Field(default=64, ge=0, le=10000)
+    redis_cache_max_waiters: int = Field(default=0, ge=0, le=10000)
+    redis_bulk_max_waiters: int = Field(default=0, ge=0, le=10000)
+    redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
+    redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
+    redis_connect_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str | None = None

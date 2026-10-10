@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 from src.audit.delivery import AuditDeliveryClass
 from src.billing.tier_pricing import (
     attach_pricing_metadata,
-    resolve_deployment_tier_pricing,
     resolve_token_billing_result,
 )
 from src.cache.pricing import cache_pricing_snapshot_from_deployment
@@ -43,7 +42,12 @@ from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.provider_request_bounds import validated_provider_request_bounds
+from src.telemetry.spend_operation import (
+    billing_write_context,
+    durable_provider_call,
+    operation_pricing,
+)
 from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.routers.routing_decision import (
     capture_attempted_deployment,
@@ -62,6 +66,7 @@ from src.services.audit_service import (
 )
 from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
+from src.billing.accounting_protocol import AccountingOperationHandle
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 
@@ -149,6 +154,11 @@ async def _emit_embedding_audit_event(
     completion_tokens: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    if isinstance(
+        getattr(request.state, "spend_operation_handle", None),
+        AccountingOperationHandle,
+    ):
+        return
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
     if audit_service is None:
         return
@@ -307,7 +317,14 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
-            execute=lambda dep: _execute_embedding(request, payload, dep),
+            execute=lambda dep: durable_provider_call(
+                request,
+                model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
+                call_type="embedding",
+                deployment=dep,
+                execute=lambda: _execute_embedding(request, payload, dep),
+            ),
             return_deployment=True,
             on_attempt=track_attempt,
             routing_context=request_context,
@@ -340,12 +357,11 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             mode="embedding",
             usage=usage,
         )
-        pricing = resolve_deployment_tier_pricing(
+        pricing = operation_pricing(
+            request,
             auth=auth,
             model=payload.model,
             deployment=served_deployment,
-            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-            mode="sync",
         )
         cache_hit = bool(getattr(request.state, "cache_hit", False))
         customer_billing = resolve_token_billing_result(
@@ -411,7 +427,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_spend(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -420,6 +436,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="embedding",
                 usage=usage,
                 cost=request_cost,
@@ -552,7 +569,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -561,6 +578,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="embedding",
                 metadata=error_metadata,
                 cache_hit=bool(getattr(request.state, "cache_hit", False)),
@@ -626,7 +644,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -635,6 +653,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="embedding",
                 metadata=error_metadata,
                 cache_hit=bool(getattr(request.state, "cache_hit", False)),

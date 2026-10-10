@@ -175,17 +175,24 @@ async def test_report_page_uses_existing_scope_time_index_at_representative_card
     operation_nodes = [
         node for node in nodes if node.get("Relation Name") == "deltallm_billing_operations"
     ]
-    assert len(operation_nodes) == 1
-    assert operation_nodes[0]["Node Type"] == "Index Scan"
-    assert operation_nodes[0]["Index Name"] == "deltallm_billing_operations_org_time_idx"
-    assert operation_nodes[0]["Actual Rows"] == 1
+    assert len(operation_nodes) == 2
+    page = next(node for node in operation_nodes if node["Alias"] != "ns")
+    selector = next(node for node in operation_nodes if node["Alias"] == "ns")
+    assert page["Node Type"] == "Index Scan"
+    assert page["Index Name"] == "deltallm_billing_operations_org_time_idx"
+    assert page["Actual Rows"] == 1
+    assert selector["Node Type"] == "Index Scan"
+    assert selector["Index Name"] == "deltallm_billing_operations_pkey"
+    assert selector["Actual Rows"] <= 1
+    assert selector["Actual Loops"] <= 11
     assert report["Plan"]["Actual Rows"] <= 11
     print(
         json.dumps(
             {
                 "execution_ms": report["Execution Time"],
-                "operation_index": operation_nodes[0]["Index Name"],
-                "operation_rows": operation_nodes[0]["Actual Rows"],
+                "operation_index": page["Index Name"],
+                "operation_rows": page["Actual Rows"],
+                "selector_index": selector["Index Name"],
             }
         )
     )

@@ -8,6 +8,7 @@ from fastapi import Request
 from src.audit.actions import AuditAction, normalize_audit_action
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
+from src.billing.accounting_protocol import AccountingOperationHandle
 from src.services.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
@@ -48,6 +49,14 @@ async def emit_audit_event(
     critical: bool = True,
     event_id: str | None = None,
 ) -> None:
+    # The accounting finalization ACK already contains the required redacted
+    # audit envelope. Its projection worker writes the compatibility audit row;
+    # a second request-path enqueue would reintroduce per-request lifecycle I/O.
+    if isinstance(
+        getattr(request.state, "spend_operation_handle", None),
+        AccountingOperationHandle,
+    ):
+        return
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
     if audit_service is None:
         return

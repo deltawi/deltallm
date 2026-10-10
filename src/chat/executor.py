@@ -13,6 +13,7 @@ from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.services.output_token_context import OutputTokenContext
 from src.metrics import observe_request_phase
+from src.metrics.request_phases import track_request_phase
 from src.providers.base import ProviderAdapter, read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
 from src.providers.chat_hop import HopOutcome, HopPhase, execute_chat_hop
@@ -109,23 +110,24 @@ async def _execute_chat(
     )
 
     upstream_start = perf_counter()
-    canonical = await execute_chat_hop(
-        client=request.app.state.http_client,
-        upstream=upstream,
-        params=params,
-        payload=upstream_payload,
-        model_name=payload.model,
-        timeout=build_upstream_request_timeout_for_request(request, timeout),
-        observer=_observe_answer_hop,
-        **(
-            {
-                "output_observer": context.observe_output,
-                "dispatch_observer": context.mark_dispatched,
-            }
-            if context is not None
-            else {}
-        ),
-    )
+    with track_request_phase(route="chat_completions", phase="upstream_http"):
+        canonical = await execute_chat_hop(
+            client=request.app.state.http_client,
+            upstream=upstream,
+            params=params,
+            payload=upstream_payload,
+            model_name=payload.model,
+            timeout=build_upstream_request_timeout_for_request(request, timeout),
+            observer=_observe_answer_hop,
+            **(
+                {
+                    "output_observer": context.observe_output,
+                    "dispatch_observer": context.mark_dispatched,
+                }
+                if context is not None
+                else {}
+            ),
+        )
     if context is not None:
         await context.finish()
     canonical_payload = canonical.model_dump(mode="json")

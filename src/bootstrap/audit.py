@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
+from src.shutdown import cleanup_deadline
+from src.telemetry.lifecycle import stop_tasks_before_deadline
+
 from asyncio import Task, create_task
 from dataclasses import dataclass
 import os
@@ -33,10 +34,18 @@ def _startup_setting(general_settings: Any, settings: Any, field_name: str, defa
 
 
 async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
+    runtime = AuditRuntime(statuses=(BootstrapStatus("audit", "disabled"),))
+    try:
+        return await _init_audit_runtime(app, cfg, runtime)
+    except BaseException:
+        await shutdown_audit_runtime(app, runtime)
+        raise
+
+
+async def _init_audit_runtime(app: Any, cfg: Any, runtime: AuditRuntime) -> AuditRuntime:
     app.state.audit_repository = None
     app.state.audit_service = None
 
-    runtime = AuditRuntime(statuses=(BootstrapStatus("audit", "disabled"),))
     if not cfg.general_settings.audit_enabled:
         return runtime
 
@@ -54,12 +63,32 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
     if ingestion_mode == "outbox" and telemetry_client is None:
         raise RuntimeError("audit outbox mode requires the dedicated telemetry database pool")
     audit_db_client = (
-        telemetry_client if ingestion_mode == "outbox" else app.state.prisma_manager.client
+        telemetry_client
+        if ingestion_mode == "outbox"
+        else app.state.foreground_prisma_manager.client
     )
+    worker_enabled = bool(
+        _startup_setting(
+            cfg.general_settings,
+            settings,
+            "audit_ingestion_worker_enabled",
+            True,
+        )
+    )
+    worker_db_client = (
+        app.state.telemetry_worker_prisma_manager.client
+        if ingestion_mode == "outbox" and worker_enabled
+        else app.state.prisma_manager.client
+        if ingestion_mode != "outbox"
+        else None
+    )
+    if worker_enabled and worker_db_client is None:
+        raise RuntimeError("Audit workers require their database allocation")
     repository = AuditRepository(audit_db_client)
     service = AuditService(
         repository,
         db_client=audit_db_client,
+        worker_db_client=worker_db_client,
         prompt_repository=PromptRegistryRepository(audit_db_client),
         redis_client=getattr(app.state, "redis", None),
         policy_invalidation_channel=build_redis_channel(
@@ -70,11 +99,7 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
         ),
         ingestion_config=AuditIngestionConfig(
             enabled=ingestion_mode == "outbox",
-            worker_enabled=bool(
-                _startup_setting(
-                    cfg.general_settings, settings, "audit_ingestion_worker_enabled", True
-                )
-            ),
+            worker_enabled=worker_enabled,
             batch_size=int(
                 _startup_setting(cfg.general_settings, settings, "audit_ingestion_batch_size", 100)
             ),
@@ -157,9 +182,10 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
             worker_id=f"{socket.gethostname()}:{os.getpid()}:audit",
         ),
     )
+    app.state.audit_service = service
     await service.start()
 
-    app.state.audit_repository = repository
+    app.state.audit_repository = AuditRepository(app.state.prisma_manager.client)
     app.state.audit_service = service
 
     if not cfg.general_settings.audit_retention_worker_enabled:
@@ -170,7 +196,7 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
         return runtime
 
     runtime.retention_worker = AuditRetentionWorker(
-        repository=repository,
+        repository=AuditRepository(worker_db_client),
         config=AuditRetentionConfig(
             interval_seconds=cfg.general_settings.audit_retention_interval_seconds,
             scan_limit=cfg.general_settings.audit_retention_scan_limit,
@@ -190,9 +216,9 @@ async def shutdown_audit_runtime(app: Any, runtime: AuditRuntime) -> None:
     if runtime.retention_worker is not None:
         runtime.retention_worker.stop()
     if runtime.retention_task is not None:
-        runtime.retention_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runtime.retention_task
+        await stop_tasks_before_deadline(
+            [runtime.retention_task], deadline=cleanup_deadline(5), cancel_first=True
+        )
 
     audit_service: AuditService | None = getattr(app.state, "audit_service", None)
     if audit_service is not None:

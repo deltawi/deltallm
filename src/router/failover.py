@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.request_deadline import inherited_request_deadline
+
 import asyncio
 import logging
 import math
@@ -15,7 +17,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from src.metrics import increment_router_health_update_failure
+from src.metrics import increment_router_health_transition, increment_router_health_update_failure
 from src.router.attempt_capacity import attempt_capacity
 from src.models.errors import (
     FailureClassification,
@@ -39,6 +41,7 @@ from src.router.context_policy import context_capacity_error
 from src.router.execution import (
     ManagedFailoverResult,
     ProviderAttemptResult,
+    ProviderAttemptSuccess,
     RequestDeadline,
     attach_failover_attempt_context,
     attach_failover_original_error,
@@ -531,6 +534,8 @@ class FailoverManager:
                             )
 
                         if _manage_attempt_lifecycle:
+                            if permit is None:
+                                raise RuntimeError("Managed attempt requires an owned permit")
                             managed = ManagedFailoverResult(
                                 value=result,
                                 deployment=deployment,
@@ -540,7 +545,8 @@ class FailoverManager:
                             )
                             permit = None
                             return managed
-                        await self._release_attempt(permit, deployment)
+                        if permit is not None:
+                            await self._release_attempt(permit, deployment)
                         permit = None
                         if return_deployment:
                             return result, deployment
@@ -614,6 +620,10 @@ class FailoverManager:
                             if extra_result is not None:
                                 result, served, permit = extra_result
                                 if _manage_attempt_lifecycle:
+                                    if permit is None:
+                                        raise RuntimeError(
+                                            "Managed fallback requires an owned permit"
+                                        )
                                     managed = ManagedFailoverResult(
                                         value=result,
                                         deployment=served,
@@ -625,7 +635,8 @@ class FailoverManager:
                                     )
                                     permit = None
                                     return managed
-                                await self._release_attempt(permit, served)
+                                if permit is not None:
+                                    await self._release_attempt(permit, served)
                                 if return_deployment:
                                     return result, served
                                 return result
@@ -699,7 +710,7 @@ class FailoverManager:
         )
 
     def create_request_deadline(self, timeout_seconds: float | None = None) -> RequestDeadline:
-        return RequestDeadline.after(self._effective_timeout(timeout_seconds))
+        return inherited_request_deadline(self._effective_timeout(timeout_seconds))
 
     async def select_context_fallback_for_local_rejection(
         self,
@@ -862,7 +873,7 @@ class FailoverManager:
         timeout_seconds: float | None,
         timeout_for_deployment: TimeoutForDeployment | None = None,
         defer_success: bool = False,
-    ) -> tuple[Any, Deployment, AttemptPermit] | None:
+    ) -> tuple[Any, Deployment, AttemptPermit | None] | None:
         async for _, deployment in prepared_deployments(
             chain, planner=self.candidate_planner, context=routing_context
         ):
@@ -1040,6 +1051,14 @@ class FailoverManager:
             started = time.monotonic()
             result = await deadline.wait_for(execute(deployment), limit=attempt_timeout)
             latency_ms = (time.monotonic() - started) * 1000
+            if isinstance(result, ProviderAttemptSuccess) and not defer_success:
+                await self._complete_attempt_success(
+                    deployment,
+                    permit,
+                    latency_ms=latency_ms,
+                    usage_counters=result.usage_counters,
+                )
+                return True, result.value, None
             await self._record_attempt_latency(deployment, latency_ms)
             if isinstance(result, ProviderAttemptResult):
                 await self._record_aggregate_health_failure(
@@ -1056,6 +1075,32 @@ class FailoverManager:
         except BaseException:
             await self._release_attempt(permit, deployment)
             raise
+
+    async def _complete_attempt_success(
+        self,
+        deployment: Deployment,
+        permit: AttemptPermit,
+        *,
+        latency_ms: float,
+        usage_counters: Mapping[str, int],
+    ) -> None:
+        try:
+            transition = await self.state.complete_attempt_success(
+                permit,
+                latency_ms=latency_ms,
+                usage_counters=usage_counters,
+            )
+        except Exception:
+            # Keep the provider result. The permit has an expiry for failed cleanup.
+            increment_router_health_update_failure()
+            logger.warning(
+                "post-provider router completion failed deployment_id=%s",
+                deployment.deployment_id,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            return
+        if transition.recovered:
+            increment_router_health_transition(transition="recovered")
 
     async def _record_aggregate_health_failure(
         self,

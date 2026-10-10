@@ -67,6 +67,8 @@ def test_telemetry_shutdown_deadline_must_fit_pod_termination_grace() -> None:
         [
             HELM,
             "template",
+            "--set",
+            "managedLifecycle.enabled=false",
             "deltallm",
             str(HELM_CHART_DIR),
             "--set",
@@ -97,6 +99,8 @@ def test_email_shutdown_deadline_must_fit_pod_termination_grace() -> None:
         [
             HELM,
             "template",
+            "--set",
+            "managedLifecycle.enabled=false",
             "deltallm",
             str(HELM_CHART_DIR),
             "--set",
@@ -133,6 +137,8 @@ def test_batch_worker_shutdown_deadline_must_fit_pod_termination_grace() -> None
         [
             HELM,
             "template",
+            "--set",
+            "managedLifecycle.enabled=false",
             "deltallm",
             str(HELM_CHART_DIR),
             "--set",
@@ -142,7 +148,7 @@ def test_batch_worker_shutdown_deadline_must_fit_pod_termination_grace() -> None
             "--set",
             "batchWorker.enabled=true",
             "--set",
-            "batchWorker.config.general_settings.telemetry_shutdown_drain_timeout_seconds=30",
+            "batchWorker.config.general_settings.telemetry_shutdown_drain_timeout_seconds=90",
         ],
         cwd=REPO_ROOT,
         check=False,

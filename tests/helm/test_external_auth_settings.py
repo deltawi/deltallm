@@ -53,14 +53,15 @@ def enabled_values(tmp_path: Path) -> str:
     )
     values = {
         "externalAuthCapacity": {
-            "maximumApiPods": 15,
-            "otherReservedConnections": 376,
-            "postgresConnectionBudget": 436,
+            "maximumApiPods": 5,
+            "otherReservedConnections": 210,
+            "postgresConnectionBudget": 230,
         },
         "config": {
             "general_settings": {
                 "external_auth": settings,
                 "api_key_auth_cache_ttl_seconds": 60,
+                "audit_enabled": True,
                 "audit_ingestion_mode": "outbox",
                 "audit_ingestion_worker_enabled": True,
                 "cache_invalidation_worker_enabled": True,
@@ -79,11 +80,12 @@ def test_certified_external_auth_profile_renders(tmp_path):
 @pytest.mark.parametrize(
     "setting,value,reason",
     [
-        ("externalAuthCapacity.postgresConnectionBudget", "435", "postgresConnectionBudget"),
-        ("externalAuthCapacity.otherReservedConnections", "374", "otherReservedConnections"),
+        ("externalAuthCapacity.postgresConnectionBudget", "229", "postgresConnectionBudget"),
+        ("externalAuthCapacity.otherReservedConnections", "209", "otherReservedConnections"),
         ("externalAuthCapacity.maximumApiPods", "1", "maximumApiPods"),
         ("config.general_settings.api_key_auth_cache_ttl_seconds", "61", "cache_ttl"),
         ("config.general_settings.audit_ingestion_worker_enabled", "false", "workers"),
+        ("config.general_settings.audit_enabled", "false", "workers"),
         (
             "config.general_settings.external_auth.deployment_protocol",
             "wrong",
@@ -118,7 +120,7 @@ def test_separate_worker_pool_and_surge_are_included_in_the_budget(tmp_path):
         "--set",
         "api.config.general_settings.cache_invalidation_worker_enabled=true",
         "--set",
-        "externalAuthCapacity.otherReservedConnections=426",
+        "externalAuthCapacity.otherReservedConnections=324",
         "--set",
-        "externalAuthCapacity.postgresConnectionBudget=486",
+        "externalAuthCapacity.postgresConnectionBudget=344",
     )

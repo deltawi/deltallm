@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-
-from src.metrics import get_prometheus_registry
+from src.bootstrap.metrics import metrics_snapshot_response
 
 router = APIRouter(tags=["metrics"])
 
 
 @router.get("/metrics", include_in_schema=False)
-async def metrics() -> Response:
-    return Response(content=generate_latest(get_prometheus_registry()), media_type=CONTENT_TYPE_LATEST)
+async def metrics(request: Request) -> Response:
+    service = getattr(request.app.state, "prometheus_snapshot_service", None)
+    return metrics_snapshot_response(service)

@@ -98,20 +98,24 @@ class KeyCacheLookup:
 
 
 class KeyAuthCache:
-    def __init__(self, redis: KeyCacheRedis) -> None:
+    def __init__(self, redis: KeyCacheRedis, *, max_bytes: int = 131_072) -> None:
         self.redis = redis
+        self.max_bytes = max_bytes
 
     @staticmethod
     def key(token_hash: str) -> str:
         return "key:v7:" + token_hash
 
-    @staticmethod
-    def decode(value: object) -> UserAPIKeyAuth | None:
+    def decode(self, value: object) -> UserAPIKeyAuth | None:
         if value in (None, "", b""):
             return None
         if not isinstance(value, (str, bytes)):
             raise ServiceUnavailableError(code="key_auth_cache_unavailable")
         try:
+            if len(value) > self.max_bytes or (
+                isinstance(value, str) and len(value.encode("utf-8")) > self.max_bytes
+            ):
+                raise ValueError("Key auth cache record exceeds its size bound")
             payload = json.loads(value)
             if not isinstance(payload, dict):
                 raise ValueError("Invalid key auth cache record")
@@ -120,10 +124,12 @@ class KeyAuthCache:
             if payload.get("cache_version") != 7 or payload.get("cache_kind") != "allow":
                 raise ValueError("Invalid key auth cache record")
             auth = UserAPIKeyAuth.model_validate(payload["auth"])
+            if not UserAPIKeyAuth.model_fields.keys() <= auth.model_fields_set:
+                raise ValueError("Incomplete key auth cache record")
             if auth.expires is not None and datetime.fromisoformat(
                 auth.expires.replace("Z", "+00:00")
             ) <= datetime.now(UTC):
-                raise AuthenticationError(code="invalid_api_key")
+                raise AuthenticationError(message="API key expired", code="invalid_api_key")
             return auth
         except (ValueError, KeyError, TypeError, ValidationError, RecursionError) as exc:
             raise ServiceUnavailableError(code="key_auth_cache_unavailable") from exc
@@ -134,7 +140,10 @@ class KeyAuthCache:
         )
         if not isinstance(result, (list, tuple)) or len(result) != 2:
             raise ServiceUnavailableError(code="key_auth_cache_unavailable")
-        return KeyCacheLookup(self.decode(result[0]), int(result[1]) + 1000)
+        auth = self.decode(result[0])
+        if auth is not None and auth.api_key != token_hash:
+            raise ServiceUnavailableError(code="key_auth_cache_unavailable")
+        return KeyCacheLookup(auth, int(result[1]) + 1000)
 
     async def fill(
         self,
@@ -159,12 +168,15 @@ class KeyAuthCache:
                 if not name.endswith("_output_tpm_limit")
             },
         }
+        payload = json.dumps({"cache_version": 7, **snapshot})
+        if len(payload.encode("utf-8")) > self.max_bytes:
+            return auth
         result = await self.redis.eval(
             AUTH_CACHE_FILL,
             2,
             self.key(token_hash),
             f"key:v5:{token_hash}",
-            json.dumps({"cache_version": 7, **snapshot}),
+            payload,
             json.dumps({"cache_version": 5, **legacy_snapshot}),
             ttl_seconds,
             deadline_ms,
@@ -172,6 +184,8 @@ class KeyAuthCache:
         resolved = self.decode(result)
         if resolved is None:
             raise ServiceUnavailableError(code="key_auth_fill_deadline_exceeded")
+        if resolved.api_key != token_hash:
+            raise ServiceUnavailableError(code="key_auth_cache_unavailable")
         return resolved
 
     async def revoke(self, token_hash: str, *, ttl_seconds: int) -> None:

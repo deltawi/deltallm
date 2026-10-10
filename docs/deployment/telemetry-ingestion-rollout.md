@@ -8,7 +8,7 @@ applies_to: Releases whose notes explicitly link this runbook.
 
 # Durable telemetry ingestion rollout
 
-Durable telemetry mode moves spend aggregation, audit persistence, and prompt-render logging onto bounded outboxes and a dedicated Prisma connection pool. Both ingestion modes default to `legacy` and are restart-bound. In legacy audit mode, required audit and prompt-render records are persisted synchronously and fail closed; only best-effort audit events use the bounded in-process queue.
+Durable telemetry mode moves spend aggregation, audit persistence, and prompt-render logging onto bounded outboxes with separate Prisma allocations for acceptance and background workers. Both ingestion modes default to `legacy` and are restart-bound. In legacy audit mode, required audit and prompt-render records are persisted synchronously and fail closed; only best-effort audit events use the bounded in-process queue.
 
 !!! warning "Check your release notes"
     Use this runbook only when the release notes for your target version link to it. Do not assume its migration names or compatibility rules apply to another release.
@@ -16,7 +16,7 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 ## Preconditions
 
 1. Apply all Prisma migrations through `20260817140000_fence_email_delivery` before deploying this binary. The application assumes the additive email-audit reconciliation, fenced email-delivery claims, and exact-spend columns exist before startup.
-2. Provision database headroom for `telemetry_db_pool_size` connections per process. These connections are separate from `db_pool_size`; size the database for the sum across all replicas.
+2. Provision database headroom for `telemetry_db_pool_size` acceptance connections and `telemetry_worker_db_pool_size` worker connections per process. Add the control and foreground pools and all API/worker rollout overlap using the [dependency capacity calculation](dependency-capacity.md). Consumers, cleanup and retention share the worker allocation; they are not extra pools.
 3. Configure Redis for prompt cache freshness and multi-replica audit policy invalidation. PostgreSQL advisory locks and the policy-change transaction remain the privacy correctness boundary; audit content writes do not rely on Pub/Sub delivery.
 4. Verify the server-owned spend event identity, Prisma transaction-client detection, blocked-event replay, and claim-token fencing tests before enabling spend producers.
 5. Set the pod termination grace period above `telemetry_shutdown_drain_timeout_seconds`.
@@ -48,6 +48,10 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 
 ## Spend rollout
 
+For ordinary operation intents and reserved settlement capacity, follow the
+[spend recovery runbook](spend-recovery.md) after this outbox rollout. It preserves
+unknown outcomes across process loss and does not provide hard monetary budgets.
+
 After the P0 migration, lock-snapshot concurrency tests, and fixed-binary rollout are complete:
 
 1. Start with `spend_ingestion_overload_policy: sync_fallback`, a conservative `spend_ingestion_batch_size`, and `spend_ingestion_max_pending_events` sized for the tolerated outage window.
@@ -60,7 +64,7 @@ After the P0 migration, lock-snapshot concurrency tests, and fixed-binary rollou
    - One bulk acknowledgement.
 
 3. Compare the spend-event total with key, user, team, organization, and team-model ledger deltas. Retries must not increment a ledger twice.
-4. Increase the canary share while watching request-pool saturation and the dedicated telemetry pool independently.
+4. Increase the canary share while watching foreground, telemetry acceptance, telemetry worker and control pool saturation independently.
 5. Roll all replicas only after the oldest-event age returns to normal after an induced worker pause.
 
 The exact-spend migration only adds schema elements.
@@ -89,6 +93,20 @@ The resolution and its necessary operator audit commit atomically.
 Do not resolve an uncertain row as failed only to force another send.
 Create a new server-owned email event only after you establish that the provider did not accept the original.
 
+## Idle consumer polling
+
+Spend and audit outbox consumers reduce database polling when a claim is empty.
+The first idle wait uses the configured ingestion flush interval.
+Each further empty claim doubles the wait, up to one second.
+A configured interval greater than one second remains unchanged.
+
+A durable enqueue in the same process wakes its consumer at once.
+Work from another process is found by the bounded poll.
+At the default 100 ms flush interval, idle detection can thus take up to one
+second plus database time. This is not a request acknowledgement delay.
+Busy processing, leases, retries, and shutdown keep their existing bounds.
+Startup and configuration changes reset the idle wait.
+
 ## Alerts and overload behavior
 
 Alert before capacity is exhausted, using both utilization and age:
@@ -104,6 +122,8 @@ An audit-database or compatibility-sink failure has delivery-class-specific beha
 Completed records and failed best-effort audit records are retained separately. Independent maintenance tasks drain up to `cleanup_batch_size * cleanup_max_batches_per_run` rows per interval within the configured time budget, including while ingestion is idle. Size this nominal rate above peak terminal-row creation—for example, the defaults permit up to 10,000 deletion candidates per 60-second run. Parallel cleaners use `FOR UPDATE SKIP LOCKED` so replicas select disjoint pages.
 
 Exhausted spend and required-audit records move to `blocked`. They remain capacity-accounted, are never selected by cleanup, and retain their stable event ID and frozen payload. Claims carry a unique token and renew at one-third of the lease interval; completion, retry, redaction, and acknowledgement all validate that token. A platform administrator may replay one investigated record with `POST /ui/api/telemetry-ingestion/{spend|audit}/{event_id}/replay`. Replay resets attempts but preserves identity and payload, records operator metadata, and does not change capacity. The replay mutation and required operator-audit insert commit atomically; if either write fails, both roll back and the endpoint returns a controlled `503`.
+
+Audit claim polling updates the shared capacity row only when it terminalizes exhausted best-effort records and releases their slots. Empty polls, ordinary claims and reclaims, and required-only exhaustion leave that row untouched. Capacity release remains atomic with terminalization in the same SQL statement. PostgreSQL executes [data-modifying CTEs](https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING) even when the main claim returns no rows, so the capacity update has its own explicit condition. This reduces unnecessary contention; it does not establish a supported concurrency limit or remove the need to measure admission locks and size connection pools.
 
 ## Rollback
 
@@ -126,3 +146,7 @@ DELTALLM_LOAD_API_KEY=... uv run python scripts/measure_gateway_load.py \
 ```
 
 Do not treat unit-test timings or runs against different providers/configuration as a before/after result. Compare success count, generator drops, arrival-window throughput, drain time, scheduling lag, latency p50/p95/p99/max, and database/Redis dependency counts from the matching server metrics interval.
+
+See [Process lifecycle](process-lifecycle.md) for migration-before-rollout ordering,
+the managed 80-second shutdown budget, interrupted-stream behavior and recovery of
+committed records after a pod exits. Keep the managed image command in production.

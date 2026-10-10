@@ -63,13 +63,17 @@ class RealtimeRuntime:
             del self._sessions[task]
             active_sessions.dec()
 
-    async def close(self) -> None:
+    def begin_drain(self) -> None:
+        """Stop admission and start each owned cleanup once."""
         self._closing = True
-        owners = dict(self._sessions)
-        for task, drain in owners.items():
+        for task, drain in self._sessions.items():
             if drain.deadline is None:
                 drain.begin()
                 task.cancel()
+
+    async def close(self) -> None:
+        self.begin_drain()
+        owners = dict(self._sessions)
         if owners:
             deadline = max(drain.begin() for drain in owners.values())
             done, pending = await asyncio.wait(

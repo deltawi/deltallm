@@ -1785,8 +1785,10 @@ async def test_route_group_policy_simulation_reports_retries_and_fallbacks(
     state = test_app.state.routing_runtime_generation_store.require_snapshot().router.state
     health_reads = 0
     cooldown_reads = 0
+    combined_reads = 0
     get_health_batch = state.get_health_batch
     get_cooldown_batch = state.get_cooldown_batch
+    get_combined = state.get_health_and_cooldown_batch
 
     async def count_health_reads(health_refs):  # noqa: ANN001, ANN202
         nonlocal health_reads
@@ -1798,8 +1800,15 @@ async def test_route_group_policy_simulation_reports_retries_and_fallbacks(
         cooldown_reads += 1
         return await get_cooldown_batch(health_refs)
 
+    async def count_combined_reads(health_refs):  # noqa: ANN001, ANN202
+        nonlocal combined_reads
+        combined_reads += 1
+        assert len(health_refs) == 2
+        return await get_combined(health_refs)
+
     monkeypatch.setattr(state, "get_health_batch", count_health_reads)
     monkeypatch.setattr(state, "get_cooldown_batch", count_cooldown_reads)
+    monkeypatch.setattr(state, "get_health_and_cooldown_batch", count_combined_reads)
 
     response = await client.post(
         "/ui/api/route-groups/sim-route/policy/simulate",
@@ -1838,8 +1847,8 @@ async def test_route_group_policy_simulation_reports_retries_and_fallbacks(
         "retry",
         "fallback",
     ]
-    assert health_reads == 1
-    assert cooldown_reads == 1
+    assert combined_reads == 1
+    assert health_reads == cooldown_reads == 0
 
 
 @pytest.mark.asyncio

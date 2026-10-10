@@ -8,6 +8,20 @@ from src.metrics import increment_cache_hit, increment_cache_miss
 from src.metrics.prometheus import get_prometheus_registry
 
 
+_cache_writes = Counter(
+    "deltallm_cache_write_total",
+    "Total cache writes",
+    ["endpoint", "model"],
+    registry=get_prometheus_registry(),
+)
+_cache_errors = Counter(
+    "deltallm_cache_error_total",
+    "Total cache errors",
+    ["operation"],
+    registry=get_prometheus_registry(),
+)
+
+
 class CacheMetricsProtocol(Protocol):
     def hit(self, *, endpoint: str, model: str) -> None: ...
 
@@ -35,18 +49,8 @@ class NoopCacheMetrics:
 class PrometheusCacheMetrics:
     def __init__(self, cache_type: str = "default") -> None:
         self.cache_type = cache_type
-        self._writes = Counter(
-            "deltallm_cache_write_total",
-            "Total cache writes",
-            ["endpoint", "model"],
-            registry=get_prometheus_registry(),
-        )
-        self._errors = Counter(
-            "deltallm_cache_error_total",
-            "Total cache errors",
-            ["operation"],
-            registry=get_prometheus_registry(),
-        )
+        self._writes = _cache_writes
+        self._errors = _cache_errors
 
     def hit(self, *, endpoint: str, model: str) -> None:
         del endpoint

@@ -10,12 +10,18 @@ fullnameOverride: ""
 replicaCount: 2
 revisionHistoryLimit: 10
 minReadySeconds: 5
-terminationGracePeriodSeconds: 30
+terminationGracePeriodSeconds: 90
+
+managedLifecycle:
+  enabled: true
+  production: false
+  exitMarginSeconds: 10
 
 image:
   repository: deltallm/deltallm
   pullPolicy: IfNotPresent
   tag: latest
+  digest: ""
   pullSecrets: []
 
 serviceAccount:
@@ -27,8 +33,17 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
-podSecurityContext: {}
-securityContext: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
 
 strategy:
   type: RollingUpdate
@@ -79,6 +94,7 @@ probes:
     timeoutSeconds: 5
     failureThreshold: 3
   readiness:
+    successThreshold: 2
     path: /health/readiness
     initialDelaySeconds: 5
     periodSeconds: 5
@@ -86,6 +102,10 @@ probes:
     failureThreshold: 3
 
 autoscaling:
+  admittedInflight:
+    enabled: false
+    targetAverageValue: 70
+  scaleDownStabilizationSeconds: 300
   enabled: false
   minReplicas: 2
   maxReplicas: 10
@@ -156,6 +176,7 @@ batchWorker:
       cpu: 2000m
       memory: 2Gi
   autoscaling:
+    scaleDownStabilizationSeconds: 300
     enabled: false
     minReplicas: 1
     maxReplicas: 6
@@ -171,6 +192,77 @@ batchWorker:
   # Per-role config overrides for the batch worker Deployment.
   # Shared config.general_settings is used first, then worker-safe defaults
   # are filled for missing keys, then this map is applied last.
+  config: {}
+
+# Dedicated compatibility projection and expired-reservation recovery role.
+# API pods retain reservation/finalization microbatchers but do not run this loop.
+accountingWorker:
+  enabled: false
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    scaleDownStabilizationSeconds: 300
+    oldestEventAge:
+      enabled: false
+      metricName: deltallm_accounting_projection_oldest_event_age_seconds
+      targetAverageValue: "5"
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  command: []
+  args: []
+  env: []
+  envFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  # This role does not serve gateway traffic. Keep its control/foreground pools
+  # small while preserving dedicated admission and worker pools for projection.
+  config:
+    general_settings:
+      db_pool_size: 4
+      db_foreground_pool_size: 1
+      telemetry_db_pool_size: 5
+      telemetry_worker_db_pool_size: 5
+
+# Native signed RPC role. Fixed replicas and rollout overlap count in capacity.
+accountingRequest:
+  enabled: false
+  replicaCount: 1
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  command: []
+  args: []
+  env: []
+  envFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
   config: {}
 
 dependencyWait:
@@ -192,6 +284,10 @@ secret:
     batchWebhookEncryptionKey: ""
 
 runtime:
+  accounting:
+    existingSecret:
+      name: ""
+      signingKey: accounting-rpc-signing-secret
   database:
     url: ""
     existingSecret:
@@ -260,6 +356,28 @@ config:
       write_seconds: 10
       health_seconds: 5
       cleanup_seconds: 5
+
+    readiness_probe_timeout_seconds: 1
+    readiness_cache_seconds: 1
+    lifecycle_withdrawal_seconds: 5
+    lifecycle_request_drain_seconds: 45
+    lifecycle_cancellation_seconds: 5
+    lifecycle_worker_drain_seconds: 20
+    lifecycle_close_seconds: 5
+    lifecycle_shutdown_seconds: 80
+    migration_mode: startup
+    deployment_capacity_path: null
+    deployment_capacity_role: api
+    migration_verify_timeout_seconds: 10
+    # Finite Redis allocations (restart required).
+    redis_bulk_url: null
+    redis_critical_max_connections: 64
+    redis_critical_max_waiters: 64
+    redis_bulk_max_connections: 16
+    redis_bulk_max_waiters: 0
+    redis_acquisition_timeout_seconds: 0.2
+    redis_socket_timeout_seconds: 1.0
+    redis_connect_timeout_seconds: 1.0
     deltallm_key_header_name: Authorization
     # Startup-only provider discovery egress; independent of batch webhook policy.
     provider_discovery_allow_http: false
@@ -288,11 +406,42 @@ config:
     budget_enforcement_query_mode: legacy
     budget_enforcement_shadow_sample_rate: 0.01
     budget_enforcement_query_timeout_seconds: 2
+    # Per-process ingress admission (restart required; enable after workload validation).
+    gateway_ingress_control_max_active: 16
+    gateway_ingress_control_max_buffered_bytes: 67108864
+    auth_fallback_max_active: 8
+    auth_fallback_max_waiters: 32
+    auth_fallback_queue_timeout_ms: 10
+    auth_fallback_timeout_seconds: 0.5
+    auth_fallback_cache_timeout_seconds: 0.1
+    auth_fallback_cache_max_bytes: 131072
+    # Startup-only callback delivery and guardrail execution bounds.
+    callback_max_pending: 128
+    callback_max_concurrency: 4
+    callback_max_payload_bytes: 262144
+    callback_max_bytes: 8388608
+    callback_timeout_seconds: 5
+    callback_shutdown_seconds: 5
+    guardrail_max_concurrency: 2
+    guardrail_max_pending: 8
+    guardrail_max_bytes: 33554432
+    guardrail_timeout_seconds: 5
+    guardrail_shutdown_seconds: 5
+    gateway_ingress_enabled: false
+    gateway_ingress_max_active: 100
+    gateway_ingress_max_waiters: 0
+    gateway_ingress_queue_timeout_ms: 10
+    gateway_ingress_max_body_bytes: 33554432
+    gateway_ingress_max_buffered_bytes: 67108864
+    gateway_ingress_body_timeout_seconds: 10.0
+    gateway_ingress_health_max_active: 4
     gateway_preflight_capacity_enabled: false
     gateway_preflight_global_max_parallel: 300
     gateway_preflight_org_max_parallel: 100
     gateway_preflight_lease_ttl_seconds: 30
     spend_ingestion_mode: legacy
+    spend_operation_intents_enabled: false
+    spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
     spend_ingestion_batch_size: 100
     spend_ingestion_flush_interval_ms: 100
     spend_ingestion_lease_seconds: 30
@@ -310,10 +459,53 @@ config:
     spend_ingestion_cleanup_batch_size: 1000
     spend_ingestion_cleanup_max_batches_per_run: 10
     spend_ingestion_cleanup_time_budget_seconds: 2
+    db_pool_size: 20
+    db_pool_timeout: 30
     telemetry_db_pool_size: 5
+    db_foreground_pool_size: 8
+    telemetry_worker_db_pool_size: 5
+    db_acquisition_timeout_seconds: 0.2
+    db_statement_timeout_seconds: 1.0
+    db_lock_timeout_seconds: 0.2
+    db_transaction_timeout_seconds: 2.0
+    db_background_statement_timeout_seconds: 5.0
+    db_background_lock_timeout_seconds: 1.0
+    db_background_transaction_timeout_seconds: 10.0
+    redis_cache_max_connections: 16
+    redis_cache_max_waiters: 0
     telemetry_db_pool_timeout_seconds: 2
     telemetry_worker_startup_timeout_seconds: 5
     telemetry_shutdown_drain_timeout_seconds: 20
+    accounting_protocol_enabled: false
+    accounting_execution_mode: assigned
+    accounting_request_url: null
+    accounting_rpc_signing_secret: null
+    accounting_rpc_allow_http: false
+    accounting_rpc_allowed_ports: [443]
+    accounting_rpc_allowed_private_cidrs: []
+    accounting_rpc_max_connections: 16
+    accounting_local_max_subjects: 1024
+    accounting_protocol_generation: 1
+    accounting_microbatch_max_size: 8
+    accounting_microbatch_dwell_ms: 2
+    accounting_reservation_max_pending: 4096
+    accounting_finalization_max_pending: 8192
+    accounting_reservation_max_pending_bytes: 8388608
+    accounting_finalization_max_pending_bytes: 8388608
+    accounting_statement_timeout_ms: 250
+    accounting_reservation_ack_timeout_ms: 1000
+    accounting_finalization_ack_timeout_ms: 2000
+    accounting_hot_path_db_pool_size: 2
+    accounting_max_provider_attempts: 3
+    accounting_grants_enabled: true
+    accounting_grant_target_operations: 32
+    accounting_grant_ttl_seconds: 30
+    accounting_projection_worker_enabled: false
+    accounting_projection_batch_size: 64
+    accounting_projection_max_concurrent_partitions: 4
+    accounting_projection_lease_seconds: 30
+    accounting_projection_poll_interval_ms: 50
+    accounting_projection_maintenance_interval_ms: 1000
     audit_ingestion_mode: legacy
     audit_ingestion_worker_enabled: true
     audit_ingestion_batch_size: 100
@@ -460,6 +652,8 @@ s3:
     secretAccessKeyKey: aws-secret-access-key
 
 prometheus:
+  customMetrics:
+    enabled: false # Externally managed Prometheus Adapter APIService.
   podAnnotations:
     enabled: true
   serviceMonitor:
@@ -471,20 +665,26 @@ prometheus:
 
 migrationJob:
   enabled: false
+  external: false
   annotations: {}
   hook:
     enabled: false
     deletePolicy: before-hook-creation,hook-succeeded
-  backoffLimit: 4
-  activeDeadlineSeconds: 600
-  ttlSecondsAfterFinished: 300
-  resources: {}
-  command:
-    - sh
-    - -c
-  args:
-    - |
-      python -m src.organization_deletion_migrations deploy --schema ./prisma/schema.prisma
+  backoffLimit: 0
+  activeDeadlineSeconds: 330
+  timeoutSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  command: [python, -m, src.prisma_bootstrap]
+  args: [--schema, ./prisma/schema.prisma, --max-attempts, "30", --sleep-seconds, "2"]
+  env: []
+  envFrom: []
 
 postgresql:
   enabled: false
@@ -510,3 +710,38 @@ redis:
     persistence:
       enabled: true
       size: 5Gi
+
+# Declared deployment ceilings, not a change to PostgreSQL/Redis server limits.
+# Set these from provisioned service capacity before production deployment.
+dependencyCapacity:
+  apiProcessesPerPod: 1
+  batchWorkerProcessesPerPod: 1
+  accountingWorkerProcessesPerPod: 1
+  accountingRequestProcessesPerPod: 1
+  retiringGenerations: 1
+  postgresqlMaxConnections: 1000
+  postgresqlReservedConnections: 20
+  redisMaxClients: 2000
+  redisReservedClients: 64
+  # Governed deployment allocations. Physical limits must be verified by operators.
+  extended:
+    enabled: false
+    postgresqlMigrationConnections: 0
+    postgresqlOtherConnections: 0
+    redisOtherClients: 0
+    proxyPoolsPerClient: 0
+    auxiliaryHttpConnectionsPerProcess: 0
+    cacheRedis:
+      separate: false
+      maxClients: 2000
+      reservedClients: 64
+    fileDescriptors:
+      processLimit: 8192
+      engineLimit: 1024
+      inboundConnectionsPerProcess: 256
+      otherPerProcess: 128
+      headroomPerProcess: 256
+      maxPodsPerNode: 44
+      nodeLimit: 1048576
+      nodeReserved: 8192
+    providerDomains: {}

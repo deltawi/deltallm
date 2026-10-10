@@ -8,6 +8,7 @@ import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
+from src.billing.spend_read import SPEND_READ_SOURCE
 from src.models.platform_auth import PlatformAuthContext
 
 
@@ -343,7 +344,7 @@ async def test_spend_summary_applies_org_scope_for_non_platform(client, test_app
     assert response.status_code == 200
 
     query, params = fake_db.calls[0]
-    assert "FROM deltallm_spendlog_events" in query
+    assert f"FROM {SPEND_READ_SOURCE.table}" in query
     assert "organization_id IN" in query
     assert "COUNT(DISTINCT model)" in query
     assert "org-1" in params
@@ -370,7 +371,7 @@ async def test_spend_summary_uses_event_scope(client, test_app, monkeypatch):
     assert response.status_code == 200
 
     query, params = fake_db.calls[0]
-    assert "FROM deltallm_spendlog_events" in query
+    assert f"FROM {SPEND_READ_SOURCE.table}" in query
     assert "organization_id IN" in query
     assert (
         "team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN" not in query
@@ -405,7 +406,7 @@ async def test_spend_logs_applies_org_scope_for_non_platform(client, test_app, m
         for query, _ in fake_db.admission_calls
     )
     logs_query, logs_params = fake_db.calls[0]
-    assert "FROM deltallm_spendlog_events" in logs_query
+    assert f"FROM {SPEND_READ_SOURCE.table}" in logs_query
     assert "organization_id IN" in logs_query
     assert "org-1" in logs_params
     assert response.json()["pagination"] == {
@@ -445,7 +446,7 @@ async def test_spend_logs_use_normalized_event_columns(client, test_app, monkeyp
 
     assert len(fake_db.calls) == 1
     logs_query = fake_db.calls[0]
-    assert "FROM deltallm_spendlog_events" in logs_query[0]
+    assert f"FROM {SPEND_READ_SOURCE.table}" in logs_query[0]
     assert "input_tokens AS prompt_tokens" in logs_query[0]
     assert 'user_id AS "user"' in logs_query[0]
     assert "status" in logs_query[0]
@@ -759,7 +760,7 @@ async def test_grouped_spend_report_applies_org_scope_for_non_platform(
 
     assert len(fake_db.calls) == 1
     query, params = fake_db.calls[0]
-    assert "FROM deltallm_spendlog_events s" in query
+    assert f"FROM {SPEND_READ_SOURCE.table} s" in query
     assert "s.organization_id IN" in query
     assert (
         "LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id" in query

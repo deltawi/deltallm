@@ -12,6 +12,10 @@ A selected checkbox without this evidence is not sufficient for release.
 - [ ] API and worker replicas use independent failure domains where the availability target requires it.
 - [ ] Capacity tests cover non-streaming, streaming, provider latency, retry/failover, and background work.
 - [ ] Resource requests, limits, autoscaling bounds, disruption budgets, and connection pools match those tests.
+- [ ] The target RPS, response duration, provider quotas and failure headroom follow
+  [Production requirements for RPS targets](production-rps-requirements.md).
+- [ ] The same release image passes sustained capacity tests, with correct
+  accounting and completed drain; short diagnostics alone do not approve traffic.
 
 ## Identity, secrets, and network
 

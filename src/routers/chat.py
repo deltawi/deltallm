@@ -18,9 +18,11 @@ from src.chat import (
     emit_precommit_failure,
     emit_stream_failure,
     emit_stream_success,
-    execute_chat,
-    open_stream_with_first_chunk,
     run_text_preflight,
+)
+from src.chat.durable_execution import (
+    execute_durable_chat as execute_chat,
+    open_durable_stream as open_stream_with_first_chunk,
 )
 from src.chat.audit import request_client_ip
 from src.chat.mcp_execution import (

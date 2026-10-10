@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from src.shutdown import BoundedExitStack
+import asyncio
 from src.startup_settings import startup_setting
-
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,23 +10,31 @@ import httpx
 from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
+from src.startup_config import StartupConfig
+from src.db.migration_status import verify_migration_status
+from src.process_lifecycle import ProcessLifecycle
+from src.bootstrap.dependency_capacity import DependencyAllocationSnapshot
+from src.redis_runtime import build_redis_client
 from src.batch import BatchRepository
 from src.config import (
-    get_settings,
     resolve_database_settings,
     resolve_salt_key,
     resolve_telemetry_database_settings,
 )
-from src.config_runtime import (
-    DynamicConfigManager,
-    SecretResolver,
-    build_app_config,
-    load_yaml_dict,
-)
+from src.config_runtime.dynamic import DynamicConfigManager
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
-from src.db.client import prisma_manager, telemetry_prisma_manager
+from src.spend_operation_settings import SpendOperationAllocation
+from src.db.client import (
+    prisma_manager,
+    telemetry_prisma_manager,
+    foreground_prisma_manager,
+    telemetry_worker_prisma_manager,
+    telemetry_settlement_prisma_manager,
+)
+from src.db.allocation_config import DatabasePolicy
+from src.db.accounting_pool import accounting_postgres_manager
 from src.db.email import EmailOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
@@ -73,17 +82,9 @@ class InfrastructureRuntime:
     managed_asset_reconciliation_service: ManagedAssetReconciliationService
     telemetry_database_connected: bool = False
     statuses: tuple[BootstrapStatus, ...] = ()
-
-
-def _build_redis_client(settings: Any, cfg: Any) -> Redis:
-    redis_url = settings.redis_url or cfg.general_settings.redis_url
-    if redis_url:
-        return Redis.from_url(redis_url, decode_responses=True)
-
-    host = cfg.general_settings.redis_host or settings.redis_host
-    port = cfg.general_settings.redis_port or settings.redis_port
-    password = cfg.general_settings.redis_password or settings.redis_password
-    return Redis(host=host, port=port, password=password, decode_responses=True)
+    bulk_redis_client: Redis | None = None
+    cache_redis_client: Redis | None = None
+    cleanup: BoundedExitStack | None = None
 
 
 def _startup_setting(general_settings: Any, settings: Any, field_name: str, default: Any) -> Any:
@@ -91,9 +92,22 @@ def _startup_setting(general_settings: Any, settings: Any, field_name: str, defa
 
 
 async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
-    settings = get_settings()
-    file_config = load_yaml_dict(settings.config_path)
-    cfg = build_app_config(file_config, secret_resolver=SecretResolver())
+    async with BoundedExitStack() as cleanup:
+        resources = BoundedExitStack(phase="close")
+        cleanup.push_async_callback(resources.aclose, cleanup_phase="close")
+        runtime = await _init_infrastructure_runtime(app, cleanup, resources)
+        runtime.cleanup = cleanup.pop_all()
+        return runtime
+
+
+async def _init_infrastructure_runtime(
+    app: Any, cleanup: BoundedExitStack, resources: BoundedExitStack
+) -> InfrastructureRuntime:
+    startup = getattr(app.state, "startup_config", None) or StartupConfig.load()
+    app.state.startup_config = startup
+    if getattr(app.state, "process_lifecycle", None) is None:
+        app.state.process_lifecycle = ProcessLifecycle(startup.lifecycle)
+    settings, file_config, cfg = startup.settings, startup.file_config, startup.app_config
 
     from src.ui.config import UIMountSettings
 
@@ -102,27 +116,87 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     )
     app.state.settings = settings
     app.state.app_config = cfg
-
-    redis_client = _build_redis_client(settings, cfg)
-    app.state.redis = redis_client
-    app.state.route_group_runtime_cache = RouteGroupRuntimeCache(
-        redis_client=redis_client,
-        keyspace=RouteGroupRuntimeRedisKeyspace(environment=str(settings.app_env)),
-    )
+    redis_endpoint_settings = cfg.general_settings
 
     database_settings = resolve_database_settings(cfg, settings)
-    await prisma_manager.connect(database_settings)
+    startup_allocations = DependencyAllocationSnapshot.build(cfg, settings)
+    startup_allocations.validate_deployment(cfg, settings)
+    database_allocations = startup_allocations.database
+    if database_settings is None:
+        raise RuntimeError("Database allocations require an explicit database URL")
+    resources.push_async_callback(prisma_manager.disconnect)
+    await prisma_manager.connect(
+        database_settings,
+        policy=DatabasePolicy.build(
+            database_allocations,
+            "control",
+            database_settings.pool_size,
+        ),
+    )
     app.state.prisma_manager = prisma_manager
+    if startup.lifecycle.migration_mode == "external":
+        await verify_migration_status(
+            prisma_manager.client,
+            timeout_seconds=startup.lifecycle.migration_verify_timeout_seconds,
+        )
 
     dynamic_config_manager = DynamicConfigManager(
         db_client=prisma_manager.client,
-        redis_client=redis_client,
+        redis_client=None,
         file_config=file_config,
+        defer_updates=True,
         output_policy_degraded_mode=settings.redis_degraded_mode,
         runtime_settings=settings,
     )
+    cleanup.push_async_callback(dynamic_config_manager.close)
     await dynamic_config_manager.initialize()
     cfg = dynamic_config_manager.get_app_config()
+    startup_allocations.validate_effective(cfg, settings)
+    startup.validate_effective(cfg)
+    resources.push_async_callback(foreground_prisma_manager.disconnect)
+    await foreground_prisma_manager.connect(
+        database_settings,
+        policy=DatabasePolicy.build(
+            database_allocations,
+            "foreground",
+            database_allocations.db_foreground_pool_size,
+        ),
+    )
+    app.state.foreground_prisma_manager = foreground_prisma_manager
+
+    redis_client = build_redis_client(
+        settings,
+        cfg.general_settings,
+        allocation="critical",
+        endpoint_settings=redis_endpoint_settings,
+    )
+    resources.push_async_callback(redis_client.aclose)
+    bulk_redis_client = build_redis_client(
+        settings, cfg.general_settings, allocation="bulk", endpoint_settings=redis_endpoint_settings
+    )
+    resources.push_async_callback(bulk_redis_client.aclose)
+    redis_status = BootstrapStatus("redis", "degraded", "unavailable")
+    try:
+        async with asyncio.timeout(startup.lifecycle.readiness_probe_timeout_seconds):
+            if await redis_client.ping():
+                redis_status = BootstrapStatus("redis", "ready")
+    except Exception:
+        pass  # The readiness owner reports recovery; no exception text is exposed.
+    app.state.redis = redis_client
+    app.state.bulk_redis = bulk_redis_client
+    cache_redis_client = build_redis_client(
+        settings,
+        cfg.general_settings,
+        allocation="cache",
+        endpoint_settings=redis_endpoint_settings,
+    )
+    resources.push_async_callback(cache_redis_client.aclose)
+    app.state.cache_redis = cache_redis_client
+    dynamic_config_manager.attach_redis(redis_client)
+    app.state.route_group_runtime_cache = RouteGroupRuntimeCache(
+        redis_client=cache_redis_client,
+        keyspace=RouteGroupRuntimeRedisKeyspace(environment=str(settings.app_env)),
+    )
 
     app.state.dynamic_config_manager = dynamic_config_manager
     app.state.app_config = cfg
@@ -136,17 +210,123 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     )
     app.state.spend_ingestion_mode = spend_ingestion_mode
     app.state.audit_ingestion_mode = audit_ingestion_mode
-    durable_telemetry_enabled = spend_ingestion_mode == "outbox" or audit_ingestion_mode == "outbox"
+    accounting_protocol_enabled = bool(
+        _startup_setting(
+            cfg.general_settings,
+            settings,
+            "accounting_protocol_enabled",
+            False,
+        )
+    )
+    app.state.accounting_protocol_enabled = accounting_protocol_enabled
+    app.state.accounting_execution_mode = startup_allocations.accounting.accounting_execution_mode
+    assigned_accounting = (
+        accounting_protocol_enabled and app.state.accounting_execution_mode == "assigned"
+    )
+    durable_telemetry_enabled = startup_allocations.telemetry_connections > 0
+    telemetry_worker_enabled = startup_allocations.telemetry_worker_connections > 0
     telemetry_database_connected = False
     app.state.telemetry_prisma_manager = telemetry_prisma_manager
+    app.state.accounting_postgres_manager = accounting_postgres_manager
+    app.state.telemetry_worker_prisma_manager = telemetry_worker_prisma_manager
+    app.state.telemetry_settlement_prisma_manager = telemetry_settlement_prisma_manager
+    app.state.telemetry_worker_database_required = telemetry_worker_enabled
+    app.state.spend_operation_intents_enabled = False
     if durable_telemetry_enabled:
         telemetry_database_settings = resolve_telemetry_database_settings(cfg, settings)
         if telemetry_database_settings is None:
             raise RuntimeError("durable telemetry ingestion requires an explicit database URL")
-        await telemetry_prisma_manager.connect(telemetry_database_settings)
+        operation_allocation = SpendOperationAllocation.resolve(
+            cfg.general_settings,
+            settings,
+            telemetry_connections=telemetry_database_settings.pool_size,
+        )
+        legacy_operation_intents_enabled = (
+            operation_allocation.enabled and not accounting_protocol_enabled
+        )
+        settlement_connections = (
+            operation_allocation.settlement_connections if legacy_operation_intents_enabled else 0
+        )
+        accounting_connections = (
+            int(
+                _startup_setting(
+                    cfg.general_settings,
+                    settings,
+                    "accounting_hot_path_db_pool_size",
+                    2,
+                )
+            )
+            if assigned_accounting
+            else 0
+        )
+        if accounting_connections + settlement_connections >= telemetry_database_settings.pool_size:
+            raise RuntimeError(
+                "accounting and settlement pools must leave at least one telemetry connection"
+            )
+        app.state.spend_operation_intents_enabled = legacy_operation_intents_enabled
+        if legacy_operation_intents_enabled:
+            resources.push_async_callback(telemetry_settlement_prisma_manager.disconnect)
+            await telemetry_settlement_prisma_manager.connect(
+                telemetry_database_settings,
+                policy=DatabasePolicy.build(
+                    database_allocations,
+                    "telemetry_settlement",
+                    settlement_connections,
+                ),
+            )
+            if telemetry_settlement_prisma_manager.client is None:
+                raise RuntimeError("Spend recovery requires its settlement allocation")
+        if assigned_accounting:
+            accounting_statement_seconds = (
+                float(
+                    _startup_setting(
+                        cfg.general_settings,
+                        settings,
+                        "accounting_statement_timeout_ms",
+                        250,
+                    )
+                )
+                / 1000.0
+            )
+            resources.push_async_callback(accounting_postgres_manager.disconnect)
+            await accounting_postgres_manager.connect(
+                telemetry_database_settings,
+                pool_size=accounting_connections,
+                acquisition_seconds=database_allocations.db_acquisition_timeout_seconds,
+                statement_seconds=accounting_statement_seconds,
+                lock_seconds=min(
+                    database_allocations.db_lock_timeout_seconds,
+                    accounting_statement_seconds,
+                ),
+            )
+            if accounting_postgres_manager.client is None:
+                raise RuntimeError("accounting protocol requires its direct PostgreSQL pool")
+        resources.push_async_callback(telemetry_prisma_manager.disconnect)
+        await telemetry_prisma_manager.connect(
+            telemetry_database_settings,
+            policy=DatabasePolicy.build(
+                database_allocations,
+                "telemetry",
+                telemetry_database_settings.pool_size
+                - settlement_connections
+                - accounting_connections,
+            ),
+        )
         if telemetry_prisma_manager.client is None:
             raise RuntimeError("durable telemetry ingestion requires the Prisma client")
         telemetry_database_connected = True
+        if telemetry_worker_enabled:
+            resources.push_async_callback(telemetry_worker_prisma_manager.disconnect)
+            await telemetry_worker_prisma_manager.connect(
+                telemetry_database_settings,
+                policy=DatabasePolicy.build(
+                    database_allocations,
+                    "telemetry_worker",
+                    startup_allocations.telemetry_worker_connections,
+                ),
+            )
+            if telemetry_worker_prisma_manager.client is None:
+                raise RuntimeError("Durable telemetry requires its worker database allocation")
 
     ui_branding_asset_service = UIBrandingAssetService(prisma_manager.client)
     await ui_branding_asset_service.initialize(cfg)
@@ -154,8 +334,10 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.ui_branding_asset_service = ui_branding_asset_service
 
     http_client = build_upstream_http_client(cfg.general_settings)
+    resources.push_async_callback(http_client.aclose)
     control_transport = build_control_http_transport()
     control_http_client = build_control_http_client(transport=control_transport)
+    resources.push_async_callback(control_http_client.aclose)
     app.state.provider_discovery_runtime = ProviderDiscoveryRuntime(
         transport=control_transport,
         policy=OutboundNetworkPolicy(
@@ -226,6 +408,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         ),
     )
     await app.state.managed_asset_reconciliation_service.start()
+    cleanup.push_async_callback(app.state.managed_asset_reconciliation_service.close)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
     app.state.creator_model_access_service = CreatorModelAccessService(
@@ -281,6 +464,8 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
     return InfrastructureRuntime(
         redis_client=redis_client,
+        bulk_redis_client=bulk_redis_client,
+        cache_redis_client=cache_redis_client,
         dynamic_config_manager=dynamic_config_manager,
         http_client=http_client,
         control_http_client=control_http_client,
@@ -288,7 +473,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         telemetry_database_connected=telemetry_database_connected,
         statuses=(
             BootstrapStatus("config", "ready"),
-            BootstrapStatus("redis", "ready"),
+            redis_status,
             BootstrapStatus("database", "ready"),
             BootstrapStatus(
                 "managed_asset_links",
@@ -307,12 +492,5 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
 
 async def shutdown_infrastructure_runtime(runtime: InfrastructureRuntime) -> None:
-    await runtime.managed_asset_reconciliation_service.close()
-    await runtime.dynamic_config_manager.close()
-    await runtime.http_client.aclose()
-    await runtime.control_http_client.aclose()
-    if runtime.redis_client is not None:
-        await runtime.redis_client.close()
-    if runtime.telemetry_database_connected:
-        await telemetry_prisma_manager.disconnect()
-    await prisma_manager.disconnect()
+    if runtime.cleanup is not None:
+        await runtime.cleanup.aclose()

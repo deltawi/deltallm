@@ -260,6 +260,7 @@ class BatchItemRecord:
     last_scheduled_at: datetime | None = None
     claim_epoch: int = 0
     selector_checkpoint: object | None = None
+    accounting_checkpoint: object | None = None
 
 
 @dataclass

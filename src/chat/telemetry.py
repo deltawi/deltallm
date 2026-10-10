@@ -10,7 +10,6 @@ from fastapi import Request
 
 from src.billing.tier_pricing import (
     attach_pricing_metadata,
-    resolve_deployment_tier_pricing,
     resolve_token_billing_result,
 )
 from src.callbacks import build_standard_logging_payload
@@ -25,8 +24,13 @@ from src.metrics import (
 )
 from src.providers.resolution import resolve_provider
 from src.router.health_policy import exception_status_code
-from src.telemetry.request_failures import enqueue_request_log_write
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.request_failures import (
+    enqueue_request_log_write,
+    record_optional_accounting_v2_diagnostic,
+    requires_preflight_audit,
+    uses_optional_accounting_v2_diagnostics,
+)
+from src.telemetry.spend_operation import billing_write_context, operation_pricing
 from src.routers.routing_decision import attach_route_decision, resolve_failure_target
 
 
@@ -64,12 +68,11 @@ def _resolve_completion_pricing_costs(
     cache_hit: bool,
 ):
     usage_data = dict(usage or {})
-    pricing = resolve_deployment_tier_pricing(
+    pricing = operation_pricing(
+        request,
         auth=auth,
         model=model,
         deployment=served_deployment,
-        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-        mode="sync",
     )
     customer_billing = resolve_token_billing_result(
         pricing,
@@ -159,12 +162,13 @@ async def emit_stream_success(
     await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_spend(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
             team_id=auth.team_id,
             organization_id=getattr(auth, "organization_id", None),
+            owner_account_id=getattr(auth, "owner_account_id", None),
             end_user_id=None,
             model=payload.model,
             call_type="completion",
@@ -192,7 +196,6 @@ async def emit_stream_success(
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),
         ),
-        wait_for_completion=True,
     )
     await emit_text_audit_event(
         request=request,
@@ -282,7 +285,7 @@ async def emit_stream_failure(
     await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_request_failure(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -437,7 +440,7 @@ async def emit_nonstream_success(
     await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_spend(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -567,38 +570,42 @@ async def emit_precommit_failure(
         default_api_base=api_base,
         default_deployment_model=primary_deployment.deltallm_params.get("model"),
     )
-    await enqueue_request_log_write(
-        request,
-        request.app.state.spend_tracking_service.log_request_failure(
-            event_id=get_or_create_billing_event_id(request),
-            request_id=request_id or "",
-            api_key=auth.api_key,
-            user_id=auth.user_id,
-            team_id=auth.team_id,
-            organization_id=getattr(auth, "organization_id", None),
-            owner_account_id=getattr(auth, "owner_account_id", None),
-            end_user_id=None,
-            model=payload.model,
-            call_type="completion",
-            metadata=_append_route_decision_metadata(
-                request,
-                {
-                    "route": request.url.path,
-                    "stream": stream,
-                    "cache_hit": cache_hit,
-                    "cache_key": cache_key,
-                    "api_base": failure_fields["api_base"],
-                    "provider": failure_fields["provider"],
-                    "deployment_model": failure_fields["deployment_model"],
-                },
+    optional_accounting_diagnostic = uses_optional_accounting_v2_diagnostics(request)
+    if optional_accounting_diagnostic:
+        record_optional_accounting_v2_diagnostic(request, status_code=status_code)
+    else:
+        await enqueue_request_log_write(
+            request,
+            request.app.state.spend_tracking_service.log_request_failure(
+                **billing_write_context(request),
+                request_id=request_id or "",
+                api_key=auth.api_key,
+                user_id=auth.user_id,
+                team_id=auth.team_id,
+                organization_id=getattr(auth, "organization_id", None),
+                owner_account_id=getattr(auth, "owner_account_id", None),
+                end_user_id=None,
+                model=payload.model,
+                call_type="completion",
+                metadata=_append_route_decision_metadata(
+                    request,
+                    {
+                        "route": request.url.path,
+                        "stream": stream,
+                        "cache_hit": cache_hit,
+                        "cache_key": cache_key,
+                        "api_base": failure_fields["api_base"],
+                        "provider": failure_fields["provider"],
+                        "deployment_model": failure_fields["deployment_model"],
+                    },
+                ),
+                cache_hit=cache_hit,
+                start_time=callback_start,
+                end_time=datetime.now(tz=UTC),
+                http_status_code=status_code,
+                exc=exc,
             ),
-            cache_hit=cache_hit,
-            start_time=callback_start,
-            end_time=datetime.now(tz=UTC),
-            http_status_code=status_code,
-            exc=exc,
-        ),
-    )
+        )
     await guardrail_middleware.run_post_call_failure(
         request_data=request_data,
         user_api_key_dict=auth.model_dump(mode="python"),
@@ -649,26 +656,27 @@ async def emit_precommit_failure(
         original_exception=exc,
         user_api_key_dict=auth.model_dump(mode="json"),
     )
-    await emit_text_audit_event(
-        request=request,
-        auth=auth,
-        action=audit_action,
-        model=payload.model,
-        status="error",
-        request_start=request_start,
-        request_data=request_data,
-        response_data=None,
-        error=exc,
-        metadata=_append_route_decision_metadata(
-            request,
-            {
-                "route": request.url.path,
-                "stream": stream,
-                "cache_hit": cache_hit,
-                "cache_key": cache_key,
-                "api_base": failure_fields["api_base"],
-                "provider": failure_fields["provider"],
-                "deployment_model": failure_fields["deployment_model"],
-            },
-        ),
-    )
+    if not optional_accounting_diagnostic or requires_preflight_audit(exc):
+        await emit_text_audit_event(
+            request=request,
+            auth=auth,
+            action=audit_action,
+            model=payload.model,
+            status="error",
+            request_start=request_start,
+            request_data=request_data,
+            response_data=None,
+            error=exc,
+            metadata=_append_route_decision_metadata(
+                request,
+                {
+                    "route": request.url.path,
+                    "stream": stream,
+                    "cache_hit": cache_hit,
+                    "cache_key": cache_key,
+                    "api_base": failure_fields["api_base"],
+                    "provider": failure_fields["provider"],
+                    "deployment_model": failure_fields["deployment_model"],
+                },
+            ),
+        )

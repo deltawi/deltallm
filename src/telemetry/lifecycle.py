@@ -4,7 +4,9 @@ import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Iterable
+from typing import Iterable, Protocol
+
+from src.shutdown import retain_unfinished
 
 
 class WorkerState(StrEnum):
@@ -24,6 +26,11 @@ class WorkerHealth:
     @property
     def ready(self) -> bool:
         return self.state in {WorkerState.DISABLED, WorkerState.READY}
+
+
+class WorkerHealthSource(Protocol):
+    @property
+    def worker_health(self) -> WorkerHealth: ...
 
 
 async def wait_for_startup(
@@ -76,6 +83,7 @@ async def stop_tasks_before_deadline(
         remaining = max(0.0, deadline - asyncio.get_running_loop().time())
         if remaining > 0:
             _, pending = await asyncio.wait(pending, timeout=remaining)
+    retain_unfinished(pending)
     for task in pending:
         task.cancel()
         task.add_done_callback(_observe_task_result)

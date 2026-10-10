@@ -56,6 +56,9 @@ class ChatItemExecutionMixin:
             request_data=dump_request_for_preflight(chat_request),
             call_type="completion",
             routing_runtime=routing_generation,
+            native_accounting=None
+            if self.native_billing is None
+            else self.native_billing.accounting,
         )
         chat_request = preflight.payload
         self._validate_batch_chat_request(chat_request)
@@ -225,6 +228,7 @@ class ChatItemExecutionMixin:
             await self._mark_item_failed(
                 job=job,
                 item=prepared.item,
+                native_execution=prepared.native_accounting,
                 model_name=prepared.model_name,
                 exc=exc,
                 deployment_id=None,
@@ -262,12 +266,7 @@ class ChatItemExecutionMixin:
                 prepared.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=prepared.primary_deployment,
                     model_group=prepared.model_group,
-                    execute=lambda dep: self._execute_chat(
-                        prepared.request_shim,
-                        prepared.payload,
-                        dep,
-                        record_usage=False,
-                    ),
+                    execute=lambda dep: self._execute_batch_chat_attempt(job, prepared, dep),
                     return_deployment=True,
                     routing_context=prepared.request_context,
                     **{
@@ -332,6 +331,7 @@ class ChatItemExecutionMixin:
                 context_label="chat",
             )
             if persisted:
+                self._native_completion_saved([prepared])
                 self._observe_item_execution_latency(
                     status="success",
                     latency_seconds=perf_counter() - prepared.started_at_monotonic,
@@ -358,6 +358,7 @@ class ChatItemExecutionMixin:
             await self._mark_item_failed(
                 job=job,
                 item=prepared.item,
+                native_execution=prepared.native_accounting,
                 model_name=prepared.model_name,
                 exc=exc,
                 deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "")
@@ -367,6 +368,7 @@ class ChatItemExecutionMixin:
             increment_batch_chat_item_executed(mode=batch_execution_mode, status="error")
             return
         finally:
+            await self._close_native_batch_items([prepared])
             if item_heartbeat is not None:
                 await item_heartbeat.stop()
             await self._release_prepared_policy_lease(prepared)

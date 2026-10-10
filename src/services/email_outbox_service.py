@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline
+
 import asyncio
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -308,13 +310,14 @@ class EmailOutboxWorker:
     async def shutdown(self) -> None:
         self._stopped = True
         self._state = WorkerState.STOPPING
-        deadline = asyncio.get_running_loop().time() + self.config.shutdown_drain_timeout_seconds
+        deadline = cleanup_deadline(self.config.shutdown_drain_timeout_seconds)
         stopped = await stop_tasks_before_deadline([self._task], deadline=deadline)
         if not stopped:
             increment_email_worker_failure(phase="shutdown_timeout")
             logger.error("email worker exceeded shutdown deadline and was cancelled")
-        self._task = None
-        self._state = WorkerState.DISABLED
+        if stopped:
+            self._task = None
+        self._state = WorkerState.DISABLED if stopped else WorkerState.FAILED
         self._detail = None
 
     async def run(self) -> None:

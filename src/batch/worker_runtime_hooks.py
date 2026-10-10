@@ -5,11 +5,14 @@ import logging
 from typing import Any
 
 from src.batch.endpoints import batch_call_type_for_endpoint
+from src.batch.accounting_native import NativeBatchBilling
 
 logger = logging.getLogger(__name__)
 
 
 class WorkerRuntimeHooksMixin:
+    native_billing: NativeBatchBilling | None = None
+
     async def _record_upstream_success_runtime_hooks(
         self,
         *,
@@ -48,7 +51,12 @@ class WorkerRuntimeHooksMixin:
         deployment_id: str | None,
     ) -> None:
         spend_tracking_service = getattr(self.app.state, "spend_tracking_service", None)
-        if job.created_by_api_key and spend_tracking_service is not None:
+        if (
+            self.native_billing is None
+            and item.accounting_checkpoint is None
+            and job.created_by_api_key
+            and spend_tracking_service is not None
+        ):
             metadata = {
                 "batch_id": batch_id,
                 "batch_item_id": item.item_id,

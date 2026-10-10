@@ -16,8 +16,18 @@ from src.models.errors import RateLimitError, ServiceUnavailableError
 from src.models.responses import UserAPIKeyAuth
 from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
 from src.rate_limit_release_retry import RateLimitReleaseRetryQueue
-from src.rate_limit_policy import RateLimitLease, acquire_rate_limit_controls, build_rate_limit_checks, release_rate_limit_controls
-from src.services.limit_counter import LegacyParallelLease, LimitCounter, ParallelLimitCheck, ParallelLimitLease
+from src.rate_limit_policy import (
+    RateLimitLease,
+    acquire_rate_limit_controls,
+    build_rate_limit_checks,
+    release_rate_limit_controls,
+)
+from src.services.limit_counter import (
+    LegacyParallelLease,
+    LimitCounter,
+    ParallelLimitCheck,
+    ParallelLimitLease,
+)
 from src.services.tier_capacity_fair_share import (
     fair_share_limit_hit_heatmap_key,
     fair_share_limit_hit_heatmap_rank_key,
@@ -35,7 +45,8 @@ class _TierRateLimitService:
     def __init__(
         self,
         *,
-        descriptors: dict[tuple[str, str], tuple[CompiledTierRateLimitDescriptor, ...]] | None = None,
+        descriptors: dict[tuple[str, str], tuple[CompiledTierRateLimitDescriptor, ...]]
+        | None = None,
         model_policies: dict[tuple[str, str], Any] | None = None,
         pool_policies: dict[tuple[str, str], CompiledTierCapacityPoolPolicy] | None = None,
         allowed_by_org: dict[str, set[str]] | None = None,
@@ -49,8 +60,7 @@ class _TierRateLimitService:
         self.model_policies = model_policies or {}
         self.pool_policies = pool_policies or {}
         self.allowed_by_org = {
-            org_id: frozenset(models)
-            for org_id, models in (allowed_by_org or {}).items()
+            org_id: frozenset(models) for org_id, models in (allowed_by_org or {}).items()
         }
         self.explicit_orgs = set(explicit_orgs or self.allowed_by_org or {"org-1"})
         self.mode = mode
@@ -61,7 +71,9 @@ class _TierRateLimitService:
     def has_explicit_tier_policy(self, organization_id: str | None) -> bool:
         return str(organization_id or "").strip() in self.explicit_orgs
 
-    def resolve_org_allowed_callable_keys(self, organization_id: str | None) -> frozenset[str] | None:
+    def resolve_org_allowed_callable_keys(
+        self, organization_id: str | None
+    ) -> frozenset[str] | None:
         normalized = str(organization_id or "").strip()
         if normalized not in self.explicit_orgs:
             return None
@@ -434,11 +446,7 @@ def _parallel_lease() -> RateLimitLease:
 @pytest.mark.asyncio
 async def test_tier_org_model_rpm_is_enforced() -> None:
     service = _TierRateLimitService(
-        descriptors={
-            ("org-1", "gpt-4o-mini"): (
-                _descriptor("tier_org_model_rpm", limit=1),
-            )
-        }
+        descriptors={("org-1", "gpt-4o-mini"): (_descriptor("tier_org_model_rpm", limit=1),)}
     )
     limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
 
@@ -492,8 +500,12 @@ async def test_tier_org_model_tpm_is_enforced() -> None:
 async def test_shared_pool_rpm_is_enforced_across_organizations() -> None:
     service = _TierRateLimitService(
         model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
-            ("org-2", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
+            ("org-2", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
         },
         pool_policies={("shared", "gpt-4o-mini"): _pool_policy(rpm_capacity=1)},
         allowed_by_org={"org-1": {"gpt-4o-mini"}, "org-2": {"gpt-4o-mini"}},
@@ -526,8 +538,12 @@ async def test_shared_pool_rpm_is_enforced_across_organizations() -> None:
 async def test_shared_pool_tpm_is_enforced_across_organizations() -> None:
     service = _TierRateLimitService(
         model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
-            ("org-2", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
+            ("org-2", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
         },
         pool_policies={("shared", "gpt-4o-mini"): _pool_policy(tpm_capacity=10)},
         allowed_by_org={"org-1": {"gpt-4o-mini"}, "org-2": {"gpt-4o-mini"}},
@@ -606,8 +622,7 @@ async def test_static_pool_denial_records_heatmap_in_same_atomic_admission(
     rank_key = fair_share_limit_hit_heatmap_rank_key()
     total_key = fair_share_limit_hit_total_key()
     counter_key = (
-        f"ratelimit:tier_pool_model_rpm:shared-hard-cap:gpt-4o-mini:"
-        f"{limiter._window_id(60)}"
+        f"ratelimit:tier_pool_model_rpm:shared-hard-cap:gpt-4o-mini:{limiter._window_id(60)}"
     )
 
     assert redis.tier_admission_eval_calls == 2
@@ -638,9 +653,13 @@ async def test_tier_checks_are_sent_in_one_atomic_rate_limit_call() -> None:
             )
         },
         model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
         },
-        pool_policies={("shared", "gpt-4o-mini"): _pool_policy(rpm_capacity=500, tpm_capacity=500_000)},
+        pool_policies={
+            ("shared", "gpt-4o-mini"): _pool_policy(rpm_capacity=500, tpm_capacity=500_000)
+        },
     )
     limiter = _RecordingLimitCounter()
 
@@ -663,11 +682,7 @@ async def test_tier_checks_are_sent_in_one_atomic_rate_limit_call() -> None:
 @pytest.mark.asyncio
 async def test_existing_key_limit_remains_hard_cap_when_tier_limit_is_higher() -> None:
     service = _TierRateLimitService(
-        descriptors={
-            ("org-1", "gpt-4o-mini"): (
-                _descriptor("tier_org_model_rpm", limit=100),
-            )
-        }
+        descriptors={("org-1", "gpt-4o-mini"): (_descriptor("tier_org_model_rpm", limit=100),)}
     )
     limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
     auth = _auth(rpm_limit=1)
@@ -723,7 +738,7 @@ async def test_tier_model_parallel_limit_is_enforced_and_released() -> None:
             model="gpt-4o-mini",
             tier_policy_service=service,
             tier_policy_mode="enforce",
-    )
+        )
 
     assert exc_info.value.param == "tier_org_model_parallel"
     assert exc_info.value.code == "tier_org_model_parallel_exceeded"
@@ -999,8 +1014,12 @@ async def test_rate_limit_failure_does_not_acquire_key_parallel_lease() -> None:
 async def test_tier_pool_parallel_limit_is_shared_across_organizations() -> None:
     service = _TierRateLimitService(
         model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
-            ("org-2", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
+            ("org-2", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
         },
         pool_policies={("shared", "gpt-4o-mini"): _pool_policy(max_parallel_requests=1)},
         allowed_by_org={"org-1": {"gpt-4o-mini"}, "org-2": {"gpt-4o-mini"}},
@@ -1136,7 +1155,9 @@ async def test_parallel_lease_acquire_and_release_use_single_redis_round_trip_ea
     limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
     checks = [
         ParallelLimitCheck(scope="key", entity_id="key-1", limit=2),
-        ParallelLimitCheck(scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1),
+        ParallelLimitCheck(
+            scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1
+        ),
     ]
 
     leases = await limiter.acquire_parallel_leases(checks)
@@ -1152,8 +1173,12 @@ async def test_parallel_lease_acquire_and_release_use_single_redis_round_trip_ea
 async def test_parallel_lease_acquire_coalesces_duplicate_checks() -> None:
     limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
     checks = [
-        ParallelLimitCheck(scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1),
-        ParallelLimitCheck(scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1),
+        ParallelLimitCheck(
+            scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1
+        ),
+        ParallelLimitCheck(
+            scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1
+        ),
     ]
 
     with pytest.raises(RateLimitError):
@@ -1168,7 +1193,9 @@ async def test_parallel_lease_refresh_extends_redis_token_expiry() -> None:
     limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
     leases = await limiter.acquire_parallel_leases(
         [
-            ParallelLimitCheck(scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1),
+            ParallelLimitCheck(
+                scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1
+            ),
         ],
         ttl_seconds=1,
     )
@@ -1188,7 +1215,9 @@ async def test_parallel_lease_redis_release_failure_remains_retryable() -> None:
     leases = await limiter.acquire_parallel_leases(
         [
             ParallelLimitCheck(scope="key", entity_id="key-1", limit=2),
-            ParallelLimitCheck(scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1),
+            ParallelLimitCheck(
+                scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1
+            ),
         ]
     )
     lease = RateLimitLease(parallel_leases=leases)
@@ -1258,6 +1287,8 @@ async def test_request_rate_limit_release_keeps_retrying_pending_slots() -> None
         ("tier_org_model_parallel", "org-1:gpt-4o-mini"),
     ]
 
+    await request.app.state.rate_limit_release_retry_queue.stop()
+
 
 @pytest.mark.asyncio
 async def test_request_rate_limit_release_failure_is_queued_for_retry() -> None:
@@ -1326,7 +1357,9 @@ def test_rate_limit_release_retry_queue_ignores_empty_leases() -> None:
 
 @pytest.mark.asyncio
 async def test_batch_policy_release_failure_is_queued_for_retry(monkeypatch) -> None:
-    monkeypatch.setattr(worker_persistence_module, "_policy_release_retry_delay_seconds", lambda attempt_count: 0.0)
+    monkeypatch.setattr(
+        worker_persistence_module, "_policy_release_retry_delay_seconds", lambda attempt_count: 0.0
+    )
     lease = BatchPolicyLease(rate_limit_lease=_parallel_lease())
     limiter = _FlakyReleaseLimitCounter(
         fail_scope="tier_pool_model_parallel",
@@ -1378,7 +1411,9 @@ def test_build_rate_limit_checks_filters_by_tier_mode_and_request_mode() -> None
             )
         },
         model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
         },
         pool_policies={("shared", "gpt-4o-mini"): _pool_policy(rpm_capacity=20)},
     )
@@ -1439,11 +1474,7 @@ def test_tier_lookup_latency_is_bounded_in_each_rollout_mode(
 ) -> None:
     service = _TierRateLimitService(
         mode=policy_mode,
-        descriptors={
-            ("org-1", "gpt-4o-mini"): (
-                _descriptor("tier_org_model_rpm", limit=100),
-            )
-        },
+        descriptors={("org-1", "gpt-4o-mini"): (_descriptor("tier_org_model_rpm", limit=100),)},
     )
     auth = _auth(rpm_limit=None, tpm_limit=None)
 
@@ -1506,7 +1537,9 @@ def test_batch_tier_limits_use_batch_override_per_dimension() -> None:
             ("org-1", "gpt-4o-mini"): (
                 _descriptor("tier_org_model_rpm", limit=10, mode="sync"),
                 _descriptor("tier_org_model_tpm", limit=100, amount_kind="tokens", mode="sync"),
-                _descriptor("tier_org_model_batch_tpm", limit=50, amount_kind="tokens", mode="batch"),
+                _descriptor(
+                    "tier_org_model_batch_tpm", limit=50, amount_kind="tokens", mode="batch"
+                ),
             )
         }
     )
@@ -1531,7 +1564,9 @@ def test_batch_tier_limits_use_batch_override_per_dimension() -> None:
 def test_build_rate_limit_checks_skips_pool_for_denied_tier_model_policy() -> None:
     service = _TierRateLimitService(
         model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(access_mode="deny", capacity_pool_key="shared"),
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="deny", capacity_pool_key="shared"
+            ),
         },
         pool_policies={("shared", "gpt-4o-mini"): _pool_policy(rpm_capacity=1)},
     )
@@ -1553,11 +1588,7 @@ def test_build_rate_limit_checks_skips_pool_for_denied_tier_model_policy() -> No
 @pytest.mark.asyncio
 async def test_tier_snapshot_stale_fail_closed_blocks_rate_limits() -> None:
     service = _TierRateLimitService(
-        descriptors={
-            ("org-1", "gpt-4o-mini"): (
-                _descriptor("tier_org_model_rpm", limit=1),
-            )
-        },
+        descriptors={("org-1", "gpt-4o-mini"): (_descriptor("tier_org_model_rpm", limit=1),)},
         missing_service_mode="fail_closed",
         snapshot_stale=True,
     )
@@ -1610,11 +1641,7 @@ async def test_tier_lookup_failure_follows_missing_service_mode() -> None:
 @pytest.mark.asyncio
 async def test_redis_degraded_mode_applies_to_tier_checks() -> None:
     service = _TierRateLimitService(
-        descriptors={
-            ("org-1", "gpt-4o-mini"): (
-                _descriptor("tier_org_model_rpm", limit=1),
-            )
-        }
+        descriptors={("org-1", "gpt-4o-mini"): (_descriptor("tier_org_model_rpm", limit=1),)}
     )
     fail_open_limiter = LimitCounter(redis_client=_FailingRedis(), degraded_mode="fail_open")
 
@@ -1680,9 +1707,7 @@ async def test_batch_policy_lease_uses_batch_tier_limits() -> None:
 async def test_batch_policy_lease_falls_back_to_sync_tier_limit_when_batch_limit_absent() -> None:
     service = _TierRateLimitService(
         descriptors={
-            ("org-1", "gpt-4o-mini"): (
-                _descriptor("tier_org_model_rpm", limit=1, mode="sync"),
-            )
+            ("org-1", "gpt-4o-mini"): (_descriptor("tier_org_model_rpm", limit=1, mode="sync"),)
         }
     )
     app = SimpleNamespace(
@@ -1732,7 +1757,9 @@ async def test_tier_rate_limit_429_uses_tier_scope_headers(client, test_app) -> 
 
 
 @pytest.mark.asyncio
-async def test_tier_rate_limit_429_uses_original_checks_when_snapshot_changes(client, test_app) -> None:
+async def test_tier_rate_limit_429_uses_original_checks_when_snapshot_changes(
+    client, test_app
+) -> None:
     service = _TierRateLimitService(
         descriptors={
             ("org-default", "gpt-4o-mini"): (
@@ -1799,13 +1826,22 @@ def test_tier_rate_limit_check_construction_uses_compiled_tier_and_pool_checks()
                 _descriptor("tier_org_model_rpm", limit=100),
                 _descriptor("tier_org_model_tpm", limit=100_000, amount_kind="tokens"),
                 _descriptor("tier_org_model_rph", limit=1_000, window_seconds=3600),
-                _descriptor("tier_org_model_tpd", limit=1_000_000, amount_kind="tokens", window_seconds=86400),
+                _descriptor(
+                    "tier_org_model_tpd",
+                    limit=1_000_000,
+                    amount_kind="tokens",
+                    window_seconds=86400,
+                ),
             )
         },
         model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(access_mode="allow", capacity_pool_key="shared"),
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow", capacity_pool_key="shared"
+            ),
         },
-        pool_policies={("shared", "gpt-4o-mini"): _pool_policy(rpm_capacity=500, tpm_capacity=500_000)},
+        pool_policies={
+            ("shared", "gpt-4o-mini"): _pool_policy(rpm_capacity=500, tpm_capacity=500_000)
+        },
     )
     auth = _auth()
 

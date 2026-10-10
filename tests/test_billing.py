@@ -5,9 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.billing.budget import BudgetEnforcementService, BudgetExceeded, _next_reset_after
+from src.billing.budget import (
+    BudgetEnforcementService,
+    BudgetExceeded,
+    BudgetStateUnavailable,
+    _next_reset_after,
+)
 from src.billing.spend import SpendTrackingService
 from src.billing.spend_events import build_spend_event
+from src.billing.spend_read import SPEND_READ_SOURCE
 
 
 class RecordingDB:
@@ -251,7 +257,7 @@ class CombinedBudgetDB:
 class SpendQueryDB:
     async def query_raw(self, query: str, *args):
         normalized = " ".join(query.lower().split())
-        if "total_requests" in normalized and "from deltallm_spendlog_events" in normalized:
+        if "total_requests" in normalized and f"from {SPEND_READ_SOURCE.table}" in normalized:
             return [
                 {
                     "total_spend": 1.25,
@@ -264,7 +270,7 @@ class SpendQueryDB:
         if "count(*) as total" in normalized:
             return [{"total": 1}]
         if (
-            "from deltallm_spendlog_events" in normalized
+            f"from {SPEND_READ_SOURCE.table}" in normalized
             and "order by start_time desc" in normalized
         ):
             return [
@@ -660,15 +666,20 @@ async def test_budget_enforcement_prefers_team_model_counter_when_available():
         query for query, _ in db.calls if "from deltallm_teammodelspend" in query.lower()
     )
     assert "coalesce(spend_exact, spend::numeric)" in " ".join(counter_query.lower().split())
-    assert not any("from deltallm_spendlog_events" in query.lower() for query, _ in db.calls)
+    assert "reconciled_at is not null" in counter_query.lower()
+    assert not any(
+        source in query.lower()
+        for query, _ in db.calls
+        for source in ("deltallm_spendlog_events", SPEND_READ_SOURCE.table)
+    )
 
 
 @pytest.mark.asyncio
-async def test_budget_enforcement_falls_back_to_spend_events_when_counter_missing():
+async def test_budget_enforcement_rejects_missing_counter_without_scanning_history():
     db = TeamModelBudgetDB(counter_spend=None)
     service = BudgetEnforcementService(db_client=db)
 
-    with pytest.raises(BudgetExceeded):
+    with pytest.raises(BudgetStateUnavailable):
         await service.check_budgets(
             api_key=None,
             user_id=None,
@@ -677,10 +688,11 @@ async def test_budget_enforcement_falls_back_to_spend_events_when_counter_missin
             model="gpt-4o-mini",
         )
 
-    fallback_query = next(
-        query for query, _ in db.calls if "from deltallm_spendlog_events" in query.lower()
+    assert not any(
+        source in query.lower()
+        for query, _ in db.calls
+        for source in ("deltallm_spendlog_events", SPEND_READ_SOURCE.table)
     )
-    assert "sum(coalesce(spend_exact, spend::numeric))" in " ".join(fallback_query.lower().split())
 
 
 @pytest.mark.asyncio

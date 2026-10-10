@@ -32,7 +32,10 @@ GROUP_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "external_auth",
         ),
     ),
-    ("Database and telemetry ingestion", ("database_", "telemetry_", "spend_ingestion_")),
+    (
+        "Database and telemetry ingestion",
+        ("database_", "telemetry_", "spend_ingestion_", "accounting_"),
+    ),
     ("Redis and caching", ("redis_", "cache_", "prompt_cache_", "prompt_negative_")),
     ("Gateway and upstream capacity", ("gateway_", "preflight_", "upstream_http_", "realtime")),
     ("Spend, budgets, and reporting", ("spend_", "budget_")),

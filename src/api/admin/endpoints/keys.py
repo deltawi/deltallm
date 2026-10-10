@@ -19,6 +19,8 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from src.api.admin.accounting_budget import apply_accounting_balances
+from src.billing.accounting_protocol import AccountingScope
 from src.api.admin.key_removal import (
     remove_key_with_required_audit as _remove_key_with_required_audit,
 )
@@ -615,8 +617,10 @@ async def list_keys(
         *params,
     )
 
+    keys = [dict(row) for row in rows]
+    await apply_accounting_balances(request, keys, AccountingScope.API_KEY)
     return {
-        "data": [_key_response_payload(dict(row)) for row in rows],
+        "data": [_key_response_payload(row) for row in keys],
         "pagination": {
             "total": total,
             "limit": limit,

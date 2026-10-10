@@ -6,6 +6,88 @@ from tests.dependency_lanes import DEPENDENCY_LANES
 from tests.dependency_lanes import DependencyLaneError
 from tests.dependency_lanes import classify_dependency_lane
 from tests.dependency_lanes import detect_external_dependency
+from tests.dependency_lanes import parse_postgres_shard
+from tests.dependency_lanes import postgres_test_shard
+
+pytest_plugins = ("pytester",)
+
+
+@pytest.mark.parametrize("value", ["", "0", "0/2/3", "x/2", "-1/2", "2/2", "0/0", "0/9"])
+def test_postgres_shards_reject_invalid_allocations(value):
+    with pytest.raises(ValueError, match="PostgreSQL shard"):
+        parse_postgres_shard(value)
+
+
+def test_postgres_shards_keep_all_parameters_and_scoped_fixtures_together():
+    assert parse_postgres_shard("0/2") == (0, 2)
+    assert parse_postgres_shard("7/8") == (7, 8)
+    for count in (1, 2, 8):
+        for module in range(100):
+            prefix = f"tests/test_module_{module}.py::test_case"
+            assigned = postgres_test_shard(prefix + "[one]", count)
+            assert 0 <= assigned < count
+            assert postgres_test_shard(prefix + "[two]", count) == assigned
+            assert postgres_test_shard(prefix, count) == assigned
+    for invalid in (0, 9):
+        with pytest.raises(ValueError, match="shard count"):
+            postgres_test_shard("tests/test_case.py::test_case", invalid)
+
+
+def test_postgres_shards_execute_every_case_once_and_preserve_failure(pytester, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
+    pytester.makeini("[pytest]\nmarkers = postgres: synthetic database selection cases")
+    modules = {}
+    for number in range(8):
+        modules[f"test_module_{number}"] = f"""
+        from pathlib import Path
+        import pytest
+
+        @pytest.fixture(scope="module")
+        def owner():
+            Path("owner-{number}").touch(exist_ok=False)
+
+        @pytest.mark.postgres
+        @pytest.mark.parametrize("case", [0, 1])
+        def test_case(case, owner):
+            Path(f"case-{number}-{{case}}").touch(exist_ok=False)
+            assert ({number}, case) != (0, 1), "expected failure must reach the CI gate"
+        """
+    pytester.makepyfile(**modules)
+    for index in range(2):
+        module_count = sum(
+            postgres_test_shard(f"{name}.py::test_case", 2) == index for name in modules
+        )
+        failed = int(postgres_test_shard("test_module_0.py::test_case", 2) == index)
+        result = pytester.runpytest_subprocess(
+            "-p",
+            "tests.dependency_lanes",
+            "-q",
+            "-m",
+            "postgres",
+            f"--postgres-shard={index}/2",
+            timeout=30,
+        )
+        result.assert_outcomes(passed=module_count * 2 - failed, failed=failed)
+        assert result.ret == (pytest.ExitCode.TESTS_FAILED if failed else pytest.ExitCode.OK)
+    assert len(list(pytester.path.glob("owner-*"))) == 8
+    assert len(list(pytester.path.glob("case-*"))) == 16
+
+
+@pytest.mark.parametrize("selection", ["", "hermetic", "postgres or app"])
+def test_postgres_shards_cannot_silently_filter_other_lanes(pytester, monkeypatch, selection):
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
+    pytester.makepyfile("def test_case(): pass")
+    result = pytester.runpytest_subprocess(
+        "-p",
+        "tests.dependency_lanes",
+        "-q",
+        "-m",
+        selection,
+        "--postgres-shard=0/2",
+        timeout=30,
+    )
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*--postgres-shard requires the exact -m postgres selection*"])
 
 
 def test_dependency_lanes_are_stable_and_mutually_exclusive() -> None:

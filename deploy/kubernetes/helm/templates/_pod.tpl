@@ -82,6 +82,11 @@
 {{- define "deltallm.runtimeEnv" -}}
 {{- $root := .root -}}
 {{- $extraEnv := default (list) .extraEnv -}}
+{{- $worker := default false .worker -}}
+{{- $processes := default (ternary $root.Values.dependencyCapacity.batchWorkerProcessesPerPod $root.Values.dependencyCapacity.apiProcessesPerPod $worker) .processes -}}
+{{- $configTemplate := default (ternary "deltallm.batchWorkerConfigYaml" "deltallm.apiConfigYaml" $worker) .configTemplate -}}
+{{- $general := (include $configTemplate $root | fromYaml).general_settings -}}
+{{- $minimal := and (eq $general.accounting_execution_mode "local_journal") (has $general.deployment_capacity_role (list "accountingRequest" "accountingWorker")) -}}
 {{- $databaseEnv := include "deltallm.databaseEnv" $root -}}
 {{- $redisEnv := include "deltallm.redisEnv" $root -}}
 {{- $deltallmRedisEnv := include "deltallm.deltallmRedisEnv" $root -}}
@@ -90,8 +95,17 @@
   value: "0.0.0.0"
 - name: PORT
   value: {{ $root.Values.service.port | quote }}
+- name: WEB_CONCURRENCY
+  value: {{ $processes | quote }}
+- name: UVICORN_WORKERS
+  value: {{ $processes | quote }}
+- name: DELTALLM_DB_POOL_SIZE
+  value: {{ $general.db_pool_size | quote }}
+- name: DELTALLM_TELEMETRY_DB_POOL_SIZE
+  value: {{ $general.telemetry_db_pool_size | quote }}
 - name: DELTALLM_CONFIG_PATH
   value: /app/config/config.yaml
+{{- if not $minimal }}
 - name: DELTALLM_MASTER_KEY
   valueFrom:
     secretKeyRef:
@@ -108,20 +122,30 @@
       name: {{ include "deltallm.appSecretName" $root }}
       key: {{ $root.Values.secret.keys.batchWebhookEncryptionKey }}
       optional: true
+{{- end }}
+{{- if and (eq $general.accounting_execution_mode "local_journal") (ne $general.deployment_capacity_role "accountingWorker") }}
+- name: DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ $root.Values.runtime.accounting.existingSecret.name }}
+      key: {{ $root.Values.runtime.accounting.existingSecret.signingKey }}
+{{- end }}
 {{- if $databaseEnv }}
 {{ $databaseEnv }}
 {{- end }}
-{{- if $redisEnv }}
+{{- if and (not $minimal) $redisEnv }}
 {{ $redisEnv }}
 {{- end }}
-{{- if $deltallmRedisEnv }}
+{{- if and (not $minimal) $deltallmRedisEnv }}
 {{ $deltallmRedisEnv }}
 {{- end }}
-{{- if $s3Env }}
+{{- if and (not $minimal) $s3Env }}
 {{ $s3Env }}
 {{- end }}
+{{- if not $minimal }}
 {{- with $root.Values.env }}
 {{ toYaml . }}
+{{- end }}
 {{- end }}
 {{- with $extraEnv }}
 {{ toYaml . }}
@@ -131,9 +155,10 @@
 {{- define "deltallm.envFrom" -}}
 {{- $root := .root -}}
 {{- $extraEnvFrom := default (list) .extraEnvFrom -}}
-{{- if or $root.Values.envFrom $extraEnvFrom -}}
+{{- $globalEnvFrom := ternary (list) $root.Values.envFrom (default false .minimal) -}}
+{{- if or $globalEnvFrom $extraEnvFrom -}}
 envFrom:
-{{- with $root.Values.envFrom -}}
+{{- with $globalEnvFrom -}}
 {{ toYaml . | nindent 2 }}
 {{- end }}
 {{- with $extraEnvFrom -}}
@@ -146,9 +171,10 @@ envFrom:
 {{- if and .Values.dependencyWait.enabled (include "deltallm.hasRuntimeDependencies" .) -}}
 {{- $databaseEnv := include "deltallm.databaseEnv" . -}}
 {{- $redisEnv := include "deltallm.redisEnv" . -}}
+{{- if .onlyPostgresql -}}{{- $redisEnv = "" -}}{{- end -}}
 initContainers:
   - name: wait-for-runtime-dependencies
-    image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+    image: {{ include "deltallm.image" . | quote }}
     imagePullPolicy: {{ .Values.image.pullPolicy }}
     securityContext:
       {{- toYaml .Values.securityContext | nindent 6 }}
@@ -224,4 +250,5 @@ readinessProbe:
   periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
   timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
   failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+  successThreshold: {{ .Values.probes.readiness.successThreshold }}
 {{- end -}}

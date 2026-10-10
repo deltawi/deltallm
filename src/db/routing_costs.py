@@ -9,6 +9,7 @@ from src.billing.routing_costs import RoutingCostObservation
 from src.billing.operation_reservation import ComponentState
 from src.billing.selector_charge import SelectorPriceSnapshot, SelectorTokenReceipt
 from src.billing.spend_read import SPEND_READ_SOURCE
+from src.db.routing_cost_sql import routing_cost_sql
 from src.services.spend_visibility import SpendVisibility, apply_spend_visibility
 
 
@@ -30,7 +31,7 @@ def routing_cost_query(
 ) -> RoutingCostQuery:
     """Execute through the existing bounded, protected reporting query owner.
 
-    The operation page is bounded before two unique spend-event joins. The returned
+    The operation page is bounded before unique legacy/event-sequence joins. The returned
     observations are not a full-history total; aggregate coverage retains that fact.
     """
     if (
@@ -60,43 +61,7 @@ def routing_cost_query(
             f"(created_at,operation_id)<(${len(params) - 1}::timestamptz,${len(params)}::text)"
         )
     params.append(limit + 1)
-    # Selector receipts use the typed "reported" contract; the existing answer
-    # billing owner freezes token counts without that discriminator. Neither a
-    # missing receipt nor explicitly unpriced usage proves a free answer.
-    answer_receipt = """(a.usage_snapshot->>'kind'='reported' OR (
-        jsonb_typeof(a.usage_snapshot->'prompt_tokens')='number'
-        AND jsonb_typeof(a.usage_snapshot->'completion_tokens')='number'
-        AND a.unpriced_reason IS NULL
-    ))"""
-    sql = f"""
-        WITH page AS MATERIALIZED (
-            SELECT * FROM deltallm_billing_operations WHERE {" AND ".join(clauses)}
-            ORDER BY created_at DESC,operation_id DESC LIMIT ${len(params)}
-        )
-        SELECT o.operation_id,o.created_at,o.selector_state,
-            CASE WHEN o.snapshot->>'budget_mode'='soft_selector:v1' THEN
-                CASE WHEN {answer_receipt} THEN 'settled' ELSE 'pending' END
-                ELSE o.answer_state END AS answer_state,
-            a.deployment_model AS answer_model,
-            CASE WHEN o.selector_state='unattempted' THEN '0' ELSE
-                COALESCE(s.provider_cost_exact::text,o.selector_receipt->>'provider_cost_exact') END AS selector_provider_cost,
-            CASE WHEN o.selector_state='unattempted' THEN '0' ELSE
-                COALESCE(s.spend_exact::text,o.selector_receipt->>'cost_exact') END AS selector_customer_charge,
-            CASE WHEN {answer_receipt} THEN a.provider_cost_exact::text
-                WHEN o.answer_state='unattempted'
-                  AND o.snapshot->>'budget_mode' IS DISTINCT FROM 'soft_selector:v1'
-                THEN '0' END AS answer_provider_cost,
-            CASE WHEN {answer_receipt} THEN a.spend_exact::text
-                WHEN o.answer_state='unattempted'
-                  AND o.snapshot->>'budget_mode' IS DISTINCT FROM 'soft_selector:v1'
-                THEN '0' END AS answer_customer_charge,
-            o.snapshot->'reference_answer_pricing' AS reference_answer_pricing,
-            o.snapshot->>'measurable_switch_penalty' AS measurable_penalty,
-            a.input_tokens,a.output_tokens,a.total_tokens,a.status
-        FROM page o LEFT JOIN deltallm_spendlog_events s ON s.id=o.selector_event_id
-        LEFT JOIN deltallm_spendlog_events a ON a.id=o.operation_id
-        ORDER BY o.created_at DESC,o.operation_id DESC
-    """
+    sql = routing_cost_sql(clauses, limit_parameter=len(params))
     return RoutingCostQuery(sql, tuple(params), limit)
 
 

@@ -182,6 +182,49 @@ def test_model_identity_recovery_stops_before_deploy_when_resolve_fails() -> Non
     assert calls[1][:3] == ["prisma", "migrate", "resolve"]
 
 
+def test_recovery_and_deploy_share_one_timeout_and_environment() -> None:
+    module = _prisma_bootstrap_module()
+    now = [0.0]
+    calls = []
+    environment = {"DATABASE_URL": "postgresql://fixture"}
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        now[0] += 40
+        return _completed_process(returncode=0)
+
+    module.run_prisma_bootstrap(
+        recover_model_api_identity=True,
+        timeout_seconds=120,
+        clock=lambda: now[0],
+        runner=runner,
+        environment=environment,
+    )
+    assert [kwargs["timeout"] for _, kwargs in calls] == [120, 80, 40]
+    assert all(kwargs["env"] is environment for _, kwargs in calls)
+
+
+def test_recovery_cannot_start_deploy_after_the_shared_timeout() -> None:
+    module = _prisma_bootstrap_module()
+    now = [0.0]
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        now[0] += 5
+        return _completed_process(returncode=0)
+
+    with pytest.raises(module.PrismaBootstrapError, match="wall-time budget"):
+        module.run_prisma_bootstrap(
+            recover_model_api_identity=True,
+            timeout_seconds=10,
+            clock=lambda: now[0],
+            runner=runner,
+        )
+    assert len(calls) == 2
+    assert calls[-1][:3] == ["prisma", "migrate", "resolve"]
+
+
 def test_run_prisma_bootstrap_raises_immediately_on_fatal_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -230,3 +273,51 @@ def test_run_prisma_bootstrap_raises_after_retry_budget_exhausted(
     assert exc_info.value.retryable is True
     assert sleeps == [1.5]
     assert "Waiting for database before Prisma migrate deploy... (1/2)" in captured.err
+
+
+def test_migration_wall_time_is_shared_across_connectivity_retries():
+    module = _prisma_bootstrap_module()
+    now = [0.0]
+    timeouts = []
+
+    def runner(command, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        now[0] += 2
+        return _completed_process(returncode=1, stderr="P1001")
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    with pytest.raises(module.PrismaBootstrapError, match="wall-time"):
+        module.run_prisma_bootstrap(
+            runner=runner,
+            sleeper=sleep,
+            clock=lambda: now[0],
+            timeout_seconds=5,
+            max_attempts=10,
+            sleep_seconds=1,
+        )
+    assert timeouts == [5, 2]
+
+
+def test_migration_command_output_redacts_credentialed_urls_and_secrets(capsys):
+    module = _prisma_bootstrap_module()
+    module.run_prisma_bootstrap(
+        runner=lambda *a, **kw: _completed_process(
+            returncode=0,
+            stdout="Datasource postgresql://user:private-password@host/db?secret=secret-value\n",
+            stderr="token=private-token password=private-password",
+        )
+    )
+    captured = capsys.readouterr()
+    assert "private-" not in captured.out + captured.err
+    assert "secret-value" not in captured.out + captured.err
+
+
+def test_migration_subprocess_bounds_hung_children_and_excess_output():
+    from src.migration_process import MigrationOutputLimitError, run_migration_process
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_migration_process([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.05)
+    with pytest.raises(MigrationOutputLimitError):
+        run_migration_process([sys.executable, "-c", "print('x' * 1000000)"], timeout=3)

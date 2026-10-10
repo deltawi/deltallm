@@ -106,6 +106,20 @@ router_settings:
   #         lane: quality
 
 general_settings:
+  # Startup-only Helm capacity contract; null for standalone development.
+  deployment_capacity_path: null
+  deployment_capacity_role: api
+  # Startup-only managed process budgets. Production uses migration_mode: external.
+  readiness_probe_timeout_seconds: 1
+  readiness_cache_seconds: 1
+  lifecycle_withdrawal_seconds: 5
+  lifecycle_request_drain_seconds: 45
+  lifecycle_cancellation_seconds: 5
+  lifecycle_worker_drain_seconds: 20
+  lifecycle_close_seconds: 5
+  lifecycle_shutdown_seconds: 80
+  migration_mode: startup
+  migration_verify_timeout_seconds: 10
   # External customer sign-in is off until the coordinated Console rollout is ready.
   # Configure the Console signing public keys here; keep its private keys in Console.
   external_auth:
@@ -135,10 +149,59 @@ general_settings:
   # In Docker Compose, DATABASE_URL and REDIS_URL are wired automatically.
   database_url: os.environ/DATABASE_URL
   redis_url: os.environ/REDIS_URL
+  # Finite Redis allocations (restart required). Separate bulk endpoint isolates server memory.
+  redis_bulk_url: null
+  redis_critical_max_connections: 64
+  redis_critical_max_waiters: 64
+  redis_bulk_max_connections: 16
+  redis_bulk_max_waiters: 0
+  redis_acquisition_timeout_seconds: 0.2
+  redis_socket_timeout_seconds: 1.0
+  redis_connect_timeout_seconds: 1.0
   db_pool_size: 20
+  db_foreground_pool_size: 8
+  telemetry_worker_db_pool_size: 5
+  db_acquisition_timeout_seconds: 0.2
+  db_statement_timeout_seconds: 1.0
+  db_lock_timeout_seconds: 0.2
+  db_transaction_timeout_seconds: 2.0
+  db_background_statement_timeout_seconds: 5.0
+  db_background_lock_timeout_seconds: 1.0
+  db_background_transaction_timeout_seconds: 10.0
+  redis_cache_max_connections: 16
+  redis_cache_max_waiters: 0
   db_pool_timeout: 30
   # Reject overload before prompt, guardrail, and budget work. Enable after sizing
   # these limits below the measured safe database/upstream concurrency envelope.
+  # Per-process ingress admission (restart required; enable after workload validation).
+  gateway_ingress_control_max_active: 16
+  gateway_ingress_control_max_buffered_bytes: 67108864
+  auth_fallback_max_active: 8
+  auth_fallback_max_waiters: 32
+  auth_fallback_queue_timeout_ms: 10
+  auth_fallback_timeout_seconds: 0.5
+  auth_fallback_cache_timeout_seconds: 0.1
+  auth_fallback_cache_max_bytes: 131072
+  # Startup-only callback delivery and guardrail execution bounds.
+  callback_max_pending: 128
+  callback_max_concurrency: 4
+  callback_max_payload_bytes: 262144
+  callback_max_bytes: 8388608
+  callback_timeout_seconds: 5
+  callback_shutdown_seconds: 5
+  guardrail_max_concurrency: 2
+  guardrail_max_pending: 8
+  guardrail_max_bytes: 33554432
+  guardrail_timeout_seconds: 5
+  guardrail_shutdown_seconds: 5
+  gateway_ingress_enabled: false
+  gateway_ingress_max_active: 100
+  gateway_ingress_max_waiters: 0
+  gateway_ingress_queue_timeout_ms: 10
+  gateway_ingress_max_body_bytes: 33554432
+  gateway_ingress_max_buffered_bytes: 67108864
+  gateway_ingress_body_timeout_seconds: 10.0
+  gateway_ingress_health_max_active: 4
   gateway_preflight_capacity_enabled: false
   gateway_preflight_global_max_parallel: 300
   gateway_preflight_org_max_parallel: 100
@@ -146,6 +209,8 @@ general_settings:
   # The outbox mode durably accepts one small event on the request path and
   # applies idempotent spend/ledger updates in a bounded background worker.
   spend_ingestion_mode: legacy # Use outbox before activating a model-router selector.
+  spend_operation_intents_enabled: false
+  spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
   spend_ingestion_batch_size: 100
   spend_ingestion_flush_interval_ms: 100
   spend_ingestion_lease_seconds: 30
@@ -167,6 +232,37 @@ general_settings:
   telemetry_db_pool_timeout_seconds: 2
   telemetry_worker_startup_timeout_seconds: 5
   telemetry_shutdown_drain_timeout_seconds: 20
+  # Accounting v2 replaces lifecycle write amplification with one batched
+  # reservation ACK before dispatch and one batched terminal ACK.
+  accounting_protocol_enabled: false
+  accounting_execution_mode: assigned # local_journal requires the complete native role bundle.
+  accounting_request_url: null
+  accounting_rpc_signing_secret: os.environ/DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET
+  accounting_rpc_allow_http: false
+  accounting_rpc_allowed_ports: [443]
+  accounting_rpc_allowed_private_cidrs: []
+  accounting_rpc_max_connections: 16
+  accounting_local_max_subjects: 1024
+  accounting_protocol_generation: 1
+  accounting_microbatch_max_size: 8
+  accounting_microbatch_dwell_ms: 2
+  accounting_reservation_max_pending: 4096
+  accounting_finalization_max_pending: 8192
+  accounting_reservation_max_pending_bytes: 8388608
+  accounting_finalization_max_pending_bytes: 8388608
+  accounting_statement_timeout_ms: 250
+  accounting_finalization_ack_timeout_ms: 2000
+  accounting_max_provider_attempts: 3
+  accounting_grants_enabled: true
+  accounting_grant_target_operations: 32
+  accounting_grant_ttl_seconds: 30
+  # Run this only in the dedicated accounting worker process/Deployment.
+  accounting_projection_worker_enabled: false
+  accounting_projection_batch_size: 64
+  accounting_projection_max_concurrent_partitions: 4
+  accounting_projection_lease_seconds: 30
+  accounting_projection_poll_interval_ms: 50
+  accounting_projection_maintenance_interval_ms: 1000
   audit_ingestion_mode: legacy
   audit_ingestion_worker_enabled: true
   audit_ingestion_batch_size: 100
@@ -262,9 +358,10 @@ general_settings:
 
   # Governance notifications are opt-in and disabled by default.
   governance_notifications_enabled: false
+  # Startup-only: restart after enabling the durable budget-notification worker.
   budget_notifications_enabled: false
   key_lifecycle_notifications_enabled: false
-  budget_alert_ttl_seconds: 3600
+  budget_alert_ttl_seconds: 3600  # Startup-only; shared durable deduplication window
 
   # Optional terminal Batch API webhooks. The feature remains inert until enabled.
   # Generate the encryption key with:

@@ -24,7 +24,9 @@ class SpendReadSource:
 
 
 SPEND_READ_SOURCE = SpendReadSource(
-    table="deltallm_spendlog_events",
+    # The expanded view retains old rows when native writing is disabled or
+    # rolled back. A writer flag must never hide accepted reporting history.
+    table="deltallm_spend_read_events_v2",
     user_column="user_id",
     end_user_column="end_user_id",
     prompt_tokens_column="input_tokens",

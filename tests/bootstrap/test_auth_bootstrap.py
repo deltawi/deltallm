@@ -129,6 +129,7 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis="redis-client",
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
@@ -146,6 +147,8 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
         is app.state.settings
     )
     assert app.state.key_service[0] == "key-service"
+    assert app.state.key_service[1]["repository"] == ("key-repo", "foreground-db-client")
+    assert app.state.key_service[1]["invalidation_repository"] == ("key-repo", "db-client")
     assert created["platform_identity_service"].bootstrap_calls == [("admin@example.com", "secret")]
     assert created["platform_identity_service"].totp_issuer == "Acme AI"
     assert app.state.master_session_service.db == "db-client"
@@ -191,6 +194,7 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis="redis-client",
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
@@ -237,6 +241,7 @@ async def test_init_auth_runtime_requires_jwt_issuer(monkeypatch: pytest.MonkeyP
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis="redis-client",
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
@@ -269,6 +274,7 @@ async def test_init_auth_runtime_marks_incomplete_sso_degraded(
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis=None,
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
@@ -305,6 +311,7 @@ async def test_init_auth_runtime_keeps_sso_disabled_when_redis_missing(
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis=None,
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
@@ -355,6 +362,7 @@ async def test_init_auth_runtime_starts_and_stops_cache_invalidation_worker(
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis="redis-client",
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
@@ -416,6 +424,7 @@ async def test_init_auth_runtime_does_not_start_cache_worker_when_redis_missing(
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis=None,
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
@@ -474,6 +483,7 @@ async def test_init_auth_runtime_does_not_start_cache_worker_when_later_startup_
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
             redis="redis-client",
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),

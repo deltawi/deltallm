@@ -83,6 +83,11 @@ def test_cost_page_uses_canonical_visibility_before_bounded_unique_event_joins(
     assert "org-a" not in query.sql and "owner-a" not in query.sql
     assert "s.id=o.selector_event_id" in query.sql
     assert "a.id=o.operation_id" in query.sql
+    assert "n.accounting_sequence=o.final_event_sequence" in query.sql
+    assert "n.protocol_generation=o.accounting_generation" in query.sql
+    assert "n.operation_id=o.operation_id AND n.api_key=o.api_key" in query.sql
+    assert "o.accounting_protocol IS NULL" in query.sql
+    assert "n.owner_account_id IS NOT DISTINCT FROM" in query.sql
 
 
 def test_cost_aggregation_is_bounded():

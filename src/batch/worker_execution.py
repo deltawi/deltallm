@@ -7,7 +7,10 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable
 
 from src.batch.chat_worker_execution import ChatWorkerExecutionMixin
+from src.batch.accounting_provider_execution import AccountingProviderExecutionMixin
+from src.batch.accounting_native import NativeBatchBilling
 from src.batch.embedding_worker_execution import EmbeddingWorkerExecutionMixin
+from src.batch.embedding_group_lifecycle import EmbeddingGroupLifecycleMixin
 from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_EMBEDDINGS
 from src.batch.repository import BatchRepository
 from src.batch.worker_backpressure import WorkerBackpressureMixin
@@ -22,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 class BatchExecutionEngine(
+    AccountingProviderExecutionMixin,
+    EmbeddingGroupLifecycleMixin,
     EmbeddingWorkerExecutionMixin,
     ChatWorkerExecutionMixin,
     WorkerBackpressureMixin,
@@ -42,10 +47,12 @@ class BatchExecutionEngine(
         observe_item_execution_latency: Callable[..., None],
         start_heartbeat: Callable[..., asyncio.Task[None]],
         stop_heartbeat: Callable[[asyncio.Task[None]], Awaitable[None]],
+        native_billing: NativeBatchBilling | None = None,
     ) -> None:
         self.app = app
         self.repository = repository
         self.config = config
+        self.native_billing = native_billing
         self._normalize_persisted_embedding_response_body = (
             normalize_persisted_embedding_response_body
         )

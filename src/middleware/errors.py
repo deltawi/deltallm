@@ -8,16 +8,23 @@ from fastapi.exception_handlers import http_exception_handler as fastapi_http_ex
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from prisma.errors import RawQueryError
 
 from src.db.managed_assets import ManagedAssetAudienceNotFoundError
 from src.guardrails.exceptions import GuardrailViolationError
 from src.models.errors import (
     ApprovalRequiredError,
+    AuthenticationUnavailableError,
     InvalidRequestError,
     ProxyError,
     RateLimitError,
     ServiceUnavailableError,
 )
+from src.middleware.error_responses import (
+    anthropic_error_payload as anthropic_error_payload,
+    anthropic_error_response as anthropic_error_response,
+)
+from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import (
     maybe_log_proxy_error,
     maybe_log_request_validation_failure,
@@ -48,59 +55,12 @@ def proxy_error_response(exc: ProxyError) -> JSONResponse:
     """Build the canonical HTTP response for a gateway error."""
     headers = {}
     retry_after = getattr(exc, "retry_after", None)
-    if isinstance(exc, (RateLimitError, ServiceUnavailableError)) and retry_after is not None:
+    if (
+        isinstance(exc, (RateLimitError, AuthenticationUnavailableError, ServiceUnavailableError))
+        and retry_after is not None
+    ):
         headers["Retry-After"] = str(retry_after)
     return JSONResponse(status_code=exc.status_code, content=_serialize_error(exc), headers=headers)
-
-
-def _anthropic_error_type(status_code: int) -> str:
-    if status_code == 400:
-        return "invalid_request_error"
-    if status_code == 401:
-        return "authentication_error"
-    if status_code == 403:
-        return "permission_error"
-    if status_code == 404:
-        return "not_found_error"
-    if status_code == 413:
-        return "request_too_large"
-    if status_code == 429:
-        return "rate_limit_error"
-    if status_code == 503:
-        return "overloaded_error"
-    return "api_error"
-
-
-def anthropic_error_response(
-    *,
-    status_code: int,
-    message: str,
-    error_type: str | None = None,
-    headers: dict[str, str] | None = None,
-) -> JSONResponse:
-    """Render one error envelope for every Anthropic Messages failure boundary."""
-
-    return JSONResponse(
-        status_code=status_code,
-        content=anthropic_error_payload(
-            status_code=status_code,
-            message=message,
-            error_type=error_type,
-        ),
-        headers=headers or {},
-    )
-
-
-def anthropic_error_payload(
-    *, status_code: int, message: str, error_type: str | None = None
-) -> dict[str, object]:
-    return {
-        "type": "error",
-        "error": {
-            "type": error_type or _anthropic_error_type(status_code),
-            "message": message,
-        },
-    }
 
 
 def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:
@@ -108,7 +68,10 @@ def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:
 
     headers = {}
     retry_after = getattr(exc, "retry_after", None)
-    if isinstance(exc, (RateLimitError, ServiceUnavailableError)) and retry_after is not None:
+    if (
+        isinstance(exc, (RateLimitError, AuthenticationUnavailableError, ServiceUnavailableError))
+        and retry_after is not None
+    ):
         headers["Retry-After"] = str(retry_after)
     return anthropic_error_response(
         status_code=exc.status_code,
@@ -128,6 +91,38 @@ def _proxy_error_response_for_request(request: Request, exc: ProxyError) -> JSON
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(RawQueryError)
+    async def budget_policy_error_handler(request: Request, exc: RawQueryError) -> JSONResponse:
+        if (
+            isinstance(exc.meta, dict)
+            and exc.meta.get("code") == "55000"
+            and str(exc) == "accounting_budget_policy_requires_drain"
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": (
+                        "Pause affected inference and drain its permits before adding a new "
+                        "hard-budget scope. Resolve uncertain usage first. "
+                        "Older grants without scope data require a generation drain."
+                    ),
+                    "code": "budget_policy_requires_drain",
+                },
+            )
+        if (
+            isinstance(exc.meta, dict)
+            and exc.meta.get("code") == "P0001"
+            and str(exc) == "accounting_budget_policy_below_debits"
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": "The hard budget cannot be lower than its existing spend and holds.",
+                    "code": "budget_policy_below_debits",
+                },
+            )
+        return await unhandled_error_handler(request, exc)
+
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(request: Request, exc: StarletteHTTPException) -> Response:
         if _uses_anthropic_error_dialect(request):
@@ -140,14 +135,20 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProxyError)
     async def proxy_error_handler(request: Request, exc: ProxyError) -> JSONResponse:
-        await maybe_log_proxy_error(request, exc)
+        try:
+            await maybe_log_proxy_error(request, exc)
+        except SpendPersistenceUnavailable as persistence_error:
+            return _proxy_error_response_for_request(request, persistence_error)
         return _proxy_error_response_for_request(request, exc)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        await maybe_log_request_validation_failure(request, exc)
+        try:
+            await maybe_log_request_validation_failure(request, exc)
+        except SpendPersistenceUnavailable as persistence_error:
+            return _proxy_error_response_for_request(request, persistence_error)
         if _uses_anthropic_error_dialect(request):
             return anthropic_proxy_error_response(InvalidRequestError(message="Invalid request"))
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})

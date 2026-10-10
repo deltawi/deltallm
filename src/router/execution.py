@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Awaitable, Callable, Generic, Mapping, TypeVar
 
-from src.models.errors import TimeoutError
+from src.request_deadline import RequestDeadline as RequestDeadline
 
 if TYPE_CHECKING:
     from src.router.router import Deployment
@@ -80,41 +79,11 @@ class ProviderAttemptResult(Generic[T]):
 
 
 @dataclass(frozen=True, slots=True)
-class RequestDeadline:
-    """One monotonic budget shared by planning, retries, and provider work."""
+class ProviderAttemptSuccess(Generic[T]):
+    """A provider result with fixed routing-usage counters."""
 
-    expires_at: float
-
-    @classmethod
-    def after(cls, timeout_seconds: float) -> RequestDeadline:
-        return cls(asyncio.get_running_loop().time() + timeout_seconds)
-
-    def remaining(self) -> float:
-        return max(0.0, self.expires_at - asyncio.get_running_loop().time())
-
-    def require_remaining(self) -> float:
-        remaining = self.remaining()
-        if remaining <= 0:
-            raise TimeoutError(message="Request deadline exceeded")
-        return remaining
-
-    async def wait_for(self, awaitable: Awaitable[T], *, limit: float | None = None) -> T:
-        try:
-            remaining = self.require_remaining()
-            timeout = remaining if limit is None else min(remaining, limit)
-            if timeout <= 0:
-                raise TimeoutError(message="Request deadline exceeded")
-        except BaseException:
-            if inspect.iscoroutine(awaitable):
-                awaitable.close()
-            raise
-        try:
-            # Keep work in the calling task so cancellation waits for its
-            # shielded finalizers before outer cleanup closes their resources.
-            async with asyncio.timeout(timeout):
-                return await awaitable
-        except asyncio.TimeoutError as exc:
-            raise TimeoutError(message="Request deadline exceeded") from exc
+    value: T
+    usage_counters: Mapping[str, int]
 
 
 @dataclass(slots=True)

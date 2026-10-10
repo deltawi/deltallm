@@ -38,6 +38,8 @@ def test_realtime_and_accounting_drain_fit_pod_grace(grace, success):
         "--set",
         "secret.values.saltKey=test-salt-key-1234567890",
         "--set",
+        "managedLifecycle.enabled=false",
+        "--set",
         "config.general_settings.realtime.enabled=true",
         "--set",
         "config.general_settings.spend_ingestion_mode=outbox",
@@ -45,6 +47,25 @@ def test_realtime_and_accounting_drain_fit_pod_grace(grace, success):
         f"terminationGracePeriodSeconds={grace}",
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) is success, result.stderr
+    if not success:
+        assert "Realtime cleanup_seconds + write_seconds" in result.stderr
+
+
+@pytest.mark.parametrize("cleanup,write,success", [(5, 10, True), (25, 25, False), (30, 30, False)])
+def test_managed_realtime_cleanup_finishes_before_response_cutoff(cleanup, write, success):
+    from tests.helm.test_ingress_settings import render
+
+    result = render(
+        "--set",
+        "config.general_settings.realtime.enabled=true",
+        "--set",
+        "config.general_settings.spend_ingestion_mode=outbox",
+        "--set",
+        f"config.general_settings.realtime.cleanup_seconds={cleanup}",
+        "--set",
+        f"config.general_settings.realtime.write_seconds={write}",
+    )
     assert (result.returncode == 0) is success, result.stderr
     if not success:
         assert "Realtime cleanup_seconds + write_seconds" in result.stderr

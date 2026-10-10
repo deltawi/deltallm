@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from typing import Any
 
 from fastapi import Request
 
 from src.models.errors import BudgetExceededError
 from src.providers.request_defaults import provider_request_defaults
-
-logger = logging.getLogger(__name__)
 
 
 def apply_default_params(
@@ -35,6 +31,18 @@ async def enforce_budget_if_configured(
 ) -> None:
     if bool(getattr(request.state, "budget_checked", False)):
         return
+    # Accounting-v2 performs the authoritative multi-scope hard-budget check
+    # in the same durable statement that grants provider dispatch. Keeping the
+    # legacy read here would add hot-path queries and still race concurrent
+    # requests.
+    from src.billing.accounting_service import AccountingProtocolService
+
+    if isinstance(
+        getattr(request.app.state, "accounting_protocol_service", None),
+        AccountingProtocolService,
+    ):
+        request.state.budget_checked = True
+        return
     budget_service = getattr(request.app.state, "budget_service", None)
     auth_ctx = auth or getattr(request.state, "user_api_key", None)
     if budget_service is None or auth_ctx is None:
@@ -57,15 +65,3 @@ async def enforce_budget_if_configured(
             code="budget_exceeded",
         ) from exc
     request.state.budget_checked = True
-
-
-def fire_and_forget(coro: Any) -> None:
-    task = asyncio.create_task(coro)
-
-    def _on_done(done_task: asyncio.Task) -> None:
-        try:
-            done_task.result()
-        except Exception as exc:  # pragma: no cover
-            logger.warning("background side effect failed: %s", exc)
-
-    task.add_done_callback(_on_done)

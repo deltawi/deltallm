@@ -60,12 +60,12 @@ class FakePubSub:
     async def subscribe(self, channel: str) -> None:
         del channel
 
-    async def listen(self):
-        while True:
-            item = await self.queue.get()
-            if item.get("type") == "stop":
-                break
-            yield item
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float):
+        del ignore_subscribe_messages
+        try:
+            return await asyncio.wait_for(self.queue.get(), timeout=timeout)
+        except TimeoutError:
+            return None
 
     async def unsubscribe(self, channel: str) -> None:
         del channel
@@ -90,9 +90,8 @@ class FailingPubSub:
     async def subscribe(self, channel: str) -> None:
         del channel
 
-    async def listen(self):
+    async def get_message(self, **_):
         raise RuntimeError("redis unavailable")
-        yield {}  # pragma: no cover
 
     async def unsubscribe(self, channel: str) -> None:
         del channel
@@ -137,13 +136,15 @@ class FakeDB:
     def tx(self) -> FakeTransaction:
         return FakeTransaction(self)
 
-    async def query_raw(self, query: str, name: str):
-        del name
+    async def query_raw(self, query: str, *params: object):
+        del params
         self.queries.append(query)
         if self.fail_query:
             raise RuntimeError("db read unavailable")
         if "pg_advisory_xact_lock" in query:
             return [{"locked": None}]
+        if "AS key_enabled" in query:
+            return [{"key_enabled": False, "shared_enabled": False, "tier_enabled": False}]
         return [{"config_value": json.dumps(self.config_value)}]
 
     async def execute_raw(self, query: str, name: str, payload: str, updated_by: str):
@@ -258,6 +259,7 @@ async def test_route_group_reload_invalidates_replica_cache_before_rebuild(monke
     object_marker = object()
     manager.routing_authorization_reconciler = None
     manager.dynamic_config = SimpleNamespace(get_app_config=lambda: AppConfig.model_validate({}))
+
     class CreatorMCPReloader:
         async def reload(self) -> None:
             calls.append("mcp")
@@ -906,6 +908,8 @@ async def test_dynamic_config_rejects_startup_only_ingestion_mode_change() -> No
         ("provider_discovery_allowed_private_cidrs", ["10.0.0.0/8"]),
         ("email_worker_delivery_lease_seconds", 90),
         ("email_worker_enabled", False),
+        ("budget_notifications_enabled", True),
+        ("budget_alert_ttl_seconds", 120),
     ),
 )
 async def test_dynamic_config_rejects_startup_owned_worker_changes(
@@ -1117,6 +1121,11 @@ async def test_dynamic_config_pubsub_failure_keeps_polling_and_records_metric(mo
     await manager.initialize()
 
     try:
+        # Initial subscription now catches up from PostgreSQL. Prove that a
+        # subsequent update after listener failure is recovered by polling.
+        async with asyncio.timeout(1):
+            while {"source": "pubsub", "result": "listener_failed"} not in events:
+                await asyncio.sleep(0)
         db.config_value["router_settings"] = RouterSettings(
             routing_strategy="weighted"
         ).model_dump()
@@ -1178,6 +1187,8 @@ async def test_dynamic_config_persists_fallbacks_and_updates_runtime_registries(
         state=SimpleNamespace(
             settings=settings,
             app_config=None,
+            redis=object(),
+            bulk_redis=object(),
             model_registry=initial_model_registry,
             router=router,
             failover_manager=failover_manager,
@@ -1224,15 +1235,28 @@ async def test_dynamic_config_persists_fallbacks_and_updates_runtime_registries(
             "general_settings": {
                 **dynamic.get_app_config().general_settings.model_dump(mode="python"),
                 "instance_name": "Acme AI",
+                "cache_enabled": True,
+                "cache_backend": "redis",
             },
         }
     )
 
     await dynamic.update_config(
-        updated_cfg.model_dump(mode="python"),
+        {
+            "model_list": updated_cfg.model_dump(mode="python")["model_list"],
+            "router_settings": updated_cfg.router_settings.model_dump(mode="python"),
+            "deltallm_settings": updated_cfg.deltallm_settings.model_dump(mode="python"),
+            "general_settings": {
+                "instance_name": "Acme AI",
+                "cache_enabled": True,
+                "cache_backend": "redis",
+            },
+        },
         updated_by="admin_api",
     )
 
+    assert app.state.cache_backend.redis is app.state.bulk_redis
+    assert app.state.cache_backend.redis is not app.state.redis
     assert "gpt-4.1-mini" in app.state.model_registry
     assert app.state.router.strategy == RoutingStrategy.WEIGHTED
     assert app.state.failover_manager.config.num_retries == 2
@@ -2096,3 +2120,26 @@ async def test_model_hot_reload_manager_adds_deployment_to_existing_model_group(
     ] == ["old-dep", "new-dep"]
 
     await dynamic.close()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("spend_ingestion_worker_enabled", False),
+        ("spend_ingestion_worker_enabled", True),
+        ("audit_ingestion_worker_enabled", False),
+        ("audit_ingestion_worker_enabled", True),
+        ("spend_operation_intents_enabled", False),
+        ("spend_settlement_db_pool_size", 1),
+    ],
+)
+async def test_telemetry_startup_fields_reject_changes_before_commit(field, value):
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    try:
+        with pytest.raises(DynamicConfigRestartRequiredError, match=field):
+            await manager.update_config({"general_settings": {field: value}}, updated_by="test")
+        assert db.config_value == {}
+    finally:
+        await manager.close()

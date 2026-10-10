@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline
+
 import asyncio
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -44,6 +46,7 @@ from src.telemetry.lifecycle import (
     task_failure_detail,
     wait_for_startup,
 )
+from src.telemetry.worker_idle import IdleWorkerPoll
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +228,7 @@ class AuditService:
         repository: AuditRepository,
         *,
         db_client: Any | None = None,
+        worker_db_client: Any | None = None,
         prompt_repository: PromptRegistryRepository | None = None,
         ingestion_config: AuditIngestionConfig | None = None,
         redis_client: Any | None = None,
@@ -236,6 +240,13 @@ class AuditService:
     ) -> None:
         self.repository = repository
         self.db = db_client
+        self.worker_db = worker_db_client if worker_db_client is not None else db_client
+        self._worker_ingestion_repository = (
+            AuditIngestionRepository(worker_db_client) if worker_db_client is not None else None
+        )
+        self.worker_repository = (
+            repository.with_db(worker_db_client) if worker_db_client is not None else repository
+        )
         self.prompt_repository = prompt_repository
         self.ingestion_config = ingestion_config or AuditIngestionConfig()
         self.ingestion_repository = AuditIngestionRepository(db_client)
@@ -267,6 +278,7 @@ class AuditService:
         self._closed = False
         self._started = False
         self._wake = asyncio.Event()
+        self._idle_poll = IdleWorkerPoll(self._wake)
         self.dropped_events = 0
         self.failed_events = 0
 
@@ -342,8 +354,7 @@ class AuditService:
     async def shutdown(self) -> None:
         self._closed = True
         self._worker_state = WorkerState.STOPPING
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.ingestion_config.shutdown_drain_timeout_seconds
+        deadline = cleanup_deadline(self.ingestion_config.shutdown_drain_timeout_seconds)
         if self._worker_task is not None:
             if self.ingestion_config.enabled:
                 await self._stop_durable_worker_tasks(deadline=deadline)
@@ -363,19 +374,28 @@ class AuditService:
                     logger.error(
                         "audit queue worker exceeded its shutdown deadline and was cancelled"
                     )
-                self._worker_task = None
+                if worker_stopped:
+                    self._worker_task = None
         if self._cleanup_task is not None:
-            await stop_tasks_before_deadline(
+            cleanup_stopped = await stop_tasks_before_deadline(
                 [self._cleanup_task],
                 deadline=deadline,
                 cancel_first=True,
             )
-            self._cleanup_task = None
+            if cleanup_stopped:
+                self._cleanup_task = None
         listener_stopped = await self.policy_invalidation.shutdown(deadline=deadline)
         if not listener_stopped:
             increment_audit_write_failure(path="policy_listener_shutdown_timeout")
             logger.error("audit policy listener exceeded its shutdown deadline and was cancelled")
-        self._worker_state = WorkerState.DISABLED
+        pending = any(
+            task is not None and not task.done()
+            for task in (
+                self._worker_task,
+                self._cleanup_task,
+            )
+        )
+        self._worker_state = WorkerState.FAILED if pending else WorkerState.DISABLED
         self._worker_detail = None
         self._started = False
         set_audit_queue_depth(0)
@@ -394,6 +414,8 @@ class AuditService:
         if worker_active and not worker_desired:
             await self._stop_durable_worker_tasks()
         self.ingestion_config = config
+        self._idle_poll.reset()
+        self._wake.set()
         if worker_desired and not worker_active:
             try:
                 await self._reconcile_durable_capacity()
@@ -405,7 +427,7 @@ class AuditService:
 
     async def _reconcile_durable_capacity(self) -> None:
         try:
-            await self.ingestion_repository.reconcile_capacity()
+            await self.worker_ingestion_repository.reconcile_capacity()
         except Exception:
             increment_audit_write_failure(path="capacity_reconcile")
             logger.exception("failed to reconcile durable audit capacity")
@@ -414,6 +436,7 @@ class AuditService:
     def _launch_durable_worker_tasks(self) -> None:
         if self._worker_task is not None and not self._worker_task.done():
             return
+        self._idle_poll.reset()
         self._durable_worker_running = True
         self._worker_started.clear()
         self._cleanup_started.clear()
@@ -455,10 +478,7 @@ class AuditService:
 
     async def _stop_durable_worker_tasks(self, *, deadline: float | None = None) -> None:
         if deadline is None:
-            deadline = (
-                asyncio.get_running_loop().time()
-                + self.ingestion_config.shutdown_drain_timeout_seconds
-            )
+            deadline = cleanup_deadline(self.ingestion_config.shutdown_drain_timeout_seconds)
         self._worker_state = WorkerState.STOPPING
         self._durable_worker_running = False
         self._wake.set()
@@ -472,9 +492,13 @@ class AuditService:
         if not cleanup_stopped or not worker_stopped:
             increment_audit_write_failure(path="shutdown_timeout")
             logger.error("durable audit worker exceeded its shutdown deadline and was cancelled")
-        self._worker_task = None
-        self._cleanup_task = None
-        self._worker_state = WorkerState.DISABLED
+        if worker_stopped:
+            self._worker_task = None
+        if cleanup_stopped:
+            self._cleanup_task = None
+        self._worker_state = (
+            WorkerState.DISABLED if worker_stopped and cleanup_stopped else WorkerState.FAILED
+        )
         self._worker_detail = None
 
     async def enqueue_event(
@@ -527,7 +551,10 @@ class AuditService:
         payload = _serialize_audit_item(item)
         redacted_payload = _serialize_audit_item(_redact_audit_item(item))
         try:
-            result = await self.ingestion_repository.enqueue(
+            ingestion_repository = (
+                self.ingestion_repository if required else self.worker_ingestion_repository
+            )
+            result = await ingestion_repository.enqueue(
                 event_id=item.event_id,
                 record_type="audit_event",
                 organization_id=event.organization_id,
@@ -757,6 +784,14 @@ class AuditService:
                 self._queue.task_done()
                 set_audit_queue_depth(self._total_queue_depth())
 
+    @property
+    def worker_ingestion_repository(self):
+        return (
+            self._worker_ingestion_repository
+            if self._worker_ingestion_repository is not None
+            else self.ingestion_repository
+        )
+
     def _total_queue_depth(self) -> int:
         return self._queue.qsize()
 
@@ -784,8 +819,9 @@ class AuditService:
                 await asyncio.sleep(min(5.0, 0.1 * (2 ** min(consecutive_failures - 1, 6))))
 
     async def _durable_worker_iteration(self) -> None:
+        self._idle_poll.begin_claim()
         try:
-            records = await self.ingestion_repository.claim_batch(
+            records = await self.worker_ingestion_repository.claim_batch(
                 limit=self.ingestion_config.batch_size,
                 worker_id=self.ingestion_config.worker_id,
                 claim_token=str(uuid4()),
@@ -795,16 +831,10 @@ class AuditService:
             increment_audit_write_failure(path="claim")
             raise
         if not records:
-            self._wake.clear()
-            try:
-                await asyncio.wait_for(
-                    self._wake.wait(),
-                    timeout=self.ingestion_config.flush_interval_seconds,
-                )
-            except TimeoutError:
-                pass
+            await self._idle_poll.wait(self.ingestion_config.flush_interval_seconds)
             await self._publish_durable_backlog()
             return
+        self._idle_poll.reset()
         await self._process_durable_batch(records)
         await self._publish_durable_backlog()
 
@@ -864,7 +894,7 @@ class AuditService:
             )
         )
         try:
-            async with self._transaction() as tx:
+            async with self._transaction(self.worker_db) as tx:
                 ingestion_repository = self.ingestion_repository.with_db(tx)
                 audit_repository = self.repository.with_db(tx)
                 prompt_repository = PromptRegistryRepository(tx)
@@ -941,7 +971,7 @@ class AuditService:
         while True:
             await asyncio.sleep(interval)
             try:
-                renewed = await self.ingestion_repository.renew_lease(
+                renewed = await self.worker_ingestion_repository.renew_lease(
                     event_ids=event_ids,
                     worker_id=self.ingestion_config.worker_id,
                     claim_token=claim_token,
@@ -962,7 +992,7 @@ class AuditService:
                 return
 
     async def _mark_durable_retry(self, record: AuditOutboxRecord, exc: Exception) -> None:
-        terminal = await self.ingestion_repository.mark_retry(
+        terminal = await self.worker_ingestion_repository.mark_retry(
             record=record,
             worker_id=self.ingestion_config.worker_id,
             error=str(exc),
@@ -988,7 +1018,7 @@ class AuditService:
 
     async def _publish_durable_backlog(self) -> None:
         try:
-            count, oldest_age = await self.ingestion_repository.pending_stats()
+            count, oldest_age = await self.worker_ingestion_repository.pending_stats()
         except Exception:
             increment_audit_write_failure(path="backlog_metrics")
             return
@@ -1013,7 +1043,7 @@ class AuditService:
             if perf_counter() - started >= self.ingestion_config.cleanup_time_budget_seconds:
                 break
             try:
-                deleted = await self.ingestion_repository.cleanup_terminal(
+                deleted = await self.worker_ingestion_repository.cleanup_terminal(
                     completed_retention_hours=self.ingestion_config.completed_retention_hours,
                     failed_retention_days=self.ingestion_config.failed_retention_days,
                     limit=self.ingestion_config.cleanup_batch_size,
@@ -1110,6 +1140,7 @@ class AuditService:
             try:
                 await self._persist(
                     item,
+                    repository=self.worker_repository,
                     path=(
                         AuditIngestionPath.QUEUE if attempt == 1 else AuditIngestionPath.FALLBACK
                     ),
@@ -1166,7 +1197,7 @@ class AuditService:
         enabled = False
         version = 0
         try:
-            enabled, version = await self.ingestion_repository.get_content_policy(normalized)
+            enabled, version = await self.worker_ingestion_repository.get_content_policy(normalized)
         except Exception:
             logger.exception(
                 "failed reading audit content policy for invalidation",

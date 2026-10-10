@@ -33,7 +33,8 @@ async def recovery_session(dependencies, profile="realtime"):
     assert attempt.acquired and attempt.recovery
     context = charge_context()
     owner = SimpleNamespace(
-        settings=RealtimeSettings(), billing=SimpleNamespace(accept=AsyncMock())
+        settings=RealtimeSettings(),
+        billing=SimpleNamespace(accept=AsyncMock(), terminal_lifetime=None),
     )
     request = SimpleNamespace(session_id=context.attribution.session_id, profile=profile)
     route = SimpleNamespace(

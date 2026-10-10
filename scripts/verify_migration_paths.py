@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from src.prisma_bootstrap import run_prisma_bootstrap
+from src.migration_process import run_migration_process
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -109,6 +110,32 @@ def _db_execute(
 def _migrate(prisma: str, *, schema: Path, database_url: str) -> None:
     _run(
         [prisma, "migrate", "deploy", "--schema", str(schema)],
+        env=_database_env(database_url),
+    )
+
+
+def _verify_image_history(database_url: str) -> None:
+    _run(
+        [
+            sys.executable,
+            "-c",
+            """
+import asyncio
+from datetime import timedelta
+from prisma import Prisma
+from src.db.migration_status import verify_migration_status
+async def verify():
+    db = Prisma()
+    try:
+        await db.connect(timeout=timedelta(seconds=10))
+        async with db.tx() as tx:
+            await tx.execute_raw('SET TRANSACTION READ ONLY')
+            await verify_migration_status(tx, timeout_seconds=2)
+    finally:
+        await db.disconnect(timeout=timedelta(seconds=5))
+asyncio.run(verify())
+""",
+        ],
         env=_database_env(database_url),
     )
 
@@ -961,6 +988,201 @@ $reservation_verify$;
     )
 
 
+def _verify_accounting_protocol(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql="""
+DO $accounting_verify$
+BEGIN
+  IF (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name IN (
+        'deltallm_accounting_protocols','deltallm_accounting_partitions',
+        'deltallm_accounting_budget_windows','deltallm_accounting_reservations',
+        'deltallm_accounting_events','deltallm_accounting_projection_checkpoints',
+        'deltallm_accounting_grants','deltallm_accounting_grant_windows'
+      )) <> 8 THEN
+    RAISE EXCEPTION 'accounting protocol tables are missing';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_billing_operations'
+        AND column_name IN (
+          'accounting_protocol','accounting_generation','accounting_partition',
+          'request_fingerprint','accounting_state','accounting_grant_id','provisional_debit_exact',
+          'final_event_sequence','accounting_permit_ordinal','accounting_grant_fence_token'
+        )) <> 10 THEN
+    RAISE EXCEPTION 'accounting operation columns are missing';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_accounting_grants'
+        AND column_name IN ('dispatch_mode','fence_token','unit_allowance_exact')) <> 3
+     OR NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid='deltallm_billing_operations'::regclass
+          AND conname='deltallm_billing_operation_permit_ordinal_key'
+          AND contype='u'
+     ) THEN
+    RAISE EXCEPTION 'accounting permit schema is missing';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_accounting_grants'
+        AND column_name IN (
+          'local_dispatch','dispatch_expires_at','returned_exact',
+          'returned_operations','unknown_provisional_exact'
+        )) <> 5
+     OR NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid='deltallm_accounting_grants'::regclass
+          AND conname='deltallm_accounting_grant_local_dispatch_check'
+          AND contype='c'
+     ) THEN
+    RAISE EXCEPTION 'accounting local lease schema is missing';
+  END IF;
+  IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_accounting_grants'
+        AND column_name='accounting_partition' AND data_type='integer'
+  ) OR NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid='deltallm_accounting_grants'::regclass AND contype='f'
+        AND pg_get_constraintdef(oid) LIKE
+          '%(protocol_name, generation, accounting_partition)%deltallm_accounting_partitions%'
+  ) THEN
+    RAISE EXCEPTION 'accounting grant capacity lease is missing';
+  END IF;
+  IF to_regprocedure('deltallm_accounting_reserve_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_finalize_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_grant_subject(jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_ensure_grants_batch(bigint,text,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reserve_grant_batch(bigint,text,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_permit_grant(bigint,text,uuid,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_claim_permit_batch(bigint,text,text,uuid,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_permit_window_ids(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_permit_grants_batch(bigint,text,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_claim_permits_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_local_permit_grant(bigint,text,uuid,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_return_local_permits(bigint,text,uuid,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_return_local_permits_batch(bigint,text,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_finalize_local_permit_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_pending_legacy_work()') IS NULL
+     OR to_regprocedure('deltallm_accounting_finalize_grant_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reconcile_expired_grants(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reconcile_grants(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reconcile_expired(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_resolve_provisional(bigint,text,numeric,jsonb,text)') IS NULL
+     OR to_regprocedure('deltallm_accounting_roll_windows(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_sync_budget(text,text,numeric,numeric,text,timestamp without time zone,jsonb)') IS NULL THEN
+    RAISE EXCEPTION 'accounting protocol functions are missing';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN (
+        'deltallm_accounting_key_budget_policy',
+        'deltallm_accounting_user_budget_policy',
+        'deltallm_accounting_team_budget_policy',
+        'deltallm_accounting_organization_budget_policy',
+        'deltallm_accounting_team_model_budget_policy'
+      )) <> 5 THEN
+    RAISE EXCEPTION 'accounting budget policy triggers are missing';
+  END IF;
+END
+$accounting_verify$;
+""",
+    )
+
+
+def _seed_pr5_budgets(prisma: str, database_url: str, schema: Path) -> None:
+    _db_execute(
+        prisma,
+        schema=schema,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/pr5_budget_seed.sql").read_text(),
+    )
+
+
+def _verify_pr5_budgets(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/pr5_budget_verify.sql").read_text(),
+    )
+
+
+def _pr6_fixture(prisma: str, database_url: str, schema: Path, phase: str) -> None:
+    filename = {"seed": "pr6_spend_seed.sql", "verify": "pr6_spend_verify.sql"}[phase]
+    _db_execute(
+        prisma,
+        schema=schema,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures" / filename).read_text(),
+    )
+
+
+def _verify_accounting_window_keysets(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(
+            REPO_ROOT / "scripts/migration_fixtures/accounting_window_keysets_verify.sql"
+        ).read_text(),
+    )
+
+
+def _verify_accounting_recovery(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/accounting_recovery_verify.sql").read_text(),
+    )
+
+
+def _verify_accounting_health(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/accounting_health_verify.sql").read_text(),
+    )
+
+
+def _verify_accounting_presence(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/accounting_presence_verify.sql").read_text(),
+    )
+
+
+def _verify_accounting_native_reporting(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(
+            REPO_ROOT / "scripts/migration_fixtures/accounting_native_reporting_verify.sql"
+        ).read_text(),
+    )
+
+
+def _stage_before_model_identity_migration(destination: Path) -> Path:
+    later_migrations = tuple(
+        path.name
+        for path in (CURRENT_SCHEMA.parent / "migrations").iterdir()
+        if path.is_dir() and path.name >= MODEL_IDENTITY_MIGRATION
+    )
+    shutil.copytree(
+        CURRENT_SCHEMA.parent,
+        destination,
+        ignore=shutil.ignore_patterns(*later_migrations),
+    )
+    return destination / "schema.prisma"
+
+
 def _verify_model_identity_recovery_path(
     prisma: str,
     *,
@@ -978,9 +1200,18 @@ INSERT INTO deltallm_modeldeployment
   (deployment_id, model_name, deltallm_params)
 VALUES
   ('model-identity-recovery-deployment', 'model-identity-recovery', '{}'::jsonb);
-
-DROP EXTENSION pgcrypto;
 """,
+    )
+    # Apply prerequisites before removing the extension needed by this fixture.
+    staged_schema = _stage_before_model_identity_migration(
+        temp_root / "model-identity-prerequisites"
+    )
+    _migrate(prisma, schema=staged_schema, database_url=database_url)
+    _db_execute(
+        prisma,
+        schema=staged_schema,
+        database_url=database_url,
+        sql="DROP EXTENSION pgcrypto;",
     )
     _migrate_expect_failure(
         prisma,
@@ -996,18 +1227,14 @@ DROP EXTENSION pgcrypto;
         command: list[str],
         **kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            env=_database_env(database_url),
-            **kwargs,
-        )
+        return run_migration_process([prisma, *command[1:]], **kwargs)
 
     run_prisma_bootstrap(
         schema_path=str(CURRENT_SCHEMA),
         max_attempts=1,
         sleep_seconds=0,
         runner=database_runner,
+        environment=_database_env(database_url),
         recover_model_api_identity=True,
     )
     _db_execute(
@@ -1080,12 +1307,17 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _migrate(prisma, schema=CURRENT_SCHEMA, database_url=fresh_url)
         _verify_fresh_database(prisma, fresh_url)
         _verify_operation_reservations(prisma, fresh_url)
+        _verify_accounting_protocol(prisma, fresh_url)
+        _verify_pr5_budgets(prisma, fresh_url)
+        _pr6_fixture(prisma, fresh_url, CURRENT_SCHEMA, "verify")
 
         with tempfile.TemporaryDirectory(prefix="deltallm-migration-base-") as temp:
             temp_root = Path(temp)
             base_schema = _extract_prisma_at_ref(base_ref, temp_root / "base")
             _migrate(prisma, schema=base_schema, database_url=upgrade_url)
             _seed_upgrade_fixture(prisma, upgrade_url, base_schema)
+            _seed_pr5_budgets(prisma, upgrade_url, base_schema)
+            _pr6_fixture(prisma, upgrade_url, base_schema, "seed")
             _db_execute(
                 prisma,
                 schema=base_schema,
@@ -1119,6 +1351,8 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             )
             _migrate(prisma, schema=shared_schema, database_url=shared_url)
             _seed_shared_migration_fixture(prisma, shared_url, shared_schema)
+            _seed_pr5_budgets(prisma, shared_url, shared_schema)
+            _pr6_fixture(prisma, shared_url, shared_schema, "seed")
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
             _verify_model_identity_recovery_path(
                 prisma,
@@ -1135,7 +1369,16 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _verify_shared_migration_database(prisma, shared_url)
         _verify_operation_reservations(prisma, upgrade_url)
         _verify_operation_reservations(prisma, shared_url)
+        _verify_accounting_protocol(prisma, upgrade_url)
+        _verify_accounting_protocol(prisma, shared_url)
+        _verify_pr5_budgets(prisma, upgrade_url)
+        _verify_pr5_budgets(prisma, shared_url)
         for database_url in (fresh_url, upgrade_url, shared_url):
+            _verify_accounting_window_keysets(prisma, database_url)
+            _verify_accounting_recovery(prisma, database_url)
+            _verify_accounting_health(prisma, database_url)
+            _verify_accounting_presence(prisma, database_url)
+            _verify_accounting_native_reporting(prisma, database_url)
             _db_execute(
                 prisma,
                 schema=CURRENT_SCHEMA,
@@ -1144,6 +1387,10 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
                     REPO_ROOT / "scripts/migration_fixtures/realtime_billing_verify.sql"
                 ).read_text(),
             )
+        _pr6_fixture(prisma, upgrade_url, CURRENT_SCHEMA, "verify")
+        _pr6_fixture(prisma, shared_url, CURRENT_SCHEMA, "verify")
+        for database_url in (fresh_url, upgrade_url, shared_url, model_identity_recovery_url):
+            _verify_image_history(database_url)
     finally:
         primary_error = sys.exc_info()[1]
         cleanup_errors: list[subprocess.CalledProcessError] = []

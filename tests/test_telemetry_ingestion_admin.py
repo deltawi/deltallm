@@ -23,7 +23,7 @@ async def test_platform_admin_can_replay_blocked_telemetry_event(
 ) -> None:
     telemetry_db = object()
     test_app.state.settings.master_key = "mk-test"
-    test_app.state.telemetry_prisma_manager = SimpleNamespace(client=telemetry_db)
+    test_app.state.telemetry_worker_prisma_manager = SimpleNamespace(client=telemetry_db)
     replay_calls: list[tuple[object, str, str]] = []
     audits: list[dict[str, object]] = []
 
@@ -87,7 +87,7 @@ async def test_replay_rejects_non_blocked_telemetry_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_app.state.settings.master_key = "mk-test"
-    test_app.state.telemetry_prisma_manager = SimpleNamespace(client=object())
+    test_app.state.telemetry_worker_prisma_manager = SimpleNamespace(client=object())
 
     class FakeReplayService:
         def __init__(self, _db: object, *, audit_service: object | None) -> None:
@@ -117,7 +117,7 @@ async def test_replay_rejects_non_blocked_telemetry_event(
 @pytest.mark.asyncio
 async def test_replay_requires_telemetry_database(client, test_app) -> None:
     test_app.state.settings.master_key = "mk-test"
-    test_app.state.telemetry_prisma_manager = SimpleNamespace(client=None)
+    test_app.state.telemetry_worker_prisma_manager = SimpleNamespace(client=None)
 
     response = await client.post(
         "/ui/api/telemetry-ingestion/audit/event-1/replay",

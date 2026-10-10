@@ -73,6 +73,48 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
+{{- define "deltallm.accountingWorkerName" -}}
+{{- $base := include "deltallm.name" . | trunc 45 | trimSuffix "-" -}}
+{{- printf "%s-accounting-worker" $base -}}
+{{- end -}}
+
+{{- define "deltallm.accountingWorkerFullname" -}}
+{{- $base := include "deltallm.fullname" . | trunc 45 | trimSuffix "-" -}}
+{{- printf "%s-accounting-worker" $base -}}
+{{- end -}}
+
+{{- define "deltallm.accountingWorkerSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "deltallm.accountingWorkerName" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: accounting-worker
+{{- end -}}
+
+{{- define "deltallm.accountingWorkerLabels" -}}
+helm.sh/chart: {{ include "deltallm.chart" . }}
+{{ include "deltallm.accountingWorkerSelectorLabels" . }}
+app.kubernetes.io/part-of: {{ include "deltallm.name" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
+{{- define "deltallm.accountingRequestFullname" -}}
+{{- printf "%s-accounting-request" (include "deltallm.fullname" . | trunc 44 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "deltallm.accountingRequestSelectorLabels" -}}
+app.kubernetes.io/name: {{ printf "%s-accounting-request" (include "deltallm.name" . | trunc 44 | trimSuffix "-") }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: accounting-request
+{{- end -}}
+
+{{- define "deltallm.accountingRequestLabels" -}}
+helm.sh/chart: {{ include "deltallm.chart" . }}
+{{ include "deltallm.accountingRequestSelectorLabels" . }}
+app.kubernetes.io/part-of: {{ include "deltallm.name" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{- define "deltallm.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "deltallm.fullname" .) .Values.serviceAccount.name -}}
@@ -118,5 +160,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "redis://:%s@%s:6379/0" ($password | urlquery) (include "deltallm.redisHost" .) -}}
 {{- else -}}
 {{- printf "redis://%s:6379/0" (include "deltallm.redisHost" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deltallm.image" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
 {{- end -}}
 {{- end -}}

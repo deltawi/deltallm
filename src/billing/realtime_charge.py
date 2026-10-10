@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
 from src.billing.money import money_string
+from src.billing.realtime_accounting_bounds import RealtimeCostBounds
 from src.billing.realtime_pricing import RealtimePrices
 from src.billing.realtime_usage import RealtimeDurationUsage, RealtimeUsageReceipt
 
@@ -27,15 +28,19 @@ class RealtimeChargeContext:
     customer: RealtimePrices
     provider: RealtimePrices
     started_at: datetime
+    cost_bounds: RealtimeCostBounds | None = None
 
     def snapshot(self) -> dict[str, object]:
-        return {
+        result = {
             "version": 1,
             "attribution": asdict(self.attribution),
             "customer": self.customer.snapshot(),
             "provider": self.provider.snapshot(),
             "started_at": self.started_at.isoformat(),
         }
+        if self.cost_bounds is not None:
+            result["cost_bounds"] = self.cost_bounds.snapshot()
+        return result
 
     def spend_payload(
         self,
@@ -43,6 +48,7 @@ class RealtimeChargeContext:
         *,
         operation_started_at: datetime,
         completed_at: datetime,
+        operation_id: str | None = None,
     ) -> dict[str, object]:
         usage = receipt.usage
         if usage is None or receipt.pending_reason is not None:
@@ -61,7 +67,7 @@ class RealtimeChargeContext:
             }
         owner = self.attribution
         return {
-            "request_id": owner.session_id,
+            "request_id": operation_id if operation_id is not None else owner.session_id,
             "api_key": owner.api_key,
             "user_id": owner.user_id,
             "team_id": owner.team_id,
@@ -76,6 +82,14 @@ class RealtimeChargeContext:
             "start_time": operation_started_at.astimezone(UTC).isoformat(),
             "end_time": completed_at.astimezone(UTC).isoformat(),
             "metadata": {
+                **(
+                    {
+                        "realtime_session_id": owner.session_id,
+                        "realtime_receipt_id": receipt.receipt_id,
+                    }
+                    if operation_id is not None
+                    else {}
+                ),
                 "provider": "openai",
                 "deployment_id": owner.deployment_id,
                 "deployment_model": owner.deployment_model,

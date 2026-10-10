@@ -1,0 +1,22 @@
+# Layer after values-eval.yaml for a reproducible local accounting-v2 topology.
+postgresql:
+  primary:
+    extendedConfiguration: |
+      max_connections = 160
+
+dependencyCapacity:
+  postgresqlMaxConnections: 160
+  # Three peak API processes * 33 + three accounting workers * 15 + 16 reserve.
+  postgresqlReservedConnections: 16
+
+accountingWorker:
+  enabled: true
+
+config:
+  general_settings:
+    accounting_protocol_enabled: true
+    accounting_execution_mode: assigned
+    accounting_protocol_generation: 1
+    spend_ingestion_mode: outbox
+    audit_ingestion_mode: outbox
+    audit_enabled: true

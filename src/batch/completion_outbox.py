@@ -8,6 +8,8 @@ from typing import Any
 
 from src.batch.models import BatchCompletionOutboxRecord
 from src.batch.repository import BatchRepository
+from src.batch.accounting_delivery import NativeBatchCompletionDelivery
+from src.billing.accounting_service import AccountingProtocolService
 from src.billing.spend import SpendTrackingService
 from src.metrics import (
     increment_batch_completion_outbox_failure,
@@ -46,18 +48,22 @@ class BatchCompletionOutboxWorker:
         app: Any,
         repository: BatchRepository,
         config: BatchCompletionOutboxWorkerConfig | None = None,
+        accounting: AccountingProtocolService | None = None,
     ) -> None:
         self.app = app
         self.repository = repository
         self.config = config or BatchCompletionOutboxWorkerConfig()
+        self._native_delivery = NativeBatchCompletionDelivery(accounting, repository)
         self._stopped = False
         self._stop_event = asyncio.Event()
+        self.started = asyncio.Event()
 
     def stop(self) -> None:
         self._stopped = True
         self._stop_event.set()
 
     async def run(self) -> None:
+        self.started.set()
         while not self._stopped and not self._stop_event.is_set():
             try:
                 processed = await self.process_once()
@@ -108,7 +114,10 @@ class BatchCompletionOutboxWorker:
 
     async def _process_record(self, record: BatchCompletionOutboxRecord) -> None:
         payload = dict(record.payload_json or {})
-        heartbeat_task = self._start_heartbeat(record.completion_id)
+        native_fence = (
+            {"attempt_count": record.attempt_count} if "native_accounting" in payload else {}
+        )
+        heartbeat_task = self._start_heartbeat(record.completion_id, **native_fence)
         try:
             delivered = await self._record_durable_success(record, payload)
         except Exception as exc:
@@ -124,6 +133,7 @@ class BatchCompletionOutboxWorker:
                     record.completion_id,
                     worker_id=self.config.worker_id,
                     error=str(exc),
+                    **native_fence,
                 )
                 if not updated:
                     logger.info(
@@ -141,13 +151,17 @@ class BatchCompletionOutboxWorker:
                 return
             retry_seconds = min(
                 self.config.retry_max_seconds,
-                max(self.config.retry_initial_seconds, self.config.retry_initial_seconds * max(1, record.attempt_count)),
+                max(
+                    self.config.retry_initial_seconds,
+                    self.config.retry_initial_seconds * max(1, record.attempt_count),
+                ),
             )
             updated = await self.repository.mark_completion_outbox_retry(
                 record.completion_id,
                 worker_id=self.config.worker_id,
                 error=str(exc),
                 next_attempt_at=datetime.now(tz=UTC) + timedelta(seconds=retry_seconds),
+                **native_fence,
             )
             if not updated:
                 logger.info(
@@ -161,7 +175,11 @@ class BatchCompletionOutboxWorker:
         if delivered:
             self._publish_metrics(payload)
 
-    async def _record_durable_success(self, record: BatchCompletionOutboxRecord, payload: dict[str, Any]) -> bool:
+    async def _record_durable_success(
+        self, record: BatchCompletionOutboxRecord, payload: dict[str, Any]
+    ) -> bool:
+        if "native_accounting" in payload:
+            return await self._native_delivery.deliver(record, worker_id=self.config.worker_id)
         db = getattr(self.repository, "prisma", None)
         spend_tracking_service = getattr(self.app.state, "spend_tracking_service", None)
         if db is not None and hasattr(db, "tx"):
@@ -171,7 +189,8 @@ class BatchCompletionOutboxWorker:
                     repository=tx_repository,
                     spend_tracking_service=(
                         spend_tracking_service.with_db(tx)
-                        if spend_tracking_service is not None and hasattr(spend_tracking_service, "with_db")
+                        if spend_tracking_service is not None
+                        and hasattr(spend_tracking_service, "with_db")
                         else SpendTrackingService(tx)
                     ),
                     record=record,
@@ -219,12 +238,16 @@ class BatchCompletionOutboxWorker:
             spend_metadata.update(pricing_metadata)
             outcome = await service.log_spend_once(
                 event_id=record.completion_id,
-                request_id=str(payload.get("request_id") or f"batch:{record.batch_id}:{record.item_id}"),
+                request_id=str(
+                    payload.get("request_id") or f"batch:{record.batch_id}:{record.item_id}"
+                ),
                 api_key=api_key,
                 user_id=str(payload.get("user_id")) if payload.get("user_id") is not None else None,
                 team_id=str(payload.get("team_id")) if payload.get("team_id") is not None else None,
                 organization_id=(
-                    str(payload.get("organization_id")) if payload.get("organization_id") is not None else None
+                    str(payload.get("organization_id"))
+                    if payload.get("organization_id") is not None
+                    else None
                 ),
                 owner_account_id=(
                     str(payload.get("owner_account_id"))
@@ -249,8 +272,13 @@ class BatchCompletionOutboxWorker:
             worker_id=self.config.worker_id,
         )
 
-    def _start_heartbeat(self, completion_id: str) -> asyncio.Task[None]:
-        return asyncio.create_task(self._heartbeat_loop(completion_id))
+    def _start_heartbeat(
+        self,
+        completion_id: str,
+        *,
+        attempt_count: int | None = None,
+    ) -> asyncio.Task[None]:
+        return asyncio.create_task(self._heartbeat_loop(completion_id, attempt_count=attempt_count))
 
     async def _stop_heartbeat(self, task: asyncio.Task[None]) -> None:
         task.cancel()
@@ -259,8 +287,15 @@ class BatchCompletionOutboxWorker:
         except asyncio.CancelledError:
             pass
 
-    async def _heartbeat_loop(self, completion_id: str) -> None:
-        interval_seconds = max(0.1, min(self.config.heartbeat_interval_seconds, self.config.lease_seconds / 2))
+    async def _heartbeat_loop(
+        self,
+        completion_id: str,
+        *,
+        attempt_count: int | None = None,
+    ) -> None:
+        interval_seconds = max(
+            0.1, min(self.config.heartbeat_interval_seconds, self.config.lease_seconds / 2)
+        )
         while True:
             await asyncio.sleep(interval_seconds)
             try:
@@ -268,6 +303,7 @@ class BatchCompletionOutboxWorker:
                     completion_id=completion_id,
                     worker_id=self.config.worker_id,
                     lease_seconds=self.config.lease_seconds,
+                    **({"attempt_count": attempt_count} if attempt_count is not None else {}),
                 )
             except Exception as exc:
                 logger.warning(

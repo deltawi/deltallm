@@ -8,13 +8,14 @@ from uuid import uuid4
 import logging
 
 from src.billing.realtime_charge import RealtimeAttribution, RealtimeChargeContext
+from src.billing.realtime_accounting_bounds import realtime_cost_bounds
+from src.billing.realtime_billing import RealtimeBilling
 from src.billing.realtime_usage import RealtimeDurationUsage, realtime_usage_receipt
 from src.metrics.realtime import record_receipt
 from src.metrics import increment_router_health_update_failure
 from src.models.errors import ServiceUnavailableError
 from src.providers.openai_realtime import successful_realtime_terminal
 from src.router.candidates import AttemptPermit
-from src.db.realtime_billing import RealtimeBillingRepository
 from src.realtime.capacity import RealtimeCapacity, RealtimeLeases
 from src.realtime.config import RealtimeSettings
 from src.realtime.contracts import AdmittedRealtime, RealtimeRequest, TextSocket
@@ -32,7 +33,7 @@ class RealtimeAdmissionService:
         self,
         *,
         routing: RealtimeRouting,
-        billing: RealtimeBillingRepository,
+        billing: RealtimeBilling,
         capacity: RealtimeCapacity,
         keys: KeyService,
         settings: RealtimeSettings,
@@ -76,6 +77,17 @@ class RealtimeAdmissionService:
             route.provider_prices,
             datetime.now(UTC),
         )
+        if self.billing.requires_cost_bounds:
+            context = replace(
+                context,
+                cost_bounds=realtime_cost_bounds(
+                    route.deployment.model_info,
+                    transcription=request.profile == "transcription",
+                    duration=route.usage_type == "duration",
+                    max_output_tokens=self.settings.max_output_tokens,
+                    max_input_bytes=self.settings.max_input_bytes,
+                ),
+            )
         await self.billing.check_owner(context)
         leases = await self.capacity.acquire(auth, route)
         permit = RealtimeSessionPermit(self, request, route, context, leases)
@@ -118,6 +130,7 @@ class RealtimeSessionPermit:
         self.expires_at = context.started_at + timedelta(
             seconds=owner.settings.session_seconds + 30
         )
+        self.turn_expires_at = self.expires_at
 
     async def prepare_upstream(self, upstream: TextSocket) -> TextSocket:
         return await prepare_session(
@@ -125,6 +138,8 @@ class RealtimeSessionPermit:
             target=self.route.target,
             limits=self.owner.settings.transport_limits(),
             max_output_tokens=self.owner.settings.max_output_tokens,
+            duration_pcm=self.context.cost_bounds is not None
+            and self.context.cost_bounds.input_seconds is not None,
         )
 
     def authorize_client_event(self, event: Mapping[str, object]) -> None:
@@ -133,6 +148,9 @@ class RealtimeSessionPermit:
             event,
             profile=self.request.profile,
             max_output_tokens=self.owner.settings.max_output_tokens,
+            duration_pcm=self.context.cost_bounds is not None
+            and self.context.cost_bounds.input_seconds is not None,
+            transcription_model=self.route.target.upstream_model,
         )
         if self.request.profile == "transcription":
             if self.committed and event.get("type") in {
@@ -162,8 +180,14 @@ class RealtimeSessionPermit:
             self.provider_permit = await self.leases.turn(self.request.auth)
             try:
                 operation_id = str(uuid4())
+                lifetime = self.owner.billing.terminal_lifetime
+                self.turn_expires_at = (
+                    self.expires_at
+                    if lifetime is None
+                    else min(self.expires_at, datetime.now(UTC) + lifetime)
+                )
                 await self.owner.billing.dispatch(
-                    operation_id, self.context, expires_at=self.expires_at
+                    operation_id, self.context, expires_at=self.turn_expires_at
                 )
                 self.current = operation_id
                 self.turns += 1
@@ -223,6 +247,21 @@ class RealtimeSessionPermit:
 
     async def check_health(self) -> None:
         self.owner.require_ready()
+        margin = (
+            self.owner.settings.cleanup_seconds
+            + self.owner.settings.write_seconds
+            + (self.owner.settings.health_seconds)
+        )
+        if (
+            self.current is not None
+            and self.owner.billing.terminal_lifetime is not None
+            and (datetime.now(UTC) + timedelta(seconds=margin) >= self.turn_expires_at)
+        ):
+            raise RealtimeError(
+                "turn_deadline_exceeded",
+                "Realtime turn reached its accounting deadline",
+                close_code=1013,
+            )
         auth = await self.owner.keys.get_auth_by_token_hash(self.request.auth.api_key)
         self.request = replace(self.request, auth=auth)
         self.owner.check_guardrails(self.request)

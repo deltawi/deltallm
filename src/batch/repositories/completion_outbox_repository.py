@@ -7,6 +7,13 @@ from uuid import uuid4
 
 from src.batch.models import BatchCompletionOutboxCreate, BatchCompletionOutboxRecord
 from src.batch.selector_identity import batch_selector_operation_id
+from src.batch.repositories.completion_outbox_fences import (
+    SENT_SQL,
+    RETRY_SQL,
+    FAILED_SQL,
+    RENEW_SQL,
+    execute_completion_transition,
+)
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -168,27 +175,21 @@ class BatchCompletionOutboxRepository:
         )
         return [_record_from_row(dict(row)) for row in rows]
 
-    async def mark_sent(self, completion_id: str, *, worker_id: str) -> bool:
+    async def mark_sent(
+        self,
+        completion_id: str,
+        *,
+        worker_id: str,
+        attempt_count: int | None = None,
+    ) -> bool:
         if self.prisma is None:
             return False
-        rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_batch_completion_outbox
-            SET status = 'sent',
-                last_error = NULL,
-                locked_by = NULL,
-                lease_expires_at = NULL,
-                processed_at = NOW(),
-                updated_at = NOW()
-            WHERE completion_id = $1
-              AND status = 'processing'
-              AND locked_by = $2
-            RETURNING completion_id
-            """,
-            completion_id,
-            worker_id,
+        return await execute_completion_transition(
+            self.prisma,
+            SENT_SQL,
+            (completion_id, worker_id, attempt_count),
+            attempt_count=attempt_count,
         )
-        return bool(rows)
 
     async def mark_retry(
         self,
@@ -197,70 +198,50 @@ class BatchCompletionOutboxRepository:
         worker_id: str,
         error: str,
         next_attempt_at: datetime,
+        attempt_count: int | None = None,
     ) -> bool:
         if self.prisma is None:
             return False
-        rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_batch_completion_outbox
-            SET status = 'retrying',
-                last_error = $2,
-                next_attempt_at = $3::timestamptz,
-                locked_by = NULL,
-                lease_expires_at = NULL,
-                updated_at = NOW()
-            WHERE completion_id = $1
-              AND status = 'processing'
-              AND locked_by = $4
-            RETURNING completion_id
-            """,
-            completion_id,
-            error[:4000],
-            next_attempt_at,
-            worker_id,
+        return await execute_completion_transition(
+            self.prisma,
+            RETRY_SQL,
+            (completion_id, error[:4000], next_attempt_at, worker_id, attempt_count),
+            attempt_count=attempt_count,
         )
-        return bool(rows)
 
-    async def mark_failed(self, completion_id: str, *, worker_id: str, error: str) -> bool:
+    async def mark_failed(
+        self,
+        completion_id: str,
+        *,
+        worker_id: str,
+        error: str,
+        attempt_count: int | None = None,
+    ) -> bool:
         if self.prisma is None:
             return False
-        rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_batch_completion_outbox
-            SET status = 'failed',
-                last_error = $2,
-                locked_by = NULL,
-                lease_expires_at = NULL,
-                updated_at = NOW()
-            WHERE completion_id = $1
-              AND status = 'processing'
-              AND locked_by = $3
-            RETURNING completion_id
-            """,
-            completion_id,
-            error[:4000],
-            worker_id,
+        return await execute_completion_transition(
+            self.prisma,
+            FAILED_SQL,
+            (completion_id, error[:4000], worker_id, attempt_count),
+            attempt_count=attempt_count,
         )
-        return bool(rows)
 
-    async def renew_lease(self, completion_id: str, *, worker_id: str, lease_seconds: int) -> bool:
+    async def renew_lease(
+        self,
+        completion_id: str,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+        attempt_count: int | None = None,
+    ) -> bool:
         if self.prisma is None:
             return False
-        rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_batch_completion_outbox
-            SET lease_expires_at = NOW() + ($3 || ' seconds')::interval,
-                updated_at = NOW()
-            WHERE completion_id = $1
-              AND status = 'processing'
-              AND locked_by = $2
-            RETURNING completion_id
-            """,
-            completion_id,
-            worker_id,
-            max(1, lease_seconds),
+        return await execute_completion_transition(
+            self.prisma,
+            RENEW_SQL,
+            (completion_id, worker_id, max(1, lease_seconds), attempt_count),
+            attempt_count=attempt_count,
         )
-        return bool(rows)
 
     async def list_by_item_ids(self, item_ids: list[str]) -> list[BatchCompletionOutboxRecord]:
         if self.prisma is None or not item_ids:

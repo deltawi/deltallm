@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, feature/org-tiers, feature/issue-304-model-router]
+    branches: [main, master, feature/org-tiers, feature/issue-304-model-router, feature/issue-320-concurrency]
   pull_request:
-    branches: [main, master, feature/org-tiers, feature/issue-304-model-router]
+    branches: [main, master, feature/org-tiers, feature/issue-304-model-router, feature/issue-320-concurrency]
 
 permissions:
   contents: read
@@ -73,9 +73,13 @@ jobs:
           --durations=25 --durations-min=0.5
 
   postgres-tests:
-    name: Python tests (postgres)
+    name: Python tests (postgres ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     services:
       postgres:
         image: postgres:15
@@ -142,7 +146,8 @@ jobs:
           DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
         run: >-
           uv run pytest -q -m postgres
-          --durations=25 --durations-min=0.5
+          --postgres-shard=${{ matrix.shard }}/2
+          --tb=short --durations=25 --durations-min=0.5
 
   redis-tests:
     name: Python tests (redis)
@@ -161,6 +166,30 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
+      redis-critical-memory:
+        image: redis:7
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6380:6379
+      redis-cache-memory:
+        image: redis:7
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6381:6379
     steps:
       - uses: actions/checkout@v4
 
@@ -182,6 +211,8 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379/0
           DELTALLM_TEST_REDIS_URL: redis://localhost:6379/0
+          DELTALLM_TEST_REDIS_CRITICAL_MEMORY_URL: redis://localhost:6380/0
+          DELTALLM_TEST_REDIS_CACHE_MEMORY_URL: redis://localhost:6381/0
         run: >-
           uv run pytest -q -m redis -rs
           --durations=25 --durations-min=0.5
@@ -284,27 +315,63 @@ jobs:
             > /dev/null
           helm lint deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
+            --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             --set runtime.database.url="${VALID_DATABASE_URL}" \
             --set runtime.redis.url="${VALID_REDIS_URL}"
           helm template deltallm deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
+            --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             --set runtime.database.url="${VALID_DATABASE_URL}" \
             --set runtime.redis.url="${VALID_REDIS_URL}" \
             > /dev/null
+          for replicas in 2 3 4; do
+            helm lint deploy/kubernetes/helm \
+              -f deploy/kubernetes/helm/values-production.yaml \
+              -f deploy/kubernetes/helm/values-capacity-experiment.yaml \
+              -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
+              --set replicaCount="$replicas" \
+              --set image.tag=ci-validation \
+              --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+              --set secret.values.saltKey="${VALID_SALT_KEY}" \
+              --set runtime.database.url="${VALID_DATABASE_URL}" \
+              --set runtime.redis.url="${VALID_REDIS_URL}"
+            helm template deltallm deploy/kubernetes/helm \
+              -f deploy/kubernetes/helm/values-production.yaml \
+              -f deploy/kubernetes/helm/values-capacity-experiment.yaml \
+              -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
+              --set replicaCount="$replicas" \
+              --set image.tag=ci-validation \
+              --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+              --set secret.values.saltKey="${VALID_SALT_KEY}" \
+              --set runtime.database.url="${VALID_DATABASE_URL}" \
+              --set runtime.redis.url="${VALID_REDIS_URL}" \
+              > /dev/null
+          done
+
+      - name: Verify effective profile documentation
+        run: uv run python scripts/render_capacity_profiles.py --check
 
       - name: Run Helm tests
         run: >-
           uv run pytest -q -m helm -rs
           --durations=25 --durations-min=0.5
 
+  lifecycle-acceptance:
+    uses: ./.github/workflows/lifecycle-acceptance.yml
+
+  capacity-acceptance:
+    uses: ./.github/workflows/capacity-acceptance.yml
+
   test:
     name: test
     if: ${{ always() }}
-    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm]
+    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm, lifecycle-acceptance, capacity-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -315,8 +382,10 @@ jobs:
           REDIS: ${{ needs.redis-tests.result }}
           MIGRATIONS: ${{ needs.migration-paths.result }}
           HELM: ${{ needs.helm.result }}
+          LIFECYCLE: ${{ needs.lifecycle-acceptance.result }}
+          CAPACITY: ${{ needs.capacity-acceptance.result }}
         run: |
-          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM"; do
+          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM" "$LIFECYCLE" "$CAPACITY"; do
             if [ "$result" != success ]; then
               echo "Required test job finished with status: $result"
               exit 1

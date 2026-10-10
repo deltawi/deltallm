@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
+from prisma.errors import RawQueryError
 
 from src.db.managed_assets import ManagedAssetAudienceNotFoundError
 from src.middleware.errors import (
@@ -18,6 +19,41 @@ from src.models.errors import (
     RateLimitError,
     ServiceUnavailableError,
 )
+
+
+@pytest.mark.parametrize(
+    "code,message,expected",
+    [
+        ("55000", "accounting_budget_policy_requires_drain", 409),
+        ("55000", "secret internal failure", 500),
+        ("P0001", "accounting_budget_policy_requires_drain", 500),
+        ("P0001", "accounting_budget_policy_below_debits", 409),
+        ("55000", "accounting_budget_policy_below_debits", 500),
+    ],
+)
+async def test_only_known_budget_policy_conflicts_are_exposed(code, message, expected):
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.put("/ui/api/organizations/org")
+    async def edit():
+        raise RawQueryError(
+            {
+                "user_facing_error": {
+                    "error_code": "P2010",
+                    "meta": {"code": code, "message": message},
+                }
+            }
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.put("/ui/api/organizations/org")
+    assert response.status_code == expected
+    assert "secret internal failure" not in response.text
+    if expected == 409:
+        assert response.json()["code"] == message.removeprefix("accounting_")
 
 
 def test_provider_failure_classification_is_not_serialized() -> None:
@@ -120,6 +156,4 @@ async def test_missing_managed_asset_audience_is_a_client_validation_error() -> 
         response = await client.post("/access")
 
     assert response.status_code == 400
-    assert response.json() == {
-        "detail": "Selected team audience does not exist: missing-team"
-    }
+    assert response.json() == {"detail": "Selected team audience does not exist: missing-team"}

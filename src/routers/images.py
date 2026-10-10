@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from src.billing.cost import compute_billing_result
-from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
+from src.billing.tier_pricing import attach_pricing_metadata
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
@@ -39,7 +39,12 @@ from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.provider_request_bounds import validated_provider_request_bounds
+from src.telemetry.spend_operation import (
+    billing_write_context,
+    durable_provider_call,
+    operation_pricing,
+)
 from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
@@ -161,9 +166,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         ),
         callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
         creator_model_access_snapshot=routing_runtime.creator_model_access_snapshot,
-        creator_route_group_access_snapshot=(
-            routing_runtime.creator_route_group_access_snapshot
-        ),
+        creator_route_group_access_snapshot=(routing_runtime.creator_route_group_access_snapshot),
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),
@@ -179,9 +182,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         await release_preflight_capacity(request)
         raise
 
-    callback_manager: CallbackManager = getattr(
-        request.app.state, "callback_manager", CallbackManager()
-    )
+    callback_manager: CallbackManager = request.app.state.callback_manager
     try:
         await check_and_acquire_rate_limits_for_payload(
             request,
@@ -217,7 +218,14 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
-            execute=lambda dep: _execute_image_generation(request, payload, dep),
+            execute=lambda dep: durable_provider_call(
+                request,
+                model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
+                call_type="image_generation",
+                deployment=dep,
+                execute=lambda: _execute_image_generation(request, payload, dep),
+            ),
             return_deployment=True,
             on_attempt=track_attempt,
             routing_context=request_context,
@@ -244,12 +252,11 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             mode="image_generation",
             usage=usage,
         )
-        pricing = resolve_deployment_tier_pricing(
+        pricing = operation_pricing(
+            request,
             auth=auth,
             model=payload.model,
             deployment=served_deployment,
-            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-            mode="sync",
         )
         billing = compute_billing_result(
             mode="image_generation",
@@ -284,7 +291,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_spend(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -293,6 +300,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 usage=usage,
                 cost=request_cost,
@@ -396,7 +404,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -405,6 +413,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 metadata=attach_route_decision(
                     {
@@ -457,7 +466,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -466,6 +475,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 metadata=attach_route_decision(
                     {

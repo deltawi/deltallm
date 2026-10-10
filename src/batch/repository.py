@@ -322,8 +322,12 @@ class BatchRepository:
             scheduler_mode=scheduler_mode,
         )
 
-    async def claim_next_finalization(self, *, worker_id: str, lease_seconds: int = 30) -> BatchJobRecord | None:
-        return await self.jobs.claim_next_finalization(worker_id=worker_id, lease_seconds=lease_seconds)
+    async def claim_next_finalization(
+        self, *, worker_id: str, lease_seconds: int = 30
+    ) -> BatchJobRecord | None:
+        return await self.jobs.claim_next_finalization(
+            worker_id=worker_id, lease_seconds=lease_seconds
+        )
 
     async def claim_next_work(
         self,
@@ -700,7 +704,9 @@ class BatchRepository:
         return records
 
     async def renew_job_lease(self, *, batch_id: str, worker_id: str, lease_seconds: int) -> bool:
-        return await self.jobs.renew_job_lease(batch_id=batch_id, worker_id=worker_id, lease_seconds=lease_seconds)
+        return await self.jobs.renew_job_lease(
+            batch_id=batch_id, worker_id=worker_id, lease_seconds=lease_seconds
+        )
 
     async def reschedule_finalization(
         self,
@@ -754,7 +760,9 @@ class BatchRepository:
             item_claim_epochs=item_claim_epochs,
         )
 
-    async def enqueue_completion_outbox_many(self, records: list[BatchCompletionOutboxCreate]) -> list[str]:
+    async def enqueue_completion_outbox_many(
+        self, records: list[BatchCompletionOutboxCreate]
+    ) -> list[str]:
         return await self.completion_outbox.enqueue_many(records)
 
     async def claim_completion_outbox_due(
@@ -770,8 +778,18 @@ class BatchRepository:
             limit=limit,
         )
 
-    async def mark_completion_outbox_sent(self, completion_id: str, *, worker_id: str) -> bool:
-        return await self.completion_outbox.mark_sent(completion_id, worker_id=worker_id)
+    async def mark_completion_outbox_sent(
+        self,
+        completion_id: str,
+        *,
+        worker_id: str,
+        attempt_count: int | None = None,
+    ) -> bool:
+        return await self.completion_outbox.mark_sent(
+            completion_id,
+            worker_id=worker_id,
+            attempt_count=attempt_count,
+        )
 
     async def mark_completion_outbox_retry(
         self,
@@ -780,25 +798,49 @@ class BatchRepository:
         worker_id: str,
         error: str,
         next_attempt_at: datetime,
+        attempt_count: int | None = None,
     ) -> bool:
         return await self.completion_outbox.mark_retry(
             completion_id,
             worker_id=worker_id,
             error=error,
             next_attempt_at=next_attempt_at,
+            attempt_count=attempt_count,
         )
 
-    async def mark_completion_outbox_failed(self, completion_id: str, *, worker_id: str, error: str) -> bool:
-        return await self.completion_outbox.mark_failed(completion_id, worker_id=worker_id, error=error)
+    async def mark_completion_outbox_failed(
+        self,
+        completion_id: str,
+        *,
+        worker_id: str,
+        error: str,
+        attempt_count: int | None = None,
+    ) -> bool:
+        return await self.completion_outbox.mark_failed(
+            completion_id,
+            worker_id=worker_id,
+            error=error,
+            attempt_count=attempt_count,
+        )
 
-    async def renew_completion_outbox_lease(self, *, completion_id: str, worker_id: str, lease_seconds: int) -> bool:
+    async def renew_completion_outbox_lease(
+        self,
+        *,
+        completion_id: str,
+        worker_id: str,
+        lease_seconds: int,
+        attempt_count: int | None = None,
+    ) -> bool:
         return await self.completion_outbox.renew_lease(
             completion_id,
             worker_id=worker_id,
             lease_seconds=lease_seconds,
+            attempt_count=attempt_count,
         )
 
-    async def list_completion_outbox_by_item_ids(self, item_ids: list[str]) -> list[BatchCompletionOutboxRecord]:
+    async def list_completion_outbox_by_item_ids(
+        self, item_ids: list[str]
+    ) -> list[BatchCompletionOutboxRecord]:
         return await self.completion_outbox.list_by_item_ids(item_ids)
 
     async def count_pending_completion_outbox(self) -> int:
@@ -866,9 +908,7 @@ class BatchRepository:
         *,
         batch_ids: list[str],
     ) -> int:
-        return await self.webhook_outbox.backfill_missing_ownership_for_batches(
-            batch_ids=batch_ids
-        )
+        return await self.webhook_outbox.backfill_missing_ownership_for_batches(batch_ids=batch_ids)
 
     async def replay_failed_webhook_outbox(
         self,
@@ -1194,15 +1234,13 @@ class BatchRepository:
         elif self.prisma is not None and hasattr(self.prisma, "tx"):
             async with self.prisma.tx() as tx:
                 transactional_repository = self.with_prisma(tx)
-                finalized = (
-                    await transactional_repository._attach_artifacts_and_enqueue_webhook_in_current_transaction(
-                        batch_id=batch_id,
-                        output_file_id=output_file_id,
-                        error_file_id=error_file_id,
-                        final_status=normalized_final_status,
-                        worker_id=worker_id,
-                        terminal_provider_error=terminal_provider_error,
-                    )
+                finalized = await transactional_repository._attach_artifacts_and_enqueue_webhook_in_current_transaction(
+                    batch_id=batch_id,
+                    output_file_id=output_file_id,
+                    error_file_id=error_file_id,
+                    final_status=normalized_final_status,
+                    worker_id=worker_id,
+                    terminal_provider_error=terminal_provider_error,
                 )
         else:
             existing = await self.get_job(batch_id)
@@ -1267,7 +1305,9 @@ class BatchRepository:
         if not items:
             return "completed"
 
-        async def _run_in_current_repo(repo: BatchRepository) -> Literal["completed", "already_completed", "not_owned"]:
+        async def _run_in_current_repo(
+            repo: BatchRepository,
+        ) -> Literal["completed", "already_completed", "not_owned"]:
             updated = await repo.mark_items_completed_bulk(
                 items=[
                     {
@@ -1302,7 +1342,9 @@ class BatchRepository:
             item_ids = [str(item["item_id"]) for item in items]
             existing_items = await repo.list_items_by_ids(item_ids)
             existing_outbox = await repo.list_completion_outbox_by_item_ids(item_ids)
-            completed_item_ids = {item.item_id for item in existing_items if item.status == "completed"}
+            completed_item_ids = {
+                item.item_id for item in existing_items if item.status == "completed"
+            }
             outbox_item_ids = {record.item_id for record in existing_outbox}
             if completed_item_ids == set(item_ids) and outbox_item_ids == set(item_ids):
                 return "already_completed"
@@ -1314,7 +1356,9 @@ class BatchRepository:
                 return await _run_in_current_repo(self.with_prisma(tx))
         return await _run_in_current_repo(self)
 
-    async def set_provider_error(self, *, batch_id: str, provider_error: str | None) -> BatchJobRecord | None:
+    async def set_provider_error(
+        self, *, batch_id: str, provider_error: str | None
+    ) -> BatchJobRecord | None:
         return await self.jobs.set_provider_error(batch_id=batch_id, provider_error=provider_error)
 
     async def cleanup_next_expired_terminal_job(self, *, now: datetime) -> bool:
@@ -1327,12 +1371,8 @@ class BatchRepository:
             )
             if not batch_ids:
                 return 0
-            await repo.webhook_outbox.backfill_missing_ownership_for_batches(
-                batch_ids=batch_ids
-            )
-            await repo.webhook_outbox.assert_ownership_matches_jobs_for_batches(
-                batch_ids=batch_ids
-            )
+            await repo.webhook_outbox.backfill_missing_ownership_for_batches(batch_ids=batch_ids)
+            await repo.webhook_outbox.assert_ownership_matches_jobs_for_batches(batch_ids=batch_ids)
             deleted = await repo.maintenance.delete_job_metadata(batch_ids[0])
             return int(deleted)
 
@@ -1382,7 +1422,9 @@ class BatchRepository:
             max_rows_per_run=max_rows_per_run,
         )
 
-    async def list_expired_unreferenced_files(self, *, now: datetime, limit: int = 100) -> list[BatchFileRecord]:
+    async def list_expired_unreferenced_files(
+        self, *, now: datetime, limit: int = 100
+    ) -> list[BatchFileRecord]:
         return await self.files.list_expired_unreferenced_files(now=now, limit=limit)
 
     async def delete_file(self, file_id: str) -> None:

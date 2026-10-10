@@ -29,6 +29,14 @@ class BoundedCapacityGate:
     def waiters(self) -> int:
         return self._waiters
 
+    @property
+    def concurrency(self) -> int:
+        return self._concurrency
+
+    @property
+    def max_waiters(self) -> int:
+        return self._max_waiters
+
     async def acquire(self, *, timeout_seconds: float) -> None:
         async with self._condition:
             if self._active >= self._concurrency:

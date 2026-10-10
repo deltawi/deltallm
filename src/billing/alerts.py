@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from src.audit.actions import AuditAction
-from src.metrics import increment_notification_enqueue
 from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.types import NotificationMessage
-from src.services.notification_recipients import NotificationRecipientResolver
+from src.services.notification_recipients import (
+    NotificationRecipientResolver,
+    NotificationRecipients,
+)
 
-logger = logging.getLogger(__name__)
 
-
-@dataclass
-class AlertConfig:
-    budget_alert_ttl: int = 3600
+@dataclass(frozen=True)
+class PreparedBudgetAlert:
+    message: NotificationMessage
+    recipients: NotificationRecipients
 
 
 class AlertService:
@@ -25,17 +25,15 @@ class AlertService:
     def __init__(
         self,
         *,
-        config: AlertConfig | None = None,
         dispatcher: NotificationDispatcher,
         recipient_resolver: NotificationRecipientResolver | None = None,
         config_getter=None,  # noqa: ANN001
     ) -> None:
-        self.config = config or AlertConfig()
         self.dispatcher = dispatcher
         self.recipient_resolver = recipient_resolver
         self._config_getter = config_getter
 
-    async def send_budget_alert(
+    async def prepare_budget_alert(
         self,
         *,
         entity_type: str,
@@ -43,75 +41,57 @@ class AlertService:
         current_spend: float,
         soft_budget: float | None,
         hard_budget: float | None,
-    ) -> None:
-        if not self._budget_notifications_enabled():
-            return
+    ) -> PreparedBudgetAlert:
         if self.recipient_resolver is None:
-            return
+            raise RuntimeError("budget notification recipient resolver is unavailable")
+        percentage = (
+            (current_spend / hard_budget * 100.0) if hard_budget and hard_budget > 0 else 0.0
+        )
+        base_payload = {
+            "type": "budget_alert",
+            "timestamp": datetime.now(tz=UTC).isoformat(),
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "current_spend": float(current_spend),
+            "soft_budget": float(soft_budget) if soft_budget is not None else None,
+            "hard_budget": float(hard_budget) if hard_budget is not None else None,
+            "percentage": percentage,
+        }
+        recipients = await self.recipient_resolver.resolve_budget_recipients(
+            entity_type=entity_type, entity_id=entity_id
+        )
+        message = NotificationMessage(
+            alert_type="budget_threshold",
+            metric_kind="budget_threshold",
+            payload={
+                **base_payload,
+                "instance_name": self._instance_name(),
+                "recipient_policy": recipients.policy,
+                "team_id": recipients.team_id,
+                "organization_id": recipients.organization_id,
+                "owner_account_id": recipients.owner_account_id,
+            },
+        )
+        return PreparedBudgetAlert(message=message, recipients=recipients)
 
-        # Claim the shared dedupe slot before any recipient DB query so a
-        # throttled alert does no extra work.
-        alert_key = self._alert_key("budget", entity_type=entity_type, entity_id=entity_id)
-        claim = await self.dispatcher.try_claim(alert_key)
-        if claim != "claimed":
-            status = "throttled" if claim == "held" else "dedupe_unavailable"
-            increment_notification_enqueue(kind="budget_threshold", channel="all", status=status)
-            return
+    async def dispatch_prepared_budget_alert(
+        self,
+        prepared: PreparedBudgetAlert,
+        *,
+        entity_type: str,
+        entity_id: str,
+    ) -> bool:
+        return await self.dispatcher.dispatch(
+            message=prepared.message,
+            recipients=prepared.recipients,
+            audit_action=AuditAction.SYSTEM_BUDGET_NOTIFICATION_ENQUEUE.value,
+            resource_type=entity_type,
+            resource_id=entity_id,
+            organization_id=prepared.recipients.organization_id,
+        )
 
-        # A notification failure must never surface to the inference request that
-        # triggered the budget check, so the whole send is isolated here.
-        organization_id: str | None = None
-        try:
-            percentage = (current_spend / hard_budget * 100.0) if hard_budget and hard_budget > 0 else 0.0
-            base_payload = {
-                "type": "budget_alert",
-                "timestamp": datetime.now(tz=UTC).isoformat(),
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "current_spend": float(current_spend),
-                "soft_budget": float(soft_budget) if soft_budget is not None else None,
-                "hard_budget": float(hard_budget) if hard_budget is not None else None,
-                "percentage": percentage,
-            }
-            recipients = await self.recipient_resolver.resolve_budget_recipients(
-                entity_type=entity_type, entity_id=entity_id
-            )
-            organization_id = recipients.organization_id
-            message = NotificationMessage(
-                alert_type="budget_threshold",
-                metric_kind="budget_threshold",
-                payload={
-                    **base_payload,
-                    "instance_name": self._instance_name(),
-                    "recipient_policy": recipients.policy,
-                    "team_id": recipients.team_id,
-                    "organization_id": recipients.organization_id,
-                    "owner_account_id": recipients.owner_account_id,
-                },
-            )
-            any_delivered = await self.dispatcher.dispatch(
-                message=message,
-                recipients=recipients,
-                audit_action=AuditAction.SYSTEM_BUDGET_NOTIFICATION_ENQUEUE.value,
-                resource_type=entity_type,
-                resource_id=entity_id,
-            )
-            if not any_delivered:
-                await self.dispatcher.release(alert_key)
-        except Exception as exc:
-            await self.dispatcher.release(alert_key)
-            logger.warning(
-                "budget notification failed",
-                extra={"entity_type": entity_type, "entity_id": entity_id, "error": str(exc)},
-            )
-            await self.dispatcher.record_error(
-                metric_kind="budget_threshold",
-                audit_action=AuditAction.SYSTEM_BUDGET_NOTIFICATION_ENQUEUE.value,
-                resource_type=entity_type,
-                resource_id=entity_id,
-                organization_id=organization_id,
-                error=str(exc),
-            )
+    def budget_notifications_enabled(self) -> bool:
+        return self._budget_notifications_enabled()
 
     def _budget_notifications_enabled(self) -> bool:
         cfg = self._current_config()
@@ -132,6 +112,3 @@ class AlertService:
         if self._config_getter is None:
             return None
         return self._config_getter()
-
-    def _alert_key(self, alert_type: str, *, entity_type: str, entity_id: str) -> str:
-        return f"alert:{alert_type}:{entity_type}:{entity_id}"

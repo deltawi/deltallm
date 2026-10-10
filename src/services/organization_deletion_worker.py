@@ -68,6 +68,7 @@ class OrganizationDeletionWorker:
         self.lifecycle_authorizer = lifecycle_authorizer
         self._clock = clock
         self._stopped = False
+        self.started = asyncio.Event()
         self._started = False
         self._last_repository_success_at: float | None = None
         self._last_progress_at: float | None = None
@@ -111,6 +112,7 @@ class OrganizationDeletionWorker:
         return self.health_snapshot().fresh
 
     async def run(self) -> None:
+        self.started.set()
         self._started = True
         try:
             while not self._stopped:

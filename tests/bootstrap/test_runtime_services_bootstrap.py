@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.bootstrap.runtime_services import init_runtime_services, shutdown_runtime_services
+from src.config import GeneralSettings, Settings
 
 
 def _runtime_config(
@@ -17,7 +18,7 @@ def _runtime_config(
     tier_policy_refresh_retry_delay_seconds: float = 5.0,
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        general_settings=SimpleNamespace(
+        general_settings=GeneralSettings(
             budget_alert_ttl_seconds=3600,
             tier_policy_mode=tier_policy_mode,
             tier_policy_missing_service_mode=tier_policy_missing_service_mode,
@@ -39,33 +40,37 @@ def _runtime_config(
 
 def _runtime_config_without_tier_policy_settings() -> SimpleNamespace:
     config = _runtime_config()
-    for field_name in (
+    fields = {
         "tier_policy_mode",
         "tier_policy_missing_service_mode",
         "tier_policy_refresh_interval_seconds",
         "tier_policy_refresh_jitter_seconds",
         "tier_policy_transition_grace_seconds",
         "tier_policy_refresh_retry_delay_seconds",
-    ):
-        delattr(config.general_settings, field_name)
+    }
+    config.general_settings = GeneralSettings.model_validate(
+        config.general_settings.model_dump(exclude_unset=True, exclude=fields)
+    )
     return config
 
 
 def _runtime_app(*, settings: SimpleNamespace | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         state=SimpleNamespace(
-            settings=settings,
+            settings=Settings(**vars(settings)) if settings is not None else Settings(),
             prompt_registry_repository="prompt-repo",
             route_group_repository="route-group-repo",
             tier_repository="tier-repo",
             mcp_repository="mcp-repo",
             mcp_scope_policy_repository="mcp-scope-policy-repo",
             redis="redis-client",
+            cache_redis="cache-redis-client",
             http_client="http-client",
             upstream_http_settings="startup-upstream-settings",
             limit_counter="limit-counter",
             cache_backend="cache-backend",
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
         )
     )
 
@@ -86,14 +91,16 @@ def _install_runtime_service_fakes(
     )
 
     class FakeGuardrailRegistry:
-        def __init__(self) -> None:
+        def __init__(self, *, executor) -> None:
+            self.executor = executor
             self.loaded = None
 
         def load_from_config(self, config) -> None:  # noqa: ANN001
             self.loaded = config
 
     class FakeCallbackManager:
-        def __init__(self) -> None:
+        def __init__(self, settings) -> None:
+            self.settings = settings
             self.loaded = None
             self.shutdown_called = False
             created["callback_manager"] = self
@@ -253,7 +260,7 @@ async def test_init_and_shutdown_runtime_services(monkeypatch: pytest.MonkeyPatc
     assert app.state.guardrail_middleware[0] == "guardrail-middleware"
     assert app.state.turn_off_message_logging is True
     assert app.state.alert_service[0] == "alert-service"
-    assert app.state.spend_ledger_service == ("ledger", "db-client")
+    assert app.state.spend_ledger_service == ("ledger", "foreground-db-client")
     assert app.state.budget_service[0] == "budget"
 
     await shutdown_runtime_services(runtime)
@@ -399,3 +406,82 @@ async def test_init_runtime_services_prefers_explicit_config_over_settings_fallb
     assert _status_map(runtime)["tier_policy"] == "disabled"
 
     await shutdown_runtime_services(runtime)
+
+
+@pytest.mark.asyncio
+async def test_budget_worker_start_failure_closes_initialized_runtime(monkeypatch):
+    created = {}
+    _install_runtime_service_fakes(monkeypatch, created)
+    cfg = _runtime_config()
+    cfg.general_settings.budget_notifications_enabled = True
+
+    class FailingWorker:
+        def __init__(self, *args, **kwargs):
+            self.stopped = False
+            created["budget_worker"] = self
+
+        async def start(self):
+            raise RuntimeError("notification table unavailable")
+
+        async def shutdown(self):
+            self.stopped = True
+
+    monkeypatch.setattr("src.bootstrap.runtime_services.BudgetNotificationWorker", FailingWorker)
+    with pytest.raises(RuntimeError, match="notification table unavailable"):
+        await init_runtime_services(_runtime_app(), cfg)
+    assert created["budget_worker"].stopped
+    assert created["governance_invalidation_service"].closed
+    assert created["tier_policy_service"].closed
+    assert created["callback_manager"].shutdown_called
+
+
+@pytest.mark.asyncio
+async def test_notification_and_spend_drains_overlap_before_dependencies_close(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from src.bootstrap.runtime_services import RuntimeServicesRuntime
+
+    notification_entered, spend_entered = asyncio.Event(), asyncio.Event()
+    finished = []
+
+    async def notification_drain():
+        notification_entered.set()
+        await spend_entered.wait()
+        finished.append("notification")
+
+    async def spend_drain():
+        spend_entered.set()
+        await notification_entered.wait()
+        finished.append("spend")
+
+    async def dependency_close():
+        assert set(finished) == {"notification", "spend"}
+
+    runtime = RuntimeServicesRuntime(
+        callback_manager=SimpleNamespace(shutdown=AsyncMock(side_effect=dependency_close)),
+        governance_invalidation_service=SimpleNamespace(
+            close=AsyncMock(side_effect=dependency_close)
+        ),
+        tier_policy_service=None,
+        budget_notification_worker=SimpleNamespace(shutdown=notification_drain),
+        spend_ingestion_service=SimpleNamespace(shutdown=spend_drain),
+        statuses=(),
+    )
+    monkeypatch.setattr("src.bootstrap.runtime_services.close_shared_client", AsyncMock())
+    await asyncio.wait_for(shutdown_runtime_services(runtime), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_mid_bootstrap_failure_closes_owners_created_before_runtime_return(monkeypatch):
+    created = {}
+    _install_runtime_service_fakes(monkeypatch, created)
+
+    def invalid_callback_config(*args, **kwargs):
+        raise RuntimeError("callback configuration rejected")
+
+    monkeypatch.setattr("src.bootstrap.runtime_services.CallbackManager", invalid_callback_config)
+    with pytest.raises(RuntimeError, match="callback configuration rejected"):
+        await init_runtime_services(_runtime_app(), _runtime_config())
+    assert created["governance_invalidation_service"].closed
+    assert created["tier_policy_service"].closed

@@ -43,6 +43,10 @@ general_settings:
 
 Metrics are exposed at `/metrics` in Prometheus format.
 
+Use the [concurrency measurement runbook](../deployment/concurrency-measurement.md)
+to diagnose request-side audit/spend acceptance, authentication, streaming lifetime,
+and event-loop delay, and to reproduce the fixed local-provider workload.
+
 Example scrape config:
 
 ```yaml
@@ -101,6 +105,17 @@ Core metrics include:
 | `deltallm_spend_ingestion_enqueue_total` | Counter | Spend enqueue, duplicate, full, and fallback outcomes |
 | `deltallm_spend_ingestion_batch_size` | Histogram | Spend records committed per worker transaction |
 | `deltallm_spend_ingestion_ledger_rows` | Histogram | Unique ledger rows updated per entity type and spend batch |
+| `deltallm_accounting_queue_depth` | Gauge | Reservation or finalization work waiting behind the active microbatch |
+| `deltallm_accounting_batch_size` | Histogram | Accounting operations committed per PostgreSQL call |
+| `deltallm_accounting_batch_seconds` | Histogram | Reservation and finalization acknowledgement latency by success or error |
+| `deltallm_accounting_reservation_decisions_total` | Counter | Dispatch, replay, budget exhaustion, and capacity exhaustion decisions |
+| `deltallm_accounting_projection_actions_total` | Counter | Recovered reservations, rolled windows, projected events, and iteration failures |
+| `deltallm_accounting_projection_event_lag_seconds` | Histogram | Event age when the compatibility projection completes |
+| `deltallm_accounting_projection_backlog` | Gauge | Durable accounting events beyond their projection checkpoints |
+| `deltallm_accounting_projection_oldest_event_age_seconds` | Gauge | Age of the oldest durable event beyond a projection checkpoint |
+| `deltallm_redis_command_round_trips_total` | Counter | Actual Redis client round trips by allocation, bounded command family, and outcome |
+| `deltallm_redis_command_round_trip_seconds` | Histogram | Redis pool-acquisition and network duration by allocation, bounded command family, and outcome |
+| `deltallm_redis_pipeline_commands` | Histogram | Commands carried in each measured Redis pipeline round trip |
 | `deltallm_tier_policy_shadow_mismatches_total` | Counter | Differences observed while tier policy runs in shadow mode |
 | `deltallm_tier_capacity_requests_total` | Counter | Allowed and denied pool admissions by pool, model, tier, scope, and outcome |
 | `deltallm_tier_capacity_fair_share_decisions_total` | Counter | Advanced fair-share decisions and reasons |

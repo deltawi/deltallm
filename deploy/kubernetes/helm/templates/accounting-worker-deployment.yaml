@@ -1,0 +1,3 @@
+{{- if .Values.accountingWorker.enabled }}
+{{ include "deltallm.accountingRoleDeployment" (dict "root" . "values" .Values.accountingWorker "configTemplate" "deltallm.accountingWorkerConfigYaml" "fullnameTemplate" "deltallm.accountingWorkerFullname" "labelsTemplate" "deltallm.accountingWorkerLabels" "selectorsTemplate" "deltallm.accountingWorkerSelectorLabels" "component" "accounting-worker" "processes" .Values.dependencyCapacity.accountingWorkerProcessesPerPod) }}
+{{- end }}

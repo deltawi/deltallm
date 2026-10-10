@@ -1,0 +1,43 @@
+"""HTTP chat composition; batch execution retains its completion-outbox protocol."""
+
+from typing import Any
+
+from fastapi import Request
+
+from src.chat.executor import OpenedStream, execute_chat, open_stream_with_first_chunk
+from src.models.requests import ChatCompletionRequest
+from src.router.router import Deployment
+from src.router.execution import ProviderAttemptSuccess
+from src.router.usage import normalize_router_usage
+from src.telemetry.provider_request_bounds import validated_provider_request_bounds
+from src.telemetry.spend_operation import durable_provider_call
+
+
+async def execute_durable_chat(
+    request: Request, payload: ChatCompletionRequest, deployment: Deployment
+) -> ProviderAttemptSuccess[tuple[dict[str, Any], float]]:
+    result = await durable_provider_call(
+        request,
+        model=payload.model,
+        bounds=validated_provider_request_bounds(payload),
+        call_type="completion",
+        deployment=deployment,
+        execute=lambda: execute_chat(request, payload, deployment, record_usage=False),
+    )
+    return ProviderAttemptSuccess(
+        value=result,
+        usage_counters=normalize_router_usage(mode="chat", usage=result[0].get("usage")),
+    )
+
+
+async def open_durable_stream(
+    request: Request, payload: ChatCompletionRequest, deployment: Deployment
+) -> OpenedStream:
+    return await durable_provider_call(
+        request,
+        model=payload.model,
+        bounds=validated_provider_request_bounds(payload),
+        call_type="completion",
+        deployment=deployment,
+        execute=lambda: open_stream_with_first_chunk(request, payload, deployment),
+    )

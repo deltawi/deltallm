@@ -285,8 +285,7 @@ class ModelHotReloadManager:
             )
         salt_key = generation.salt_key
 
-        if app_config.deltallm_settings.guardrails:
-            app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
+        app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
 
         app.state.callback_manager.load_from_settings(
             success_callbacks=app_config.deltallm_settings.success_callback,
@@ -386,7 +385,7 @@ class ModelHotReloadManager:
         configure_cache_runtime(
             app,
             app_config=app_config,
-            redis_client=getattr(app.state, "redis", None),
+            redis_client=getattr(app.state, "bulk_redis", None),
             salt_key=salt_key,
         )
 
@@ -697,9 +696,7 @@ class ModelHotReloadManager:
             while self._applied_route_reload < self._requested_route_reload:
                 requested = self._requested_route_reload
                 await self._invalidate_route_group_cache()
-                creator_model_access = getattr(
-                    self.app.state, "creator_model_access_service", None
-                )
+                creator_model_access = getattr(self.app.state, "creator_model_access_service", None)
                 if creator_model_access is not None:
                     await creator_model_access.reload()
                 creator_route_group_access = getattr(
@@ -712,9 +709,7 @@ class ModelHotReloadManager:
                 )
                 if creator_prompt_access is not None:
                     await creator_prompt_access.reload()
-                creator_mcp_access = getattr(
-                    self.app.state, "creator_mcp_access_service", None
-                )
+                creator_mcp_access = getattr(self.app.state, "creator_mcp_access_service", None)
                 if creator_mcp_access is not None:
                     await creator_mcp_access.reload()
                 app_config = self.dynamic_config.get_app_config()
@@ -806,9 +801,7 @@ class ModelHotReloadManager:
             "model_info": dict(deployment.get("model_info", {})),
             "credential_binding_mode": deployment.get("credential_binding_mode"),
             "credential_binding_state": deployment.get("credential_binding_state"),
-            "credential_bound_by_account_id": deployment.get(
-                "credential_bound_by_account_id"
-            ),
+            "credential_bound_by_account_id": deployment.get("credential_bound_by_account_id"),
             "clear_credential_binding": bool(deployment.get("clear_credential_binding", False)),
         }
         signature = inspect.signature(repository.update)

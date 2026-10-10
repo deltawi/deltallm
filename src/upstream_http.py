@@ -5,7 +5,10 @@ from typing import Any
 import httpx
 from httpx._utils import get_environment_proxies
 
+from src.request_deadline import current_request_deadline
+
 from src.providers.error_body import bound_provider_error_response_body
+from src.providers.http_transport import UpstreamHTTPTransport
 
 
 DEFAULT_UPSTREAM_HTTP_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -92,10 +95,25 @@ def build_upstream_http_limits(general_settings: Any) -> httpx.Limits:
     )
 
 
+def environment_proxy_pool_count() -> int:
+    """Count HTTPX proxy transports without exposing proxy URLs or credentials."""
+    return sum(proxy is not None for proxy in get_environment_proxies().values())
+
+
 def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
+    limits = build_upstream_http_limits(general_settings)
+    # An explicit transport disables HTTPX's automatic environment proxy mounts.
+    # Keep its existing parser and NO_PROXY rules, and keep the capacity contract
+    # of one bounded pool for each configured direct/proxy transport.
+    mounts = {
+        pattern: None if proxy is None else UpstreamHTTPTransport(limits=limits, proxy=proxy)
+        for pattern, proxy in get_environment_proxies().items()
+    }
     return httpx.AsyncClient(
         timeout=build_upstream_http_timeout(general_settings),
-        limits=build_upstream_http_limits(general_settings),
+        limits=limits,
+        transport=UpstreamHTTPTransport(limits=limits),
+        mounts=mounts,
         event_hooks={"response": [bound_provider_error_response_body]},
     )
 
@@ -185,7 +203,7 @@ def build_upstream_request_timeout(
             DEFAULT_UPSTREAM_HTTP_READ_TIMEOUT_SECONDS,
         )
     )
-    return httpx.Timeout(
+    timeout = httpx.Timeout(
         connect=float(
             _setting(
                 general_settings,
@@ -211,6 +229,16 @@ def build_upstream_request_timeout(
             )
         ),
     )
+    deadline = current_request_deadline()
+    if deadline is not None:
+        remaining = deadline.require_remaining()
+        return httpx.Timeout(
+            **{
+                phase: min(limit, remaining) if limit is not None else remaining
+                for phase, limit in timeout.as_dict().items()
+            }
+        )
+    return timeout
 
 
 def build_health_check_request_timeout(

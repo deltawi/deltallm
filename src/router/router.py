@@ -372,8 +372,7 @@ class Router:
         )
 
         calls: dict[str, Any] = {
-            "health": self.state.get_health_batch(health_refs),
-            "cooldowns": self.state.get_cooldown_batch(health_refs),
+            "health_and_cooldowns": self.state.get_health_and_cooldown_batch(health_refs),
         }
         if needs_active:
             calls["active"] = self.state.get_active_requests_batch(deployment_ids)
@@ -388,13 +387,14 @@ class Router:
         keys = list(calls)
         values = await asyncio.gather(*(calls[key] for key in keys))
         results = dict(zip(keys, values, strict=True))
+        health, cooldowns = results["health_and_cooldowns"]
         latency = {window_ms: results[f"latency:{window_ms}"] for window_ms in latency_windows}
         snapshot = StrategyStateSnapshot(
             active_requests=results.get("active"),
             usage=results.get("usage"),
             latency_windows=latency or None,
         )
-        return results["health"], results["cooldowns"], snapshot
+        return health, cooldowns, snapshot
 
     @staticmethod
     def _filter_healthy(

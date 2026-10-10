@@ -80,6 +80,7 @@ class OrganizationLifecycleAuthorizer:
         self._generation_refreshed_at = 0.0
         self._last_refresh_error: str | None = "not_initialized"
         self._stop_event = asyncio.Event()
+        self.started = asyncio.Event()
 
     async def initialize(self) -> None:
         await self.refresh_generation()
@@ -102,6 +103,7 @@ class OrganizationLifecycleAuthorizer:
         return self.health_snapshot().fresh
 
     async def run(self) -> None:
+        self.started.set()
         while not self._stop_event.is_set():
             try:
                 await asyncio.wait_for(

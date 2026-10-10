@@ -36,6 +36,7 @@ NEW_MODULES = (
     "batch/chat_lease_lifecycle.py",
     "batch/public_errors.py",
     "router/attempt_capacity.py",
+    "billing/selector_native.py",
 )
 
 
@@ -144,7 +145,8 @@ def test_selector_execution_requires_authenticated_cache_admission_and_shared_ac
         < edge.index("primary = await require_initial_deployment")
     )
     source = (ROOT / "src/router/selection/runtime.py").read_text()
-    assert "AccountedSelectorHop(store=self._billing" in source
+    assert "AccountedSelectorHop(store=billing" in source
+    assert "billing.bind(" in source and "cleanup=cleanup" in source
     assert "ReservedSelectorAdmission(" in source and "CapacityAdmittedSelectorHop(" in source
     bootstrap = (ROOT / "src/bootstrap/selector.py").read_text()
     assert "BillingOperationRecovery(" in bootstrap and "selector_events_only=True" in bootstrap

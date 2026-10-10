@@ -12,6 +12,11 @@ metadata:
   namespace: {{ .Values.prometheus.serviceMonitor.namespace }}
   {{- end }}
 spec:
+  {{- if and .Values.prometheus.serviceMonitor.namespace (ne .Values.prometheus.serviceMonitor.namespace .Release.Namespace) }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "deltallm.selectorLabels" . | nindent 6 }}
@@ -20,4 +25,7 @@ spec:
       path: /metrics
       interval: {{ .Values.prometheus.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.prometheus.serviceMonitor.scrapeTimeout }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+          targetLabel: deltallm_role
 {{- end }}

@@ -127,6 +127,7 @@ nav:
           - Kubernetes: guides/kubernetes-deployment.md
       - Prepare for production:
           - Production checklist: deployment/production-checklist.md
+          - Size production for RPS targets: deployment/production-rps-requirements.md
           - Secure the deployment: security/hardening.md
           - Tune provider connections: guides/provider-connections.md
           - Monitor the system: guides/monitoring.md
@@ -182,7 +183,20 @@ nav:
       - Operations details:
           - Kubernetes and Helm: deployment/kubernetes.md
           - Metrics and callbacks: features/observability.md
+          - Measure gateway concurrency: deployment/concurrency-measurement.md
+          - Gateway ingress admission: deployment/ingress-admission.md
+          - Dependency capacity: deployment/dependency-capacity.md
+          - Concurrency runtime design: design/concurrency-runtime.md
+          - Process lifecycle: deployment/process-lifecycle.md
+          - Saturation autoscaling: deployment/saturation-autoscaling.md
+          - Capacity profiles: deployment/capacity-profiles.md
+          - Budget and prompt performance: deployment/budget-prompt-performance.md
+          - Spend recovery: deployment/spend-recovery.md
+          - Accounting protocol v2: deployment/accounting-v2.md
+          - Accounting protocol v2 design: design/accounting-protocol-v2.md
+          - Request deadlines: deployment/request-deadlines.md
           - Provider connection tuning: deployment/upstream-http.md
+          - Provider connection pool design: design/upstream-http-pool.md
           - Upgrade and rollback behavior: deployment/upgrade-and-rollback.md
           - Release-specific rollouts: deployment/rollout-index.md
           - Governance migration: deployment/governance.md
@@ -192,6 +206,10 @@ nav:
           - Router state cutover: deployment/router-state-schema-cutover.md
           - Telemetry ingestion rollout: deployment/telemetry-ingestion-rollout.md
           - Usage reporting rollout: deployment/usage-reporting-v2.md
+      - Performance evidence:
+          - RPS results and merge status: project/issue-320-rps-report.md
+          - Reproduce RPS tests: project/issue-320-rps-reproduction.md
+          - Concrete concurrency measures: project/issue-320-50-to-500-rps-measures-and-integration.md
       - Policies and support:
           - Security model: security/index.md
           - Report a security problem: security/vulnerability-reporting.md

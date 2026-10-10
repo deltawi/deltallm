@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline
+
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -16,7 +18,12 @@ from src.billing.fallback_gate import (
     FallbackGateFull,
     FallbackGateTimedOut,
 )
+from src.billing.accounting_protocol import AccountingOperationHandle
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting_finalization import AccountingSpendFinalizer
 from src.billing.money import money_string
+from src.billing.spend_operation_service import SpendOperationService
+from src.billing.spend_operations import OperationHandle, SpendPersistenceUnavailable
 from src.billing.operation_reservation import BillingOperationUnavailable
 from src.billing.selector_charge import AcceptedSelectorCharge
 from src.billing.spend import PreparedSpendEvent, SpendTrackingService, _failure_metadata
@@ -44,6 +51,7 @@ from src.telemetry.lifecycle import (
     task_failure_detail,
     wait_for_startup,
 )
+from src.telemetry.worker_idle import IdleWorkerPoll
 
 if TYPE_CHECKING:
     from src.db.billing_operation_recovery import BillingOperationRecovery
@@ -106,16 +114,27 @@ class SpendIngestionService:
         db_client: Any | None,
         writer: SpendTrackingService,
         config: SpendIngestionConfig,
+        worker_db_client: Any | None = None,
         operation_recovery: BillingOperationRecovery | None = None,
+        operations: SpendOperationService | None = None,
+        accounting: AccountingProtocolService | None = None,
     ) -> None:
         self.db = db_client
+        self.worker_db = worker_db_client if worker_db_client is not None else db_client
+        self._worker_repository = (
+            SpendIngestionRepository(worker_db_client) if worker_db_client is not None else None
+        )
         self.writer = writer
         self.config = config
         self.operation_recovery = operation_recovery
         self.realtime_recovery: RealtimeBillingRecovery | None = None
+        self.operations = operations
+        self.accounting = accounting
+        self._accounting_finalizer = AccountingSpendFinalizer(accounting)
         self.repository = SpendIngestionRepository(db_client)
         self._running = False
         self._wake = asyncio.Event()
+        self._idle_poll = IdleWorkerPoll(self._wake)
         self._worker: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._worker_started = asyncio.Event()
@@ -128,6 +147,10 @@ class SpendIngestionService:
             concurrency=config.fallback_max_concurrency,
             max_waiters=config.fallback_max_waiters,
         )
+
+    @property
+    def worker_repository(self):
+        return self._worker_repository if self._worker_repository is not None else self.repository
 
     @property
     def durable_ingestion_enabled(self) -> bool:
@@ -176,7 +199,7 @@ class SpendIngestionService:
             raise RuntimeError("spend outbox mode requires the telemetry database pool")
         try:
             await asyncio.wait_for(
-                self.repository.reconcile_capacity(),
+                self.worker_repository.reconcile_capacity(),
                 timeout=self.config.worker_startup_timeout_seconds,
             )
         except Exception as exc:
@@ -185,6 +208,8 @@ class SpendIngestionService:
             increment_spend_ingestion_failure("capacity_reconcile")
             logger.exception("failed to reconcile spend ingestion capacity")
             raise
+        if self.operations is not None:
+            await self.operations.initialize()
         if not self.config.worker_enabled:
             self._worker_state = WorkerState.DISABLED
             self._worker_detail = None
@@ -192,6 +217,7 @@ class SpendIngestionService:
             return
         if self._worker is not None and not self._worker.done():
             return
+        self._idle_poll.reset()
         self._worker_state = WorkerState.STARTING
         self._worker_detail = None
         self._worker_started.clear()
@@ -231,7 +257,7 @@ class SpendIngestionService:
 
     async def shutdown(self) -> None:
         self._closed = True
-        await self._stop_worker_tasks(drain_pending=True)
+        await self._stop_worker_tasks(drain_pending=False)
         self._started = False
 
     async def _stop_worker_tasks(self, *, drain_pending: bool) -> None:
@@ -243,7 +269,7 @@ class SpendIngestionService:
         self._worker_state = WorkerState.STOPPING
         self._worker_detail = None
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.config.shutdown_drain_timeout_seconds
+        deadline = cleanup_deadline(self.config.shutdown_drain_timeout_seconds)
         if drain_pending:
             while loop.time() < deadline:
                 pending_count = await self._pending_count_before_deadline(deadline)
@@ -274,12 +300,18 @@ class SpendIngestionService:
         if not cleanup_stopped or not worker_stopped:
             increment_spend_ingestion_failure("shutdown_timeout")
             logger.error("spend ingestion worker exceeded its shutdown deadline and was cancelled")
-        self._cleanup_task = None
-        self._worker = None
-        self._worker_state = WorkerState.DISABLED
+        if cleanup_stopped:
+            self._cleanup_task = None
+        if worker_stopped:
+            self._worker = None
+        self._worker_state = (
+            WorkerState.DISABLED if cleanup_stopped and worker_stopped else WorkerState.FAILED
+        )
         self._worker_detail = None
 
     async def reconfigure(self, config: SpendIngestionConfig) -> None:
+        if self.operations is not None and not config.worker_enabled:
+            raise RuntimeError("Spend operation recovery requires its worker")
         if config.enabled != self.config.enabled:
             raise RuntimeError("changing spend ingestion mode requires a restart")
         previous = self.config
@@ -288,6 +320,8 @@ class SpendIngestionService:
         if worker_active and not worker_desired:
             await self._stop_worker_tasks(drain_pending=not config.enabled)
         self.config = config
+        self._idle_poll.reset()
+        self._wake.set()
         await self._fallback_gate.reconfigure(
             concurrency=config.fallback_max_concurrency,
             max_waiters=config.fallback_max_waiters,
@@ -307,6 +341,31 @@ class SpendIngestionService:
 
     async def log_spend(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
+        operation = kwargs.pop("operation", None)
+        if isinstance(operation, AccountingOperationHandle):
+            await self._finalize_accounting_spend(
+                operation,
+                event_id=event_id,
+                payload=kwargs,
+            )
+            return
+        if operation is not None:
+            if (
+                not isinstance(operation, OperationHandle)
+                or self.operations is None
+                or event_id != str(operation.event_id)
+            ):
+                raise SpendPersistenceUnavailable()
+            await self.operations.accept(
+                operation,
+                {
+                    **kwargs,
+                    "cost_exact": money_string(kwargs.get("cost_exact", kwargs.get("cost"))),
+                    "spend_event_version": 2,
+                },
+            )
+            self._wake.set()
+            return
         if not self.config.enabled:
             await self.writer.log_spend(**kwargs)
             return
@@ -314,6 +373,23 @@ class SpendIngestionService:
 
     async def log_request_failure(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
+        operation = kwargs.pop("operation", None)
+        if isinstance(operation, AccountingOperationHandle):
+            await self._finalize_accounting_failure(
+                operation,
+                event_id=event_id,
+                payload=kwargs,
+            )
+            return
+        if operation is not None:
+            if (
+                not isinstance(operation, OperationHandle)
+                or self.operations is None
+                or event_id != str(operation.event_id)
+            ):
+                raise SpendPersistenceUnavailable()
+            await self.operations.unknown(operation)
+            return
         if not self.config.enabled:
             await self.writer.log_request_failure(**kwargs)
             return
@@ -330,6 +406,16 @@ class SpendIngestionService:
             or (exc.__class__.__name__ if exc is not None else None)
         )
         await self._enqueue("request_failure", payload, event_id=event_id)
+
+    async def _finalize_accounting_spend(
+        self, operation: AccountingOperationHandle, *, event_id: object, payload: dict[str, Any]
+    ) -> None:
+        await self._accounting_finalizer.log_spend(operation, event_id=event_id, payload=payload)
+
+    async def _finalize_accounting_failure(
+        self, operation: AccountingOperationHandle, *, event_id: object, payload: dict[str, Any]
+    ) -> None:
+        await self._accounting_finalizer.log_failure(operation, event_id=event_id, payload=payload)
 
     async def log_spend_once(self, **kwargs: Any) -> Any:
         return await self.writer.log_spend_once(**kwargs)
@@ -470,21 +556,16 @@ class SpendIngestionService:
                 await asyncio.sleep(min(5.0, 0.1 * (2 ** min(consecutive_failures - 1, 6))))
 
     async def _worker_iteration(self) -> None:
+        self._idle_poll.begin_claim()
         try:
             records = await self._claim_batch()
         except Exception:
             increment_spend_ingestion_failure("claim")
             raise
         if not records:
-            self._wake.clear()
-            try:
-                await asyncio.wait_for(
-                    self._wake.wait(),
-                    timeout=self.config.flush_interval_seconds,
-                )
-            except TimeoutError:
-                pass
+            await self._idle_poll.wait(self.config.flush_interval_seconds)
             return
+        self._idle_poll.reset()
         started = perf_counter()
         await self._process_batch(records)
         observe_spend_ingestion_batch(len(records))
@@ -496,6 +577,8 @@ class SpendIngestionService:
             logger.debug("failed to publish spend ingestion backlog", exc_info=True)
 
     async def _claim_batch(self) -> list[_OutboxRecord]:
+        if self.operations is not None:
+            await self.operations.recover()
         if self.operation_recovery is not None:
             try:
                 await self.operation_recovery.recover()
@@ -510,7 +593,7 @@ class SpendIngestionService:
             except BillingOperationUnavailable:
                 increment_spend_ingestion_failure("realtime_recovery")
                 logger.warning("realtime_billing_recovery_unavailable")
-        return await self.repository.claim_batch(
+        return await self.worker_repository.claim_batch(
             limit=self.config.batch_size,
             worker_id=self.config.worker_id,
             claim_token=str(uuid4()),
@@ -584,7 +667,7 @@ class SpendIngestionService:
             )
         )
         try:
-            async with self._transaction() as tx:
+            async with self._transaction(self.worker_db) as tx:
                 if self.operation_recovery is not None and operation_events:
                     await self.operation_recovery.lock_for_events(tx, operation_events)
                 if self.realtime_recovery is not None and realtime_events:
@@ -617,7 +700,7 @@ class SpendIngestionService:
         while True:
             await asyncio.sleep(interval)
             try:
-                renewed = await self.repository.renew_lease(
+                renewed = await self.worker_repository.renew_lease(
                     event_ids=event_ids,
                     worker_id=self.config.worker_id,
                     claim_token=claim_token,
@@ -650,7 +733,7 @@ class SpendIngestionService:
             )
 
     async def _mark_retry(self, record: _OutboxRecord, exc: Exception) -> None:
-        terminal = await self.repository.mark_retry(
+        terminal = await self.worker_repository.mark_retry(
             record=record,
             worker_id=self.config.worker_id,
             error=str(exc),
@@ -665,7 +748,7 @@ class SpendIngestionService:
         )
 
     async def _pending_count(self) -> int:
-        return await self.repository.drainable_count()
+        return await self.worker_repository.drainable_count()
 
     async def _pending_count_before_deadline(self, deadline: float) -> int | None:
         task = asyncio.create_task(self._pending_count())
@@ -681,7 +764,7 @@ class SpendIngestionService:
         return None
 
     async def _publish_backlog(self) -> None:
-        count, oldest_age = await self.repository.pending_stats()
+        count, oldest_age = await self.worker_repository.pending_stats()
         set_spend_ingestion_backlog(count)
         set_spend_ingestion_oldest_event_age(oldest_age)
         set_spend_ingestion_capacity_utilization(
@@ -703,7 +786,7 @@ class SpendIngestionService:
             if perf_counter() - started >= self.config.cleanup_time_budget_seconds:
                 break
             try:
-                deleted = await self.repository.cleanup_terminal(
+                deleted = await self.worker_repository.cleanup_terminal(
                     completed_retention_hours=self.config.completed_retention_hours,
                     limit=self.config.cleanup_batch_size,
                 )
@@ -718,18 +801,19 @@ class SpendIngestionService:
         return deleted_total
 
     @asynccontextmanager
-    async def _transaction(self):  # noqa: ANN202
-        if self.db is None:
+    async def _transaction(self, db_client=None):  # noqa: ANN202
+        target_db = db_client if db_client is not None else self.db
+        if target_db is None:
             raise RuntimeError("spend ingestion database is unavailable")
-        if is_prisma_transaction_client(self.db):
-            yield self.db
+        if is_prisma_transaction_client(target_db):
+            yield target_db
             return
-        tx_factory = getattr(self.db, "tx", None)
+        tx_factory = getattr(target_db, "tx", None)
         if callable(tx_factory):
             async with tx_factory() as tx:
                 yield tx
             return
-        yield self.db
+        yield target_db
 
 
 def _json_default(value: Any) -> str:

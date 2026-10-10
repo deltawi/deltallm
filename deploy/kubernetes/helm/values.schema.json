@@ -3,32 +3,295 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
-    "externalAuthCapacity": {
+    "postgresql": {
       "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "maximumApiPods",
-        "otherReservedConnections",
-        "postgresConnectionBudget"
-      ],
+      "additionalProperties": true,
       "properties": {
-        "maximumApiPods": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "otherReservedConnections": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "postgresConnectionBudget": {
-          "type": "integer",
-          "minimum": 0
+        "primary": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "extendedConfiguration": { "type": "string" }
+          }
         }
       }
     },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
-    "replicaCount": { "type": "integer", "minimum": 1 },
+    "dependencyCapacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiProcessesPerPod",
+        "batchWorkerProcessesPerPod",
+        "accountingWorkerProcessesPerPod",
+        "accountingRequestProcessesPerPod",
+        "retiringGenerations",
+        "postgresqlMaxConnections",
+        "postgresqlReservedConnections",
+        "redisMaxClients",
+        "redisReservedClients",
+        "extended"
+      ],
+      "properties": {
+        "apiProcessesPerPod": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "batchWorkerProcessesPerPod": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "accountingWorkerProcessesPerPod": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "accountingRequestProcessesPerPod": {
+          "type": "integer", "minimum": 1, "maximum": 32
+        },
+        "retiringGenerations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "postgresqlMaxConnections": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "postgresqlReservedConnections": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "redisMaxClients": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "redisReservedClients": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "extended": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "postgresqlMigrationConnections",
+            "postgresqlOtherConnections",
+            "redisOtherClients",
+            "proxyPoolsPerClient",
+            "auxiliaryHttpConnectionsPerProcess",
+            "cacheRedis",
+            "fileDescriptors",
+            "providerDomains"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "postgresqlMigrationConnections": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "postgresqlOtherConnections": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "redisOtherClients": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "proxyPoolsPerClient": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "auxiliaryHttpConnectionsPerProcess": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "cacheRedis": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "separate",
+                "maxClients",
+                "reservedClients"
+              ],
+              "properties": {
+                "separate": {
+                  "type": "boolean"
+                },
+                "maxClients": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                },
+                "reservedClients": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                }
+              }
+            },
+            "fileDescriptors": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "processLimit",
+                "engineLimit",
+                "inboundConnectionsPerProcess",
+                "otherPerProcess",
+                "headroomPerProcess",
+                "maxPodsPerNode",
+                "nodeLimit",
+                "nodeReserved"
+              ],
+              "properties": {
+                "processLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "engineLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "inboundConnectionsPerProcess": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "otherPerProcess": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "headroomPerProcess": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "maxPodsPerNode": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "nodeLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "nodeReserved": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                }
+              }
+            },
+            "providerDomains": {
+              "type": "object",
+              "maxProperties": 64,
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "rpm",
+                  "tpm",
+                  "concurrency",
+                  "apiRpmPerProcess",
+                  "workerRpmPerProcess",
+                  "tokensPerAttempt",
+                  "attemptsPerRequest",
+                  "reservedRpm",
+                  "reservedTpm",
+                  "reservedConcurrency",
+                  "modelIds"
+                ],
+                "properties": {
+                  "rpm": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "tpm": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "concurrency": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "apiRpmPerProcess": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "workerRpmPerProcess": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "tokensPerAttempt": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "attemptsPerRequest": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "reservedRpm": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000000
+                  },
+                  "reservedTpm": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000000
+                  },
+                  "reservedConcurrency": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000000
+                  },
+                  "modelIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1024,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
     "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
     "minReadySeconds": { "type": "integer", "minimum": 0 },
     "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
@@ -44,7 +307,7 @@
           "required": ["maxUnavailable", "maxSurge"],
           "properties": {
             "maxUnavailable": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
-            "maxSurge": { "oneOf": [{ "type": "integer" }, { "type": "string" }] }
+            "maxSurge": {"oneOf": [{"type": "integer", "minimum": 0, "maximum": 2147483647}, {"type": "string", "pattern": "^([0-9]{1,9}|[0-9]{1,4}%)$"}]}
           }
         }
       }
@@ -65,7 +328,8 @@
         "repository": { "type": "string", "minLength": 1 },
         "pullPolicy": { "type": "string" },
         "tag": { "type": "string" },
-        "pullSecrets": { "type": "array" }
+        "pullSecrets": { "type": "array" },
+        "digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$"}
       }
     },
     "serviceAccount": {
@@ -103,11 +367,34 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
         "enabled": { "type": "boolean" },
-        "minReplicas": { "type": "integer", "minimum": 1 },
-        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "minReplicas": { "type": "integer", "minimum": 1,
+  "maximum": 10000
+},
+        "maxReplicas": { "type": "integer", "minimum": 1,
+  "maximum": 10000
+},
         "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+        "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "admittedInflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "targetAverageValue"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "targetAverageValue": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            }
+          }
+        }
       }
     },
     "podDisruptionBudget": {
@@ -134,6 +421,7 @@
           "additionalProperties": true,
           "properties": {
             "general_settings": {
+              "$ref": "#/properties/config/properties/general_settings",
               "type": "object",
               "additionalProperties": true,
               "properties": {
@@ -155,7 +443,7 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "allowUnsafeLocalStorage": { "type": "boolean" },
-        "replicaCount": { "type": "integer", "minimum": 1 },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
         "podAnnotations": { "type": "object" },
         "podLabels": { "type": "object" },
         "priorityClassName": { "type": "string" },
@@ -192,6 +480,7 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
+            "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
             "enabled": { "type": "boolean" },
             "minReplicas": { "type": "integer", "minimum": 1 },
             "maxReplicas": { "type": "integer", "minimum": 1 },
@@ -221,6 +510,7 @@
           "additionalProperties": true,
           "properties": {
             "general_settings": {
+              "$ref": "#/properties/config/properties/general_settings",
               "type": "object",
               "additionalProperties": true,
               "properties": {
@@ -232,6 +522,85 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "accountingWorker": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "autoscaling": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage", "targetMemoryUtilizationPercentage", "scaleDownStabilizationSeconds", "oldestEventAge"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "maxReplicas": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
+            "oldestEventAge": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "metricName", "targetAverageValue"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "metricName": { "type": "string", "minLength": 1 },
+                "targetAverageValue": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" }
+              }
+            }
+          }
+        },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "priorityClassName": { "type": "string" },
+        "command": { "type": "array" },
+        "args": { "type": "array" },
+        "env": { "type": "array" },
+        "envFrom": { "type": "array" },
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" },
+        "resources": { "type": "object", "additionalProperties": true },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array" },
+        "config": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "general_settings": {"$ref": "#/properties/config/properties/general_settings"}
+          }
+        }
+      }
+    },
+    "accountingRequest": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "priorityClassName": { "type": "string" },
+        "command": { "type": "array" },
+        "args": { "type": "array" },
+        "env": { "type": "array" },
+        "envFrom": { "type": "array" },
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" },
+        "resources": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array" },
+        "config": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "general_settings": { "$ref": "#/properties/config/properties/general_settings" }
           }
         }
       }
@@ -274,6 +643,20 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "accounting": {
+          "type": "object", "additionalProperties": false,
+          "required": ["existingSecret"],
+          "properties": {
+            "existingSecret": {
+              "type": "object", "additionalProperties": false,
+              "required": ["name", "signingKey"],
+              "properties": {
+                "name": {"type": "string", "maxLength": 253},
+                "signingKey": {"type": "string", "minLength": 1, "maxLength": 253}
+              }
+            }
+          }
+        },
         "database": {
           "type": "object",
           "additionalProperties": true,
@@ -312,162 +695,16 @@
       "properties": {
         "model_list": { "type": "array" },
         "router_settings": { "type": "object" },
-        "deltallm_settings": { "type": "object" },
+        "deltallm_settings": {
+          "type": "object",
+          "properties": {
+            "guardrails": { "type": "array", "maxItems": 32 }
+          }
+        },
         "general_settings": {
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "external_auth": {
-              "additionalProperties": false,
-              "description": "Startup trust and capacity. PostgreSQL owns live enablement.",
-              "properties": {
-                "enabled": {
-                  "default": false,
-                  "title": "Enabled",
-                  "type": "boolean"
-                },
-                "deployment_protocol": {
-                  "anyOf": [
-                    {
-                      "const": "external_customer_v1",
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "default": null,
-                  "title": "Deployment Protocol"
-                },
-                "integrations": {
-                  "default": [],
-                  "items": {
-                    "$ref": "#/definitions/ExternalAuthIntegrationSettings"
-                  },
-                  "maxItems": 8,
-                  "title": "Integrations",
-                  "type": "array"
-                },
-                "assertion_lifetime_seconds": {
-                  "default": 60,
-                  "maximum": 60,
-                  "minimum": 1,
-                  "title": "Assertion Lifetime Seconds",
-                  "type": "integer"
-                },
-                "clock_allowance_seconds": {
-                  "default": 10,
-                  "maximum": 10,
-                  "minimum": 0,
-                  "title": "Clock Allowance Seconds",
-                  "type": "integer"
-                },
-                "child_lifetime_seconds": {
-                  "default": 300,
-                  "maximum": 300,
-                  "minimum": 60,
-                  "title": "Child Lifetime Seconds",
-                  "type": "integer"
-                },
-                "parent_lifetime_seconds": {
-                  "default": 43200,
-                  "maximum": 43200,
-                  "minimum": 300,
-                  "title": "Parent Lifetime Seconds",
-                  "type": "integer"
-                },
-                "previous_overlap_seconds": {
-                  "default": 30,
-                  "maximum": 30,
-                  "minimum": 0,
-                  "title": "Previous Overlap Seconds",
-                  "type": "integer"
-                },
-                "subject_exchanges_per_minute": {
-                  "default": 12,
-                  "maximum": 60,
-                  "minimum": 1,
-                  "title": "Subject Exchanges Per Minute",
-                  "type": "integer"
-                },
-                "binding_exchanges_per_minute": {
-                  "default": 60,
-                  "maximum": 600,
-                  "minimum": 1,
-                  "title": "Binding Exchanges Per Minute",
-                  "type": "integer"
-                },
-                "integration_exchanges_per_minute": {
-                  "default": 1200,
-                  "maximum": 1200,
-                  "minimum": 1,
-                  "title": "Integration Exchanges Per Minute",
-                  "type": "integer"
-                },
-                "cleanup_batch_size": {
-                  "default": 1000,
-                  "maximum": 1000,
-                  "minimum": 1,
-                  "title": "Cleanup Batch Size",
-                  "type": "integer"
-                },
-                "cleanup_interval_seconds": {
-                  "default": 5,
-                  "maximum": 60,
-                  "minimum": 1,
-                  "title": "Cleanup Interval Seconds",
-                  "type": "integer"
-                },
-                "allowed_origins": {
-                  "default": [],
-                  "items": {
-                    "type": "string"
-                  },
-                  "maxItems": 16,
-                  "title": "Allowed Origins",
-                  "type": "array"
-                },
-                "trusted_proxy_cidrs": {
-                  "default": [],
-                  "items": {
-                    "type": "string"
-                  },
-                  "maxItems": 16,
-                  "title": "Trusted Proxy Cidrs",
-                  "type": "array"
-                }
-              },
-              "title": "ExternalAuthSettings",
-              "type": "object"
-            },
-            "ui_mount": {
-              "additionalProperties": false,
-              "properties": {
-                "mount_path": {
-                  "default": "",
-                  "maxLength": 128,
-                  "pattern": "^(/[A-Za-z0-9_-]+)*$",
-                  "title": "Mount Path",
-                  "type": "string"
-                },
-                "external_console": {
-                  "default": false,
-                  "title": "External Console",
-                  "type": "boolean"
-                }
-              },
-              "title": "UIMountSettings",
-              "type": "object"
-            },
-            "api_key_auth_cache_ttl_seconds": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 300
-            },
-            "db_pool_size": {
-              "type": "integer",
-              "minimum": 1
-            },
             "realtime": {
               "additionalProperties": false,
               "properties": {
@@ -581,6 +818,32 @@
               },
               "type": "object"
             },
+            "budget_enforcement_query_mode": {"type": "string", "enum": ["legacy", "shadow", "combined"]},
+            "budget_enforcement_query_timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 30},
+            "budget_enforcement_shadow_sample_rate": {"type": "number", "minimum": 0, "maximum": 1},
+            "budget_notifications_enabled": {"type": "boolean"},
+            "budget_alert_ttl_seconds": {"type": "integer", "minimum": 60, "maximum": 2147483647},
+            "redis_bulk_url": { "type": ["string", "null"] },
+            "db_foreground_pool_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
+            "telemetry_worker_db_pool_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 5},
+            "db_acquisition_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30, "default": 0.2},
+            "db_statement_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30, "default": 1.0},
+            "db_lock_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30, "default": 0.2},
+            "db_transaction_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 60, "default": 2.0},
+            "db_background_statement_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 60, "default": 5.0},
+            "db_background_lock_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 60, "default": 1.0},
+            "db_background_transaction_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 120, "default": 10.0},
+            "redis_cache_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 16},
+            "redis_cache_max_waiters": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 0},
+            "db_pool_size": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "db_pool_timeout": {"type": "integer", "minimum": 0},
+            "redis_critical_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "redis_critical_max_waiters": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "redis_bulk_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "redis_bulk_max_waiters": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "redis_acquisition_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30},
+            "redis_socket_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30},
+            "redis_connect_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30},
             "provider_discovery_allow_http": { "type": "boolean" },
             "provider_discovery_allowed_ports": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
             "provider_discovery_allowed_private_cidrs": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 3 } },
@@ -588,8 +851,8 @@
             "upstream_http_read_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "upstream_http_write_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "upstream_http_pool_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
-            "upstream_http_max_connections": { "type": "integer", "minimum": 1 },
-            "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0 },
+            "upstream_http_max_connections": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0, "maximum": 100000 },
             "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 },
             "prompt_singleflight_max_keys": { "type": "integer", "minimum": 1, "maximum": 10000 },
             "prompt_singleflight_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 30 },
@@ -598,6 +861,33 @@
             "email_worker_audit_lease_seconds": { "type": "integer", "minimum": 5, "maximum": 300 },
             "email_worker_startup_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 60 },
             "email_worker_shutdown_drain_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 },
+            "gateway_ingress_control_max_active": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "gateway_ingress_control_max_buffered_bytes": {"type": "integer", "minimum": 1, "maximum": 4294967296},
+            "auth_fallback_max_active": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "auth_fallback_max_waiters": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "auth_fallback_queue_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "auth_fallback_timeout_seconds": {"type": "number", "minimum": 0.01, "maximum": 30},
+            "auth_fallback_cache_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 1},
+            "auth_fallback_cache_max_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576},
+            "callback_max_pending": {"default": 128, "maximum": 4096, "minimum": 1, "type": "integer"},
+            "callback_max_concurrency": {"default": 4, "maximum": 64, "minimum": 1, "type": "integer"},
+            "callback_max_payload_bytes": {"default": 262144, "maximum": 16777216, "minimum": 1024, "type": "integer"},
+            "callback_max_bytes": {"default": 8388608, "maximum": 134217728, "minimum": 1024, "type": "integer"},
+            "callback_timeout_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 60, "type": "number"},
+            "callback_shutdown_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 30, "type": "number"},
+            "guardrail_max_concurrency": {"default": 2, "maximum": 32, "minimum": 1, "type": "integer"},
+            "guardrail_max_pending": {"default": 8, "maximum": 256, "minimum": 1, "type": "integer"},
+            "guardrail_max_bytes": {"default": 33554432, "maximum": 268435456, "minimum": 1024, "type": "integer"},
+            "guardrail_timeout_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 60, "type": "number"},
+            "guardrail_shutdown_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 30, "type": "number"},
+            "gateway_ingress_enabled": { "type": "boolean" },
+            "gateway_ingress_max_active": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "gateway_ingress_max_waiters": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "gateway_ingress_queue_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "gateway_ingress_max_body_bytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
+            "gateway_ingress_max_buffered_bytes": { "type": "integer", "minimum": 1, "maximum": 4294967296 },
+            "gateway_ingress_body_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 },
+            "gateway_ingress_health_max_active": { "type": "integer", "minimum": 1, "maximum": 100 },
             "gateway_preflight_capacity_enabled": { "type": "boolean" },
             "gateway_preflight_global_max_parallel": { "type": "integer", "minimum": 1, "maximum": 100000 },
             "gateway_preflight_org_max_parallel": { "type": "integer", "minimum": 0, "maximum": 100000 },
@@ -606,6 +896,44 @@
             "telemetry_db_pool_timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 60 },
             "telemetry_worker_startup_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 60 },
             "telemetry_shutdown_drain_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 300 },
+            "accounting_protocol_enabled": { "type": "boolean" },
+            "accounting_execution_mode": { "type": "string", "enum": ["assigned", "local_journal"] },
+            "accounting_request_url": { "type": ["string", "null"], "maxLength": 2048 },
+            "accounting_rpc_signing_secret": { "type": ["string", "null"], "maxLength": 4096 },
+            "accounting_rpc_allow_http": { "type": "boolean" },
+            "accounting_rpc_allowed_ports": {
+              "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+              "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            },
+            "accounting_rpc_allowed_private_cidrs": {
+              "type": "array", "maxItems": 16, "uniqueItems": true,
+              "items": { "type": "string", "maxLength": 128 }
+            },
+            "accounting_rpc_max_connections": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "accounting_local_max_subjects": { "type": "integer", "minimum": 1, "maximum": 4096 },
+            "accounting_protocol_generation": { "type": "integer", "minimum": 1 },
+            "accounting_microbatch_max_size": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "accounting_microbatch_dwell_ms": { "type": "integer", "minimum": 0, "maximum": 50 },
+            "accounting_reservation_max_pending": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "accounting_finalization_max_pending": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "accounting_reservation_max_pending_bytes": { "type": "integer", "minimum": 1048576, "maximum": 67108864 },
+            "accounting_finalization_max_pending_bytes": { "type": "integer", "minimum": 1048576, "maximum": 67108864 },
+            "accounting_statement_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 2000 },
+            "accounting_reservation_ack_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 5000 },
+            "accounting_finalization_ack_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 5000 },
+            "accounting_hot_path_db_pool_size": { "type": "integer", "minimum": 1, "maximum": 32 },
+            "accounting_max_provider_attempts": { "type": "integer", "minimum": 1, "maximum": 128 },
+            "accounting_grants_enabled": { "type": "boolean" },
+            "accounting_grant_target_operations": { "type": "integer", "minimum": 1, "maximum": 1024 },
+            "accounting_grant_ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "accounting_projection_worker_enabled": { "type": "boolean" },
+            "accounting_projection_batch_size": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "accounting_projection_max_concurrent_partitions": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "accounting_projection_lease_seconds": { "type": "integer", "minimum": 5, "maximum": 300 },
+            "accounting_projection_poll_interval_ms": { "type": "integer", "minimum": 10, "maximum": 10000 },
+            "accounting_projection_maintenance_interval_ms": { "type": "integer", "minimum": 100, "maximum": 60000 },
+            "spend_operation_intents_enabled": { "type": "boolean", "default": false },
+            "spend_settlement_db_pool_size": { "type": "integer", "minimum": 1, "maximum": 99, "default": 1 },
             "spend_ingestion_mode": { "type": "string", "enum": ["legacy", "outbox"] },
             "spend_ingestion_batch_size": { "type": "integer", "minimum": 1, "maximum": 500 },
             "spend_ingestion_flush_interval_ms": { "type": "integer", "minimum": 10, "maximum": 10000 },
@@ -783,7 +1111,188 @@
             "embeddings_batch_min_large_job_claim_interval_seconds": { "type": "integer", "minimum": 0 },
             "embeddings_batch_small_job_fast_lane_enabled": { "type": "boolean" },
             "embeddings_batch_small_job_max_work_units": { "type": "integer", "minimum": 1 },
-            "embeddings_batch_finalization_first": { "type": "boolean" }
+            "embeddings_batch_finalization_first": { "type": "boolean" },
+            "readiness_probe_timeout_seconds": {"type": "number", "maximum": 2, "exclusiveMinimum": 0},
+            "readiness_cache_seconds": {"type": "number", "maximum": 5, "exclusiveMinimum": 0},
+            "lifecycle_withdrawal_seconds": {"type": "number", "minimum": 0, "maximum": 30},
+            "lifecycle_request_drain_seconds": {"type": "number", "maximum": 600, "exclusiveMinimum": 0},
+            "lifecycle_cancellation_seconds": {"type": "number", "maximum": 30, "exclusiveMinimum": 0},
+            "lifecycle_worker_drain_seconds": {"type": "number", "maximum": 60, "exclusiveMinimum": 0},
+            "lifecycle_close_seconds": {"type": "number", "maximum": 30, "exclusiveMinimum": 0},
+            "lifecycle_shutdown_seconds": {"type": "number", "maximum": 750, "exclusiveMinimum": 0},
+            "migration_mode": {"type": "string", "enum": ["startup", "external"]},
+            "migration_verify_timeout_seconds": {"type": "number", "maximum": 60, "exclusiveMinimum": 0},
+            "redis_degraded_mode": {
+              "type": "string",
+              "enum": [
+                "fail_open",
+                "fail_closed"
+              ]
+            },
+            "deployment_capacity_path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "deployment_capacity_role": {
+              "type": "string",
+              "enum": [
+                "api",
+                "batchWorker",
+                "accountingWorker",
+                "accountingRequest"
+              ]
+            },
+            "external_auth": {
+              "additionalProperties": false,
+              "description": "Startup trust and capacity. PostgreSQL owns live enablement.",
+              "properties": {
+                "enabled": {
+                  "default": false,
+                  "title": "Enabled",
+                  "type": "boolean"
+                },
+                "deployment_protocol": {
+                  "anyOf": [
+                    {
+                      "const": "external_customer_v1",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Deployment Protocol"
+                },
+                "integrations": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/definitions/ExternalAuthIntegrationSettings"
+                  },
+                  "maxItems": 8,
+                  "title": "Integrations",
+                  "type": "array"
+                },
+                "assertion_lifetime_seconds": {
+                  "default": 60,
+                  "maximum": 60,
+                  "minimum": 1,
+                  "title": "Assertion Lifetime Seconds",
+                  "type": "integer"
+                },
+                "clock_allowance_seconds": {
+                  "default": 10,
+                  "maximum": 10,
+                  "minimum": 0,
+                  "title": "Clock Allowance Seconds",
+                  "type": "integer"
+                },
+                "child_lifetime_seconds": {
+                  "default": 300,
+                  "maximum": 300,
+                  "minimum": 60,
+                  "title": "Child Lifetime Seconds",
+                  "type": "integer"
+                },
+                "parent_lifetime_seconds": {
+                  "default": 43200,
+                  "maximum": 43200,
+                  "minimum": 300,
+                  "title": "Parent Lifetime Seconds",
+                  "type": "integer"
+                },
+                "previous_overlap_seconds": {
+                  "default": 30,
+                  "maximum": 30,
+                  "minimum": 0,
+                  "title": "Previous Overlap Seconds",
+                  "type": "integer"
+                },
+                "subject_exchanges_per_minute": {
+                  "default": 12,
+                  "maximum": 60,
+                  "minimum": 1,
+                  "title": "Subject Exchanges Per Minute",
+                  "type": "integer"
+                },
+                "binding_exchanges_per_minute": {
+                  "default": 60,
+                  "maximum": 600,
+                  "minimum": 1,
+                  "title": "Binding Exchanges Per Minute",
+                  "type": "integer"
+                },
+                "integration_exchanges_per_minute": {
+                  "default": 1200,
+                  "maximum": 1200,
+                  "minimum": 1,
+                  "title": "Integration Exchanges Per Minute",
+                  "type": "integer"
+                },
+                "cleanup_batch_size": {
+                  "default": 1000,
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "title": "Cleanup Batch Size",
+                  "type": "integer"
+                },
+                "cleanup_interval_seconds": {
+                  "default": 5,
+                  "maximum": 60,
+                  "minimum": 1,
+                  "title": "Cleanup Interval Seconds",
+                  "type": "integer"
+                },
+                "allowed_origins": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 16,
+                  "title": "Allowed Origins",
+                  "type": "array"
+                },
+                "trusted_proxy_cidrs": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 16,
+                  "title": "Trusted Proxy Cidrs",
+                  "type": "array"
+                }
+              },
+              "title": "ExternalAuthSettings",
+              "type": "object"
+            },
+            "ui_mount": {
+              "additionalProperties": false,
+              "properties": {
+                "mount_path": {
+                  "default": "",
+                  "maxLength": 128,
+                  "pattern": "^(/[A-Za-z0-9_-]+)*$",
+                  "title": "Mount Path",
+                  "type": "string"
+                },
+                "external_console": {
+                  "default": false,
+                  "title": "External Console",
+                  "type": "boolean"
+                }
+              },
+              "title": "UIMountSettings",
+              "type": "object"
+            },
+            "api_key_auth_cache_ttl_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            }
           }
         }
       }
@@ -831,6 +1340,18 @@
             "scrapeTimeout": { "type": "string" },
             "labels": { "type": "object" }
           }
+        },
+        "customMetrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
         }
       }
     },
@@ -852,7 +1373,33 @@
         "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
         "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
         "command": { "type": "array" },
-        "args": { "type": "array" }
+        "args": { "type": "array" },
+        "external": {"type": "boolean"},
+        "timeoutSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 600}
+      }
+    },
+    "managedLifecycle": {"type": "object", "additionalProperties": false, "required": ["enabled", "production", "exitMarginSeconds"], "properties": {"enabled": {"type": "boolean"}, "production": {"type": "boolean"}, "exitMarginSeconds": {"type": "integer", "minimum": 1, "maximum": 60}}},
+    "externalAuthCapacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximumApiPods",
+        "otherReservedConnections",
+        "postgresConnectionBudget"
+      ],
+      "properties": {
+        "maximumApiPods": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "otherReservedConnections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "postgresConnectionBudget": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     }
   },
