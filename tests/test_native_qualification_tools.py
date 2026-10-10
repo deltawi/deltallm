@@ -399,7 +399,22 @@ async def test_economic_gate_requires_exact_charge_and_every_scope(monkeypatch, 
 
 
 @pytest.mark.parametrize(
-    "problem", [None, "http", "id", "preserved", "facts", "charge", "drain", "readiness"]
+    "problem",
+    [
+        None,
+        "http",
+        "id",
+        "preserved",
+        "facts",
+        "charge",
+        "drain",
+        "readiness",
+        "models",
+        "auth",
+        "schema",
+        "ui",
+        "stream",
+    ],
 )
 async def test_ordinary_client_gate_records_failures_before_load(tmp_path, monkeypatch, problem):
     import httpx
@@ -414,7 +429,27 @@ async def test_ordinary_client_gate_records_failures_before_load(tmp_path, monke
 
     def respond(request):
         if request.method == "GET":
+            if request.url.path == "/v1/models":
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [{"id": "other" if problem == "models" else "concurrency-fixture"}]
+                    },
+                )
+            if request.url.path == "/ui":
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "text/html"},
+                    text="missing"
+                    if problem == "ui"
+                    else '<html><script src="/ui/assets/app.js"></script></html>',
+                )
             return httpx.Response(503 if problem == "readiness" else 200)
+        payload = json.loads(request.content)
+        if "authorization" not in request.headers:
+            return httpx.Response(200 if problem == "auth" else 401)
+        if payload["messages"] == "invalid":
+            return httpx.Response(200 if problem == "schema" else 422)
         supplied = request.headers.get("x-request-id")
         requests.append(supplied)
         if problem == "http":
@@ -424,6 +459,18 @@ async def test_ordinary_client_gate_records_failures_before_load(tmp_path, monke
             resolved = ""
         if problem == "preserved":
             resolved = "other-valid-id"
+        if payload["stream"]:
+            chunks = [
+                {"choices": [{"delta": {"content": "OK"}}]},
+                {
+                    "choices": [{"delta": {}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+                },
+            ]
+            stream = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
+            if problem != "stream":
+                stream += "data: [DONE]\n\n"
+            return httpx.Response(200, headers={"x-request-id": resolved}, text=stream)
         return httpx.Response(
             200,
             headers={"x-request-id": resolved},
@@ -447,8 +494,8 @@ async def test_ordinary_client_gate_records_failures_before_load(tmp_path, monke
             side_effect=[
                 {"facts": 0, "fact_charge": "0"},
                 {
-                    "facts": 19 if problem == "facts" else 20,
-                    "fact_charge": "0" if problem == "charge" else "0.000140",
+                    "facts": 23 if problem == "facts" else 24,
+                    "fact_charge": "0" if problem == "charge" else "0.000168",
                 },
             ]
         ),
@@ -463,8 +510,9 @@ async def test_ordinary_client_gate_records_failures_before_load(tmp_path, monke
             await clients.verify_native_clients([1, 2, 3, 4], [5, 6, 7], tmp_path)
     result = json.loads((tmp_path / "native-client-requests.json").read_text())
     assert result["passed"] is (problem is None)
-    assert len(requests) == len(result["requests"]) == 20
-    assert requests.count(None) == 4
+    assert len(requests) == len(result["requests"]) == 24
+    assert requests.count(None) == 8
+    assert len(result["functional_checks"]) == 16
 
 
 @pytest.mark.parametrize("replace_all", [True, False])

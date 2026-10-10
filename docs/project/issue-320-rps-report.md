@@ -9,6 +9,62 @@ candidate image, full CI, ordinary native client requests, the sustained four-ti
 series, and recovery checks. Use its final report to assess the corrected release.
 The older results below are not a certificate for the current release image.
 
+## Fixed-candidate checks on 10 October 2026
+
+The corrected candidate uses source `ee15393d0731e8e9c76453dae5d7b24a3c16249c`
+and image ID
+`sha256:2bf9f8d025aa4f1c7b1a56c0b308c9cd560a706ed7305f61dad751aa26f28d1e`.
+One unchanged image ran all four short stages and all four ten-minute stages.
+The fixture used a six-CPU, 12-GiB Linux arm64 VM with two kind nodes, four API
+processes, two accounting request processes, and one reporting process.
+PostgreSQL, Redis, the immediate synthetic provider, monitoring, and the generator
+shared the VM. Response-cache bypass remained enabled.
+
+All four 30-second stages passed. The ten-minute results are:
+
+| Rate | Successful / scheduled | p95 / p99 | Active-request growth per second | Exact accounting | Result |
+| --- | ---: | ---: | ---: | --- | --- |
+| 50 RPS | 30,000 / 30,000 | 21.09 / 23.88 ms | +0.000023 | Passed | Passed |
+| 100 RPS | 60,000 / 60,000 | 21.37 / 24.09 ms | +0.000241 | Passed | Passed |
+| 200 RPS | 120,000 / 120,000 | 25.98 / 36.60 ms | +0.000307 | Passed | Passed |
+| 500 RPS | 300,000 / 300,000 | 168.85 / 333.44 ms | +0.045218 | Passed | Latency and growth limits exceeded |
+
+Every stage had zero HTTP errors and zero dropped arrivals. Native facts and all
+four budget scopes agreed, and financial work drained. The fixed candidate now
+has sustained evidence at 50, 100, and 200 RPS. It does not yet have a passing
+sustained 500 RPS result. The unchanged limits are p95 at most 150 ms, p99 at most
+300 ms, and growth at most +0.01 active requests per second.
+
+The runner stopped before process-loss and Helm-rollout recovery because the
+500 RPS performance gate failed. An eight-CPU capacity check is in progress with
+the same image and limits. It is a diagnosis, not a release certificate.
+
+### Functional readiness
+
+RPS is only one release check. The fixed candidate must also preserve the
+application's supported features and its financial and access controls.
+
+| Area | Current evidence | Remaining release check |
+| --- | --- | --- |
+| Client request IDs and native reporting | 20 ordinary installed-image requests passed, including omitted and invalid headers; all seven processes were ready; charges were exact | Repeat after process loss and Helm rollout |
+| Application behavior, including streaming and access checks | 1,696 application tests passed locally | Keep all final application CI checks passing |
+| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed; all five opt-in cases passed separately | Resolve the repeated reporting-startup failure in CI |
+| Realtime clients | All four pinned official SDK cases passed locally | Keep final Realtime CI checks passing |
+| Redis limits and failure policies | 256 tests passed, including separate memory-pressure services | Keep all final Redis CI checks passing |
+| Install and upgrade migrations | Clean install, last-release upgrade, shared-feature upgrade, and model-identity recovery passed | Apply the forward reporting migration before the corrected image |
+| Container lifecycle and accepted-work recovery | Offline non-root startup and bounded exit passed; the lifecycle comparison recovered one accepted charge exactly once | Complete native process-loss and Helm-rollout recovery |
+| Helm configuration and packaged UI | All 275 Helm tests and the UI CI job passed | Keep all final chart and UI CI checks passing |
+
+The full local database group in CI order passed: 504 passed and one opt-in case
+skipped. All 33 affected tests also passed with the smaller CI Prisma pool.
+These passes do not remove the repeated CI reporting-startup failure. That
+failure and the sustained 500 RPS gate still block release readiness.
+
+The synthetic provider does not validate a real provider's quotas, service
+availability, model behavior, or network delay. Qualify the actual production
+workload before making a production capacity claim. Do not promote the unchanged
+`v0.3.1` image: it still has the missing-request-ID reporting defect.
+
 For production sizing, provider quotas, role separation and required release
 checks, use [Production requirements for RPS targets](../deployment/production-rps-requirements.md).
 
