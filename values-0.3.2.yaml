@@ -20,7 +20,7 @@ managedLifecycle:
 image:
   repository: deltallm/deltallm
   pullPolicy: IfNotPresent
-  tag: latest
+  tag: "v0.3.2"
   digest: ""
   pullSecrets: []
 
