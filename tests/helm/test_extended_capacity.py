@@ -175,7 +175,19 @@ def test_report_reader_rejects_unbounded_unknown_or_missing_data_without_leaking
 
 
 def test_role_override_uses_the_same_pool_schema_and_budget():
-    assert "maximum" in _render_error("--set", "api.config.general_settings.db_pool_size=10001")
+    schema = json.loads((HELM_CHART_DIR / "values.schema.json").read_text())
+    general = schema["properties"]["config"]["properties"]["general_settings"]
+    role_general = schema["properties"]["api"]["properties"]["config"]["properties"][
+        "general_settings"
+    ]
+    assert role_general["$ref"] == "#/properties/config/properties/general_settings"
+    assert general["properties"]["db_pool_size"]["maximum"] == 10000
+    error = _render_error("--set", "api.config.general_settings.db_pool_size=10001")
+    # Helm versions use different field paths and number separators.
+    error = error.replace("/", ".").replace(",", "")
+    assert "schema" in error
+    assert "api.config.general_settings.db_pool_size" in error
+    assert "10000" in error
     assert "PostgreSQL" in _render_error("--set", "api.config.general_settings.db_pool_size=1000")
 
 
