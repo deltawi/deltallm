@@ -465,3 +465,70 @@ async def test_ordinary_client_gate_records_failures_before_load(tmp_path, monke
     assert result["passed"] is (problem is None)
     assert len(requests) == len(result["requests"]) == 20
     assert requests.count(None) == 4
+
+
+@pytest.mark.parametrize("replace_all", [True, False])
+async def test_native_recovery_waits_for_restarts_and_requires_a_full_rollout(
+    tmp_path, monkeypatch, replace_all
+):
+    from tests.performance import native_recovery as recovery
+
+    class Cluster:
+        output = tmp_path
+        rolled = False
+        calls = []
+
+        def kubectl(self, *arguments, **options):
+            self.calls.append(arguments)
+            if arguments[0] != "get":
+                return SimpleNamespace(stdout="")
+            role = arguments[3].split("component=", 1)[1]
+            items = [
+                {
+                    "metadata": {
+                        "name": f"{role}-{index}",
+                        "uid": f"{role}-{index}-"
+                        + ("new" if self.rolled and replace_all else "old"),
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "containerStatuses": [{"restartCount": 0}],
+                    },
+                }
+                for index in range(recovery.ROLES[role])
+            ]
+            return SimpleNamespace(stdout=json.dumps({"items": items}))
+
+        def kill_container(self, name):
+            self.calls.append(("kill", name))
+            return "containerd://" + "a" * 64
+
+        def event(self, *arguments, **options):
+            self.calls.append(arguments)
+
+    cluster = Cluster()
+    overrides = []
+
+    def rollout(owner, values, *arguments):
+        assert owner is cluster and values == tmp_path / "values.yaml"
+        overrides.extend(arguments)
+        cluster.rolled = True
+
+    check = AsyncMock()
+    monkeypatch.setattr(recovery, "capacity_release", rollout)
+    monkeypatch.setattr(recovery, "check_clients", check)
+    if replace_all:
+        await recovery.verify_native_recovery(cluster, tmp_path / "values.yaml")
+        assert check.await_count == 2
+        result = json.loads((tmp_path / "native-recovery.json").read_text())
+        assert result["passed"] and len(result["process_losses"]) == 3
+    else:
+        with pytest.raises(RuntimeError, match="did not replace every process"):
+            await recovery.verify_native_recovery(cluster, tmp_path / "values.yaml")
+        assert check.await_count == 1
+        assert not (tmp_path / "native-recovery.json").exists()
+    assert len([call for call in cluster.calls if call[0] == "kill"]) == 3
+    waits = [call for call in cluster.calls if call[0] == "wait"]
+    assert len(waits) == 6
+    assert sum("restartCount" in call[1] for call in waits) == 3
+    assert len(overrides) == 6 and all("image" not in argument for argument in overrides)
