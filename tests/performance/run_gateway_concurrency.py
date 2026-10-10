@@ -8,6 +8,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -111,6 +112,7 @@ async def dependency_counts(db: Prisma, redis: Redis) -> dict[str, int]:
 
 
 def in_flight_series(run: RunResult) -> list[dict[str, float]]:
+    """Use every request lifetime, not one phase-sensitive instant per second."""
     events = sorted(
         [(sample.start_offset_seconds, 1) for sample in run.samples]
         + [(sample.completion_offset_seconds, -1) for sample in run.samples]
@@ -118,11 +120,24 @@ def in_flight_series(run: RunResult) -> list[dict[str, float]]:
     current = 0
     cursor = 0
     points = []
-    for second in range(int(run.arrival_window_seconds) + 1):
-        while cursor < len(events) and events[cursor][0] <= second:
+    previous = 0.0
+    for second in range(math.ceil(run.arrival_window_seconds)):
+        end = min(float(second + 1), run.arrival_window_seconds)
+        area = 0.0
+        while cursor < len(events) and events[cursor][0] <= end:
+            when = events[cursor][0]
+            area += current * (when - previous)
+            previous = when
             current += events[cursor][1]
             cursor += 1
-        points.append({"offset_seconds": float(second), "client_in_flight": float(current)})
+        area += current * (end - previous)
+        previous = end
+        points.append(
+            {
+                "offset_seconds": (second + end) / 2,
+                "client_in_flight": area / (end - second),
+            }
+        )
     return points
 
 
@@ -304,6 +319,7 @@ async def measure(
                 resource_recorder.evidence() if resource_recorder is not None else None
             ),
             "client_in_flight": in_flight_series(run),
+            "client_in_flight_method": "time-weighted mean per one-second interval from every request lifetime",
             "error_counts": dict(Counter(sample.error for sample in run.samples if sample.error)),
             "dependency_call_deltas_including_background": {
                 name: after.get(name, 0) - before.get(name, 0)

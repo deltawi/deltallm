@@ -5,6 +5,7 @@ import hashlib
 import json
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 from pydantic import ValidationError
@@ -28,6 +29,111 @@ from tests.performance.run_gateway_concurrency import error_code, valid_completi
 from tests.performance.summarize_historical_concurrency import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def lifetime(start: float, finish: float) -> SimpleNamespace:
+    return SimpleNamespace(start_offset_seconds=start, completion_offset_seconds=finish)
+
+
+def test_live_request_series_integrates_overlaps_and_partial_last_interval():
+    run = SimpleNamespace(
+        arrival_window_seconds=2.5,
+        samples=[lifetime(0.25, 1.25), lifetime(0.75, 1.5), lifetime(2.25, 3.5)],
+    )
+    assert workload.in_flight_series(run) == [
+        {"offset_seconds": 0.5, "client_in_flight": 1.0},
+        {"offset_seconds": 1.5, "client_in_flight": 0.75},
+        {"offset_seconds": 2.25, "client_in_flight": 0.5},
+    ]
+
+
+def test_live_request_series_keeps_empty_and_zero_duration_intervals():
+    run = SimpleNamespace(arrival_window_seconds=2.0, samples=[lifetime(0.5, 0.5)])
+    assert workload.in_flight_series(run) == [
+        {"offset_seconds": 0.5, "client_in_flight": 0.0},
+        {"offset_seconds": 1.5, "client_in_flight": 0.0},
+    ]
+
+
+def test_live_request_series_uses_all_work_when_boundary_phase_changes():
+    from tests.performance.run_native_qualification import latency_and_queue_gates
+
+    run = SimpleNamespace(
+        arrival_window_seconds=60.0,
+        samples=[
+            lifetime(second + 0.995 + second * 0.00005, second + 0.999 + second * 0.00005)
+            for second in range(60)
+        ],
+    )
+    series = workload.in_flight_series(run)
+    # A single instant at an integer second changes from zero to one active
+    # request. Total request time remains constant; do not create queue growth.
+    expected = sum(
+        min(sample.completion_offset_seconds, 60) - sample.start_offset_seconds
+        for sample in run.samples
+    )
+    assert sum(point["client_in_flight"] for point in series) == pytest.approx(expected)
+    assert max(point["client_in_flight"] for point in series) <= 0.0042
+    report = {
+        "latency_seconds": {"p95": 0.004, "p99": 0.004},
+        "success_count": 60,
+        "target_count": 60,
+        "client_in_flight": series,
+    }
+    assert latency_and_queue_gates(report)["queue_passed"]
+    report["client_in_flight"] = [
+        {
+            "offset_seconds": second,
+            "client_in_flight": sum(
+                sample.start_offset_seconds <= second < sample.completion_offset_seconds
+                for sample in run.samples
+            ),
+        }
+        for second in range(61)
+    ]
+    assert not latency_and_queue_gates(report)["queue_passed"]
+
+
+def test_time_weighted_gate_rejects_small_real_latency_growth():
+    from tests.performance.run_native_qualification import latency_and_queue_gates
+
+    report = {
+        "latency_seconds": {"p95": 0.028, "p99": 0.028},
+        "success_count": 12000,
+        "target_count": 12000,
+        "client_in_flight": workload.in_flight_series(
+            SimpleNamespace(
+                arrival_window_seconds=60.0,
+                samples=[
+                    lifetime(index / 200, index / 200 + 0.02 + index / 200 * 0.000125)
+                    for index in range(12000)
+                ],
+            )
+        ),
+    }
+    gate = latency_and_queue_gates(report)
+    assert 0.024 < gate["in_flight_slope_per_second"] < 0.026
+    assert not gate["queue_passed"]
+
+
+def test_time_weighted_growth_gate_still_rejects_real_accumulation():
+    from tests.performance.run_native_qualification import latency_and_queue_gates
+
+    report = {
+        "latency_seconds": {"p95": 0.02, "p99": 0.03},
+        "success_count": 60,
+        "target_count": 60,
+        "client_in_flight": workload.in_flight_series(
+            SimpleNamespace(
+                arrival_window_seconds=60.0,
+                samples=[lifetime(second, 120.0) for second in range(60)],
+            )
+        ),
+    }
+    gate = latency_and_queue_gates(report)
+    assert gate["success_passed"] and gate["p95_passed"] and gate["p99_passed"]
+    assert gate["in_flight_slope_per_second"] == pytest.approx(1.0)
+    assert not gate["queue_passed"]
 
 
 @pytest.mark.asyncio

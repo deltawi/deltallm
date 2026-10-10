@@ -317,7 +317,7 @@ def latency_and_queue_gates(report: dict[str, object]) -> dict[str, object]:
         "p99_passed": latency["p99"] is not None and latency["p99"] <= 0.300,
         "in_flight_slope_per_second": slope,
         "queue_passed": slope <= 0.01,
-        "queue_method": "least-squares slope over the middle 80 percent of the arrival window",
+        "queue_method": "least-squares slope of per-second time-weighted live requests over the middle 80 percent of the arrival window",
     }
 
 
