@@ -361,8 +361,20 @@ in each role, and a same-image Helm rollout. All seven processes were replaced.
 Both recovery phases repeated 24 completions, four complete streams, 16
 functional checks, readiness, and exact accounting. The pod records also show
 initial API startup retries before load. Their previous logs were not retained;
-their cause is not proved. The normal run will retain initial status and previous
-logs before arrivals. A passing load result must not hide startup failures.
+their cause was not proved in that comparison. A fresh normal run retained
+initial status and previous logs before arrivals. All four APIs exited once
+because the admission monitor did not become ready within its five-second
+startup deadline. The operator stopped the run before a measured stage.
+Its cold client checks passed after the retries, but this is not a release pass.
+
+The old native probe schedule could take more than five seconds to publish a
+healthy accounting endpoint. The native overlay now checks startup and readiness
+each second. It keeps the same readiness checks, two positive observations,
+300-second startup grace, 15-second readiness failure tolerance, and liveness
+settings. Application and request deadlines do not change. The new schedule
+passed its focused chart tests. A fresh normal run must prove startup without
+retries and complete all release checks. A passing load result must not hide
+startup failures.
 
 ### Functional readiness
 

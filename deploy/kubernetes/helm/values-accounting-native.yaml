@@ -7,6 +7,19 @@ runtime:
       name: deltallm-accounting-rpc
       signingKey: accounting-rpc-signing-secret
 
+# Publish healthy role endpoints within the API's existing startup deadline.
+# Keep two positive readiness checks, 300-second startup grace, and the
+# 15-second readiness failure tolerance. Liveness is unchanged.
+probes:
+  startup:
+    periodSeconds: 1
+    failureThreshold: 300
+  readiness:
+    initialDelaySeconds: 0
+    periodSeconds: 1
+    successThreshold: 2
+    failureThreshold: 15
+
 dependencyCapacity:
   extended:
     fileDescriptors:

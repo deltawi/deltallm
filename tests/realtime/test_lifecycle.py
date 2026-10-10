@@ -9,14 +9,21 @@ from src.realtime.runtime import RealtimeRuntime
 from tests.realtime.fakes import Admission
 
 
-async def test_drain_budget_is_cleanup_plus_write_and_is_never_restarted():
+async def test_drain_budget_is_cleanup_plus_write_and_is_never_restarted(monkeypatch):
+    now = 125.027366399
+    started = now
+    monkeypatch.setattr(asyncio.get_running_loop(), "time", lambda: now)
     drain = RealtimeDrain(RealtimeLimits(cleanup_seconds=2, write_seconds=3))
     deadline = drain.begin()
-    assert deadline - drain.cleanup_deadline == 3
+    assert drain.cleanup_deadline == started + 2
+    assert deadline == started + 2 + 3
+    now += 1
     async with drain.cleanup():
         await asyncio.sleep(0)
+    now += 0.5
     async with drain.close_socket():
         await asyncio.sleep(0)
+    assert drain.cleanup_deadline == started + 2
     assert drain.begin() == deadline
 
 
