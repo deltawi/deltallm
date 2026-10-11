@@ -3,6 +3,8 @@
 A tier is a reusable plan for organizations. It can define which models are available, their prices
 and limits, and how shared capacity is protected.
 
+--8<-- "videos/budgets-and-rate-limits.html"
+
 Use tiers when several organizations should receive the same plan. For a small installation, direct
 organization access and limits may be simpler.
 

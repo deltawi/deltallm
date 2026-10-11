@@ -3,6 +3,8 @@
 Use more than one deployment when you need extra capacity, a backup provider, or a controlled
 traffic split. Keep one public name so applications do not need to know which deployment answered.
 
+--8<-- "videos/routing-and-failover.html"
+
 ## Before you start
 
 - Connect and test one model first.

@@ -3,6 +3,8 @@
 A route group puts several deployments behind one public name. Use one when you need planned
 traffic splitting, a standby deployment, or a routing policy that can be tested before release.
 
+--8<-- "videos/routing-and-failover.html"
+
 ## Create a route group
 
 You need platform administrator access and at least one healthy deployment of the same request type.

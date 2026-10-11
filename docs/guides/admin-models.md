@@ -3,6 +3,8 @@
 The Models page connects DeltaLLM to a provider model. Applications call the public model name you
 choose instead of the provider's model name.
 
+--8<-- "videos/adding-models.html"
+
 ## Add a model
 
 You need platform administrator access and a provider key or saved provider credential.

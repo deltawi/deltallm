@@ -3,6 +3,8 @@
 A model in DeltaLLM points to an AI provider and one of its models. Your application calls the
 public name you choose, while DeltaLLM keeps the provider details and credentials separate.
 
+--8<-- "videos/adding-models.html"
+
 ## Find the sample model {#check-for-the-sample-model}
 
 The Docker starter configuration can add a model named `gpt-4o-mini`.
