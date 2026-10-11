@@ -1,8 +1,10 @@
 """Real role graphs fund locally, accept journals, recover, and withdraw admission."""
 
 import asyncio
+from contextlib import AsyncExitStack
 from decimal import Decimal
 import logging
+import os
 from time import perf_counter
 from uuid import uuid4
 
@@ -11,6 +13,7 @@ import httpx
 import pytest
 
 from src.accounting_settings import AccountingProtocolSettings
+from src.config import DatabaseConnectionSettings
 from src.api.internal_accounting import accounting_rpc_router
 from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
 from src.bootstrap.accounting_local import build_api_accounting_runtime
@@ -19,6 +22,7 @@ from src.bootstrap.accounting_role_builders import (
     build_accounting_request_runtime,
 )
 from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.runtime.accounting_pool import AccountingPostgresClient, AccountingPostgresManager
 from src.db.accounting.reporting.accounting_read_model_queries import CLAIM, INITIALIZE, PROGRESS
 from src.db.runtime.telemetry_acceptance import classify_acceptance_failure
 from src.lifecycle_settings import LifecycleSettings
@@ -89,7 +93,38 @@ def lifecycle():
     return ProcessLifecycle(LifecycleSettings())
 
 
-async def graph(clients, generation, *, native_lanes=False):
+@pytest.fixture
+async def role_resources(accounting_db):
+    # Close native pools before the control fixture deletes its generation.
+    async with AsyncExitStack() as resources:
+        yield resources
+
+
+async def native_role_client(
+    resources: AsyncExitStack, config: AccountingProtocolSettings
+) -> AccountingPostgresClient:
+    manager = AccountingPostgresManager()
+    resources.push_async_callback(manager.disconnect)
+    await manager.connect(
+        DatabaseConnectionSettings(
+            url=os.environ["DATABASE_URL"],
+            pool_size=config.accounting_hot_path_db_pool_size,
+            pool_timeout=1,
+        ),
+        pool_size=config.accounting_hot_path_db_pool_size,
+        acquisition_seconds=0.2,
+        statement_seconds=config.accounting_statement_timeout_ms / 1000,
+        lock_seconds=0.2,
+        allocation="dedicated",
+    )
+    if manager.client is None:
+        raise RuntimeError("Native role test requires its owned database client")
+    return manager.client
+
+
+async def graph(
+    clients, generation, *, resources: AsyncExitStack | None = None, native_lanes=False
+):
     config = AccountingProtocolSettings(
         accounting_protocol_enabled=True,
         accounting_protocol_generation=generation,
@@ -99,11 +134,17 @@ async def graph(clients, generation, *, native_lanes=False):
         accounting_hot_path_db_pool_size=8 if native_lanes else 2,
         accounting_projection_batch_size=256 if native_lanes else 64,
     )
-    projected = ProcessingClient(clients[0])
+    projection_client, request_client = clients
+    if native_lanes:
+        if resources is None:
+            raise ValueError("Native role test requires lifecycle-owned database resources")
+        projection_client = await native_role_client(resources, config)
+        request_client = await native_role_client(resources, config)
+    projected = ProcessingClient(projection_client)
     projection = build_accounting_projection_runtime(
         projected, config, lifecycle(), owner_id="role-test"
     )
-    request = build_accounting_request_runtime(clients[1], config, lifecycle())
+    request = build_accounting_request_runtime(request_client, config, lifecycle())
     app = FastAPI()
     app.include_router(accounting_rpc_router(request.service, signing_secret="role-test-secret"))
     wire = Wire(app)
@@ -130,12 +171,13 @@ async def graph(clients, generation, *, native_lanes=False):
 @pytest.mark.parametrize("native_lanes", [False, True])
 async def test_role_graph_has_real_startup_health_zero_call_warm_issue_and_exact_drain(
     accounting_db,
+    role_resources,
     lose_projection,
     native_lanes,
 ):
     clients, generation = accounting_db
     projection, request, api, transport, wire, projected = await graph(
-        clients, generation, native_lanes=native_lanes
+        clients, generation, resources=role_resources, native_lanes=native_lanes
     )
     window = str(uuid4())
     await _create_window(clients[0], generation, window)
@@ -208,9 +250,42 @@ async def test_request_role_without_actual_projection_presence_cannot_start(acco
     assert runtime.monitor.task is not None and runtime.monitor.task.done()
 
 
-async def test_native_projection_role_renews_recurring_budget_before_admission(accounting_db):
+async def test_native_role_graph_rejects_unowned_database_resources(accounting_db):
     clients, generation = accounting_db
-    projection, request, api, transport, _, _ = await graph(clients, generation, native_lanes=True)
+    with pytest.raises(ValueError, match="requires lifecycle-owned database resources"):
+        await graph(clients, generation, native_lanes=True)
+
+
+async def test_native_role_graph_uses_production_client_and_server_deadlines(
+    accounting_db, role_resources
+):
+    clients, generation = accounting_db
+    _, _, _, transport, _, projected = await graph(
+        clients, generation, resources=role_resources, native_lanes=True
+    )
+    try:
+        assert isinstance(projected.db, AccountingPostgresClient)
+        (row,) = await projected.query_raw(
+            "SELECT current_setting('statement_timeout') AS statement_timeout,"
+            "current_setting('lock_timeout') AS lock_timeout,"
+            "current_setting('idle_in_transaction_session_timeout') AS idle_timeout"
+        )
+        assert row == {
+            "statement_timeout": "250ms",
+            "lock_timeout": "200ms",
+            "idle_timeout": "250ms",
+        }
+    finally:
+        await transport.close()
+
+
+async def test_native_projection_role_renews_recurring_budget_before_admission(
+    accounting_db, role_resources
+):
+    clients, generation = accounting_db
+    projection, request, api, transport, _, _ = await graph(
+        clients, generation, resources=role_resources, native_lanes=True
+    )
     window = str(uuid4())
     await _create_window(clients[0], generation, window)
     await clients[0].execute_raw(
