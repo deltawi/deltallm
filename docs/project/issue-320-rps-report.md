@@ -55,8 +55,25 @@ socket race. The provider fixture closes idle connections after five seconds;
 the gateway default retains them for sixty seconds. A close after pool checkout
 caused a read error. A four-second client idle limit passed the same test without
 POST retries or a longer deadline. This proves a failure mode, not the cause of
-the historical 503 response. The next upper-tier diagnostic retains the failure
-type before any profile change is selected.
+the historical 503 response.
+
+The unchanged-profile diagnostic `diagnosis-provider-failure-trace-12cpu`
+then passed one ten-minute 500 RPS stage on clean `3d19938e`, image `ef17cf0f`.
+It returned 300,000 successes, no errors or drops, p95/p99 77.97/119.73 ms,
+growth -0.013962/second, exact charges, and complete drain in 0.533 seconds.
+Cold functions, bounded maintenance, loss of one process in each role, and the
+full seven-process Helm rollout passed. The historical error did not recur;
+no underlying cause is claimed from this pass. This selected-tier diagnostic
+is not release qualification. Its saved diagnostic schedule records 600 seconds;
+the generic CLI manifest still records the supplied short-duration argument.
+
+The qualification profile now explicitly expires upstream idle connections
+after four seconds. The fixed provider explicitly keeps its existing five-second
+limit. Two profile regressions failed before this correction. A deterministic
+clock test checks actual pool expiry and exactly two POST sends, with no retry.
+The production sixty-second default, request deadlines, health policy, monetary
+rules, and all qualification limits remain unchanged. The corrected profile
+still requires a new full, fixed-image campaign.
 
 ## Passing fixed-image qualification on 11 October 2026
 

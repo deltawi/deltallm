@@ -27,7 +27,7 @@ from tests.performance.cluster_load_generator import (
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.gateway_concurrency_diagnostics import KubernetesResourceRecorder
 from tests.performance.lifecycle_cluster import LifecycleCluster, LOAD_KEY, MASTER_KEY, SALT_KEY
-from tests.performance.lifecycle_fixtures import CHART
+from tests.performance.lifecycle_fixtures import CHART, PROVIDER_KEEPALIVE_SECONDS
 from tests.performance.native_qualification_economics import (
     accounting_snapshot,
     reconcile_native,
@@ -155,6 +155,8 @@ def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
         redis_critical_max_waiters=64,
         redis_cache_max_waiters=0,
         redis_bulk_max_waiters=0,
+        # Close idle sockets before the fixed provider's five-second limit.
+        upstream_http_keepalive_expiry_seconds=PROVIDER_KEEPALIVE_SECONDS - 1,
     )
     values["networkPolicy"].update(
         ingress=[{"from": [{"podSelector": {}}], "ports": [{"port": 4000, "protocol": "TCP"}]}],

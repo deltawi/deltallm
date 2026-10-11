@@ -443,6 +443,7 @@ def test_qualification_profile_and_generator_keep_fixed_bounded_topology(tmp_pat
     assert settings["gateway_preflight_org_max_parallel"] == 150
     assert settings["prompt_negative_cache_enabled"]
     assert settings["prompt_negative_l1_ttl_seconds"] == 30
+    assert settings["upstream_http_keepalive_expiry_seconds"] == 4
     assert (
         values["accountingWorker"]["config"]["general_settings"]["accounting_hot_path_db_pool_size"]
         == 8
@@ -460,6 +461,22 @@ def test_qualification_profile_and_generator_keep_fixed_bounded_topology(tmp_pat
         assert "--expect-fixed-one-token" in container["args"]
         assert "--bypass-cache" in container["args"]
     assert len(calls) == 1
+
+
+def test_mock_provider_declares_the_five_second_idle_limit(monkeypatch):
+    from tests.performance.lifecycle_fixtures import install_dependencies
+
+    monkeypatch.chdir(shards.Path(__file__).resolve().parents[1])
+    calls = []
+    cluster = SimpleNamespace(apply=calls.append, kubectl=lambda *args: None)
+    install_dependencies(cluster, "gateway:unit")
+    provider = next(
+        document
+        for document in calls[0]
+        if document["kind"] == "Deployment" and document["metadata"]["name"] == "provider"
+    )
+    command = provider["spec"]["template"]["spec"]["containers"][0]["command"]
+    assert command[command.index("--timeout-keep-alive") + 1] == "5"
 
 
 @pytest.mark.parametrize(

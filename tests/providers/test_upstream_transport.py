@@ -86,6 +86,35 @@ async def test_reuses_idle_connections_without_duplicate_assignment(monkeypatch)
     assert all(stream.closed for stream in backend.streams)
 
 
+@pytest.mark.parametrize("expiry,connections", [(60.0, 1), (4.0, 2)])
+async def test_idle_expiry_uses_the_declared_limit_without_post_retries(
+    expiry, connections, monkeypatch
+):
+    backend = RecordingBackend()
+    transport = UpstreamHTTPTransport(
+        limits=httpx.Limits(max_connections=2, max_keepalive_connections=2, keepalive_expiry=expiry)
+    )
+    transport._pool._network_backend = backend
+    now = [100.0]
+    # Replace only the pool module clock. The event-loop clock stays real.
+    monkeypatch.setattr("httpcore2._async.http11.time", SimpleNamespace(monotonic=lambda: now[0]))
+    async with httpx.AsyncClient(transport=transport, trust_env=False) as client:
+        assert (
+            await client.post("http://provider.example/fixture", content=b"fixture")
+        ).status_code == 200
+        now[0] += 4.5
+        assert (
+            await client.post("http://provider.example/fixture", content=b"fixture")
+        ).status_code == 200
+        assert len(backend.streams) == connections
+        assert not transport._pool._requests
+        assert (
+            sum(chunk.startswith(b"POST ") for stream in backend.streams for chunk in stream.writes)
+            == 2
+        )
+    assert all(stream.closed for stream in backend.streams)
+
+
 async def test_stream_close_releases_pool_and_pool_timeout_keeps_request():
     backend = RecordingBackend()
     transport = transport_with_backend(backend)

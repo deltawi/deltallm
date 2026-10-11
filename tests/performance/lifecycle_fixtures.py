@@ -8,6 +8,7 @@ from tests.performance.lifecycle_batch import ITEM_LEASE_SECONDS
 from tests.performance.lifecycle_cluster import LifecycleCluster, MASTER_KEY, SALT_KEY
 
 CHART = Path("deploy/kubernetes/helm")
+PROVIDER_KEEPALIVE_SECONDS = 5
 
 
 def dependency(name: str, image: str, port: int, **container: object) -> list[dict]:
@@ -85,6 +86,8 @@ def install_dependencies(cluster: LifecycleCluster, image: str) -> None:
             "0.0.0.0",
             "--port",
             "8000",
+            "--timeout-keep-alive",
+            str(PROVIDER_KEEPALIVE_SECONDS),
             "--no-access-log",
         ],
         volumeMounts=[{"name": "fixture", "mountPath": "/fixture", "readOnly": True}],
