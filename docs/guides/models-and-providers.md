@@ -3,6 +3,8 @@
 A model deployment tells DeltaLLM which provider to call. Your application uses a public model
 name, so you can change the provider later without changing application code.
 
+--8<-- "videos/adding-models.html"
+
 ## Before you start
 
 You need:

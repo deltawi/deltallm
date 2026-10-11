@@ -9,6 +9,8 @@ repo_name: deltallm
 # they must never be rendered, indexed, or included in the public sitemap.
 exclude_docs: |
   internal/
+  # Shared snippets are pulled into pages by pymdownx.snippets, not published on their own.
+  includes/
 
 theme:
   name: material
@@ -54,7 +56,10 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path:
+        - docs/includes
+      check_paths: true
   - tables
   - toc:
       permalink: true
@@ -73,6 +78,7 @@ nav:
       - Send your first request: getting-started/quickstart.md
       - Create an application key: getting-started/first-api-key.md
       - Set up a development environment: getting-started/installation.md
+  - Video tutorials: tutorials/index.md
   - Build with DeltaLLM:
       - features/index.md
       - Models and providers:
@@ -220,3 +226,6 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/deltawi/deltallm
+    - icon: fontawesome/brands/youtube
+      link: https://www.youtube.com/@deltallm
+      name: DeltaLLM on YouTube

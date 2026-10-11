@@ -23,3 +23,36 @@
 ::selection {
   background: rgb(139 124 255 / 0.22);
 }
+
+/* Tutorial video embeds (docs/includes/videos). Keep a 16:9 player at any width. */
+.md-typeset figure.video-embed {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 1.5em 0;
+}
+
+.md-typeset .video-embed__frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 0.4rem;
+  background: #05060d;
+  box-shadow: var(--md-shadow-z1);
+}
+
+.md-typeset .video-embed__frame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.md-typeset .video-embed figcaption {
+  max-width: none;
+  text-align: left;
+  margin-top: 0.6em;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}

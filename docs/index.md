@@ -17,6 +17,7 @@ and monitoring.
 | Run DeltaLLM in production | [Deploy and operate](deployment/index.md) |
 | Understand the main ideas | [Understand the system](concepts/index.md) |
 | Look up an API, setting, or provider | [Reference](reference/index.md) |
+| Watch short video walkthroughs | [Video tutorials](tutorials/index.md) |
 
 ## The shortest path to a working request
 

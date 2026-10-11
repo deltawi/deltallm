@@ -3,6 +3,8 @@
 Rate limits control how many requests or tokens can be used during a period. Start with the
 application key, then add shared team or organization limits only when you need them.
 
+--8<-- "videos/budgets-and-rate-limits.html"
+
 ## Choose where to set the limit
 
 | Goal | Set the limit on |

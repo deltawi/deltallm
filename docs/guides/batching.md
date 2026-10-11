@@ -3,6 +3,8 @@
 Use a batch when you have many requests and do not need each answer immediately. You upload a file,
 start the batch, wait for it to finish, and download the results.
 
+--8<-- "videos/batch-jobs.html"
+
 ## Before you start
 
 Enable batch processing in `config.yaml`, then restart DeltaLLM:

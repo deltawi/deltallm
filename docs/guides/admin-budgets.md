@@ -3,6 +3,8 @@
 Budgets help control application spending. A hard budget stops new requests when the available
 amount is used. A soft budget sends an alert but does not stop traffic.
 
+--8<-- "videos/budgets-and-rate-limits.html"
+
 ## Before you start
 
 Make sure each model has correct pricing information. Without pricing, DeltaLLM cannot calculate
