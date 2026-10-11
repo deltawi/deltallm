@@ -1,9 +1,12 @@
 """Signed calls have one deadline, fixed endpoints, and finite payload bytes."""
 
 import asyncio
+from types import SimpleNamespace
 
+import httpcore
 import httpx
 import pytest
+import uvicorn
 
 from src.billing.accounting.transport.accounting_auth import (
     ACCOUNTING_SIGNATURE_HEADER,
@@ -15,6 +18,7 @@ from src.billing.accounting.transport.accounting_http import AccountingHttpTrans
 from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.outbound.network_policy import OutboundNetworkPolicy
+from src.outbound.network_policy import OutboundResolutionError
 
 
 def transport(handler):
@@ -29,6 +33,112 @@ def transport(handler):
             allow_http=True, allowed_ports=(80,), resolver=resolve
         ),
     )
+
+
+@pytest.mark.parametrize("endpoint", ["/allocate/local/batch", "/finalize/local/batch"])
+async def test_idle_accounting_connections_expire_before_the_managed_server(endpoint, monkeypatch):
+    streams = []
+    writes = []
+
+    class Stream(httpcore.AsyncMockStream):
+        closed = False
+
+        async def write(self, buffer, timeout=None):
+            writes.append(buffer)
+
+        async def aclose(self):
+            self.closed = True
+            await super().aclose()
+
+    class Backend(httpcore.AsyncMockBackend):
+        async def connect_tcp(self, *args, **kwargs):
+            stream = Stream([b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]"] * 2)
+            streams.append(stream)
+            return stream
+
+    async def resolve(hostname, port):
+        return ("8.8.8.8",)
+
+    client = AccountingHttpTransport(
+        service_url="http://accounting.test",
+        signing_secret="test-secret",
+        network_policy=OutboundNetworkPolicy(
+            allow_http=True, allowed_ports=(80,), resolver=resolve
+        ),
+    )
+    pool = client._client._transport._pool
+    assert pool._keepalive_expiry < uvicorn.Config("src.main:app").timeout_keep_alive
+    pool._network_backend = Backend([])
+    now = [100.0]
+    # Replace only HTTP connection expiry. Keep the real caller deadline.
+    monkeypatch.setattr("httpcore._async.http11.time", SimpleNamespace(monotonic=lambda: now[0]))
+    try:
+        for _ in range(2):
+            assert (
+                await client.request(
+                    endpoint, b"[]", expires_at=asyncio.get_running_loop().time() + 1
+                )
+                == b"[]"
+            )
+            now[0] += 4.5
+        assert len(streams) == 2
+        assert sum(chunk.startswith(b"POST ") for chunk in writes) == 2
+        assert not pool._requests
+    finally:
+        await client.close()
+    assert all(stream.closed for stream in streams)
+
+
+@pytest.mark.parametrize(
+    "error,kind,status,reason",
+    [
+        (httpx.ReadError("hidden-secret"), "http_transport", "none", AcceptanceFailure.CONNECTION),
+        (
+            httpx.ConnectError("hidden-secret"),
+            "http_transport",
+            "none",
+            AcceptanceFailure.CONNECTION,
+        ),
+        (httpx.ReadTimeout("hidden-secret"), "deadline", "none", AcceptanceFailure.DEADLINE),
+        (OutboundResolutionError("hidden-secret"), "dns", "none", AcceptanceFailure.CONNECTION),
+        (
+            httpx.HTTPStatusError(
+                "hidden-secret",
+                request=httpx.Request("POST", "http://user:hidden-secret@accounting.test/private"),
+                response=httpx.Response(503, content=b"hidden-secret"),
+            ),
+            "http_status",
+            503,
+            AcceptanceFailure.CONNECTION,
+        ),
+    ],
+)
+async def test_transport_failure_log_keeps_only_fixed_safe_fields(
+    error, kind, status, reason, caplog
+):
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        raise error
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable) as raised:
+            await client.request(
+                "/finalize/local/batch",
+                b"hidden-secret",
+                expires_at=asyncio.get_running_loop().time() + 1,
+            )
+        assert raised.value.reason == reason.value
+        assert len(calls) == 1
+        assert caplog.messages == [
+            f"Accounting transport failed; endpoint=/finalize/local/batch kind={kind} status={status}"
+        ]
+        assert "hidden-secret" not in caplog.text
+        assert "accounting.test" not in caplog.text
+    finally:
+        await client.close()
 
 
 async def test_transport_signs_exact_bytes_and_never_retries_an_uncertain_admission():

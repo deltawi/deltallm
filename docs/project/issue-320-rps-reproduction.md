@@ -4,11 +4,21 @@ Use this guide with the [results report](issue-320-rps-report.md).
 The stored evidence is local. Do not assume that raw bundles are included in a PR.
 
 The original upgrade is merged. Its source branch was
-`codex/issue-320-main-integration`. The current release checks are in
-[PR #352](https://github.com/deltawi/deltallm/pull/352). PR #351 is merged.
+`codex/issue-320-main-integration`. The release follow-up in
+[PR #352](https://github.com/deltawi/deltallm/pull/352) is also merged.
+The internal accounting and Playground corrections are in
+[PR #353](https://github.com/deltawi/deltallm/pull/353). PR #351 is merged.
 Use the fixed candidate
 commit and evidence recorded there for current qualification. The following
 historical bundles do not qualify the later merged release image.
+
+Current app evidence uses clean `1045d5a9` and image `03f95d3b3068`. All required
+CI and installed main-app checks passed. The selected 60-second 500 RPS
+diagnostic passed. Both approved ten-minute 500 RPS preflights then failed;
+neither reached the final four stages or recovery. The first uses harness
+`7b564124` with twelve CPUs and 12 GiB RAM. The second uses harness `4b38075a`
+with twelve CPUs and 8 GiB RAM. Both use the same app image and limits. Keep
+these failed results separate from the earlier complete qualification.
 
 Current qualification uses the normal runner without `--diagnostic-rates`.
 It checks ordinary clients before load, then runs a fixed 60-second same-rate
@@ -20,6 +30,14 @@ cooling pause occurs inside a measured stage. The runner saves samples and
 requires accounting to drain between stages. It ends with native process-loss
 and same-image Helm rollout checks. Keep all gates active and retain failed
 attempts. A selected-tier diagnostic is not a release qualification.
+
+The approved `--high-rate-preflight` option replaces only the initial low-rate
+short screens. It first measures 500 RPS for 600 seconds, then measures 50, 100,
+200, and 500 RPS for 600 seconds each. Every stage keeps the 60-second same-rate
+warm-up, original acceptance limits, exact charges, and complete drain. Native
+process-loss and same-image Helm rollout checks still run after the full series.
+Do not combine this option with `--diagnostic-rates`. The manifest records each
+stage and duration. The default sequence remains unchanged.
 
 The current native runner declares and records PostgreSQL fixture resources
 and live settings in `database-fixture.json`. Its limits are four CPUs and four
@@ -59,13 +77,63 @@ directions need a client idle limit below the receiving server or proxy limit.
 No provider request retry is added. Use the saved configuration for older runs;
 do not change an older result to this new profile.
 
+The earlier `613fc1ca` campaign failed final 100 RPS after initial 500 RPS passed.
+Its original evidence is retained in `qualification-final-upstream-idle-12cpu`.
+That source still used thirty-second internal accounting connection expiry.
+The accounting follow-up uses four seconds below the managed server's five
+seconds, with no POST retry or longer deadline. It also records fixed failure
+categories and HTTP status codes without exception text, signatures, or URLs.
+Use a new clean source-matched image to test that correction. Do not change the
+older image identity or treat its failed campaign as passing qualification.
+
 Transport failures retain fixed failure-phase and reason codes, connection-reuse
 status, and available phase times. Unknown reasons remain unknown. No exception
 message, key, or response body enters these diagnostic fields. A failed warm-up
 or measured stage saves bounded server logs before process-loss or rollout
 checks replace the original pods. Retain those logs with the raw samples.
 
-## Complete release qualification bundle
+## Current preflight evidence bundle
+
+The local bundle `artifacts/release-readiness-20261011-preflight/` retains both
+new failed preflights, their raw samples, host traces, financial state, installed
+function checks, and current CI. It also retains the preceding app and selected
+load evidence. Its index preserves all earlier stage decisions. The bundle
+includes the exact image, clean harness history, fixed tools, and a reproduction
+wrapper. No complete current-image qualification is present.
+
+Use a fresh checkout of `4b38075a1763f67e7cad249518ba98b00cad508f`. This harness
+contains only test and documentation changes after the app image commit.
+The tested Python runtime hash remains `91f73195c2a360408f7d4ceb8df9d5f0d41f3fdcfba38e6b8a3629f6b6fa391b`.
+The image ID remains
+`sha256:03f95d3b30685c2ce3088ee262423847a0c350eebe3440afeb65a78dbfce3f26`.
+Do not rebuild the image and claim the same artifact identity.
+
+```sh
+task_preflight_bundle=/absolute/path/to/artifacts/release-readiness-20261011-preflight
+task_preflight_checkout=/absolute/path/to/new/preflight-reproduction
+python3 "$task_preflight_bundle/tools/export_qualification_evidence.py" \
+  --output "$task_preflight_bundle" --verify
+git bundle verify "$task_preflight_bundle/current-source.bundle"
+git clone --no-checkout "$task_preflight_bundle/current-source.bundle" "$task_preflight_checkout"
+git -C "$task_preflight_checkout" checkout --detach 4b38075a1763f67e7cad249518ba98b00cad508f
+cd "$task_preflight_checkout"
+uv sync --frozen --extra dev --python 3.11.13
+uv run --frozen prisma generate --schema=prisma/schema.prisma
+export DOCKER_CONTEXT=your-idle-dedicated-docker-context
+export PREFLIGHT_VM_MEMORY_GIB=8
+export PREFLIGHT_EVIDENCE=/absolute/path/to/new/preflight-evidence
+bash "$task_preflight_bundle/reproduce-preflight.sh"
+```
+
+Declare twelve VM CPUs and either 8 or 12 GiB RAM. Set
+`PREFLIGHT_VM_MEMORY_GIB` to that value. Do not stop unrelated workloads to
+make this setting fit. Check physical-host headroom before starting. The
+wrapper rejects a dirty checkout, running containers, or a mismatched image.
+It runs the approved preflight schedule with all unchanged gates. The saved
+tools are for macOS arm64; use the pinned versions for another host. The
+two original environments and their outcomes remain separate records.
+
+## Earlier complete release qualification bundle
 
 The local bundle `artifacts/release-readiness-20261010/` retains the passing
 `qualification-final-client-idle-12cpu` sequence and all earlier attempts.

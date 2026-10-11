@@ -76,20 +76,32 @@ FIXTURE_IMAGES = (
 
 
 def qualification_schedule(
-    short_seconds: int, diagnostic_rates: tuple[int, ...] | None
+    short_seconds: int,
+    diagnostic_rates: tuple[int, ...] | None,
+    *,
+    high_rate_preflight: bool = False,
 ) -> tuple[tuple[tuple[str, int], ...], tuple[int, ...]]:
+    if high_rate_preflight and diagnostic_rates is not None:
+        raise ValueError("High-rate preflight requires the complete qualification series")
     if diagnostic_rates is not None and (
         not diagnostic_rates
         or diagnostic_rates != tuple(sorted(set(diagnostic_rates)))
         or any(rate not in DIAGNOSTIC_RATES for rate in diagnostic_rates)
     ):
         raise ValueError("Diagnostic rates must be distinct supported tiers in increasing order")
-    phases = (
-        (("short", short_seconds),)
-        if diagnostic_rates is not None
-        else (("short", short_seconds), ("qualification", 600))
-    )
+    if high_rate_preflight:
+        phases = (("preflight", 600), ("qualification", 600))
+    else:
+        phases = (
+            (("short", short_seconds),)
+            if diagnostic_rates is not None
+            else (("short", short_seconds), ("qualification", 600))
+        )
     return phases, RATES if diagnostic_rates is None else diagnostic_rates
+
+
+def phase_rates(phase: str, rates: tuple[int, ...]) -> tuple[int, ...]:
+    return (500,) if phase == "preflight" else rates
 
 
 def merge_values(base: dict, overlay: dict) -> dict:
@@ -660,6 +672,7 @@ async def exercise(
     *,
     short_seconds: int,
     diagnostic_rates: tuple[int, ...] | None = None,
+    high_rate_preflight: bool = False,
 ) -> list[dict[str, object]]:
     with ExitStack() as forwards:
         postgres = forwards.enter_context(cluster.forward("service/postgres", 5432))
@@ -717,9 +730,11 @@ async def exercise(
         if not initial_drain["passed"]:
             raise RuntimeError("Accounting startup did not reach an empty baseline")
         results = []
-        phases, rates = qualification_schedule(short_seconds, diagnostic_rates)
+        phases, rates = qualification_schedule(
+            short_seconds, diagnostic_rates, high_rate_preflight=high_rate_preflight
+        )
         for phase, duration in phases:
-            for rate in rates:
+            for rate in phase_rates(phase, rates):
                 await record_stage_result(
                     partial(
                         run_stage,
@@ -739,9 +754,9 @@ async def exercise(
                     proof=proof,
                     results=results,
                 )
-            if phase == "short" and any(not result["passed"] for result in results):
+            if phase in {"short", "preflight"} and any(not result["passed"] for result in results):
                 raise RuntimeError(
-                    "Short qualification ladder failed; ten-minute series was not started"
+                    "Initial qualification checks failed; final ten-minute series was not started"
                 )
         if diagnostic_rates is not None:
             return results
@@ -793,6 +808,11 @@ def main() -> None:
     parser.add_argument("--kind", default="kind")
     parser.add_argument("--short-seconds", type=int, default=30)
     parser.add_argument(
+        "--high-rate-preflight",
+        action="store_true",
+        help="Replace low-rate short screens with 600 seconds at 500 RPS; keep all final stages",
+    )
+    parser.add_argument(
         "--diagnostic-rates",
         type=int,
         nargs="+",
@@ -804,7 +824,9 @@ def main() -> None:
         parser.error("Use a fresh evidence directory and a short duration from 10 to 60 seconds")
     diagnostic_rates = None if args.diagnostic_rates is None else tuple(args.diagnostic_rates)
     try:
-        qualification_schedule(args.short_seconds, diagnostic_rates)
+        phases, rates = qualification_schedule(
+            args.short_seconds, diagnostic_rates, high_rate_preflight=args.high_rate_preflight
+        )
     except ValueError as error:
         parser.error(str(error))
     manifest = candidate_manifest(args.image, allow_dirty=False)
@@ -834,12 +856,24 @@ def main() -> None:
             else "native accounting fixed-image 50/100/200/500 RPS qualification"
         ),
         diagnostic_rates=diagnostic_rates,
+        high_rate_preflight=args.high_rate_preflight,
         warmup_seconds=WARMUP_SECONDS,
+        stage_schedule=[
+            {
+                "phase": phase,
+                "rate_rps": rate,
+                "duration_seconds": stage_seconds(
+                    phase, rate, duration, diagnostic=diagnostic_rates is not None
+                ),
+            }
+            for phase, duration in phases
+            for rate in phase_rates(phase, rates)
+        ],
         initial_stage_seconds={
             str(rate): stage_seconds(
-                "short", rate, args.short_seconds, diagnostic=diagnostic_rates is not None
+                phases[0][0], rate, phases[0][1], diagnostic=diagnostic_rates is not None
             )
-            for rate in (RATES if diagnostic_rates is None else diagnostic_rates)
+            for rate in phase_rates(phases[0][0], rates)
         },
         release_eligible=False,
         docker_environment=environment,
@@ -860,6 +894,7 @@ def main() -> None:
                     args.image,
                     short_seconds=args.short_seconds,
                     diagnostic_rates=diagnostic_rates,
+                    high_rate_preflight=args.high_rate_preflight,
                 )
             )
         finally:

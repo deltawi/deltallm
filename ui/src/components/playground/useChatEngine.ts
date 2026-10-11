@@ -41,6 +41,10 @@ function nowTimestamp() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption | null }): ChatEngine {
   const { apiKey, selectedModel } = opts;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -105,6 +109,7 @@ export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption
           frequency_penalty: params.freqPenalty,
           presence_penalty: params.presPenalty,
           stream: true,
+          stream_options: { include_usage: true },
         }),
         signal: controller.signal,
       });
@@ -117,7 +122,7 @@ export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let assistantContent = '';
-      let usage: any = null;
+      let usage: Record<string, unknown> = {};
 
       if (reader) {
         let buffer = '';
@@ -127,9 +132,11 @@ export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption
           const data = trimmed.slice(6);
           if (data === '[DONE]') return;
           try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta?.content;
-            if (delta) {
+            const parsed: unknown = JSON.parse(data);
+            if (!isRecord(parsed)) return;
+            const choice = Array.isArray(parsed.choices) ? parsed.choices[0] : undefined;
+            const delta = isRecord(choice) && isRecord(choice.delta) ? choice.delta.content : undefined;
+            if (typeof delta === 'string' && delta) {
               assistantContent += delta;
               setMessages((prev) => {
                 const last = prev[prev.length - 1];
@@ -147,7 +154,7 @@ export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption
                 ];
               });
             }
-            if (parsed.usage) usage = parsed.usage;
+            if (isRecord(parsed.usage)) usage = parsed.usage;
           } catch {
             /* ignore partial JSON */
           }
@@ -187,15 +194,16 @@ export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption
       });
 
       setLastStats({
-        promptTokens: usage?.prompt_tokens ?? 0,
-        completionTokens: usage?.completion_tokens ?? 0,
-        totalTokens: usage?.total_tokens ?? 0,
+        promptTokens: typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0,
+        completionTokens: typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0,
+        totalTokens: typeof usage.total_tokens === 'number' ? usage.total_tokens : 0,
         latencyMs,
         model: selectedModel.name,
       });
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        setError(err.message || 'Request failed');
+    } catch (err: unknown) {
+      const failure = isRecord(err) ? err : null;
+      if (failure?.name !== 'AbortError') {
+        setError(typeof failure?.message === 'string' && failure.message ? failure.message : 'Request failed');
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.id === 'streaming') return prev.slice(0, -1);

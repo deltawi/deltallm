@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import logging
+import re
 from time import perf_counter
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import httpx
+from prisma._async_http import Response as EngineResponse
+from prisma.engine.errors import EngineRequestError
+from prisma.engine.errors import UnprocessableEntityError
 
 from src.auth.external_client import ExternalClientResolver
 from src.auth.external_config import ExternalAuthSettings
@@ -34,6 +39,27 @@ def install_session_diagnostics(service):
         except ExternalAuthUnavailable as error:
             cause = error.__cause__
             code = getattr(cause, "code", None)
+            engine_status, engine_reason = None, "unknown"
+            if isinstance(cause, EngineRequestError):
+                engine_status = cause.response.status
+                body = await cause.response.text()
+                if len(body) <= 16_384:
+                    found = re.search(r"\bP[0-9]{4}\b", body)
+                    code = found.group() if found else code
+                    lowered = body.lower()
+                    engine_reason = next(
+                        (
+                            reason
+                            for marker, reason in (
+                                ("expired", "transaction_expired"),
+                                ("transaction already closed", "transaction_closed"),
+                                ("graphql", "graphql"),
+                                ("malformed", "malformed"),
+                            )
+                            if marker in lowered
+                        ),
+                        "unknown",
+                    )
             if (
                 not isinstance(code, str)
                 or len(code) != 5
@@ -42,14 +68,36 @@ def install_session_diagnostics(service):
             ):
                 code = None
             logging.getLogger(__name__).warning(
-                "External customer fixture phase=session_validation cause=%s code=%s elapsed_ms=%.3f",
+                "External customer fixture phase=session_validation cause=%s code=%s "
+                "engine_status=%s engine_reason=%s elapsed_ms=%.3f",
                 type(cause).__name__,
                 code,
+                engine_status,
+                engine_reason,
                 (perf_counter() - started) * 1000,
             )
             raise
 
     service.get_context_for_session = observed
+
+
+async def test_session_diagnostics_do_not_log_engine_body_or_session(external_database, caplog):
+    exchange, _, _ = services(external_database)
+    engine_error = UnprocessableEntityError(
+        EngineResponse(httpx.Response(422, text="P2028 transaction expired secret-engine-body"))
+    )
+
+    async def unavailable(token):
+        raise ExternalAuthUnavailable() from engine_error
+
+    exchange.identities.get_context_for_session = unavailable
+    install_session_diagnostics(exchange.identities)
+    with pytest.raises(ExternalAuthUnavailable):
+        await exchange.identities.get_context_for_session("secret-client-session")
+    assert "code=P2028" in caplog.text
+    assert "engine_status=422 engine_reason=transaction_expired" in caplog.text
+    assert "secret-engine-body" not in caplog.text
+    assert "secret-client-session" not in caplog.text
 
 
 async def install_customer(fixture, app, client):

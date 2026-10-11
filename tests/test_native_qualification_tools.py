@@ -20,6 +20,7 @@ from tests.performance.run_gateway_concurrency import generator_evidence_failure
 from tests.performance.run_native_qualification import (
     latency_and_queue_gates,
     qualification_schedule,
+    phase_rates,
     stage_seconds,
     qualification_values,
 )
@@ -34,6 +35,29 @@ def test_full_qualification_keeps_both_four_tier_series():
     phases, rates = qualification_schedule(30, None)
     assert phases == (("short", 30), ("qualification", 600))
     assert rates == (50, 100, 200, 500)
+
+
+def test_high_rate_preflight_keeps_every_full_stage_and_its_original_duration():
+    phases, rates = qualification_schedule(30, None, high_rate_preflight=True)
+    assert phases == (("preflight", 600), ("qualification", 600))
+    assert rates == (50, 100, 200, 500)
+    assert [
+        (phase, rate, stage_seconds(phase, rate, seconds, diagnostic=False))
+        for phase, seconds in phases
+        for rate in phase_rates(phase, rates)
+    ] == [
+        ("preflight", 500, 600),
+        ("qualification", 50, 600),
+        ("qualification", 100, 600),
+        ("qualification", 200, 600),
+        ("qualification", 500, 600),
+    ]
+
+
+@pytest.mark.parametrize("rates", [(500,), (50, 100, 200, 500), (1000,)])
+def test_high_rate_preflight_cannot_be_combined_with_a_partial_diagnostic(rates):
+    with pytest.raises(ValueError, match="complete qualification series"):
+        qualification_schedule(30, rates, high_rate_preflight=True)
 
 
 def test_cluster_generator_closes_idle_connections_before_the_server():
@@ -107,8 +131,13 @@ def test_selected_tiers_reject_missing_duplicate_unsorted_or_unsupported_rates(r
         qualification_schedule(30, rates)
 
 
-@pytest.mark.parametrize("rates", [(200, 500), (50, 100, 200, 500), (1000,)])
-def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkeypatch, rates):
+@pytest.mark.parametrize(
+    "rates,high_rate_preflight",
+    [((200, 500), False), ((50, 100, 200, 500), False), ((1000,), False), (None, True)],
+)
+def test_cli_records_full_stages_and_never_qualifies_a_partial_diagnostic(
+    tmp_path, monkeypatch, rates, high_rate_preflight
+):
     output = tmp_path / "diagnostic"
 
     class Cluster:
@@ -134,7 +163,9 @@ def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkey
     monkeypatch.setattr(qualification, "preload_images", lambda *args: "metrics:fixture")
     monkeypatch.setattr(qualification, "qualification_values", lambda *args: tmp_path / "values")
     monkeypatch.setattr(qualification, "collect_native_logs", lambda *args: None)
-    exercise = AsyncMock(return_value=[{"passed": True} for _ in rates])
+    exercise = AsyncMock(
+        return_value=[{"passed": True} for _ in (rates or (500, 50, 100, 200, 500))]
+    )
     monkeypatch.setattr(qualification, "exercise", exercise)
     monkeypatch.setattr(
         sys,
@@ -145,15 +176,57 @@ def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkey
             "fixture:sealed",
             "--output",
             str(output),
-            "--diagnostic-rates",
-            *(str(rate) for rate in rates),
+            *(
+                ["--high-rate-preflight"]
+                if high_rate_preflight
+                else ["--diagnostic-rates", *(str(rate) for rate in rates)]
+            ),
         ],
     )
     qualification.main()
     manifest = json.loads((output / "manifest.json").read_text())
-    assert manifest["diagnostic_passed"]
-    assert not manifest["qualification_passed"] and not manifest["release_eligible"]
+    if high_rate_preflight:
+        assert manifest["qualification_passed"] and manifest["release_eligible"]
+        assert "diagnostic_passed" not in manifest
+        assert manifest["initial_stage_seconds"] == {"500": 600}
+        assert [(stage["phase"], stage["rate_rps"]) for stage in manifest["stage_schedule"]] == [
+            ("preflight", 500),
+            ("qualification", 50),
+            ("qualification", 100),
+            ("qualification", 200),
+            ("qualification", 500),
+        ]
+        assert all(stage["duration_seconds"] == 600 for stage in manifest["stage_schedule"])
+    else:
+        assert manifest["diagnostic_passed"]
+        assert not manifest["qualification_passed"] and not manifest["release_eligible"]
+    assert manifest["warmup_seconds"] == 60
+    assert manifest["high_rate_preflight"] is high_rate_preflight
     assert exercise.call_args.kwargs["diagnostic_rates"] == rates
+    assert exercise.call_args.kwargs["high_rate_preflight"] is high_rate_preflight
+
+
+def test_cli_rejects_partial_high_rate_preflight_before_external_checks(tmp_path, monkeypatch):
+    image_check = AsyncMock()
+    monkeypatch.setattr(qualification, "candidate_manifest", image_check)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "qualification",
+            "--image",
+            "fixture:sealed",
+            "--output",
+            str(tmp_path / "unused"),
+            "--high-rate-preflight",
+            "--diagnostic-rates",
+            "500",
+        ],
+    )
+    with pytest.raises(SystemExit) as error:
+        qualification.main()
+    assert error.value.code == 2
+    image_check.assert_not_called()
 
 
 def test_retained_runtime_metrics_use_only_fixed_diagnostic_labels():

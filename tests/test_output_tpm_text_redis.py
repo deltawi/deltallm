@@ -984,14 +984,41 @@ async def test_anthropic_records_only_complete_raw_output_evidence(output_app, o
 
 
 @pytest.mark.parametrize("cap", [40, 80])
-async def test_admitted_retry_finishes_after_unknown_attempt(output_app, cap):
+@pytest.mark.parametrize("cross_minute", [False, True])
+async def test_admitted_retry_finishes_after_unknown_attempt(
+    output_app, cap, cross_minute, monkeypatch
+):
     from dataclasses import replace
     from tests.mcp.test_chat_execution import _tool_call_response
+    from src.services.admission import output_limit_redis
+    from src.services.admission.output_limit_lua import OUTPUT_ACCOUNTING_SCRIPT
+    from src.services.admission.output_limit_types import OutputAccountingEvent, OutputSnapshot
+    from src.services.admission.redis_lua import RedisLuaScript
 
     app, redis, record, environment = output_app
     manager = app.state.failover_manager
     manager.config = replace(manager.config, num_retries=1)
     dispatches = []
+    minute_start = int((await redis.time())[0]) // 60 * 60
+    account = app.state.limit_counter.account_output
+    snapshots: list[OutputSnapshot] = []
+
+    async def account_at_fixed_time(event: OutputAccountingEvent) -> OutputSnapshot:
+        # Real Lua and receipts stay active. Only the clock is controlled.
+        # A retry can finish in the next minute and correctly clear unknown state.
+        now = minute_start + (60 if cross_minute and snapshots else 30)
+        expression = "tonumber(redis.call('TIME')[1])"
+        assert OUTPUT_ACCOUNTING_SCRIPT.count(expression) == 1
+        monkeypatch.setattr(
+            output_limit_redis,
+            "OUTPUT_ACCOUNTING_LUA",
+            RedisLuaScript(OUTPUT_ACCOUNTING_SCRIPT.replace(expression, str(now))),
+        )
+        snapshot = await account(event)
+        snapshots.append(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(app.state.limit_counter, "account_output", account_at_fixed_time)
 
     async def upstream(request):
         dispatches.append(json.loads(request.content))
@@ -1018,9 +1045,20 @@ async def test_admitted_retry_finishes_after_unknown_attempt(output_app, cap):
             )
     assert response.status_code == 200, response.text
     assert len(dispatches) == 2
+    assert len(snapshots) == 2
+    assert snapshots[0].window_id == minute_start // 60
+    assert snapshots[0].current_values == (0,) and snapshots[0].unknown == (True,)
+    assert snapshots[1].window_id == minute_start // 60 + int(cross_minute)
+    assert snapshots[1].current_values == (1,)
+    assert snapshots[1].unknown == (not cross_minute,)
     assert int(await redis.hget(bucket_key(record, environment), "used")) == 1
-    assert int(await redis.hget(bucket_key(record, environment), "unknown")) == 1
-    assert "x-ratelimit-remaining-output-tokens" not in response.headers
+    assert int(await redis.hget(bucket_key(record, environment), "unknown")) == int(
+        not cross_minute
+    )
+    if cross_minute:
+        assert response.headers["x-ratelimit-remaining-output-tokens"] == "99"
+    else:
+        assert "x-ratelimit-remaining-output-tokens" not in response.headers
 
 
 async def test_successful_missing_stream_usage_pauses_new_calls_until_reset(output_app):
