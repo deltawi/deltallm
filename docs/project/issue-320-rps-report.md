@@ -5,11 +5,77 @@ Original source branch: `codex/issue-320-main-integration`.
 
 The upgrade and the request-identity fix are now merged. All required PR checks
 passed for [PR #351](https://github.com/deltawi/deltallm/pull/351), merged at
-`0c622b47`. Native qualification and the declared database fixture remain under
-test. Use the complete qualification report to assess the corrected release.
+`0c622b47`. The follow-up in [PR #352](https://github.com/deltawi/deltallm/pull/352)
+now has complete passing native qualification with the declared database fixture.
 The older results below are not a certificate for the current release image.
 
-## Full fixed-image sequence on 11 October 2026
+## Passing fixed-image qualification on 11 October 2026
+
+Campaign: `qualification-final-client-idle-12cpu`. Clean harness: `8a98ce73`.
+Runtime: `c70d63cd`; fixed image ID:
+`sha256:8c9e5e246361f05904420cbddf600ebb0cd263761dd20e83b4ebb10dcdd882d9`.
+Runtime source SHA-256:
+`66400e34d0a69609b6d24244d89d96f26302ec9821db7e44e4f8a2a0e5f780e0`.
+
+One unchanged image ran on two kind nodes in a twelve-CPU, 12-GiB Linux arm64 VM.
+The generator, immediate one-token provider, monitoring, PostgreSQL, and Redis
+shared that VM. Required native accounting and response-cache bypass were active.
+Each stage had a separate 60-second same-rate warm-up. Each final stage lasted
+600 seconds, with earlier history retained and no cooling pause inside the window.
+
+| Final rate | Successful / scheduled | p95 / p99 | Growth / second | Full stage decision |
+| --- | ---: | ---: | ---: | --- |
+| 50 RPS | 30,000 / 30,000 | 22.86 / 26.15 ms | -0.000015 | Passed |
+| 100 RPS | 60,000 / 60,000 | 23.53 / 28.09 ms | -0.000062 | Passed |
+| 200 RPS | 120,000 / 120,000 | 28.16 / 41.67 ms | +0.000131 | Passed |
+| 500 RPS | 300,000 / 300,000 | 95.15 / 179.39 ms | +0.003885 | Passed |
+
+Every final stage had zero HTTP errors, client errors, and dropped arrivals.
+Success, latency, growth, Redis, exact-charge, and drain gates passed. The limits
+remained p95 at most 150 ms, p99 at most 300 ms, and growth at most +0.01 active
+requests per second. At final 500 RPS, Redis used 6.000057 core round trips per
+request. Accounting drained in 0.942 seconds, with no pending work, open grants,
+unsettled operations, or unsafe windows. All four scopes matched the durable facts.
+
+All initial stages and all eight warm-ups also passed. The separate initial
+600-second 500 RPS stage had 300,000 successes, p95/p99 61.00/101.27 ms, and
+growth -0.000397/second. All seven initial process restart counts were zero.
+
+### Functional and release checks
+
+Cold installation, process-loss recovery, and the full same-image Helm rollout
+each passed 24 client completions, including four complete streams, and
+16 functional checks. These covered model visibility, required authentication,
+invalid-input rejection, packaged UI, request IDs, readiness, exact charges,
+and safe drain. Process loss covered one API, one accounting request owner,
+and one reporting owner. The rollout replaced all seven processes. Bounded
+database maintenance passed. Final accounting held 922,580 facts and charge
+`6.458060`, with no pending or unsafe state.
+
+[CI run 38099909019](https://github.com/deltawi/deltallm/actions/runs/38099909019)
+passed all thirteen required jobs on the qualified harness. These included all
+five Python dependency lanes, migration paths, Helm, UI, lint, capacity acceptance,
+and both lifecycle variants. Separate image checks passed non-root startup,
+offline behavior, memory checks, and graceful exit.
+
+The local bundle is `artifacts/release-readiness-20261010/` in the primary repository.
+It retains raw samples, warm-ups, charges, startup and recovery records, earlier
+failures, CI records, exact image, source history, pinned tools, and reproduction
+steps. See the [reproduction guide](issue-320-rps-reproduction.md).
+
+This is better sustained 500 RPS evidence than the six-CPU sequence, but CPU and
+database profiles differ. Do not attribute the gain to one code change. The native
+load client now expires idle connections after four seconds, below the server's
+five seconds, without POST retries or longer deadlines. A controlled socket test
+proved the equal-limit race, not the cause of the two historical read errors.
+The earlier CI startup cause also remains unproved. Failed records are unchanged.
+
+This qualifies the declared synthetic profile, not real-provider latency, long
+streams, a mixed production workload, or a hardware minimum. Published pre-releases
+do not contain this full follow-up. Merge and test the exact new release artifact
+before changing Latest.
+
+## Earlier failed fixed-image sequence on 11 October 2026
 
 Campaign: `qualification-final-native-probes-12cpu`. Clean harness: `f38e6890`.
 Runtime: `c70d63cd`; fixed image: `8c9e5e24`. The VM had twelve CPUs and 12 GiB

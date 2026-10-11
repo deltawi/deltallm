@@ -14,11 +14,11 @@ accounting. It does not represent long model replies, large bodies or streaming.
 
 | Target | Current evidence | Required before a production capacity claim |
 | --- | --- | --- |
-| 50 RPS | Reporting-corrected image passed ten minutes with 30,000 successes and p95/p99 22.64/25.99 ms | Complete the full release checks and test the real traffic mix |
-| 100 RPS | Same image passed ten minutes with 60,000 successes and p95/p99 23.46/27.68 ms | Same checks, with measured provider and dependency headroom |
-| 200 RPS | Same image passed ten minutes with 120,000 successes and p95/p99 27.84/43.23 ms | Same checks, including peak concurrency and worker catch-up |
-| 500 RPS | Final stage had 299,998 successes, two client read errors, and p95/p99 90.63/174.74 ms; its full decision failed | Pass all four normal stages and the remaining CI checks |
-| 1,000 RPS | Earlier 30-second diagnostic failed; the reporting-corrected image has not been tested at this rate | Repeat only after the current sustained 500 RPS and functional gates pass |
+| 50 RPS | Full fixed-image sequence passed ten minutes with 30,000 successes and p95/p99 22.86/26.15 ms | Test the exact release image and real traffic mix |
+| 100 RPS | Same sequence passed ten minutes with 60,000 successes and p95/p99 23.53/28.09 ms | Same checks, with measured provider and dependency headroom |
+| 200 RPS | Same sequence passed ten minutes with 120,000 successes and p95/p99 28.16/41.67 ms | Same checks, including peak concurrency and worker catch-up |
+| 500 RPS | Same sequence passed ten minutes with 300,000 successes, no errors or drops, and p95/p99 95.15/179.39 ms | Qualify production storage, retained history, recovery, and real response duration |
+| 1,000 RPS | Earlier 30-second diagnostic failed; the reporting-corrected image has not been tested at this rate | Run a new declared diagnostic before making this claim |
 
 The fixed candidate's six-CPU series is not a passing release qualification. There is no
 verified production hardware minimum for each tier. Earlier RPS results do not
@@ -39,10 +39,13 @@ ordinary clients without request-ID headers, exact accounting, process recovery,
 and a same-image Helm rollout. Use the recorded final result, not an interim
 passing stage, before making a release capacity claim.
 
-The 11 October sequence passed cold functional checks, bounded database
-maintenance, process loss in all three roles, and the same-image Helm rollout.
-It did not pass the final 500 RPS all-success financial gate or the latest CI
-run. These passing functional checks do not remove either failed result.
+The complete `8a98ce73` sequence on 11 October passed all four final ten-minute
+stages, cold functional checks, bounded database maintenance, process loss in
+all three roles, and the same-image Helm rollout. Every installed-client phase
+passed streaming, authentication, model visibility, invalid-input, UI, request-ID,
+readiness, exact-charge, and drain checks. All thirteen required CI jobs passed.
+The earlier `f38e6890` sequence and CI failures remain in the report; they were
+not changed into passes.
 
 Set client idle connection expiry below the gateway or proxy idle timeout.
 The native test client uses four seconds against the installed server's five
@@ -61,8 +64,8 @@ has the complete current qualification evidence.
 
 ## Measured reference topology
 
-The original complete series used a dedicated Linux arm64 VM with six CPUs and
-12 GiB RAM.
+The passing current series used a dedicated Linux arm64 VM with twelve CPUs and
+12 GiB RAM. The earlier complete series used six CPUs and did not pass 500 RPS.
 Its two-node kind cluster shared that VM; it did not have two separate hardware
 failure domains. The generator, synthetic provider, monitoring, PostgreSQL and
 Redis also used the VM.
@@ -72,7 +75,8 @@ Redis also used the VM.
 | API | Four pods, one process per pod | 1 / 2 cores | 256 MiB / 1 GiB |
 | Accounting request | Two pods, one process per pod | 0.1 / 2 cores | 256 MiB / 1 GiB |
 | Accounting projection | One pod, one process | 0.1 / 2 cores | 256 MiB / 1 GiB |
-| PostgreSQL and Redis | One pod each, test services only | 0.1 / 2 cores each | 128 MiB / 1 GiB each |
+| PostgreSQL | One pod, test service only | 1 / 4 cores | 1 / 4 GiB |
+| Redis | One pod, test service only | 0.1 / 2 cores | 128 MiB / 1 GiB |
 
 This is a reproduction configuration, not a production installation recipe.
 The earlier database comparison used eight VM CPUs and the same 12 GiB RAM. PostgreSQL
@@ -132,8 +136,9 @@ health criteria, two positive readiness observations, 300-second startup grace,
 five-second admission-monitor startup deadline stays unchanged. Verify cold
 startup without process retries; do not use load warm-up to hide startup faults.
 
-Pod limits do not add physical CPU capacity: the sum of these limits exceeds the
-shared VM's six CPUs. At 1,000 RPS the VM was 99.11% busy. Increasing only a pool,
+Pod limits do not add physical CPU capacity: their sum exceeds the physical
+capacity of the shared VM. In the earlier six-CPU 1,000 RPS diagnostic, the VM
+was 99.11% busy. Increasing only a pool,
 pod limit or HPA maximum does not establish that this bottleneck is removed.
 
 For production, give API processes usable CPU and memory based on their measured
