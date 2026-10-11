@@ -388,6 +388,8 @@ def collect_native_logs(cluster: LifecycleCluster, *, output: Path | None = None
     for name, arguments in (
         ("postgres", ("deployment/postgres",)),
         ("gateway", ("-l", "app.kubernetes.io/instance=gateway", "--all-containers", "--prefix")),
+        ("provider", ("deployment/provider",)),
+        ("redis", ("deployment/redis",)),
     ):
         try:
             result = cluster.kubectl(

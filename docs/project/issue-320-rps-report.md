@@ -6,8 +6,57 @@ Original source branch: `codex/issue-320-main-integration`.
 The upgrade and the request-identity fix are now merged. All required PR checks
 passed for [PR #351](https://github.com/deltawi/deltallm/pull/351), merged at
 `0c622b47`. The follow-up in [PR #352](https://github.com/deltawi/deltallm/pull/352)
-now has complete passing native qualification with the declared database fixture.
+has an earlier passing native qualification with the declared database fixture.
+The newer reporting-migration image failed its initial 500 RPS stage.
+The PR remains in draft while this failure is checked.
 The older results below are not a certificate for the current release image.
+
+## New reporting-migration image: failed initial stability stage
+
+Campaign: `qualification-final-reporting-execution-12cpu`. Clean source:
+`de9f3e73f0d8581e7b1bc7b909655dff6df6b1b2`. Image ID:
+`sha256:0d438731f6041f40519bc6e9d8c20f6ab89e13666e00e7fd96aaae32b7e6d2c8`.
+The dedicated VM had twelve CPUs and 12 GiB RAM. All limits and all fixed
+60-second warm-ups remained unchanged.
+
+Cold functional checks and the initial 30-second 50/100/200 RPS stages passed.
+The 500 RPS warm-up passed all 30,000 requests. Its ten-minute stability stage
+then returned 269,795 successes from 300,000 scheduled requests and 30,205 HTTP
+503 responses. There were no HTTP 500 responses or dropped arrivals. Measured
+p95/p99 were 58.41/103.40 ms; these timings do not make the failed stage pass.
+
+One provider-unavailable response preceded 30,204 routing rejections while the
+only provider was in cooldown. The old log did not retain the transport error
+type, so its underlying cause is not proved. All seven initial process restart
+counts were zero. Do not treat the later routing rejections as 30,204 separate
+provider failures.
+
+After the 181-second drain deadline, one operation with an uncertain provider
+outcome remained provisional. Its reserve remained held. There were no open
+grants, pending terminal or reporting work, or unsafe budget windows. This
+safe but unresolved operation failed the complete-drain gate. Do not refund
+an uncertain provider result merely to make qualification pass.
+
+The runner stopped before the four final ten-minute stages, maintenance,
+process-loss recovery, or rollout. This image is not release-qualified.
+All thirteen required jobs in
+[CI run 38107746425](https://github.com/deltawi/deltallm/actions/runs/38107746425)
+passed on this source, including both real-database groups and migration paths.
+Passing CI alone does not replace the failed load result.
+
+The next candidate adds a fixed, non-sensitive transport failure type to the
+existing provider adapter log. It also retains bounded provider and Redis logs
+before cluster cleanup. Public errors, provider health, retries, deadlines,
+and accounting rules remain unchanged. All 123 focused transport and
+qualification-tool checks passed. The original failed records remain retained.
+
+A controlled loopback test with the actual provider adapter reproduced an idle
+socket race. The provider fixture closes idle connections after five seconds;
+the gateway default retains them for sixty seconds. A close after pool checkout
+caused a read error. A four-second client idle limit passed the same test without
+POST retries or a longer deadline. This proves a failure mode, not the cause of
+the historical 503 response. The next upper-tier diagnostic retains the failure
+type before any profile change is selected.
 
 ## Passing fixed-image qualification on 11 October 2026
 

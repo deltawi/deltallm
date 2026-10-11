@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterable, AsyncIterator, Iterator
 from contextlib import contextmanager
+import logging
 
 import httpcore2
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 # Specific exceptions must precede their parents. Provider/router code continues
@@ -36,6 +39,8 @@ def _httpx_errors(request: httpx.Request | None = None) -> Iterator[None]:
     except Exception as exc:
         for core_type, httpx_type in _ERROR_TYPES:
             if isinstance(exc, core_type):
+                # The allowlisted type is safe; exception text and URLs are not.
+                logger.warning("Provider transport failed; kind=%s", httpx_type.__name__)
                 raise httpx_type(str(exc), request=request) from exc
         raise
 
