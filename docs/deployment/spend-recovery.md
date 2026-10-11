@@ -76,9 +76,10 @@ cutover validation uses the resolved file/environment values at startup; adding 
 explicit default cannot silently change environment precedence during reload.
 
 The protocol adds a short pre-provider transaction per attempted deployment. Its
-whole-operation deadline is 250 ms, further bounded by the existing routing attempt
-deadline; statement, lock and acquisition limits remain enforced by the database
-allocation. Final receipt acceptance also has a 250 ms caller bound and skips the
+whole-operation deadline is 1 s. This is longer than the 250 ms used by other billing
+transactions, because this write waits on the global admission lock and can open a cold
+database connection right after a pod restarts. Statement, lock and acquisition limits
+remain enforced by the database allocation. Final receipt acceptance also has a 250 ms caller bound and skips the
 global admission/capacity lock. PR8 makes receipt and unknown-state updates single
 atomic SQL statements, removing interactive transaction start, timeout setup and
 commit round trips. Native statement/lock limits still come from the owned

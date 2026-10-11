@@ -47,10 +47,10 @@ class BillingOperationRepository:
 
     @asynccontextmanager
     async def _transaction(
-        self, expires_at: float, *, settlement: bool = False
+        self, expires_at: float, *, settlement: bool = False, budget: float | None = None
     ) -> AsyncIterator[Prisma]:
         database = self.settlement_db if settlement else self.db
-        async with billing_transaction(database, expires_at) as tx:
+        async with billing_transaction(database, expires_at, budget=budget) as tx:
             yield tx
 
     async def reserve(self, operation: BillingOperation, *, expires_at: float) -> ReservedOperation:

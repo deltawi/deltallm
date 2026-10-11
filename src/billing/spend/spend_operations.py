@@ -9,6 +9,11 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from src.models.errors import RoutingFailureAction, ServiceUnavailableError
 
+# The pre-provider admission write queues on the global admission lock and can land
+# on a cold connection right after a pod restart, so it gets a longer bound than the
+# shared 250 ms billing transaction budget.
+ADMISSION_BUDGET_SECONDS = 1.0
+
 
 class SpendPersistenceUnavailable(ServiceUnavailableError):
     error_type = "spend_persistence_unavailable"

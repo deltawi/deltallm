@@ -15,12 +15,14 @@ DB_BUDGET_SECONDS = 0.25
 
 
 @asynccontextmanager
-async def billing_transaction(db: Prisma, expires_at: float) -> AsyncIterator[Prisma]:
+async def billing_transaction(
+    db: Prisma, expires_at: float, *, budget: float | None = None
+) -> AsyncIterator[Prisma]:
     """A bounded transaction shared by durable billing intent owners."""
     now = asyncio.get_running_loop().time()
     if not math.isfinite(expires_at) or expires_at <= now:
         raise BillingOperationUnavailable()
-    remaining = min(expires_at - now, DB_BUDGET_SECONDS)
+    remaining = min(expires_at - now, DB_BUDGET_SECONDS if budget is None else budget)
     try:
         async with asyncio.timeout(remaining):
             async with db.tx(
