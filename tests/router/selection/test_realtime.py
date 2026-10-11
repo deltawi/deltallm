@@ -51,6 +51,9 @@ def configure(test_app, client, *, independent=False):
         "selector": {
             "kind": "llm-tier",
             "classifier_deployment_id": "classifier",
+            # Mocked classification is instant, but a loaded CI runner can take
+            # longer than the 750 ms default to drive it through the app.
+            "timeout_ms": 5_000,
             "lanes": [
                 {"id": "economy", "rank": 0, "description": "Routine"},
                 {"id": "quality", "rank": 1, "description": "Complex"},
