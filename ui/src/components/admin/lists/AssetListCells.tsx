@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, Copy, type LucideIcon } from 'lucide-react';
 
 export function CopyIdentifier({ value, label = 'User ID' }: { value?: string | null; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -24,7 +24,7 @@ export function CopyIdentifier({ value, label = 'User ID' }: { value?: string | 
   };
   return <div className="relative min-w-0" onClick={(event) => event.stopPropagation()}>
     <button ref={button} type="button" aria-label={`Copy ${label.toLowerCase()} ${value}`} title={value} onClick={() => void copy()} className="inline-flex max-w-full items-center gap-1.5 rounded py-1 text-left text-xs text-gray-700 hover:text-brand-primary-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
-      <code className="min-w-0 break-all"><span className="hidden md:inline">{short}</span><span className="md:hidden">{value}</span></code>{copied ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <Copy className="h-3.5 w-3.5 shrink-0 text-gray-400" />}
+      <code className="min-w-0 break-all md:whitespace-nowrap md:break-normal"><span className="hidden md:inline">{short}</span><span className="md:hidden">{value}</span></code>{copied ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <Copy className="h-3.5 w-3.5 shrink-0 text-gray-400" />}
     </button>
     <span className="sr-only" role="status">{copied ? `${label} copied` : ''}</span>
     {manual ? <label className="mt-1 block text-xs text-gray-500">Select the ID and copy it.<input ref={input} value={value} readOnly aria-label={`${label} to copy`} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setManual(false); button.current?.focus(); } }} className="mt-1 w-full min-w-0 rounded border border-gray-300 p-1.5 font-mono text-base md:text-xs" /></label> : null}
@@ -34,7 +34,7 @@ export function CopyIdentifier({ value, label = 'User ID' }: { value?: string | 
 export function UpdatedAt({ value }: { value?: string | null }) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return <span className="text-xs text-gray-400">Not recorded</span>;
-  return <time dateTime={value!} title={date.toLocaleString()} className="whitespace-nowrap text-xs tabular-nums text-gray-700">{date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}<span className="mt-0.5 block text-gray-400">{date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}</span></time>;
+  return <time dateTime={value!} title={date.toLocaleString(undefined, { timeZoneName: 'short' })} className="whitespace-nowrap text-xs tabular-nums text-gray-700">{date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}<span className="ml-1.5 text-gray-400">{date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span></time>;
 }
 
 export function Visibility({ value }: { value?: string | null }) {
@@ -42,10 +42,13 @@ export function Visibility({ value }: { value?: string | null }) {
   return <span className="text-xs capitalize text-gray-500">{visibility}</span>;
 }
 
-export function ListIdentity({ name, identifier, onOpen, secondary, actions }: { name: string; identifier: string; onOpen: () => void; secondary?: ReactNode; actions?: ReactNode }) {
+export function ListIdentity({ name, identifier, onOpen }: { name: string; identifier: string; onOpen: () => void }) {
   return <div className="min-w-40 max-w-72">
-    <div className="flex items-center gap-2"><button type="button" onClick={(event) => { event.stopPropagation(); onOpen(); }} title={name} className="min-w-0 flex-1 break-words rounded text-left text-sm font-medium text-gray-900 hover:text-brand-primary-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary md:truncate">{name}</button>{actions ? <div className="flex shrink-0 items-center gap-0.5" onClick={(event) => event.stopPropagation()}>{actions}</div> : null}</div>
-    <code title={identifier} className="mt-0.5 block truncate text-xs text-gray-400">{identifier}</code>
-    {secondary ? <div className="mt-1 text-xs text-gray-500">{secondary}</div> : null}
+    <button type="button" onClick={(event) => { event.stopPropagation(); onOpen(); }} title={name} className="block max-w-full break-words rounded text-left text-sm font-medium text-gray-900 hover:text-brand-primary-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary md:truncate">{name}</button>
+    <code title={identifier} className="block truncate text-xs text-gray-400">{identifier}</code>
   </div>;
+}
+
+export function RowAction({ label, icon: Icon, onClick, destructive, disabled }: { label: string; icon: LucideIcon; onClick: () => void; destructive?: boolean; disabled?: boolean }) {
+  return <button type="button" aria-label={label} title={label} onClick={onClick} disabled={disabled} className={`rounded-lg p-2 md:p-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary disabled:opacity-50 ${destructive ? 'text-red-500 hover:bg-red-50' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="h-4 w-4" /></button>;
 }

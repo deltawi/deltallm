@@ -7,7 +7,11 @@ import json
 import math
 from typing import TYPE_CHECKING
 
-from src.billing.spend.spend_operations import OperationHandle, SpendPersistenceUnavailable
+from src.billing.spend.spend_operations import (
+    ADMISSION_BUDGET_SECONDS,
+    OperationHandle,
+    SpendPersistenceUnavailable,
+)
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.db.billing.billing_operations import BillingOperationRepository
 from src.db.billing.billing_transaction import DB_BUDGET_SECONDS
@@ -41,7 +45,9 @@ class SpendOperationRepository:
             raise SpendPersistenceUnavailable()
         previous = handle.intent.model_dump(mode="json")
         previous["attempts"] = previous["attempts"][:-1]
-        async with self.transactions._transaction(expires_at) as tx:
+        async with self.transactions._transaction(
+            expires_at, budget=ADMISSION_BUDGET_SECONDS
+        ) as tx:
             # Keep this lock-only statement separate: the mutation must read a
             # new PostgreSQL snapshot after an earlier admission waiter commits.
             await SpendIngestionRepository(tx)._lock_enqueue_admission()
