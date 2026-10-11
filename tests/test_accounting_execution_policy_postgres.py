@@ -9,6 +9,8 @@ import pytest
 
 from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
 from src.billing.accounting.accounting_protocol import ReserveDecision
+from src.db.accounting.reporting.accounting_read_model import AccountingReadModelRepository
+from src.db.accounting.reporting.accounting_read_model_queries import CLAIM, PROGRESS, RECOVER_CLAIM
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_local_leases_postgres import allocation, deadline, owner
 from tests.test_accounting_protocol_postgres import (
@@ -28,15 +30,15 @@ accounting_db = _accounting_db
 FUNCTION_POLICIES = (
     (
         "deltallm_accounting_claim_read_model(text,bigint,text,uuid,integer,integer)",
-        {"plan_cache_mode=force_custom_plan"},
+        {"plan_cache_mode=force_custom_plan", "jit=off"},
     ),
     (
         "deltallm_accounting_read_model_progress(text,bigint)",
-        {"plan_cache_mode=force_custom_plan"},
+        {"plan_cache_mode=force_custom_plan", "jit=off"},
     ),
     (
         "deltallm_accounting_recover_read_model_claim(text,bigint,text,uuid,integer)",
-        {"plan_cache_mode=force_custom_plan"},
+        {"plan_cache_mode=force_custom_plan", "jit=off"},
     ),
     (
         "deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)",
@@ -89,6 +91,46 @@ async def test_only_the_owned_function_settings_change(accounting_db, signature,
         "'deltallm_accounting_pending_legacy_work()'::regprocedure"
     )
     assert "jit=off" not in (unrelated[0]["proconfig"] or ())
+
+
+@pytest.mark.parametrize("planner", ["auto", "generic", "custom"])
+@pytest.mark.parametrize(
+    "query,tail,marker",
+    [
+        (CLAIM, ("execution-test", str(uuid4()), 30, 256), "candidates AS MATERIALIZED"),
+        (PROGRESS, (), "oldest_head_age_seconds"),
+        (RECOVER_CLAIM, ("execution-test", str(uuid4()), 256), "owned AS MATERIALIZED"),
+    ],
+    ids=["claim", "progress", "recover"],
+)
+async def test_reporting_skips_nested_compilation_and_restores_caller(
+    accounting_db, planner, query, tail, marker
+):
+    _, generation = accounting_db
+    async with capture_accounting_plans(os.environ["DATABASE_URL"], planner=planner) as captured:
+        connection = captured._connection
+        repository = AccountingReadModelRepository(captured, statement_budget_seconds=2)
+        await repository.initialize(generation=generation, expires_at=deadline())
+        await connection.execute("SET jit=on; SET jit_above_cost=0")
+        await captured.query_raw("SELECT sum(value) FROM generate_series(1,10) value")
+        assert any(plan.jit_functions > 0 for plan in captured.plans)
+        expected = {
+            setting: await connection.fetchval("SHOW " + setting)
+            for setting in ("jit", "jit_above_cost", "plan_cache_mode")
+        }
+        captured.plans.clear()
+        rows = await captured.query_raw(query, "accounting-read-model-v2", generation, *tail)
+        assert len(rows) == 1 and rows[0]["generation"] == generation
+        if query == PROGRESS:
+            assert rows[0]["slots"] == 4 and rows[0]["pending_partitions"] == 0
+        else:
+            assert rows[0]["accounting_partition"] is None
+        owned = [plan for plan in captured.plans if marker in plan.query]
+        assert owned and all(plan.jit_functions == 0 for plan in owned)
+        assert expected == {
+            setting: await connection.fetchval("SHOW " + setting) for setting in expected
+        }
+    assert captured.errors == []
 
 
 @pytest.mark.parametrize("planner", ["auto", "generic", "custom"])

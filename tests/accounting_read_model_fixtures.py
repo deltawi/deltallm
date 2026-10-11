@@ -21,6 +21,8 @@ async def wait_for_native_projection(db, progress, generation, *, timeout):
             rows = await db.query_raw(
                 "SELECT NOT EXISTS (SELECT 1 FROM deltallm_accounting_grants "
                 "WHERE generation=$1 AND state<>'closed') AND NOT EXISTS ("
+                "SELECT 1 FROM deltallm_accounting_terminal_capacity "
+                "WHERE generation=$1 AND pending_entries<>0) AND NOT EXISTS ("
                 "SELECT 1 FROM deltallm_accounting_events e LEFT JOIN "
                 "deltallm_accounting_projection_checkpoints c ON "
                 "c.protocol_name=e.protocol_name AND c.generation=e.generation "
