@@ -67,7 +67,32 @@ behavior and financial assertions remain. All 18 focused cases, including shared
 callers, passed. A
 five-connection Prisma trial passed in isolation, so pool size alone does not
 prove the historical cause. Final PR CI remains required; runtime and load
-harness are unchanged.
+harness are unchanged at that correction.
+
+CI run `38106061106` then failed five reporting-startup cases and one
+authentication fixture transaction. The native client correction alone was
+not sufficient. A diagnostic on the actual retained tables found that an empty
+reporting claim compiled 81 JIT functions, with estimated cost `116226.03`.
+The temporary-table plan checks did not expose this empty real-table case.
+Nine new regression cases failed on the original reporting functions.
+A new forward migration disables JIT only inside the three short reporting
+functions. It preserves custom plans, caller settings, query deadlines, and
+all financial rules. All 25 execution-policy cases and all 19 native-role and
+shared-caller cases passed on the two-CPU test VM. An actual-table diagnostic
+also passed: warm empty-claim and progress calls took 2.6 to 4.5 ms, compared
+with 20 to 22 ms before the migration. These are diagnostic timings, not RPS
+results. Full checks, final CI, and new-image qualification remain required.
+All 17 focused external-customer tests also passed with the original transaction
+deadline. The historical authentication transaction cause remains unproved.
+The passing fixed-image campaign above retains its original source and image;
+it is not a certificate for the new migration.
+
+A two-CPU local check also found a selector budget assertion before terminal
+work completed. A new regression proved that the shared test drain check could
+return while its authoritative terminal-work counter was nonzero. The test
+helper now requires that counter to be zero as well as closed grants and
+projected events. All original financial assertions and deadlines remain.
+This changes test synchronization, not application accounting.
 
 The local bundle is `artifacts/release-readiness-20261010/` in the primary repository.
 It retains raw samples, warm-ups, charges, startup and recovery records, earlier

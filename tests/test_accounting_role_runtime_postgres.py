@@ -256,6 +256,32 @@ async def test_native_role_graph_rejects_unowned_database_resources(accounting_d
         await graph(clients, generation, native_lanes=True)
 
 
+async def test_projection_wait_cannot_finish_with_pending_terminal_work(accounting_db):
+    clients, generation = accounting_db
+    db = clients[0]
+    await db.execute_raw(
+        "INSERT INTO deltallm_accounting_terminal_capacity "
+        "(protocol_name,generation,accounting_partition,max_entries,pending_entries) "
+        "VALUES ('primary',$1,0,1000,1)",
+        generation,
+    )
+    try:
+        assert await db.query_raw(
+            "SELECT count(*)::integer AS count FROM deltallm_accounting_terminal_capacity "
+            "WHERE generation=$1 AND pending_entries=1",
+            generation,
+        ) == [{"count": 1}]
+        with pytest.raises(TimeoutError):
+            await wait_for_native_projection(db, asyncio.Event(), generation, timeout=0.1)
+    finally:
+        await db.execute_raw(
+            "UPDATE deltallm_accounting_terminal_capacity SET pending_entries=0 "
+            "WHERE generation=$1 AND accounting_partition=0",
+            generation,
+        )
+    await wait_for_native_projection(db, asyncio.Event(), generation, timeout=0.1)
+
+
 async def test_native_role_graph_uses_production_client_and_server_deadlines(
     accounting_db, role_resources
 ):
