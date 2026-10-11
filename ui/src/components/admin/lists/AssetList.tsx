@@ -24,6 +24,7 @@ interface AssetListProps<T> {
   onPageChange: (offset: number) => void;
   onRowClick: (row: T) => void;
   filters?: ReactNode;
+  rowActions?: (row: T) => ReactNode;
 }
 
 export default function AssetList<T extends object>(props: AssetListProps<T>) {
@@ -58,7 +59,7 @@ export default function AssetList<T extends object>(props: AssetListProps<T>) {
       </div>
       {props.error ? <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><span>{denied ? 'You do not have access to this list.' : hasRows ? 'Could not update the list. The previous result is shown.' : 'Could not load the list.'}</span>{!denied ? <button type="button" onClick={props.onRetry} className="rounded px-2 py-1 font-medium underline focus-visible:outline focus-visible:outline-2">Retry</button> : null}</div> : null}
       {props.loading && hasRows ? <p role="status" className="text-xs text-gray-500">Updating the list…</p> : null}
-      {!props.error || hasRows ? <ContentCard><div aria-busy={props.loading}><DataTable columns={props.columns} data={props.data} loading={props.loading && !hasRows} responsive rowKey={props.rowKey} caption={`${props.searchLabel.replace('Search ', '')}. Sorted by ${label.toLowerCase()}, ${props.sort.direction === 'asc' ? 'ascending' : 'descending'}.`} sort={props.sort} onSortChange={props.onSortChange} emptyMessage={props.emptyMessage} pagination={props.pagination} onPageChange={props.onPageChange} onRowClick={props.onRowClick} /></div></ContentCard> : null}
+      {!props.error || hasRows ? <ContentCard><div aria-busy={props.loading}><DataTable columns={props.columns} data={props.data} loading={props.loading && !hasRows} responsive rowKey={props.rowKey} caption={`${props.searchLabel.replace('Search ', '')}. Sorted by ${label.toLowerCase()}, ${props.sort.direction === 'asc' ? 'ascending' : 'descending'}.`} sort={props.sort} onSortChange={props.onSortChange} emptyMessage={props.emptyMessage} pagination={props.pagination} onPageChange={props.onPageChange} onRowClick={props.onRowClick} rowActions={props.rowActions} /></div></ContentCard> : null}
     </div>
   );
 }

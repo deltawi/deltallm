@@ -28,6 +28,8 @@ interface DataTableProps<T> {
   responsive?: boolean;
   rowKey?: (row: T) => string;
   caption?: string;
+  /** Row-level controls (edit, delete) rendered in a trailing column. */
+  rowActions?: (row: T) => ReactNode;
 }
 
 export default function DataTable<T extends object>({
@@ -45,6 +47,7 @@ export default function DataTable<T extends object>({
   responsive = false,
   rowKey,
   caption,
+  rowActions,
 }: DataTableProps<T>) {
   if (loading) {
     return (
@@ -62,6 +65,14 @@ export default function DataTable<T extends object>({
   const totalPages = Math.ceil(total / limit);
   const renderCell = (column: Column<T>, row: T) => column.render
     ? column.render(row) : String((row as Record<string, unknown>)[column.key] ?? '');
+  const renderActions = (row: T) => {
+    const actions = rowActions?.(row);
+    return actions ? (
+      <div className="flex items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+        {actions}
+      </div>
+    ) : null;
+  };
 
   return (
     <div>
@@ -71,7 +82,7 @@ export default function DataTable<T extends object>({
           <thead>
             <tr className="border-b border-gray-200">
               {columns.map((col) => (
-                <th key={col.key} scope="col" aria-sort={sort && col.sortKey && sort.key === col.sortKey ? sort.direction === 'asc' ? 'ascending' : 'descending' : undefined} className={`text-left text-xs font-medium text-gray-500 py-3 px-4 ${responsive ? 'bg-gray-50 whitespace-nowrap' : 'uppercase tracking-wider'} ${col.className || ''}`}>
+                <th key={col.key} scope="col" aria-sort={sort && col.sortKey && sort.key === col.sortKey ? sort.direction === 'asc' ? 'ascending' : 'descending' : undefined} className={`text-left text-xs font-medium text-gray-500 py-2.5 px-3 first:pl-4 ${responsive ? 'bg-gray-50 whitespace-nowrap' : 'uppercase tracking-wider'} ${col.className || ''}`}>
                   {col.sortKey && onSortChange ? (
                     <button type="button" aria-label={`Sort by ${col.header}`} className={`inline-flex items-center gap-1.5 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary ${sort?.key === col.sortKey ? 'text-brand-primary-ink' : ''}`} onClick={() => onSortChange({ key: col.sortKey!, direction: sort && sort.key === col.sortKey ? sort.direction === 'asc' ? 'desc' : 'asc' : col.defaultDirection || 'asc' })}>
                       {col.header}
@@ -80,12 +91,13 @@ export default function DataTable<T extends object>({
                   ) : col.header}
                 </th>
               ))}
+              {rowActions ? <th scope="col" className={`sticky right-0 w-px py-2.5 pl-2 pr-4 ${responsive ? 'bg-gray-50' : 'bg-white'}`}><span className="sr-only">Actions</span></th> : null}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="text-center py-12 text-gray-400 text-sm">
+                <td colSpan={columns.length + (rowActions ? 1 : 0)} className="text-center py-12 text-gray-400 text-sm">
                   {emptyMessage}
                 </td>
               </tr>
@@ -104,13 +116,14 @@ export default function DataTable<T extends object>({
                   }}
                   tabIndex={onRowClick && !responsive ? 0 : undefined}
                   aria-label={onRowClick ? 'Open row details' : undefined}
-                  className={`border-b border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-inset' : ''}`}
+                  className={`group border-b border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-inset' : ''}`}
                 >
                   {columns.map((col) => (
-                    <td key={col.key} className={`py-3 px-4 text-sm text-gray-700 ${col.className || ''}`}>
+                    <td key={col.key} className={`py-2 px-3 first:pl-4 text-sm text-gray-700 ${col.className || ''}`}>
                       {renderCell(col, row)}
                     </td>
                   ))}
+                  {rowActions ? <td className={`sticky right-0 w-px whitespace-nowrap bg-white py-2 pl-2 pr-4 text-right ${onRowClick ? 'group-hover:bg-gray-50 group-focus:bg-gray-50' : ''}`}>{renderActions(row)}</td> : null}
                 </tr>
               ))
             )}
@@ -121,7 +134,7 @@ export default function DataTable<T extends object>({
         <div className="divide-y divide-gray-100 md:hidden" aria-label={caption}>
           {rows.length ? rows.map((row, index) => (
             <article key={rowKey?.(row) ?? index} className="p-4">
-              <div className="mb-4">{renderCell(columns[0], row)}</div>
+              <div className="mb-4 flex items-start justify-between gap-3"><div className="min-w-0">{renderCell(columns[0], row)}</div>{renderActions(row)}</div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
                 {columns.slice(1).map((column) => (
                   <div key={column.key} className={`min-w-0 ${['created_by', 'visibility'].includes(column.key) ? 'col-span-2' : ''}`}>

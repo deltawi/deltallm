@@ -8,7 +8,7 @@ import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
 import type { Column } from '../components/DataTable';
 import AssetList from '../components/admin/lists/AssetList';
 import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
-import { CopyIdentifier, ListIdentity } from '../components/admin/lists/AssetListCells';
+import { CopyIdentifier, ListIdentity, RowAction } from '../components/admin/lists/AssetListCells';
 import ModelTypePill from '../components/models/ModelTypePill';
 import { useAssetListSort } from '../lib/useAssetListSort';
 import ProviderBadge from '../components/ProviderBadge';
@@ -93,15 +93,18 @@ export default function Models() {
   const apiModelId = (row: ModelDeploymentDetail) => row.api_model_id || row.model_name;
 
   const columns: Column<ModelDeploymentDetail>[] = [
-    { key: 'name', header: 'Model', sortKey: 'name', render: (row) => <ListIdentity name={displayName(row)} identifier={apiModelId(row)} onOpen={() => navigate(modelDetailPath(row.deployment_id))} secondary={<><CopyIdentifier value={row.deployment_id} label="Deployment ID" />{row.deltallm_params.tpm || row.deltallm_params.rpm ? <span className="block text-gray-400 md:hidden">{row.deltallm_params.tpm ? `TPM ${row.deltallm_params.tpm}` : `RPM ${row.deltallm_params.rpm}`}</span> : null}</>} actions={<>
-      {isPlatformAdmin || row.access?.capabilities.write ? <button type="button" aria-label={`Edit ${displayName(row)}`} onClick={() => navigate(modelEditPath(row.deployment_id))} className="rounded-lg p-1.5 hover:bg-gray-100"><Pencil className="h-4 w-4 text-gray-500" /></button> : null}
-      {isPlatformAdmin || row.access?.capabilities.delete ? <button type="button" aria-label={`Delete ${displayName(row)}`} onClick={() => setDeleteTarget(row.deployment_id)} className="rounded-lg p-2 md:p-1.5 hover:bg-red-50"><Trash2 className="h-4 w-4 text-red-500" /></button> : null}
-    </>} /> },
+    { key: 'name', header: 'Model', sortKey: 'name', render: (row) => <ListIdentity name={displayName(row)} identifier={apiModelId(row)} onOpen={() => navigate(modelDetailPath(row.deployment_id))} /> },
+    { key: 'deployment_id', header: 'Deployment ID', render: (row) => <CopyIdentifier value={row.deployment_id} label="Deployment ID" /> },
     { key: 'mode', header: 'Type', sortKey: 'mode', render: (row) => <ModelTypePill mode={rowMode(row)} /> },
     { key: 'provider', header: 'Provider', sortKey: 'provider', render: (row) => <ProviderBadge provider={row.provider} model={row.deltallm_params.model} /> },
     { key: 'health', header: 'Health', sortKey: 'health', render: (row) => <StatusBadge status={row.health_status || (row.healthy == null ? 'unknown' : row.healthy ? 'healthy' : 'unhealthy')} /> },
     ...assetMetadataColumns<ModelDeploymentDetail>(),
   ];
+
+  const rowActions = (row: ModelDeploymentDetail) => <>
+    {isPlatformAdmin || row.access?.capabilities.write ? <RowAction label={`Edit ${displayName(row)}`} icon={Pencil} onClick={() => navigate(modelEditPath(row.deployment_id))} /> : null}
+    {isPlatformAdmin || row.access?.capabilities.delete ? <RowAction label={`Delete ${displayName(row)}`} icon={Trash2} destructive onClick={() => setDeleteTarget(row.deployment_id)} /> : null}
+  </>;
 
   return (
     <IndexShell
@@ -119,7 +122,7 @@ export default function Models() {
       ) : undefined}
 
     >
-      <AssetList columns={columns} data={items} rowKey={(row) => row.deployment_id} loading={loading} error={error} onRetry={refetch} emptyMessage="No models configured" search={searchInput} searchLabel="Search models" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))} filters={
+      <AssetList columns={columns} data={items} rowKey={(row) => row.deployment_id} loading={loading} error={error} onRetry={refetch} emptyMessage="No models configured" search={searchInput} searchLabel="Search models" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))} rowActions={rowActions} filters={
         <select value={modeFilter} onChange={(event) => handleModeFilterChange(event.target.value)} aria-label="Filter model type" className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary md:text-sm"><option value="all">All types</option>{MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
       } />
       <ConfirmDialog

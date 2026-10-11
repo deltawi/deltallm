@@ -6,7 +6,7 @@ import CreateDrawer from '../components/route-groups/CreateRouteGroupDrawer';
 import type { Column } from '../components/DataTable';
 import AssetList from '../components/admin/lists/AssetList';
 import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
-import { ListIdentity } from '../components/admin/lists/AssetListCells';
+import { ListIdentity, RowAction } from '../components/admin/lists/AssetListCells';
 import StatusBadge from '../components/StatusBadge';
 import ModelTypePill from '../components/models/ModelTypePill';
 import { routeGroupStrategyLabel } from '../lib/routeGroups';
@@ -141,12 +141,17 @@ export default function RouteGroups() {
   const pagination = result?.pagination;
 
   const columns: Column<RouteGroup>[] = [
-    { key: 'name', header: 'Group', sortKey: 'name', render: (row) => <ListIdentity name={row.name || row.group_key} identifier={row.group_key} onOpen={() => navigate(routeGroupDetailPath(row.route_group_id))} secondary={<ModelTypePill mode={row.mode} />} actions={(!row.access || row.access.capabilities.delete) ? <button type="button" aria-label={`Delete ${row.name || row.group_key}`} onClick={() => setDeleteTarget(row)} disabled={deletingKey === row.route_group_id} className="rounded-lg p-2 md:p-1.5 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4 text-red-500" /></button> : null} /> },
-    { key: 'routing', header: 'Routing', sortKey: 'routing', render: (row) => <div className="text-xs">{routeGroupStrategyLabel(row.routing_strategy || 'simple-shuffle')}<span className="mt-1 block text-gray-400">Traffic {row.enabled ? 'live' : 'off'}</span></div> },
+    { key: 'name', header: 'Group', sortKey: 'name', render: (row) => <ListIdentity name={row.name || row.group_key} identifier={row.group_key} onOpen={() => navigate(routeGroupDetailPath(row.route_group_id))} /> },
+    { key: 'mode', header: 'Type', render: (row) => <ModelTypePill mode={row.mode} /> },
+    { key: 'routing', header: 'Routing', sortKey: 'routing', render: (row) => <span className="whitespace-nowrap text-xs">{routeGroupStrategyLabel(row.routing_strategy || 'simple-shuffle')}</span> },
     { key: 'member_count', header: 'Members', sortKey: 'members', defaultDirection: 'desc' },
-    { key: 'health', header: 'Health', sortKey: 'health', render: (row) => <div><StatusBadge status={row.health_status || 'unknown'} label={row.health_status === 'empty' ? 'No active members' : undefined} /><span className="mt-1 block text-xs text-gray-400">{row.health_status === 'unknown' || !row.health_status ? 'Health unavailable' : row.health_status === 'paused' ? 'Traffic off' : row.health_status === 'empty' ? 'No active deployments' : row.healthy_member_count == null || row.active_member_count == null ? 'Health unavailable' : `${row.healthy_member_count} of ${row.active_member_count} available`}</span></div> },
+    { key: 'health', header: 'Health', sortKey: 'health', render: (row) => <div className="flex items-center gap-2 whitespace-nowrap"><StatusBadge status={row.health_status || 'unknown'} label={row.health_status === 'empty' ? 'No active members' : row.health_status === 'paused' ? 'Traffic off' : undefined} />{row.health_status && !['unknown', 'paused', 'empty'].includes(row.health_status) && row.healthy_member_count != null && row.active_member_count != null ? <span className="text-xs text-gray-400">{`${row.healthy_member_count} of ${row.active_member_count} available`}</span> : null}</div> },
     ...assetMetadataColumns<RouteGroup>(),
   ];
+
+  const rowActions = (row: RouteGroup) => (!row.access || row.access.capabilities.delete)
+    ? <RowAction label={`Delete ${row.name || row.group_key}`} icon={Trash2} destructive disabled={deletingKey === row.route_group_id} onClick={() => setDeleteTarget(row)} />
+    : null;
 
   return (
     <IndexShell
@@ -183,7 +188,7 @@ export default function RouteGroups() {
         useGeneratedPrefix={!isPlatformAdmin}
         onGrantsChange={(nextGrants) => { setGrants(nextGrants); if (formError) setFormError(null); }}
       />
-      <AssetList columns={columns} data={groups} rowKey={(row) => row.route_group_id} loading={loading} error={error} onRetry={refetch} emptyMessage={search ? `No model groups matching "${search}"` : 'No model groups yet'} search={searchInput} searchLabel="Search model groups" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(routeGroupDetailPath(row.route_group_id))} />
+      <AssetList columns={columns} data={groups} rowKey={(row) => row.route_group_id} loading={loading} error={error} onRetry={refetch} emptyMessage={search ? `No model groups matching "${search}"` : 'No model groups yet'} search={searchInput} searchLabel="Search model groups" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(routeGroupDetailPath(row.route_group_id))} rowActions={rowActions} />
       <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Group setup</summary><p className="mt-2">Create the group shell, add members, then use default shuffle. Add a policy when you need more control.</p></details>
 
       {/* Delete confirmation */}

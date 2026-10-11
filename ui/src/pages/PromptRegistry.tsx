@@ -4,7 +4,7 @@ import { Plus, FileText, Trash2 } from 'lucide-react';
 import type { Column } from '../components/DataTable';
 import AssetList from '../components/admin/lists/AssetList';
 import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
-import { ListIdentity } from '../components/admin/lists/AssetListCells';
+import { ListIdentity, RowAction } from '../components/admin/lists/AssetListCells';
 import { useAssetListSort } from '../lib/useAssetListSort';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -115,12 +115,17 @@ export default function PromptRegistry() {
   };
 
   const columns: Column<PromptTemplate>[] = [
-    { key: 'name', header: 'Prompt', sortKey: 'name', render: (row) => <ListIdentity name={row.name} identifier={row.template_key} onOpen={() => navigate(`/prompts/${encodeURIComponent(row.template_key)}`)} secondary={row.description ? <span title={row.description} className="block max-w-60 truncate">{row.description}</span> : undefined} actions={(!row.access || row.access.capabilities.delete) ? <button type="button" aria-label={`Delete ${row.name}`} onClick={() => setDeleteTarget(row.template_key)} disabled={deletingKey === row.template_key} className="rounded-lg p-2 md:p-1.5 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-4 w-4 text-red-500" /></button> : null} /> },
+    { key: 'name', header: 'Prompt', sortKey: 'name', render: (row) => <ListIdentity name={row.name} identifier={row.template_key} onOpen={() => navigate(`/prompts/${encodeURIComponent(row.template_key)}`)} /> },
+    { key: 'description', header: 'Description', render: (row) => row.description ? <span title={row.description} className="block max-w-48 truncate text-xs text-gray-500">{row.description}</span> : <span className="text-xs text-gray-400">None</span> },
     { key: 'version_count', header: 'Versions', sortKey: 'versions', defaultDirection: 'desc' },
     { key: 'label_count', header: 'Labels', sortKey: 'labels', defaultDirection: 'desc' },
     { key: 'binding_count', header: 'Bindings', sortKey: 'bindings', defaultDirection: 'desc' },
     ...assetMetadataColumns<PromptTemplate>(),
   ];
+
+  const rowActions = (row: PromptTemplate) => (!row.access || row.access.capabilities.delete)
+    ? <RowAction label={`Delete ${row.name}`} icon={Trash2} destructive disabled={deletingKey === row.template_key} onClick={() => setDeleteTarget(row.template_key)} />
+    : null;
 
   return (
     <IndexShell
@@ -139,7 +144,7 @@ export default function PromptRegistry() {
       )}
 
     >
-      <AssetList columns={columns} data={result?.data || []} rowKey={(row) => row.prompt_template_id} loading={loading} error={error} onRetry={refetch} emptyMessage="No prompt templates found" search={searchInput} searchLabel="Search prompts" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={result?.pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(`/prompts/${encodeURIComponent(row.template_key)}`)} />
+      <AssetList columns={columns} data={result?.data || []} rowKey={(row) => row.prompt_template_id} loading={loading} error={error} onRetry={refetch} emptyMessage="No prompt templates found" search={searchInput} searchLabel="Search prompts" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={result?.pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(`/prompts/${encodeURIComponent(row.template_key)}`)} rowActions={rowActions} />
       <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Prompt setup</summary><p className="mt-2">Create the prompt shell, write the system prompt and variables, then validate and register a version before you use it.</p></details>
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create Prompt" wide>
