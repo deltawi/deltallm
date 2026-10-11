@@ -52,6 +52,13 @@ standalone load command keeps its five-second default and accepts the bounded
 `--keepalive-expiry` option. Request deadlines, connection counts, arrival rates,
 and stage gates do not change. The client does not retry POST requests.
 
+The native qualification gateway also sets
+`upstream_http_keepalive_expiry_seconds=4`. Its fixed provider explicitly uses
+`--timeout-keep-alive 5`. Production defaults remain unchanged. Both network
+directions need a client idle limit below the receiving server or proxy limit.
+No provider request retry is added. Use the saved configuration for older runs;
+do not change an older result to this new profile.
+
 Transport failures retain fixed failure-phase and reason codes, connection-reuse
 status, and available phase times. Unknown reasons remain unknown. No exception
 message, key, or response body enters these diagnostic fields. A failed warm-up

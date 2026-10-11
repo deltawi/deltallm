@@ -54,6 +54,19 @@ it does not prove the cause of the two historical errors. This client setting
 does not change the request deadline or add POST retries. Production clients
 must use their actual proxy and server limits, not assume this local value.
 
+Also set the gateway's `upstream_http_keepalive_expiry_seconds` below the
+provider or upstream proxy idle limit. The native qualification profile uses
+four seconds against its fixed provider's five seconds. The production default
+remains sixty seconds. A controlled test with the actual provider adapter
+reproduced an idle-close read error and passed with the shorter client limit.
+This proves that failure mode, not the cause of the historical failed stage.
+Do not add automatic POST retries: the provider may already have accepted work.
+
+The newer reporting-JIT image `0d438731` passed CI and cold functions but failed
+its initial 500 RPS stage after one provider error. The selected-tier follow-up
+passed; it is not a complete certificate. Use the current source-matched final
+campaign result before making a release capacity claim.
+
 The unchanged `v0.3.1` pre-release must not become Latest. Its native reporting
 can stop after a valid client request with no request-ID header. Apply the forward
 recovery migration and use the corrected image, as described in the
