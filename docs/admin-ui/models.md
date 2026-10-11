@@ -27,10 +27,13 @@ The initial order is **Updated at**, newest first. Search resets the page.
 Select the copy control to copy the full ID. The list does not show creator email addresses.
 **Updated at** shows the stored update time in your local time zone.
 If an old record has no creator ID or update time, the cell shows **Not recorded**.
-**Visibility** is the last column. On small screens, each row becomes a card with the same fields.
+**Visibility** is the last data column. Edit and delete controls sit in a trailing actions column at the end of each row,
+so the name column only shows the name and key. Open a row for the full detail page.
+On small screens, each row becomes a card with the same fields and the actions in its header.
 
 You can sort by name, type, provider, health, creator ID, update time, or visibility.
-The provider column uses the existing provider icons. The type column uses the existing type pills.
+The **Deployment ID** column has a copy control. The provider column uses the existing provider icons.
+The type column uses the existing type pills.
 Credential settings remain on the model detail and edit pages.
 If health data is unavailable, the list shows **Unknown**.
 

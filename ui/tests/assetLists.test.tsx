@@ -52,18 +52,21 @@ test('shared list sorting, pagination, copy, error states, and row controls rema
   let copied = '';
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { async writeText(value: string) { copied = value; } } });
   const columns: Column<typeof row>[] = [
-    { key: 'name', header: 'Name', sortKey: 'name', render: (item) => <ListIdentity name={item.name} identifier={item.id} onOpen={() => opened++} actions={<button onClick={() => deleted++}>Delete</button>} /> },
+    { key: 'name', header: 'Name', sortKey: 'name', render: (item) => <ListIdentity name={item.name} identifier={item.id} onOpen={() => opened++} /> },
     ...assetMetadataColumns<typeof row>(),
   ];
   const render = (error: unknown = null, loading = false, data = [row]) => fixture.root.render(<AssetList
     columns={columns} data={data} rowKey={(item) => item.id} loading={loading} error={error}
     onRetry={() => pages.push(-1)} emptyMessage="No items" search="" searchLabel="Search items"
     onSearchChange={() => {}} sort={{ key: 'updated_at', direction: 'desc' }} onSortChange={(sort) => sorts.push(sort)}
-    pagination={{ total: 21, limit: 10, offset: 10, has_more: true }} onPageChange={(offset) => pages.push(offset)} onRowClick={() => opened++} />);
+    pagination={{ total: 21, limit: 10, offset: 10, has_more: true }} onPageChange={(offset) => pages.push(offset)} onRowClick={() => opened++}
+    rowActions={() => <button onClick={() => deleted++}>Delete</button>} />);
   try {
     await act(async () => render());
     const headers = [...document.querySelectorAll('th')];
-    assert.equal(headers.at(-1)?.textContent, 'Visibility');
+    assert.equal(headers.at(-2)?.textContent, 'Visibility');
+    assert.equal(headers.at(-1)?.textContent, 'Actions');
+    assert.ok(document.querySelector('tbody tr td:last-child button')?.textContent === 'Delete');
     assert.equal(headers[2].getAttribute('aria-sort'), 'descending');
     assert.equal(headers[0].getAttribute('aria-sort'), null);
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Sort by Updated at"]')!.click());
@@ -263,12 +266,20 @@ test('all three pages share metadata, reset the server page on sort, and retain 
         await act(async () => fixture.root.render(<MemoryRouter initialEntries={[scenario.path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><AuthProvider><BrandingContext.Provider value={{ branding: DEFAULT_BRANDING, assetRevision: 0, setBranding() {}, async refreshBranding() { return DEFAULT_BRANDING; } }}><ToastProvider><Location /><scenario.Page /></ToastProvider></BrandingContext.Provider></AuthProvider></MemoryRouter>));
         const listRequests = () => requests.filter((request) => request.url.pathname === scenario.api);
         assert.equal(listRequests().at(-1)?.url.searchParams.get('sort_by'), 'updated_at');
-        assert.equal(document.querySelectorAll('th').item(6).textContent, 'Visibility');
+        assert.equal(document.querySelectorAll('th').item(7).textContent, 'Visibility');
+        assert.equal(document.querySelectorAll('th').item(8).textContent, 'Actions');
+        assert.ok(document.querySelector('tbody tr td:last-child [aria-label="Delete Support"]'));
         assert.ok(document.querySelector(`button[aria-label="Copy user id ${USER_ID}"]`));
         if (scenario.Page === Models) {
           assert.ok(document.querySelector('img[alt="OpenAI logo"]'));
           assert.ok(!document.body.textContent?.includes('inline'));
           assert.ok(document.body.textContent?.includes('Chat'));
+          assert.ok(document.querySelector('tbody tr td:last-child [aria-label="Edit Support"]'));
+        }
+        if (scenario.Page === RouteGroups) {
+          assert.equal(document.querySelectorAll('th').item(1).textContent, 'Type');
+          assert.ok(document.querySelectorAll('tbody tr td').item(1).textContent?.includes('Chat'));
+          assert.ok(document.body.textContent?.includes('1 of 2 available'));
         }
         await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Next page"]')!.click());
         assert.equal(listRequests().at(-1)?.url.searchParams.get('offset'), String(scenario.limit));
