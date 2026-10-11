@@ -58,6 +58,17 @@ five Python dependency lanes, migration paths, Helm, UI, lint, capacity acceptan
 and both lifecycle variants. Separate image checks passed non-root startup,
 offline behavior, memory checks, and graceful exit.
 
+Documentation-only CI run `38104630410` then failed two native role-startup
+cases. Those tests injected Prisma instead of the production database client.
+A new real-database regression failed before the fixture correction. Native
+role tests now use the existing pool owner, the declared eight connections,
+and database-side statement, lock, and idle-transaction deadlines. All original
+behavior and financial assertions remain. All 18 focused cases, including shared
+callers, passed. A
+five-connection Prisma trial passed in isolation, so pool size alone does not
+prove the historical cause. Final PR CI remains required; runtime and load
+harness are unchanged.
+
 The local bundle is `artifacts/release-readiness-20261010/` in the primary repository.
 It retains raw samples, warm-ups, charges, startup and recovery records, earlier
 failures, CI records, exact image, source history, pinned tools, and reproduction
