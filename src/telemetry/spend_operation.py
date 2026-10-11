@@ -34,6 +34,7 @@ from src.billing.charges.provider_allowance import (
     conservative_provider_allowance,
 )
 from src.billing.spend.spend_operations import (
+    ADMISSION_BUDGET_SECONDS,
     OperationAttempt,
     OperationHandle,
     OperationPrincipal,
@@ -161,7 +162,7 @@ async def durable_provider_call(
         handle,
         capacity=service.config.max_pending_events,
         max_attempts=service.config.max_attempts,
-        expires_at=asyncio.get_running_loop().time() + 0.25,
+        expires_at=asyncio.get_running_loop().time() + ADMISSION_BUDGET_SECONDS,
     )
     request.state.spend_operation_handle = handle
     snapshots = getattr(request.state, "spend_operation_pricing", {})

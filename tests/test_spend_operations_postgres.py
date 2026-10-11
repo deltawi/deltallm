@@ -213,8 +213,8 @@ async def test_cancelled_admission_rolls_back_and_keeps_capacity(dbs):
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
-    async def held(expires_at):
-        async with original(expires_at) as tx:
+    async def held(expires_at, **kwargs):
+        async with original(expires_at, **kwargs) as tx:
             yield tx
             entered.set()
             await asyncio.Event().wait()
