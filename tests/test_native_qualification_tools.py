@@ -36,6 +36,43 @@ def test_full_qualification_keeps_both_four_tier_series():
     assert rates == (50, 100, 200, 500)
 
 
+def test_cluster_generator_closes_idle_connections_before_the_server():
+    job = cluster_generator_job("image:sealed", ["http://api"] * 4, rate=500, duration=600)
+    arguments = job["spec"]["template"]["spec"]["containers"][0]["args"]
+    assert arguments[arguments.index("--keepalive-expiry") + 1] == "4"
+    assert arguments[arguments.index("--timeout") + 1] == "10"
+
+
+def test_sharded_generator_preserves_idle_policy_in_each_child(tmp_path):
+    args = shards._parser().parse_args(
+        [
+            "--url",
+            "http://api",
+            "--model",
+            "fixed",
+            "--rate",
+            "500",
+            "--duration",
+            "600",
+            "--output-dir",
+            str(tmp_path),
+            "--keepalive-expiry",
+            "4",
+        ]
+    )
+    specs = shards.build_shard_specs(
+        urls=args.url,
+        workers=1,
+        rate=args.rate,
+        duration=args.duration,
+        max_in_flight=args.max_in_flight,
+        max_keepalive=args.max_keepalive,
+    )
+    command = shards._child_command(args, specs[0], start_at_epoch=123, output=tmp_path)
+    assert command[command.index("--keepalive-expiry") + 1] == "4.0"
+    assert command[command.index("--timeout") + 1] == "60"
+
+
 def test_normal_high_rate_stability_observation_is_longer_not_a_weaker_limit():
     assert [stage_seconds("short", rate, 30, diagnostic=False) for rate in (50, 100, 200, 500)] == [
         30,
@@ -492,7 +529,10 @@ def test_native_database_fixture_has_explicit_resources_and_preserves_durability
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_native_log_collection_is_bounded_and_does_not_replace_failures(tmp_path, failure):
+@pytest.mark.parametrize("stage_snapshot", [False, True])
+def test_native_log_collection_is_bounded_and_does_not_replace_failures(
+    tmp_path, failure, stage_snapshot
+):
     commands = []
 
     def kubectl(*arguments, **options):
@@ -501,13 +541,15 @@ def test_native_log_collection_is_bounded_and_does_not_replace_failures(tmp_path
             raise RuntimeError("private diagnostic detail")
         return SimpleNamespace(stdout="x" * (3 * 1024 * 1024), stderr="")
 
-    qualification.collect_native_logs(SimpleNamespace(output=tmp_path, kubectl=kubectl))
+    destination = tmp_path / "stage-failure" if stage_snapshot else tmp_path
+    options = {"output": destination} if stage_snapshot else {}
+    qualification.collect_native_logs(SimpleNamespace(output=tmp_path, kubectl=kubectl), **options)
     assert len(commands) == 2
     for arguments, options in commands:
         assert "--tail=5000" in arguments
         assert options == {"check": False, "timeout": 20}
     for name in ("postgres", "gateway"):
-        saved = (tmp_path / f"native-final-{name}.log").read_text()
+        saved = (destination / f"native-final-{name}.log").read_text()
         assert len(saved) <= 2 * 1024 * 1024
         assert "private diagnostic detail" not in saved
         if failure:
@@ -685,6 +727,66 @@ async def test_failed_warmup_stops_before_measured_load_and_retains_the_failed_s
     assert not stopped.value.report["passed"]
     assert not stopped.value.report["measurement_started"]
     assert json.loads((stage / "qualification.json").read_text()) == stopped.value.report
+    assert (stage / "failure-diagnostics/native-final-postgres.log").is_file()
+    assert (stage / "failure-diagnostics/native-final-gateway.log").is_file()
+
+
+@pytest.mark.parametrize("passed", [False, True])
+async def test_measured_failure_saves_logs_before_later_recovery(tmp_path, monkeypatch, passed):
+    stage = tmp_path / "qualification-500rps"
+    stage.mkdir()
+
+    @asynccontextmanager
+    async def database():
+        yield object()
+
+    monkeypatch.setattr(qualification, "local_database", database)
+    monkeypatch.setattr(qualification, "warm_stage", AsyncMock(return_value={"passed": True}))
+    monkeypatch.setattr(qualification, "accounting_snapshot", AsyncMock(return_value={}))
+    monkeypatch.setattr(qualification, "capture_cpu_counters", lambda _cluster: {"sources": []})
+    monkeypatch.setattr(qualification, "cpu_counter_deltas", lambda *_args: [])
+    report = {"success_count": 3 if passed else 2, "target_count": 3, "diagnostic_failures": []}
+    monkeypatch.setattr(qualification, "measure", AsyncMock(return_value=report))
+    monkeypatch.setattr(
+        qualification, "wait_native_drain", AsyncMock(return_value={"passed": True})
+    )
+    monkeypatch.setattr(
+        qualification,
+        "reconcile_native",
+        AsyncMock(return_value={"passed": passed, "safe_budget_state": True}),
+    )
+    monkeypatch.setattr(
+        qualification,
+        "latency_and_queue_gates",
+        lambda _report: {
+            "success_passed": True,
+            "p95_passed": True,
+            "p99_passed": True,
+            "queue_passed": True,
+        },
+    )
+    snapshots = []
+
+    def collect(cluster, *, output):
+        saved = json.loads((stage / "qualification.json").read_text())
+        assert saved["passed"] is False
+        snapshots.append((cluster, output))
+
+    monkeypatch.setattr(qualification, "collect_native_logs", collect)
+    cluster = SimpleNamespace(output=tmp_path, event=lambda *_args, **_options: None)
+    result = await qualification.run_stage(
+        cluster,
+        "image:sealed",
+        ["http://api"] * 4,
+        api_ports=[1, 2, 3, 4],
+        worker_ports=[5, 6, 7],
+        manifest=tmp_path / "manifest.json",
+        rate=500,
+        duration=600,
+        phase="qualification",
+    )
+    assert result["passed"] is passed
+    assert snapshots == ([] if passed else [(cluster, stage / "failure-diagnostics")])
 
 
 @pytest.mark.parametrize(

@@ -118,6 +118,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration", type=float, required=True)
     parser.add_argument("--max-in-flight", type=int, default=1_000)
     parser.add_argument("--max-keepalive", type=int, default=100)
+    parser.add_argument("--keepalive-expiry", type=float, default=5.0)
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--drain-timeout", type=float, default=60)
     parser.add_argument("--bypass-cache", action="store_true")
@@ -161,6 +162,8 @@ def _child_command(
         str(spec.max_in_flight),
         "--max-keepalive",
         str(spec.max_keepalive),
+        "--keepalive-expiry",
+        str(args.keepalive_expiry),
         "--timeout",
         str(args.timeout),
         "--output-dir",

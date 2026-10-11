@@ -381,8 +381,10 @@ def install_native_dependencies(cluster: LifecycleCluster, image: str) -> None:
     cluster.event("native_database_fixture_verified", **observed)
 
 
-def collect_native_logs(cluster: LifecycleCluster) -> None:
+def collect_native_logs(cluster: LifecycleCluster, *, output: Path | None = None) -> None:
     """Keep bounded dependency and gateway logs before the owned cluster is removed."""
+    destination = cluster.output if output is None else output
+    destination.mkdir(parents=True, exist_ok=True)
     for name, arguments in (
         ("postgres", ("deployment/postgres",)),
         ("gateway", ("-l", "app.kubernetes.io/instance=gateway", "--all-containers", "--prefix")),
@@ -401,7 +403,7 @@ def collect_native_logs(cluster: LifecycleCluster) -> None:
         except Exception as error:
             # A failed diagnostic must not replace the original test failure.
             payload = "Log collection failed: " + type(error).__name__ + "\n"
-        (cluster.output / f"native-final-{name}.log").write_text(payload)
+        (destination / f"native-final-{name}.log").write_text(payload)
 
 
 def pin_api_services(cluster: LifecycleCluster, pods: list[str]) -> list[str]:
@@ -546,6 +548,7 @@ async def run_stage(
             "passed": False,
         }
         (stage / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")
+        await asyncio.to_thread(collect_native_logs, cluster, output=stage / "failure-diagnostics")
         raise QualificationStageStopped("Warm-up failed; measured load stopped", report)
     roles = {
         "api",
@@ -635,6 +638,8 @@ async def run_stage(
         success_count=report["success_count"],
         passed=report["passed"],
     )
+    if not report["passed"]:
+        await asyncio.to_thread(collect_native_logs, cluster, output=stage / "failure-diagnostics")
     if not economics["safe_budget_state"]:
         raise QualificationStageStopped(
             "Qualification found unsafe economic state; remaining load stopped", report

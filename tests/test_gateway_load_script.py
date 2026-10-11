@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+import errno
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -13,6 +17,114 @@ assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _MODULE
 _SPEC.loader.exec_module(_MODULE)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_failed_transport_keeps_safe_phases_without_post_retry(monkeypatch, tmp_path, stream):
+    calls = 0
+
+    class FailedClient:
+        @asynccontextmanager
+        async def stream(self, _method, _url, **options):
+            nonlocal calls
+            calls += 1
+            trace = options["extensions"]["trace"]
+            await trace("http11.send_request_headers.started", {})
+            await trace("http11.send_request_body.complete", {})
+            await trace("http11.receive_response_headers.failed", {})
+            try:
+                raise ConnectionResetError(errno.ECONNRESET, "private-socket-message")
+            except ConnectionResetError as cause:
+                raise _MODULE.httpx.ReadError("sk-secret https://private.test") from cause
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(_MODULE.httpx, "AsyncClient", lambda **_options: FailedClient())
+    arguments = ["--url", "http://fixture.test/chat", "--model", "fixed", "--api-key", "fixture"]
+    if stream:
+        arguments.append("--stream")
+    args = _MODULE._parser().parse_args(arguments)
+    _, send = _MODULE._request_function(args, ["fixture"])
+    result = await _MODULE.run_constant_arrival(
+        rate=500, duration_seconds=0.002, max_in_flight=1, request=send
+    )
+    sample = result.samples[0]
+    assert calls == 1 and sample.status_code is None and sample.error == "ReadError"
+    assert sample.client_request_write_seconds is not None
+    assert sample.client_transport_failure_phase == "response_headers"
+    assert sample.client_transport_failure_reason == "connection_reset"
+    assert sample.client_reused_connection is True
+    summary = _MODULE.summarize(result, target_rate=500)
+    assert summary["success_count"] == 0 and summary["error_counts"] == {"ReadError": 1}
+    raw, report = _MODULE.write_results(result, summary, tmp_path, compress=True)
+    assert _MODULE.read_results(raw, report) == result
+    encoded = json.dumps(asdict(sample))
+    assert not any(secret in encoded for secret in ("sk-secret", "private.test", "private-socket"))
+
+
+@pytest.mark.parametrize("expiry", [0.0, 4.0, 5.0, 120.0])
+def test_load_client_has_an_explicit_bounded_idle_expiry(monkeypatch, expiry):
+    captured = []
+    monkeypatch.setattr(_MODULE.httpx, "AsyncClient", lambda **options: captured.append(options))
+    args = _MODULE._parser().parse_args(
+        [
+            "--url",
+            "http://fixture.test/chat",
+            "--model",
+            "fixed",
+            "--api-key",
+            "fixture",
+            "--keepalive-expiry",
+            str(expiry),
+        ]
+    )
+    _MODULE._request_function(args, ["fixture"])
+    assert captured[0]["limits"].keepalive_expiry == expiry
+    assert captured[0]["timeout"] == 60.0
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_transport_diagnostics_preserve_cancellation(monkeypatch, stream):
+    closed = False
+
+    class CancelledClient:
+        @asynccontextmanager
+        async def stream(self, _method, _url, **_options):
+            nonlocal closed
+            try:
+                raise _MODULE.asyncio.CancelledError()
+                yield  # pragma: no cover
+            finally:
+                closed = True
+
+    monkeypatch.setattr(_MODULE.httpx, "AsyncClient", lambda **_options: CancelledClient())
+    arguments = ["--url", "http://fixture.test/chat", "--model", "fixed", "--api-key", "fixture"]
+    if stream:
+        arguments.append("--stream")
+    args = _MODULE._parser().parse_args(arguments)
+    _, send = _MODULE._request_function(args, ["fixture"])
+    with pytest.raises(_MODULE.asyncio.CancelledError):
+        await send(0, "fixture-request")
+    assert closed
+
+
+@pytest.mark.parametrize("expiry", [float("nan"), float("inf"), -1.0, 120.01])
+def test_load_client_rejects_invalid_idle_expiry_before_open(monkeypatch, expiry):
+    captured = []
+    monkeypatch.setattr(_MODULE.httpx, "AsyncClient", lambda **options: captured.append(options))
+    args = _MODULE._parser().parse_args(
+        [
+            "--url",
+            "http://fixture.test/chat",
+            "--model",
+            "fixed",
+            "--api-key",
+            "fixture",
+        ]
+    )
+    args.keepalive_expiry = expiry
+    with pytest.raises(ValueError, match="idle"):
+        _MODULE._request_function(args, ["fixture"])
+    assert captured == []
 
 
 @pytest.mark.asyncio
