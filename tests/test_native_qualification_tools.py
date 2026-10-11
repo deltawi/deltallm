@@ -544,11 +544,11 @@ def test_native_log_collection_is_bounded_and_does_not_replace_failures(
     destination = tmp_path / "stage-failure" if stage_snapshot else tmp_path
     options = {"output": destination} if stage_snapshot else {}
     qualification.collect_native_logs(SimpleNamespace(output=tmp_path, kubectl=kubectl), **options)
-    assert len(commands) == 2
+    assert len(commands) == 4
     for arguments, options in commands:
         assert "--tail=5000" in arguments
         assert options == {"check": False, "timeout": 20}
-    for name in ("postgres", "gateway"):
+    for name in ("postgres", "gateway", "provider", "redis"):
         saved = (destination / f"native-final-{name}.log").read_text()
         assert len(saved) <= 2 * 1024 * 1024
         assert "private diagnostic detail" not in saved

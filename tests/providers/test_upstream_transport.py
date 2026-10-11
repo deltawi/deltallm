@@ -175,19 +175,25 @@ async def test_cancellation_releases_waiter_or_active_connection(cancel_active):
         "ProtocolError",
     ],
 )
-async def test_keeps_specific_httpx_failure_contract(name, monkeypatch):
+async def test_keeps_specific_httpx_failure_contract(name, monkeypatch, caplog):
     transport = transport_with_backend(RecordingBackend())
 
     async def fail(request):
-        raise getattr(httpcore2, name)("transport failed")
+        raise getattr(httpcore2, name)("private transport detail and credential")
 
     monkeypatch.setattr(transport._pool, "handle_async_request", fail)
     async with httpx.AsyncClient(transport=transport) as client:
-        with pytest.raises(getattr(httpx, name), match="transport failed") as caught:
+        with pytest.raises(getattr(httpx, name), match="private transport detail") as caught:
             await client.get("http://provider.example/failure")
         assert type(caught.value) is getattr(httpx, name)
         assert caught.value.request.url.path == "/failure"
         assert isinstance(caught.value.__cause__, getattr(httpcore2, name))
+    records = [record for record in caplog.records if record.name == "src.providers.http_transport"]
+    assert [record.getMessage() for record in records] == [
+        f"Provider transport failed; kind={name}"
+    ]
+    assert "private" not in caplog.text and "credential" not in caplog.text
+    assert "provider.example" not in caplog.text
 
 
 async def test_stream_protocol_failure_keeps_httpx_error_and_releases_pool():
