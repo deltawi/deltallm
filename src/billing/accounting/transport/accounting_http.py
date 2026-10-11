@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from typing import Literal
@@ -25,6 +26,11 @@ from src.outbound.network_policy import (
     OutboundPolicyError,
     OutboundResolutionError,
 )
+
+logger = logging.getLogger(__name__)
+
+# The managed server closes idle HTTP connections after five seconds.
+ACCOUNTING_HTTP_KEEPALIVE_EXPIRY_SECONDS = 4.0
 
 AccountingEndpoint = Literal[
     "/health",
@@ -78,7 +84,7 @@ class AccountingHttpTransport:
             limits=httpx.Limits(
                 max_connections=max_connections,
                 max_keepalive_connections=min(32, max_connections),
-                keepalive_expiry=30,
+                keepalive_expiry=ACCOUNTING_HTTP_KEEPALIVE_EXPIRY_SECONDS,
             ),
         )
 
@@ -117,10 +123,23 @@ class AccountingHttpTransport:
         except asyncio.CancelledError:
             raise
         except (httpx.TimeoutException, TimeoutError):
+            logger.warning(
+                "Accounting transport failed; endpoint=%s kind=deadline status=none", endpoint
+            )
             raise AccountingProtocolUnavailable(AcceptanceFailure.DEADLINE) from None
         except OutboundPolicyError:
             raise AccountingProtocolUnavailable(AcceptanceFailure.INVALID_INPUT) from None
-        except (httpx.HTTPError, OutboundResolutionError):
+        except (httpx.HTTPError, OutboundResolutionError) as error:
+            kind = "dns" if isinstance(error, OutboundResolutionError) else "http_transport"
+            status: int | str = "none"
+            if isinstance(error, httpx.HTTPStatusError):
+                kind = "http_status"
+                code = error.response.status_code
+                status = code if 100 <= code <= 599 else "unknown"
+            # Only fixed fields enter the log. Never log bodies, signatures, or URLs.
+            logger.warning(
+                "Accounting transport failed; endpoint=%s kind=%s status=%s", endpoint, kind, status
+            )
             raise AccountingProtocolUnavailable(AcceptanceFailure.CONNECTION) from None
 
     async def _request_target(

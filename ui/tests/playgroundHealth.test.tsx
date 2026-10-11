@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
 import Playground from '../src/pages/Playground';
 import { BrandingContext } from '../src/lib/brandingContext';
 import { DEFAULT_BRANDING } from '../src/lib/branding';
+import { useChatEngine, type ChatEngine } from '../src/components/playground/useChatEngine';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const modelList = (healthy: boolean | null | undefined) => ({ data: [{
@@ -100,5 +101,51 @@ test('Playground permission denial stays visible and does not display models or 
     assert.match(document.querySelector('[role="alert"]')?.textContent || '', /do not have access/);
     assert.equal(document.querySelector('[title^="Status:"]'), null);
     assert.ok(![...document.querySelectorAll('button')].some(button => button.textContent === 'Retry'));
+  } finally { await env.close(); }
+});
+
+test('Playground requests streaming usage and keeps the complete reply and exact token counts', async () => {
+  const env = setup();
+  let engine!: ChatEngine;
+  const requests: RequestInit[] = [];
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    assert.ok(init);
+    requests.push(init);
+    const body: unknown = JSON.parse(String(init.body));
+    assert.ok(body && typeof body === 'object' && !Array.isArray(body));
+    const payload = body as Record<string, unknown>;
+    bodies.push(payload);
+    const options = payload.stream_options as { include_usage?: boolean } | undefined;
+    const chunks = [{ choices: [{ delta: { content: 'OK' } }] }] as unknown[];
+    // A provider sends the usage chunk only when the client requests it.
+    if (options?.include_usage === true) {
+      chunks.push({ choices: [], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 } });
+    }
+    const stream = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n';
+    return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+  };
+  function Probe() {
+    const value = useChatEngine({
+      apiKey: 'unit-test-only',
+      selectedModel: { id: 'dep-1', name: 'Support', provider: 'openai', status: 'online', mode: 'chat' },
+    });
+    useEffect(() => { engine = value; }, [value]);
+    return null;
+  }
+  try {
+    await act(async () => env.root.render(<Probe />));
+    await act(async () => engine.setInput('Reply with OK.'));
+    await act(async () => engine.handleSend());
+    assert.equal(engine.lastStats?.promptTokens, 5);
+    assert.equal(engine.lastStats?.completionTokens, 1);
+    assert.equal(engine.lastStats?.totalTokens, 6);
+    assert.equal(engine.messages.at(-1)?.content, 'OK');
+    assert.equal(engine.isStreaming, false);
+    assert.equal(engine.error, null);
+    assert.equal(requests.length, 1, 'Do not retry an inference POST.');
+    assert.equal(requests[0].signal?.aborted, false);
+    assert.equal(bodies[0].stream, true);
+    assert.deepEqual(bodies[0].stream_options, { include_usage: true });
   } finally { await env.close(); }
 });

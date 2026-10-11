@@ -12,7 +12,10 @@ source identities and limits. The workload uses immediate, one-token,
 non-streaming synthetic replies, with response-cache bypass and required native
 accounting. It does not represent long model replies, large bodies or streaming.
 
-| Target | Current evidence | Required before a production capacity claim |
+The table describes the earlier complete `8a98ce73` campaign. It is not a
+certificate for the current follow-up source or a published release image.
+
+| Target | Earlier complete evidence | Required before a production capacity claim |
 | --- | --- | --- |
 | 50 RPS | Full fixed-image sequence passed ten minutes with 30,000 successes and p95/p99 22.86/26.15 ms | Test the exact release image and real traffic mix |
 | 100 RPS | Same sequence passed ten minutes with 60,000 successes and p95/p99 23.53/28.09 ms | Same checks, with measured provider and dependency headroom |
@@ -23,6 +26,30 @@ accounting. It does not represent long model replies, large bodies or streaming.
 The fixed candidate's six-CPU series is not a passing release qualification. There is no
 verified production hardware minimum for each tier. Earlier RPS results do not
 qualify a later release image.
+
+The current `1045d5a9` app image passed installed main-app checks, including
+complete streaming, key and session revocation, native usage, exact charges,
+and desktop and mobile Playground use. All thirteen required CI jobs passed
+on the latest test harness `4b38075a`. Its selected 60-second 500 RPS check
+passed, but both later ten-minute 500 RPS preflights failed. The final four
+stages and recovery checks did not run. See the report for exact identities.
+
+Both preflights used twelve VM CPUs and four API processes. With 12 GiB RAM,
+the run returned 296,593/300,000 successes, 2,215 HTTP 503 responses, and 1,192
+dropped arrivals. The host had a large swap burst near the error interval.
+With 8 GiB assigned only to the owned VM, the comparison returned
+299,939/300,000 successes, 61 HTTP 503 responses, and no dropped arrivals.
+Its p95 was 139.99 ms, but p99 was 526.27 ms. Growth and accounting drain also
+failed. Committed charges matched durable facts, but 25 operations remained
+provisional. No unsafe budget window was recorded.
+
+The memory comparison supports the host-pressure hypothesis; it does not
+prove the complete cause or make this profile production-ready. Each API
+process used about 90% of one core at sustained 500 RPS, without container CPU
+throttling. Keep physical-host memory and per-process CPU headroom as well as
+deployment-wide pool limits. A different replica count is a new capacity
+profile and needs its own declared connection budget and full qualification.
+Do not use an earlier pass or a short result as a current capacity claim.
 
 The eight-CPU diagnostic reached 500 RPS with 300,000 successful requests,
 p95 65.42 ms, and p99 91.27 ms. It kept 12 GiB RAM and all original limits.
@@ -67,17 +94,28 @@ its initial 500 RPS stage after one provider error. The selected-tier follow-up
 passed; it is not a complete certificate. Use the current source-matched final
 campaign result before making a release capacity claim.
 
+The newer upstream-idle image `55443efa` passed initial 500 RPS and final 50 RPS,
+but failed final 100 RPS with 547 HTTP 503 responses and incomplete accounting
+drain. Its final 200 and 500 RPS stages and recovery checks did not run.
+Do not promote this failed campaign. The follow-up also expires internal
+accounting connections after four seconds, below the managed server's five
+seconds. It preserves the original request deadlines, pool limits, signatures,
+fail-closed admission, and zero POST retries. This controlled failure-mode fix
+still requires new-image qualification. See the report for the failed evidence.
+
 The unchanged `v0.3.1` pre-release must not become Latest. Its native reporting
 can stop after a valid client request with no request-ID header. Apply the forward
 recovery migration and use the corrected image, as described in the
 [accounting runbook](accounting-v2.md#request-ids-and-blocked-reporting-records).
 The published v0.3.2 pre-release has that reporting correction, but does not
 include the follow-up startup, cold-append, and cached-reporting corrections. No published release
-has the complete current qualification evidence.
+has the complete current qualification evidence. The v0.3.3 pre-release was
+published after PR #352 merged. Its exact published artifact has not passed the
+current qualification, and the internal accounting fix is not yet included.
 
 ## Measured reference topology
 
-The passing current series used a dedicated Linux arm64 VM with twelve CPUs and
+The earlier passing reference series used a dedicated Linux arm64 VM with twelve CPUs and
 12 GiB RAM. The earlier complete series used six CPUs and did not pass 500 RPS.
 Its two-node kind cluster shared that VM; it did not have two separate hardware
 failure domains. The generator, synthetic provider, monitoring, PostgreSQL and

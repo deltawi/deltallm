@@ -68,6 +68,8 @@ class ProcessingClient(CountingClient):
                 classify_acceptance_failure(exc).value,
                 perf_counter() - started,
             )
+            if query == INITIALIZE:
+                await failed_initializer_plan(self.db, parameters)
             raise
         if "SELECT deltallm_accounting_reconcile_grants" in query and rows[0]["count"]:
             self.settled.set()
@@ -77,6 +79,52 @@ class ProcessingClient(CountingClient):
         ):
             self.progress.set()
         return rows
+
+
+async def failed_initializer_plan(db, parameters):
+    # EXPLAIN without ANALYZE cannot execute the checkpoint insert. Keep this
+    # failure-only check on the owned test client; never log SQL or parameters.
+    try:
+        async with asyncio.timeout(0.5):
+            rows = await db.query_raw("EXPLAIN (FORMAT JSON) " + INITIALIZE, *parameters)
+            policy = await db.query_raw(
+                "SELECT current_setting('jit') AS jit, "
+                "current_setting('jit_above_cost')::float8 AS jit_above_cost"
+            )
+        plan = rows[0]["QUERY PLAN"][0]
+        logger.warning(
+            "Role graph initializer plan: total_cost=%s jit_functions=%s jit=%s jit_above_cost=%s",
+            plan["Plan"]["Total Cost"],
+            plan.get("JIT", {}).get("Functions", 0),
+            policy[0]["jit"],
+            policy[0]["jit_above_cost"],
+        )
+    except Exception as error:
+        logger.warning("Role graph initializer plan unavailable: kind=%s", type(error).__name__)
+
+
+async def test_failed_initializer_plan_is_read_only_and_does_not_log_parameters(
+    accounting_db, caplog
+):
+    clients, generation = accounting_db
+    db = clients[0]
+    before = await db.query_raw(
+        "SELECT count(*) AS count FROM deltallm_accounting_projection_checkpoints WHERE generation=$1",
+        generation,
+    )
+    await failed_initializer_plan(db, ("private-diagnostic-projection", generation))
+    assert (
+        await db.query_raw(
+            "SELECT count(*) AS count FROM deltallm_accounting_projection_checkpoints WHERE generation=$1",
+            generation,
+        )
+        == before
+    )
+    assert before == [{"count": 0}]
+    assert "Role graph initializer plan: total_cost=" in caplog.text
+    assert "jit_functions=" in caplog.text
+    assert "private-diagnostic-projection" not in caplog.text
+    assert str(generation) not in caplog.text
 
 
 class Wire(httpx.ASGITransport):

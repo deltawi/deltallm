@@ -7,9 +7,180 @@ The upgrade and the request-identity fix are now merged. All required PR checks
 passed for [PR #351](https://github.com/deltawi/deltallm/pull/351), merged at
 `0c622b47`. The follow-up in [PR #352](https://github.com/deltawi/deltallm/pull/352)
 has an earlier passing native qualification with the declared database fixture.
-The newer reporting-migration image failed its initial 500 RPS stage.
-The PR remains in draft while this failure is checked.
+The newer upstream-idle image passed initial 500 RPS, but failed final 100 RPS.
+PR #352 was merged on 11 October 2026. A separate accounting transport fix
+is in [PR #353](https://github.com/deltawi/deltallm/pull/353). It also corrects
+the Playground token display. Complete current-image qualification is still
+required before a release recommendation.
 The older results below are not a certificate for the current release image.
+
+## Current app checks and preflight results: 11 October 2026
+
+Clean source: `1045d5a95f71587b02ac5792e2a8f8aab9cca102`. Fixed image ID:
+`sha256:03f95d3b30685c2ce3088ee262423847a0c350eebe3440afeb65a78dbfce3f26`.
+The Linux arm64 test VM had twelve CPUs. The first profile had 12 GiB RAM;
+the environment comparison had 8 GiB. The topology remained four API processes,
+two accounting request processes, and one projection process. All original
+limits and 60-second warm-ups remained active. Other host workloads stayed
+running. The VM was not on an isolated physical host.
+
+All thirteen required jobs in
+[CI run 38121449994](https://github.com/deltawi/deltallm/actions/runs/38121449994)
+passed. These include the application tests, both real-database groups, Redis,
+Helm, migrations, UI, capacity, and both lifecycle image variants. Release
+promotion was skipped. All five offline, non-root, memory, migration CLI,
+and bounded shutdown image checks passed.
+
+All thirteen required jobs also passed in the latest
+[CI run 38125395301](https://github.com/deltawi/deltallm/actions/runs/38125395301)
+on test harness `4b38075a`. The harness adds the approved preflight schedule
+and corrects a real-Redis test clock. That test now checks completions in the
+same minute and across a minute boundary. Six focused real-Redis cases passed.
+The app image, output-token policy, and acceptance limits did not change.
+
+The installed app passed 86 operator and UI-file checks, 24 completions,
+four complete streams, and 16 native function checks. Key and session creation
+and revocation worked across all four API replicas. Native usage and budgets
+matched durable facts. No operator call created an inference charge.
+
+Eleven observed browser checks also passed. These checks covered sign-in,
+dashboard totals, models, masked keys, complete Playground chat, exact token
+counts, mobile usage, keyboard send, Escape focus return, sign-out, and direct
+protected links. One browser chat added one fact and exactly `0.000007` spend.
+All four scope balances matched the 25 facts. Reserved, provisional, pending,
+and unsafe counts were zero. All seven initial process restart counts were zero.
+These are observed browser checks, not an automated browser suite or a live
+provider qualification.
+
+The browser check first found a small UI defect. The Playground did not request
+streaming usage, so it showed zero tokens for a correct reply. The request now
+sets `stream_options.include_usage=true`. The regression failed before the fix.
+All 358 UI tests, the production build, and touched-file lint passed after it.
+Full lint retains 63 errors and three warnings in unchanged files, down from
+65 errors and three warnings. The initial bundle did not grow.
+
+The approved schedule first measures 500 RPS for ten minutes. Only a passing
+preflight permits all four final ten-minute stages and recovery checks.
+Both new preflights passed cold app checks, all 30,000 warm-up requests,
+and the 10,000-request generator check. Neither preflight passed.
+
+| 500 RPS preflight profile | Successful / scheduled | HTTP 503 / dropped | p95 / p99 | Growth / second |
+| --- | ---: | ---: | ---: | ---: |
+| Twelve CPUs, 12 GiB; harness `7b564124` | 296,593 / 300,000 | 2,215 / 1,192 | 298.93 / 881.87 ms | -0.049708 |
+| Twelve CPUs, 8 GiB; harness `4b38075a` | 299,939 / 300,000 | 61 / 0 | 139.99 / 526.27 ms | +0.054219 |
+
+The campaigns are `qualification-approved-high-preflight-12cpu` and
+`qualification-memory-comparison-12cpu-8gib`. Both use the same fixed image
+`03f95d3b3068` and runtime hash `91f73195c2a360408f7d4ceb8df9d5f0d41f3fdcfba38e6b8a3629f6b6fa391b`.
+The second harness change affects tests only. PostgreSQL, Redis, provider,
+replicas, deadlines, warm-ups, and stage limits stayed unchanged.
+
+In the 12-GiB run, all HTTP errors occurred at offsets 547.026 to 554.762 seconds.
+They included 1,882 usage-persistence errors, four authentication-fallback
+errors, and 329 unclassified HTTP errors. The host recorded about 2.04 GiB
+of swap-out in thirty seconds near this interval. Host memory was nearly full.
+This is evidence for a host-pressure hypothesis, not proof of the complete
+cause. After the 180-second drain deadline, four provisional operations and
+four grants remained open. Scope totals did not fully match durable facts.
+
+The 8-GiB comparison reduced errors, but did not pass. Twenty-nine unclassified
+HTTP errors occurred near offset 206 seconds. Thirty-two usage-persistence
+errors occurred near offset 491 seconds. The 99.9% success and 150-ms p95 limits
+passed. The 300-ms p99, +0.01/second growth, and complete-drain limits failed.
+After 181.46 seconds, 25 operations remained provisional. Committed charges
+matched durable facts in all four scopes, but each scope still held `0.614550`
+provisional spend. No open grant, pending reporting work, or unsafe budget
+window remained. These observations do not make the financial gate pass.
+
+During sustained load, each API process used about 90% of one CPU core.
+No container CPU throttling was recorded. This suggests limited process
+headroom. It does not prove that more replicas will resolve the remaining
+timeouts. Logs include Redis acquisition and accounting deadlines. The router
+already keeps a successful provider result when later cleanup fails; that log
+does not justify a new provider retry or an automatic refund.
+
+Neither attempt ran the final 50/100/200/500 RPS stages, maintenance, process-loss
+recovery, or rollout. No new ten-minute capacity record or release certificate
+is claimed. The next comparison needs a declared capacity profile or an idle
+test host. PR #353 remains in draft. The owned VM was restored to its original
+six-CPU, 12-GiB, stopped state. Other workloads were not changed.
+
+The following are short checks, not new ten-minute performance records:
+
+| Rate and window | Successful / scheduled | p95 / p99 | Decision |
+| --- | ---: | ---: | --- |
+| Initial 50 RPS, 30 seconds | 1,500 / 1,500 | 21.31 / 25.98 ms | Passed |
+| Initial 100 RPS, 30 seconds | 3,000 / 3,000 | 24.88 / 41.46 ms | Failed only fitted growth: +0.012608/second |
+| Initial 200 RPS, 30 seconds | 6,000 / 6,000 | 25.97 / 33.33 ms | Failed only fitted growth: +0.024576/second |
+| Separate selected 500 RPS, 60 seconds | 30,000 / 30,000 | 74.29 / 163.31 ms | Passed; not release qualification |
+
+Every completed short check had zero errors, exact charges, and complete drain.
+The growth limit remains +0.01 active requests per second. At 100 RPS, most
+samples had about two active requests. One brief sample reached 3.07 and later
+returned near two. At 200 RPS, brief peaks below five returned near 4.1 by the
+end. The middle-window fit is sensitive to these peaks. The 30-second samples
+do not establish continuing backlog growth. Keep the failed decisions; do not
+change them into passes. Use the full observation window before claiming a
+capacity defect or a fix.
+
+The normal attempt `qualification-final-playground-usage-12cpu` was stopped
+before another long stage. Its 500 RPS warm-up was interrupted. No final
+ten-minute stage, maintenance, process-loss check, or rollout ran in this
+attempt. The separate `diagnosis-playground-fixed-500-12cpu` passed its fixed
+60-second warm-up and measured stage, exactly six core Redis calls per request,
+and drain in 12.24 seconds. It remains explicitly not release-eligible.
+
+An earlier normal run on `69c81eee`, image `323efcafa531`, failed its initial
+ten-minute 500 RPS stage: 299,983/300,000 successes, 17 HTTP 503 responses from
+Redis routing acquisition timeouts, and p95/p99 335.29/669.17 ms. Charges matched
+successful requests and drained, but the strict all-success gate failed.
+No database timeout or internal accounting transport failure was recorded.
+Its final stages did not run. The historical cause remains unproved.
+
+The current image has no complete passing qualification. All current app checks
+and CI pass, but they do not override the incomplete load sequence. Do not
+promote the published v0.3.3 artifact from these candidate results.
+
+## Earlier failed sequence: internal accounting transport
+
+Campaign: `qualification-final-upstream-idle-12cpu`. Clean source:
+`613fc1ca4688ae7d9351c5afd4f78268fe1ef86e`. Fixed image ID:
+`sha256:55443efa854d14e6e8d947b788e7fd17fa16d7a7b36a1ca8b7a69e502627859c`.
+The dedicated Linux arm64 VM had twelve CPUs and 12 GiB RAM. The approved
+60-second warm-ups, all stage durations, and all limits remained unchanged.
+
+Cold functional checks passed 24 completions, four complete streams, 16 checks,
+exact charges, and full drain. All seven initial process restart counts were zero.
+All initial stages passed. The initial ten-minute 500 RPS stage had 300,000
+successes, no errors or drops, and p95/p99 143.98/268.64 ms. Its latency margin
+was small. It does not replace the final qualification stages.
+
+| Final rate | Successful / scheduled | p95 / p99 | Full stage decision |
+| --- | ---: | ---: | --- |
+| 50 RPS | 30,000 / 30,000 | 23.21 / 27.10 ms | Passed |
+| 100 RPS | 59,453 / 60,000 | 26.07 / 50.67 ms | Failed: 547 HTTP 503 responses and incomplete drain |
+| 200 RPS | Not run | Not measured | Stopped after the 100 RPS failure |
+| 500 RPS | Not run | Not measured | Stopped after the 100 RPS failure |
+
+The errors occurred at offsets 265 to 273 seconds. Of the 547 responses,
+533 reported unavailable usage persistence; fourteen were unclassified.
+Metrics recorded accounting-call connection failures, then fail-closed admission.
+That metric class includes HTTP error responses; it does not prove a network
+failure. There were no provider transport warnings. After 182 seconds, sixteen
+uncertain operations and one open grant remained. All unsafe-window counters
+were zero, but scope totals did not fully match durable facts. Maintenance,
+process-loss recovery, and rollout were not reached. This campaign failed.
+
+The internal accounting client still had a thirty-second idle limit against
+the managed server's five-second limit. A controlled test with the actual
+client reproduced a lost response at the idle-close boundary. Four-second
+client expiry passed the same test, with two server POSTs and no retry.
+This proves a failure mode, not the historical cause. Two deterministic
+pool-expiry checks and five safe-log checks failed before the correction.
+The correction changes only accounting connection expiry and fixed error-log
+fields. Signatures, bodies, URLs, and exception text do not enter those logs.
+All 202 focused transport, owner, admission, and qualification-tool checks passed.
+Full shared checks, new-image qualification, and final CI remain required.
 
 ## New reporting-migration image: failed initial stability stage
 
