@@ -58,6 +58,47 @@ message, key, or response body enters these diagnostic fields. A failed warm-up
 or measured stage saves bounded server logs before process-loss or rollout
 checks replace the original pods. Retain those logs with the raw samples.
 
+## Complete release qualification bundle
+
+The local bundle `artifacts/release-readiness-20261010/` retains the passing
+`qualification-final-client-idle-12cpu` sequence and all earlier attempts.
+Its `all-runs.json` keeps original decisions and raw checksums. Warm-ups are
+listed separately. `checksums.json` also covers source, exact image, tools,
+functional checks, financial records, maintenance, recovery, and CI evidence.
+
+Use a fresh clean checkout of harness `8a98ce73`. The tested runtime is
+`c70d63cd`, with image ID
+`sha256:8c9e5e246361f05904420cbddf600ebb0cd263761dd20e83b4ebb10dcdd882d9`.
+The bundle includes that image. A rebuild has a new identity and needs its own
+image and load checks. Later documentation-only commits do not change the tested
+runtime or harness; the bundle retains those commits separately.
+
+```sh
+task_release_bundle=/absolute/path/to/artifacts/release-readiness-20261010
+task_release_checkout=/absolute/path/to/new/release-reproduction
+python3 "$task_release_bundle/tools/export_qualification_evidence.py" \
+  --output "$task_release_bundle" --verify
+git bundle verify "$task_release_bundle/source-history.bundle"
+git clone --no-checkout "$task_release_bundle/source-history.bundle" "$task_release_checkout"
+git -C "$task_release_checkout" checkout --detach 8a98ce734f2f2338613bf629f16f14017a6d818e
+cd "$task_release_checkout"
+export DOCKER_CONTEXT=your-idle-dedicated-docker-context
+export PATH="$task_release_bundle/tools:$PATH"
+export RELEASE_KIND="$task_release_bundle/tools/kind"
+export RELEASE_STARTUP_RECORDER="$task_release_bundle/tools/record_native_startup.py"
+export RELEASE_IMAGE_ARCHIVE="$task_release_bundle/image/deltallm-reporting-corrected.tar"
+export RELEASE_EVIDENCE=/absolute/path/to/new/release-evidence
+bash "$task_release_bundle/reproduce-client-idle.sh"
+```
+
+The saved CLI binaries are for macOS arm64. On another host, install kind
+v0.31.0, Helm v3.18.4, and kubectl v1.34.3 for that host, then set the tool paths.
+The Docker VM must be idle, Linux arm64, with twelve CPUs and 12 GiB RAM. The
+wrapper rejects a dirty checkout, running containers, or a mismatched exact image.
+It checks non-root image startup, records initial process retries, then runs
+the unchanged normal qualification and recovery. It does not retry POST requests
+or stop unrelated services. Keep every new failed result.
+
 ## Latest provider-pool source
 
 The 8 October revised-adapter bundle is `artifacts/http-pool-20261008/`.
