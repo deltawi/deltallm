@@ -46,6 +46,18 @@ The API's five-second admission-monitor startup deadline does not change.
 Retain initial process status and previous logs before cold client checks.
 An initial retry is a functional readiness result, not a load warm-up result.
 
+The native load client now uses an explicit four-second idle connection expiry.
+This is shorter than the installed server's five-second idle timeout. The
+standalone load command keeps its five-second default and accepts the bounded
+`--keepalive-expiry` option. Request deadlines, connection counts, arrival rates,
+and stage gates do not change. The client does not retry POST requests.
+
+Transport failures retain fixed failure-phase and reason codes, connection-reuse
+status, and available phase times. Unknown reasons remain unknown. No exception
+message, key, or response body enters these diagnostic fields. A failed warm-up
+or measured stage saves bounded server logs before process-loss or rollout
+checks replace the original pods. Retain those logs with the raw samples.
+
 ## Latest provider-pool source
 
 The 8 October revised-adapter bundle is `artifacts/http-pool-20261008/`.

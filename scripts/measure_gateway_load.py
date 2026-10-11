@@ -14,6 +14,8 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
+import errno
 from functools import partial
 import gzip
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -58,6 +60,23 @@ SAFE_ERROR_CODES = frozenset(
 )
 
 
+class TransportFailurePhase(StrEnum):
+    CONNECT = "connect"
+    REQUEST_WRITE = "request_write"
+    RESPONSE_HEADERS = "response_headers"
+    RESPONSE_BODY = "response_body"
+    UNKNOWN = "unknown"
+
+
+class TransportFailureReason(StrEnum):
+    CONNECTION_RESET = "connection_reset"
+    CONNECTION_REFUSED = "connection_refused"
+    BROKEN_PIPE = "broken_pipe"
+    SOCKET_TIMEOUT = "socket_timeout"
+    PROTOCOL_ERROR = "protocol_error"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class RequestResult:
     status_code: int | None
@@ -69,6 +88,9 @@ class RequestResult:
     client_request_write_seconds: float | None = None
     client_response_header_seconds: float | None = None
     client_response_read_seconds: float | None = None
+    client_transport_failure_phase: TransportFailurePhase | None = None
+    client_transport_failure_reason: TransportFailureReason | None = None
+    client_reused_connection: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +112,9 @@ class RequestSample:
     client_request_write_seconds: float | None = None
     client_response_header_seconds: float | None = None
     client_response_read_seconds: float | None = None
+    client_transport_failure_phase: TransportFailurePhase | None = None
+    client_transport_failure_reason: TransportFailureReason | None = None
+    client_reused_connection: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +161,16 @@ class ClientPhaseTrace:
             "http2.send_request_body.complete",
             "http2.receive_response_headers.complete",
             "http2.receive_response_body.complete",
+            "connection.connect_tcp.failed",
+            "connection.start_tls.failed",
+            "http11.send_request_headers.failed",
+            "http11.send_request_body.failed",
+            "http11.receive_response_headers.failed",
+            "http11.receive_response_body.failed",
+            "http2.send_request_headers.failed",
+            "http2.send_request_body.failed",
+            "http2.receive_response_headers.failed",
+            "http2.receive_response_body.failed",
         }:
             self.events.setdefault(name, perf_counter())
 
@@ -162,6 +197,44 @@ class ClientPhaseTrace:
             (timestamp for name, timestamp in self.events.items() if name.endswith(suffix)),
             None,
         )
+
+    def failure_phase(self) -> TransportFailurePhase:
+        for phase, suffixes in (
+            (TransportFailurePhase.CONNECT, ("connect_tcp.failed", "start_tls.failed")),
+            (
+                TransportFailurePhase.REQUEST_WRITE,
+                ("send_request_headers.failed", "send_request_body.failed"),
+            ),
+            (TransportFailurePhase.RESPONSE_HEADERS, ("receive_response_headers.failed",)),
+            (TransportFailurePhase.RESPONSE_BODY, ("receive_response_body.failed",)),
+        ):
+            if any(name.endswith(suffix) for name in self.events for suffix in suffixes):
+                return phase
+        return TransportFailurePhase.UNKNOWN
+
+    def reused_connection(self) -> bool | None:
+        if "connection.connect_tcp.started" in self.events:
+            return False
+        return True if self._event("send_request_headers.started") is not None else None
+
+
+def _transport_failure_reason(error: BaseException) -> TransportFailureReason:
+    # A fixed code and a short cause chain keep exception messages out of evidence.
+    current: BaseException | None = error
+    for _ in range(4):
+        if isinstance(current, OSError):
+            return {
+                errno.ECONNRESET: TransportFailureReason.CONNECTION_RESET,
+                errno.ECONNREFUSED: TransportFailureReason.CONNECTION_REFUSED,
+                errno.EPIPE: TransportFailureReason.BROKEN_PIPE,
+                errno.ETIMEDOUT: TransportFailureReason.SOCKET_TIMEOUT,
+            }.get(current.errno, TransportFailureReason.UNKNOWN)
+        if current is None:
+            break
+        current = current.__cause__
+    if isinstance(error, httpx.ProtocolError):
+        return TransportFailureReason.PROTOCOL_ERROR
+    return TransportFailureReason.UNKNOWN
 
 
 def _elapsed(started: float | None, completed: float | None) -> float | None:
@@ -296,6 +369,9 @@ async def run_constant_arrival(
                 client_request_write_seconds=result.client_request_write_seconds,
                 client_response_header_seconds=result.client_response_header_seconds,
                 client_response_read_seconds=result.client_response_read_seconds,
+                client_transport_failure_phase=result.client_transport_failure_phase,
+                client_transport_failure_reason=result.client_transport_failure_reason,
+                client_reused_connection=result.client_reused_connection,
             )
             samples.append(sample)
             return sample
@@ -410,6 +486,9 @@ async def run_simultaneous_wave(
             client_request_write_seconds=result.client_request_write_seconds,
             client_response_header_seconds=result.client_response_header_seconds,
             client_response_read_seconds=result.client_response_read_seconds,
+            client_transport_failure_phase=result.client_transport_failure_phase,
+            client_transport_failure_reason=result.client_transport_failure_reason,
+            client_reused_connection=result.client_reused_connection,
         )
 
     tasks = [asyncio.create_task(execute(index)) for index in range(concurrency)]
@@ -688,6 +767,18 @@ def read_results(raw_path: Path, summary_path: Path) -> RunResult:
                 )
                 or type(sample.completed_in_arrival_window) is not bool
                 or type(sample.bytes_received) is not int
+                or (
+                    sample.client_transport_failure_phase is not None
+                    and sample.client_transport_failure_phase not in tuple(TransportFailurePhase)
+                )
+                or (
+                    sample.client_transport_failure_reason is not None
+                    and sample.client_transport_failure_reason not in tuple(TransportFailureReason)
+                )
+                or (
+                    sample.client_reused_connection is not None
+                    and type(sample.client_reused_connection) is not bool
+                )
                 or not 0 <= sample.bytes_received <= MAX_RESPONSE_BYTES
                 or (
                     sample.status_code is not None
@@ -782,9 +873,12 @@ def _request_function(
         raise ValueError("HTTP connection limits are invalid")
     if not math.isfinite(args.timeout) or not 0 < args.timeout <= 120:
         raise ValueError("HTTP timeout must be between zero and 120 seconds")
+    if not math.isfinite(args.keepalive_expiry) or not 0 <= args.keepalive_expiry <= 120:
+        raise ValueError("HTTP idle expiry must be between zero and 120 seconds")
     limits = httpx.Limits(
         max_connections=args.max_in_flight,
         max_keepalive_connections=max_keepalive,
+        keepalive_expiry=args.keepalive_expiry,
     )
     client = httpx.AsyncClient(
         timeout=args.timeout,
@@ -794,7 +888,7 @@ def _request_function(
         follow_redirects=False,
     )
 
-    async def send(index: int, request_id: str) -> RequestResult:
+    async def perform(index: int, request_id: str, phase_trace: ClientPhaseTrace) -> RequestResult:
         key = keys[index % len(keys)]
         headers = {"Authorization": f"Bearer {key}", "x-request-id": request_id}
         payload = {
@@ -805,7 +899,6 @@ def _request_function(
         }
         if args.bypass_cache:
             payload["metadata"] = {"cache": False}
-        phase_trace = ClientPhaseTrace.start()
         started = phase_trace.started
         url = urls[index % len(urls)]
         if not args.stream:
@@ -864,6 +957,20 @@ def _request_function(
             **phase_trace.result_fields(completed=perf_counter()),
         )
 
+    async def send(index: int, request_id: str) -> RequestResult:
+        phase_trace = ClientPhaseTrace.start()
+        try:
+            return await perform(index, request_id, phase_trace)
+        except httpx.TransportError as error:
+            return RequestResult(
+                status_code=None,
+                error=type(error).__name__,
+                client_transport_failure_phase=phase_trace.failure_phase(),
+                client_transport_failure_reason=_transport_failure_reason(error),
+                client_reused_connection=phase_trace.reused_connection(),
+                **phase_trace.result_fields(completed=perf_counter()),
+            )
+
     return client, send
 
 
@@ -907,6 +1014,12 @@ def _parser() -> argparse.ArgumentParser:
         help="Keep-alive connection limit; defaults to --max-in-flight",
     )
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument(
+        "--keepalive-expiry",
+        type=float,
+        default=5.0,
+        help="Idle connection lifetime; set below the server's idle close limit",
+    )
     parser.add_argument("--drain-timeout", type=float, default=DEFAULT_DRAIN_SECONDS)
     parser.add_argument("--stream", action="store_true")
     parser.add_argument("--bypass-cache", action="store_true")

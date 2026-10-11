@@ -14,10 +14,10 @@ accounting. It does not represent long model replies, large bodies or streaming.
 
 | Target | Current evidence | Required before a production capacity claim |
 | --- | --- | --- |
-| 50 RPS | Earlier candidate passed ten minutes; append-corrected `d62715d0` image passed its 30-second initial stage | Complete the reporting-corrected image's final release checks and test the real traffic mix |
-| 100 RPS | Earlier candidate passed ten minutes; append-corrected image passed its 30-second initial stage | Same checks, with measured provider and dependency headroom |
-| 200 RPS | Earlier candidate passed ten minutes; append-corrected image passed its 30-second initial stage | Same checks, including peak concurrency and worker catch-up |
-| 500 RPS | Reporting-corrected image passed two ten-minute diagnostics, including retained history, with LZ4 WAL compression; full release checks remain pending | Pass the same image's functional recovery and all four normal stages |
+| 50 RPS | Reporting-corrected image passed ten minutes with 30,000 successes and p95/p99 22.64/25.99 ms | Complete the full release checks and test the real traffic mix |
+| 100 RPS | Same image passed ten minutes with 60,000 successes and p95/p99 23.46/27.68 ms | Same checks, with measured provider and dependency headroom |
+| 200 RPS | Same image passed ten minutes with 120,000 successes and p95/p99 27.84/43.23 ms | Same checks, including peak concurrency and worker catch-up |
+| 500 RPS | Final stage had 299,998 successes, two client read errors, and p95/p99 90.63/174.74 ms; its full decision failed | Pass all four normal stages and the remaining CI checks |
 | 1,000 RPS | Earlier 30-second diagnostic failed; the reporting-corrected image has not been tested at this rate | Repeat only after the current sustained 500 RPS and functional gates pass |
 
 The fixed candidate's six-CPU series is not a passing release qualification. There is no
@@ -38,6 +38,18 @@ all latency, growth, success, and financial limits remain unchanged. It also che
 ordinary clients without request-ID headers, exact accounting, process recovery,
 and a same-image Helm rollout. Use the recorded final result, not an interim
 passing stage, before making a release capacity claim.
+
+The 11 October sequence passed cold functional checks, bounded database
+maintenance, process loss in all three roles, and the same-image Helm rollout.
+It did not pass the final 500 RPS all-success financial gate or the latest CI
+run. These passing functional checks do not remove either failed result.
+
+Set client idle connection expiry below the gateway or proxy idle timeout.
+The native test client uses four seconds against the installed server's five
+seconds. A controlled socket test reproduced a read error at equal idle limits;
+it does not prove the cause of the two historical errors. This client setting
+does not change the request deadline or add POST retries. Production clients
+must use their actual proxy and server limits, not assume this local value.
 
 The unchanged `v0.3.1` pre-release must not become Latest. Its native reporting
 can stop after a valid client request with no request-ID header. Apply the forward

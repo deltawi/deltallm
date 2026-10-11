@@ -9,6 +9,41 @@ passed for [PR #351](https://github.com/deltawi/deltallm/pull/351), merged at
 test. Use the complete qualification report to assess the corrected release.
 The older results below are not a certificate for the current release image.
 
+## Full fixed-image sequence on 11 October 2026
+
+Campaign: `qualification-final-native-probes-12cpu`. Clean harness: `f38e6890`.
+Runtime: `c70d63cd`; fixed image: `8c9e5e24`. The VM had twelve CPUs and 12 GiB
+RAM. Each stage had the approved 60-second same-rate warm-up. All four final
+stages lasted 600 seconds, on one database with earlier history retained.
+The workload used the immediate, one-token local provider and bypassed cache.
+
+| Final rate | Successful / scheduled | p95 / p99 | Growth / second | Full stage decision |
+| --- | ---: | ---: | ---: | --- |
+| 50 RPS | 30,000 / 30,000 | 22.64 / 25.99 ms | +0.000022 | Passed |
+| 100 RPS | 60,000 / 60,000 | 23.46 / 27.68 ms | +0.000026 | Passed |
+| 200 RPS | 120,000 / 120,000 | 27.84 / 43.23 ms | -0.000327 | Passed |
+| 500 RPS | 299,998 / 300,000 | 90.63 / 174.74 ms | +0.002713 | Failed: two client read errors |
+
+All latency and growth gates passed. No stage had HTTP 500/503 responses or
+dropped arrivals. The 500 RPS result is faster than the earlier six-CPU result,
+but the machine and database profile differ. Do not attribute that gain to one
+code change. Its two client errors occurred within 70 ms of each other, near
+offset 135 seconds. They ended within four ms; their exact cause is not proved.
+The original all-success financial gate remains failed. All four scope totals
+matched the facts, and drain left no pending work, open grants, or unsafe windows.
+
+Initial load also passed, including a separate ten-minute 500 RPS stage with
+300,000/300,000 successes and p95/p99 61.36/108.97 ms. All seven processes started
+without retries. Cold clients, process-loss recovery in each role, and the
+same-image Helm rollout each passed 24 completions, four full streams, 16
+functional checks, readiness, and exact charges. The rollout replaced all seven
+processes. Bounded database maintenance passed.
+
+The full sequence is not release-qualified. CI run `38093895624` also failed:
+attempt 1 had one session-validation error; attempt 2 passed that case but failed
+five reporting-startup cases. Both logs and all failed results remain saved.
+The full passing CI and load sequence remain required before release promotion.
+
 ## Fixed-candidate checks on 10 October 2026
 
 The corrected candidate uses source `ee15393d0731e8e9c76453dae5d7b24a3c16249c`
@@ -396,12 +431,12 @@ fix for the distinct persistence or latency failures.
 | Client request IDs, complete streams, and native reporting | Cold start, process-loss recovery, and Helm-rollout recovery each passed 24 completions, including four complete streams; charges were exact and all seven processes were ready | Repeat in the full final sequence and retain initial startup status |
 | Installed authentication, input validation, model visibility, and UI delivery | All 16 checks passed across the four API processes before load and after both recovery phases | Repeat in the full final sequence |
 | Application behavior, including streaming and access checks | 1,696 application tests passed locally | Keep all final application CI checks passing |
-| Database behavior, budgets, permissions, and reporting | All 1,194 PostgreSQL cases passed locally, with missing-service/profile cases provisioned separately; both latest CI database shards passed | Keep both final database CI shards passing |
+| Database behavior, budgets, permissions, and reporting | All 1,194 PostgreSQL cases passed locally on `c70d63cd`, with missing-service/profile cases provisioned separately; the later `f38e6890` CI shard has startup failures | Find the startup cause and pass both final database CI shards |
 | Realtime clients | All four pinned official SDK cases passed locally | Keep final Realtime CI checks passing |
 | Redis limits and failure policies | 256 tests passed, including separate memory-pressure services | Keep all final Redis CI checks passing |
 | Install and upgrade migrations | Clean install, v0.3.1, v0.3.2, shared-feature upgrade, and model-identity recovery passed | Apply both forward reporting migrations before the corrected image |
 | Container lifecycle and accepted-work recovery | Offline non-root startup and bounded exit passed; the lifecycle comparison recovered one accepted charge exactly once; selected native process loss and rollout passed | Repeat native recovery after the full final load sequence |
-| Helm configuration and packaged UI | All 275 Helm tests and the UI CI job passed | Keep all final chart and UI CI checks passing |
+| Helm configuration and packaged UI | All 276 Helm tests and the UI CI job passed on `f38e6890` | Keep all final chart and UI CI checks passing |
 
 The full local database group in CI order passed: 504 passed and one opt-in case
 skipped. All 33 affected tests also passed with the smaller CI Prisma pool.

@@ -62,6 +62,8 @@ def cluster_generator_job(
         "1000",
         "--max-keepalive",
         "100",
+        "--keepalive-expiry",
+        "4",
         "--timeout",
         "10",
         "--drain-timeout",
