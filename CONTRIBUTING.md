@@ -171,6 +171,14 @@ on one runner. Both shards must pass the `test` check. The time limit stays at
 use an isolated test database and Redis service. Local runs without this option
 still run the full lane.
 
+Query-plan tests read plans from `auto_explain` at the `NOTICE` level, so the plans
+reach the test connection but not the PostgreSQL server log. GitHub Actions prints
+the service container's log after the job and the readable job log keeps only its
+end, so a noisy server log hides the pytest summary. Plan assertions accept any
+bounded index access, including a bitmap over the same index: the planner's choice
+can change when autovacuum refreshes statistics during a run. Test Prisma clients
+that run accounting SQL use `jit=off`, like the accounting pool they stand in for.
+
 ## Reporting Issues
 
 When reporting bugs, please include:

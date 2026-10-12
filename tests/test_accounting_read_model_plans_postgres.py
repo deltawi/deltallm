@@ -57,6 +57,19 @@ async def retained(db, generation):
         await db.execute_raw(f"ANALYZE {relation}")
 
 
+def assert_bounded_key_access(node, report):
+    # A bitmap over the same key index reads the same few rows. The planner
+    # can pick it when autovacuum changes table statistics during a test.
+    assert node["Node Type"] != "Seq Scan", report
+    if node["Node Type"] == "Bitmap Heap Scan":
+        assert node.get("Lossy Heap Blocks", 0) == 0, report
+        (index,) = [
+            child for child in node.get("Plans", []) if child.get("Parent Relationship") == "Outer"
+        ]
+        assert index["Node Type"] == "Bitmap Index Scan", report
+        assert index["Actual Rows"] <= 4, report
+
+
 @pytest.mark.parametrize("planner", ["auto", "generic", "custom", "alternate_join"])
 async def test_actual_native_read_model_plans_do_not_scan_retained_history(
     accounting_db,
@@ -100,13 +113,16 @@ async def test_actual_native_read_model_plans_do_not_scan_retained_history(
             relation = node.get("Relation Name")
             if relation in relations and node["Actual Loops"]:
                 observed.add(relation)
-                assert node["Node Type"] not in {"Seq Scan", "Bitmap Heap Scan"}, {
-                    "relation": relation,
-                    "node": node["Node Type"],
-                    "rows": node["Actual Rows"],
-                    "filtered": node.get("Rows Removed by Filter", 0),
-                    "query_sha256": entry.safe_report()["query_sha256"],
-                }
+                assert_bounded_key_access(
+                    node,
+                    {
+                        "relation": relation,
+                        "node": node["Node Type"],
+                        "rows": node["Actual Rows"],
+                        "filtered": node.get("Rows Removed by Filter", 0),
+                        "query_sha256": entry.safe_report()["query_sha256"],
+                    },
+                )
                 assert node["Actual Rows"] <= 4, entry.safe_report()
                 assert node["Actual Loops"] <= 64, entry.safe_report()
                 assert node.get("Rows Removed by Filter", 0) <= 1, {
@@ -178,7 +194,7 @@ async def test_native_checkpoint_lease_churn_reuses_heap_without_history_work(
             if node.get("Relation Name") not in relations or not node["Actual Loops"]:
                 continue
             observed.add(node["Relation Name"])
-            assert node["Node Type"] not in {"Seq Scan", "Bitmap Heap Scan"}, entry.safe_report()
+            assert_bounded_key_access(node, entry.safe_report())
             assert node["Actual Rows"] <= 4, entry.safe_report()
             assert node["Actual Loops"] <= 64, entry.safe_report()
             assert node.get("Rows Removed by Filter", 0) <= 1, entry.safe_report()
