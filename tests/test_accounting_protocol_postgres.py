@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 from prisma import Prisma
@@ -28,6 +29,15 @@ from src.db.accounting.reporting.accounting_projection import AccountingProjecti
 pytestmark = pytest.mark.postgres
 
 
+def accounting_session_url(url: str) -> str:
+    # These clients run accounting SQL in place of the accounting pool, so they
+    # take its jit=off session setting. Stale statistics from earlier tests can
+    # otherwise push a short statement past jit_above_cost on a slow runner.
+    parsed = urlsplit(url)
+    query = parse_qsl(parsed.query, keep_blank_values=True) + [("options", "-c jit=off")]
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
+
+
 @pytest.fixture
 async def accounting_db():
     url = os.getenv("DATABASE_URL")
@@ -37,7 +47,7 @@ async def accounting_db():
         pytest.skip("DATABASE_URL is required")
     generation = int(uuid4().int % 1_000_000_000) + 1
     bootstrap_window = str(uuid4())
-    clients = [Prisma(datasource={"url": url}) for _ in range(2)]
+    clients = [Prisma(datasource={"url": accounting_session_url(url)}) for _ in range(2)]
     for client in clients:
         await client.connect()
     db = clients[0]
@@ -328,6 +338,9 @@ async def test_direct_pool_executes_accounting_protocol_with_native_deadlines(ac
     )
     try:
         assert manager.client is not None
+        assert await manager.client.query_raw("SELECT current_setting('jit') AS jit") == [
+            {"jit": "off"}
+        ]
         repository = AccountingProtocolRepository(
             manager.client,
             statement_budget_seconds=0.25,

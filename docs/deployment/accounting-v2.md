@@ -279,6 +279,11 @@ telemetry worker. The dedicated worker defaults to smaller control and foregroun
 pools because it is not selected by the gateway Service; override those pools only
 with an updated capacity report.
 
+The direct accounting pool sets `statement_timeout`, `lock_timeout`, and `jit=off`
+on every connection. Its statements are key-bounded and must finish within
+`accounting_statement_timeout_ms`. Compiling one plan with JIT can take longer than
+that budget when stale table statistics overstate a statement's cost.
+
 Each API process has separate reservation and finalization byte budgets. Both
 default to 8 MiB and are startup-only. Each budget covers immutable queued payloads,
 selected work waiting for a database acknowledgement, and a fixed charge for queue

@@ -131,6 +131,10 @@ class AccountingPostgresManager:
             "statement_timeout": str(max(1, round(statement_seconds * 1000))),
             "lock_timeout": str(max(1, round(lock_seconds * 1000))),
             "idle_in_transaction_session_timeout": str(max(1, round(statement_seconds * 1000))),
+            # Hot-path statements are key-bounded and fit a sub-second budget.
+            # Stale table statistics can still push their estimated cost past
+            # jit_above_cost, and compiling the plan then consumes the budget.
+            "jit": "off",
         }
         pool = await asyncpg.create_pool(
             dsn=accounting_postgres_dsn(database_settings.url),
