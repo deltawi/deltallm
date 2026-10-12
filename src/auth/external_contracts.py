@@ -38,6 +38,8 @@ class ExternalAssertionClaims(BaseModel):
     external_session_id: str = Field(min_length=1, max_length=200, repr=False)
     auth_time: int = Field(ge=0, le=253402300799)
     external_session_expires_at: int = Field(ge=0, le=253402300799)
+    # Optional. Selects one granted team of the binding; absent means the default team.
+    team_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("sub", "binding_id", "external_customer_id", "external_session_id")
     @classmethod
@@ -49,6 +51,11 @@ class ExternalAssertionClaims(BaseModel):
         ):
             raise ValueError("Invalid external identity reference")
         return value
+
+    @field_validator("team_id")
+    @classmethod
+    def require_bounded_team(cls, value: str | None) -> str | None:
+        return None if value is None else cls.require_bounded_reference(value)
 
     @field_validator("email")
     @classmethod

@@ -12,7 +12,8 @@ class ExternalAuthRollbackRepository:
             (SELECT count(*)::int FROM deltallm_externalauthintegration WHERE enabled) AS enabled_integrations,
             (SELECT count(*)::int FROM (SELECT 1 FROM deltallm_externalauthparentsession WHERE revoked_at IS NULL LIMIT 1001) sample) AS live_parents,
             (SELECT count(*)::int FROM (SELECT 1 FROM deltallm_platformsession WHERE external_parent_id IS NOT NULL AND revoked_at IS NULL LIMIT 1001) sample) AS live_children,
-            (SELECT count(*)::int FROM (SELECT 1 FROM deltallm_cacheinvalidationoutbox WHERE scope_type = 'key_hash' AND metadata->>'auth_revocation' = 'true' LIMIT 1001) sample) AS retained_revocations""")
+            (SELECT count(*)::int FROM (SELECT 1 FROM deltallm_cacheinvalidationoutbox WHERE scope_type = 'key_hash' AND metadata->>'auth_revocation' = 'true' LIMIT 1001) sample) AS retained_revocations,
+            (SELECT count(*)::int FROM (SELECT 1 FROM deltallm_externalauthbindingteam WHERE state = 'active' LIMIT 1001) sample) AS attached_teams""")
         return {str(key): int(value) for key, value in rows[0].items()}
 
     async def disable(self) -> None:

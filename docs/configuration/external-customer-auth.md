@@ -47,17 +47,47 @@ Use a management credential in the existing provisioning service. Keep it separa
 3. Store the returned `binding_id` in the Console's trusted customer record. A retry with the same pair is idempotent. A different pair returns conflict.
 4. Enable the configured integration with `PUT /ui/api/external-auth/integrations/{integration_id}` and `{"enabled":true,"expected_version":0,"reason":"Console rollout approved"}`. Use the current version for later changes.
 
-Database integration rows start disabled. Configuring a public key does not enable them. Binding tenant IDs are immutable. Suspend and resume operations require an operator, a reason, and the current version.
+Database integration rows start disabled. Configuring a public key does not enable them. Binding tenant IDs are immutable. The registered team is the binding's default team. Suspend and resume operations require an operator, a reason, and the current version.
 
 First sign-in creates an ordinary dedicated account, one organization membership, one team membership, and a runtime user. It does not adopt an account by email. An email collision requires explicit operator approval with a fresh `gateway_account_link` assertion at `/ui/api/external-auth/subjects/link`. Existing runtime users require the same type of approval at `/ui/api/external-auth/subjects/runtime-user-binding` with `gateway_runtime_identity_bind`. Both calls include a bounded `approval_reference`, `reason`, `expected_version`, and `binding_id`.
 
 A removed membership stays removed. Further sign-ins do not reset roles, update account email, or resume suspended access. A linked account retains local MFA and forced-password-change requirements. MFA verification carries forward only within the same live parent and while the stored factor is unchanged.
 
+## Additional teams
+
+A binding can cover more teams in its organization. Each session acts in exactly one team. The default team is always the binding's registered `team_id`. You cannot change it, attach it, detach it, grant it, or revoke it with the endpoints below. Every subject of the binding holds the default team. Subject suspension controls access to it.
+
+Only an operator management credential can manage additional teams. The customer permission ceiling does not change. Customers cannot create teams or grant access. Every request body is strict JSON with `expected_version` and `reason`. Each change writes required audit with the team ID.
+
+| Endpoint | Result |
+| --- | --- |
+| `PUT /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}` | Attach an existing team of the binding's organization. Use `expected_version` `0` for a new attachment, or the current version to attach a detached team again. A repeat on an active attachment returns it unchanged. |
+| `DELETE /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}` | Detach the team. This removes every grant on it, as below. |
+| `GET /ui/api/external-auth/bindings/{binding_id}/teams` | List the default team (`is_default: true`, first page only) and the attachments, with `after` and `limit`. |
+| `PUT /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}/subjects` | Grant one person the team. The body also has `identity_issuer` and `subject`. The issuer must be the integration's configured identity issuer. If the person has not signed in, this creates a pending subject. |
+| `DELETE /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}/subjects/{subject_id}` | Remove the grant. |
+| `GET /ui/api/external-auth/bindings/{binding_id}/subjects` | List subjects and their grants on additional teams, with `team_id`, `after`, and `limit`. |
+
+1. Create the team with `POST /ui/api/teams` in the binding's organization.
+2. Attach it to the binding.
+3. Grant each person the team. You can grant before the first sign-in.
+
+The first exchange into a granted team creates one runtime user for that person and team, and one `team_developer` membership. The runtime user has no email, because runtime user emails are unique and the default runtime user already has the account email. Later exchanges use the same runtime user. A person who is not granted, a team that is not attached or is detached, a team in another organization, and a missing team all get the same generic `external_access_denied` error.
+
+Grant removal applies immediately and in one transaction:
+
+- The grant epoch increases, so live sessions in that team fail on their next request.
+- The team membership is deleted, and the team's child sessions are revoked.
+- The team's runtime user is blocked. Billing admission reads this flag from the primary database on each request, so its keys stop at once. A durable cache invalidation record also removes the cached keys.
+- Keys are not deleted. A new grant unblocks the same runtime user and restores the membership, so its keys work again. Sessions from before the removal stay invalid.
+
+Sessions in the person's other teams do not change. This is different from subject or binding suspension, which leaves application keys unchanged.
+
 ## Customer access
 
-The session permits work in its bound organization and team. It can create private credentials and models, share eligible assets within that workspace, view its own usage, and manage its own keys under the current team self-service policy. It cannot create public grants, change budgets or owners, rotate keys, or administer other customers.
+The session permits work in its bound organization and in its selected team only. It can create private credentials and models, share eligible assets within that workspace, view its own usage, and manage its own keys under the current team self-service policy. It cannot create public grants, change budgets or owners, rotate keys, or administer other customers.
 
-Team lists and detail reads return only the registered team, including when other teams use the same organization. Organization-wide member lists and member searches require an operator session. Stored administrator membership roles do not override the customer permission ceiling.
+Team lists and detail reads return only the session's team, including when other teams use the same organization or the person has other granted teams. Organization-wide member lists and member searches require an operator session. Stored administrator membership roles do not override the customer permission ceiling.
 
 Batch administration and batch create-session routes require an operator session. External customer sessions cannot read batch records, prompts, responses, costs, or scheduler details, or run batch maintenance actions. A scope request with a required permission fails with HTTP 403 when the customer has no live grant for that permission.
 
@@ -65,7 +95,7 @@ An external session cannot create a local gateway password. A linked account wit
 
 The browser UI uses `auth_mode=session`. `/auth/me` adds `session_source=external_customer`, `workspace`, and `expires_at`. A customer session plus any master credential is denied. The Console UI has no master-login fallback.
 
-The Playground requires an active API key owned by the customer and assigned to the exact bound runtime user and team. The Console validates the choice with `POST /auth/external/inference-key`, stores the raw key encrypted, and sends normal API-key inference requests. A gateway browser session does not authorize inference. See the [Console connection contract](../guides/console-gateway-connection.md).
+The Playground requires an active API key owned by the customer and assigned to the session's runtime user and team. The Console validates the choice with `POST /auth/external/inference-key`, stores the raw key encrypted, and sends normal API-key inference requests. A gateway browser session does not authorize inference. See the [Console connection contract](../guides/console-gateway-connection.md).
 
 Logout closes the external parent and all child sessions. It does not revoke application keys. Subject or binding suspension also leaves application keys unchanged. Use explicit key revocation or existing inference controls when those must stop.
 
@@ -73,11 +103,11 @@ Integration disable, binding suspension, and subject suspension commit their sta
 
 Key removal commits deletion, required audit, and an exact-hash invalidation record together. Its response contains `enforcement`, `invalidation_id`, and `maximum_enforcement_delay_seconds`. `pending` means the durable worker must finish cache enforcement; the configured upper bound is 61 seconds with a 60-second cache lifetime. The UI displays that pending state and polls `GET /ui/api/key-revocations/{invalidation_id}`. The endpoint permits only the requesting account or an authorized operator and returns no key hash.
 
-Organization deletion or deletion of a mapped account, identity, runtime user, or team suspends external access and revokes parents and children in the same database transaction. Immutable historical IDs remain in the external tables. Cancellation of organization deletion does not resume external access automatically. An operator must recheck and resume it. A deleted tenant or mapped identity cannot be resumed.
+Organization deletion or deletion of a mapped account, identity, default runtime user, or default team suspends external access and revokes parents and children in the same database transaction. Deletion of an additional team detaches it and removes its grants. Deletion of the runtime user of an additional team removes that grant. In both cases the database revokes that team's child sessions, and the binding and other teams stay active. Immutable historical IDs remain in the external tables. Cancellation of organization deletion does not resume external access automatically. An operator must recheck and resume it. A deleted tenant or mapped identity cannot be resumed.
 
 ## Diagnostics, retention, and signer rotation
 
-Use `GET /ui/api/external-auth/status` with an operator management credential. It reports protocol `external_customer_v1`, disabled/degraded/ready state, worker health, and bounded active/queued database work. It returns no trust material or customer records. Readiness checks Redis and the completed ledger entries for all seven external-auth migrations; a missing or rolled-back migration prevents enabled startup. Public liveness contains no customer diagnostics.
+Use `GET /ui/api/external-auth/status` with an operator management credential. It reports protocol `external_customer_v1`, disabled/degraded/ready state, worker health, and bounded active/queued database work. It returns no trust material or customer records. Readiness checks Redis and the completed ledger entries for all eight external-auth migrations; a missing or rolled-back migration prevents enabled startup. Public liveness contains no customer diagnostics.
 
 Monitor fixed-label external-auth request, denial, saturation, duration, cleanup backlog/age, and key-revocation-delay metrics. A backlog sample is capped at the configured batch size plus one; an oldest-age increase requires investigation. Admitted invalid-signature denials use required sanitized audit, globally limited to 60 records per minute. Oversized bodies and ingress overload use counters. Assertions, sessions, raw API keys, email, and external session IDs are never audit content.
 
@@ -94,6 +124,10 @@ API-key cache read failure or invalid lookup data uses the bounded primary-datab
 An additional canonical production-image CI check is supplied in `plans/issue-344-ci-image-build.patch`. A maintainer with workflow-write permission must apply it to activate the image build, non-root runtime, built UI, and external-auth POST route checks. The patch also makes the required `test` check depend on the image job. Until it is applied, the current CI does not certify the production image. Connected staging and deployment capacity tests remain required.
 
 ## Deployment and rollback
+
+The multi-team migration only adds tables, columns, and trigger logic. It needs no backfill. A child session without a team acts in the binding's default team. Sessions from an older binary therefore stay valid during a rolling deployment. Deploy the gateway to every replica before the Console sends a `team_id` claim. An older gateway rejects the unknown claim.
+
+An older binary also does not know additional teams. It denies every session of an account that has a membership in an additional team. This is a lockout, not a data leak. To revert, use the procedure below. Before you restore old traffic, detach the additional teams of the people who must keep access. The rollback preview reports `attached_teams` for this check.
 
 External auth adds a four-connection primary database pool to each API process. The slots reserve two mutations, one validation, and one maintenance operation. Count all API processes, including rolling surge and retiring pods. For example, 15 peak pods with one API process each require 60 extra connections. Include control, foreground, telemetry, worker, migration, and other database connections in the total.
 

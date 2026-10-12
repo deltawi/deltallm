@@ -20,9 +20,13 @@ from src.db.identity.external.external_auth_provisioning import (
     ExternalAccountState,
     ExternalProvisioningRepository,
 )
-from src.db.identity.external.external_auth_records import ExternalSubjectRecord
+from src.db.identity.external.external_auth_records import (
+    ExternalSubjectRecord,
+    ExternalSubjectTeamRecord,
+)
 from src.db.identity.external.external_auth_sessions import ExternalSessionRepository
 from src.db.identity.external.external_auth_subjects import ExternalSubjectRepository
+from src.db.identity.external.external_auth_teams import ExternalTeamRepository
 from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.db.identity.platform_accounts import PlatformAccountDatabase
 from src.models.external_auth import ExternalExchangeResponse
@@ -81,8 +85,21 @@ class ExternalAuthExchange:
             require_subject_binding(subject, locked.binding)
             if subject.state == "suspended":
                 raise ExternalAuthError()
+            selected = assertion.claims.team_id or locked.binding.team_id
+            grant = None
+            if selected != locked.binding.team_id:
+                # A missing team, a team outside the binding and a missing grant
+                # all return the same generic denial.
+                grant = await ExternalTeamRepository(db).lock_usable_grant(
+                    subject.subject_id, locked.binding, selected
+                )
+                if grant is None:
+                    raise ExternalAuthError()
             if created:
                 subject = await self._provision(db, assertion, subject, locked)
+            if grant is not None:
+                state = await self._team_state(db, subject, locked, grant)
+            elif created:
                 state = ExternalAccountState(
                     subject.account_id or "",
                     subject.identity_id or "",
@@ -94,9 +111,11 @@ class ExternalAuthExchange:
                 state = await ExternalProvisioningRepository(db).eligible_account(
                     subject, locked.binding
                 )
-                if state is None:
-                    raise ExternalAuthError()
-            response = await self._issue(db, assertion, subject, locked, state)
+            if state is None:
+                raise ExternalAuthError()
+            response = await self._issue(
+                db, assertion, subject, locked, state, selected, grant.epoch if grant else 0
+            )
             events = [
                 ExternalAuditEvent(
                     AuditAction.EXTERNAL_AUTH_SUCCESS,
@@ -107,6 +126,7 @@ class ExternalAuthExchange:
                     locked.binding.binding_id,
                     state.account_id,
                     assertion.claims.purpose,
+                    team_id=selected,
                 )
             ]
             if created:
@@ -124,6 +144,31 @@ class ExternalAuthExchange:
                 )
             await self.audit.write_many(db, events)
             return response
+
+    async def _team_state(
+        self,
+        db: PlatformAccountDatabase,
+        subject: ExternalSubjectRecord,
+        locked: LockedExternalBinding,
+        grant: ExternalSubjectTeamRecord,
+    ) -> ExternalAccountState | None:
+        if subject.account_id is None:
+            return None
+        if grant.runtime_user_id is None:
+            provisioned = await ExternalTeamRepository(db).provision_runtime(
+                grant, account_id=subject.account_id
+            )
+            if provisioned is None:
+                return None
+            grant = provisioned
+        return await ExternalProvisioningRepository(db).eligible_target(
+            account_id=subject.account_id,
+            runtime_user_id=grant.runtime_user_id or "",
+            binding=locked.binding,
+            team_id=grant.team_id,
+            subject_id=subject.subject_id,
+            identity_id=subject.identity_id,
+        )
 
     async def _provision(
         self,
@@ -165,6 +210,8 @@ class ExternalAuthExchange:
         subject: ExternalSubjectRecord,
         locked: LockedExternalBinding,
         state: ExternalAccountState,
+        team_id: str,
+        team_epoch: int,
     ) -> ExternalExchangeResponse:
         now = datetime.now(UTC)
         auth_time = datetime.fromtimestamp(assertion.claims.auth_time, UTC)
@@ -201,6 +248,8 @@ class ExternalAuthExchange:
             expires_at=expires_at,
             mfa_verified=not state.mfa_enabled,
             overlap_seconds=self.settings.previous_overlap_seconds,
+            team_id=team_id,
+            team_epoch=team_epoch,
         )
         if issued is None:
             raise ExternalAuthError("external_reauthentication_required")
@@ -209,7 +258,7 @@ class ExternalAuthExchange:
             session_generation=issued.generation,
             account_id=state.account_id,
             organization_id=locked.binding.organization_id,
-            team_id=locked.binding.team_id,
+            team_id=team_id,
             inference_user_id=state.runtime_user_id,
             binding_id=locked.binding.binding_id,
             expires_at=expires_at,

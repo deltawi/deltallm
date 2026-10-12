@@ -185,3 +185,36 @@ def test_openapi_documents_bounded_strict_requests_without_eager_body_parsing():
         assert schema["properties"][name]["maxLength"] == limit
         route = next(item for item in app.routes if getattr(item, "path", None) == path)
         assert route.body_field is None
+
+
+def test_openapi_documents_operator_team_routes_with_strict_bodies():
+    from src.api.admin.endpoints.external_auth import router as admin_router
+
+    app = FastAPI()
+    app.include_router(admin_router)
+    paths = app.openapi()["paths"]
+    prefix = "/ui/api/external-auth/bindings/{binding_id}"
+    for path, method, required in [
+        (prefix + "/teams/{team_id}", "put", {"expected_version", "reason"}),
+        (prefix + "/teams/{team_id}", "delete", {"expected_version", "reason"}),
+        (
+            prefix + "/teams/{team_id}/subjects",
+            "put",
+            {"expected_version", "reason", "identity_issuer", "subject"},
+        ),
+        (
+            prefix + "/teams/{team_id}/subjects/{subject_id}",
+            "delete",
+            {"expected_version", "reason"},
+        ),
+    ]:
+        schema = paths[path][method]["requestBody"]["content"]["application/json"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert set(schema["required"]) == required
+        route = next(
+            item
+            for item in app.routes
+            if getattr(item, "path", None) == path and method.upper() in item.methods
+        )
+        assert route.body_field is None
+    assert "get" in paths[prefix + "/teams"] and "get" in paths[prefix + "/subjects"]

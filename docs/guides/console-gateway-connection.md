@@ -13,7 +13,8 @@ This document is the handoff to the Console agent in Replit. Implement the signe
 | Identity issuer | Console/operator; exact verified Clerk instance issuer. |
 | Public keys and `kid` | Console publishes RSA public keys; operator installs at most four per integration. |
 | Console browser origin | Operator installs the exact HTTPS origin in `allowed_origins`. |
-| Customer reference and binding | Provisioning service registers an existing gateway organization/team and stores the returned binding ID. |
+| Customer reference and binding | Provisioning service registers an existing gateway organization/team and stores the returned binding ID. That team is the binding's default team. |
+| Additional teams | Provisioning service attaches other teams of the same organization and grants people access. See [additional teams](../configuration/external-customer-auth.md#additional-teams). |
 | Shared salt | Gateway-only; not needed by the Console. |
 | UI mount | `/gateway` for this connection. Serve the built gateway assets under `/gateway/ui/`. |
 
@@ -42,11 +43,16 @@ The JWT header must contain only `alg=RS256`, `typ=JWT`, and the configured `kid
   "email_verified": true,
   "external_session_id": "sess_clerk_stable_id",
   "auth_time": 1699999000,
-  "external_session_expires_at": 1700040000
+  "external_session_expires_at": 1700040000,
+  "team_id": "granted-additional-team"
 }
 ```
 
+`team_id` is optional. Omit it to act in the binding's default team. Send it only after every gateway replica runs a release that supports it: an older gateway rejects the unknown claim. The claim selects one team that an operator already attached and granted to this person. It cannot grant access. Take it from the trusted Console membership record, not from browser input without a check.
+
 Use current integer UTC seconds. The example times are placeholders. Require verified email from Clerk. Keep the original authenticated session time and expiry on renewal. The child lifetime is at most 300 seconds. The parent ends at the earlier of the original Clerk expiry or 12 hours after `auth_time`. A different customer under the same Clerk session needs a separate approved session scope; do not reuse an external session ID to reassign a gateway parent. In this release, one exact issuer/subject belongs to one customer binding.
+
+A gateway parent serves one team. Use a distinct `external_session_id` for each (Clerk session, team) pair, for example a stable digest of the Clerk session ID and the team ID. Each pair then has its own parent and generation chain, and two browser tabs in two teams do not retire each other's sessions. A renewal that names a different team than its parent fails with `external_reauthentication_required`. To switch team, exchange with the other team's `external_session_id`.
 
 The compact JWT is at most 8 KiB and JSON request body at most 16 KiB. Subject, binding, customer, and session references are at most 200 UTF-8 bytes; email is at most 320 bytes. Extra claims are rejected. An audience array is rejected.
 
@@ -54,7 +60,7 @@ The compact JWT is at most 8 KiB and JSON request body at most 16 KiB. Subject, 
 
 Call `POST {gateway}/auth/external/exchange` with `Content-Type: application/json` and `{"assertion":"..."}`. Send no Cookie, Origin, Authorization, or master header. A bounded opaque `X-Correlation-ID` is optional. Do not log the request body or response token.
 
-The success response has `session_token`, `session_generation`, `account_id`, `organization_id`, `team_id`, `inference_user_id`, `binding_id`, `expires_at`, `refresh_after_seconds`, `next_step`, and `mfa_required`. It sets no cookie. A successful response has this shape (IDs and times are illustrative):
+The success response has `session_token`, `session_generation`, `account_id`, `organization_id`, `team_id`, `inference_user_id`, `binding_id`, `expires_at`, `refresh_after_seconds`, `next_step`, and `mfa_required`. `team_id` is the selected team. `inference_user_id` is the person's runtime user in that team; each team has a different one. It sets no cookie. A successful response has this shape (IDs and times are illustrative):
 
 ```json
 {
@@ -74,9 +80,9 @@ The success response has `session_token`, `session_generation`, `account_id`, `o
 
 The raw `psk_ext1_...` token is a gateway secret.
 
-Store the token with authenticated encryption in the Console backend. Bind the record to the Clerk issuer/user/session, customer, gateway account, and returned binding. Include the selected API key only in that same scope. Use a stable, rotated vault encryption key from backend secrets; retain old decrypt keys during rotation. Store an opaque random reference in a Secure, HttpOnly, SameSite=Lax Console cookie, scoped to `/gateway/`. Apply CSRF checks to every unsafe request. Never return the assertion or gateway token in HTML, JavaScript, JSON to the browser, a URL, browser storage, logs, traces, or an analytics event.
+Store the token with authenticated encryption in the Console backend. Keep one vault record per (Clerk session, team). Bind the record to the Clerk issuer/user/session, customer, gateway account, returned binding, and team. Include the selected API key only in that same scope. Use a stable, rotated vault encryption key from backend secrets; retain old decrypt keys during rotation. Store an opaque random reference in a Secure, HttpOnly, SameSite=Lax Console cookie, scoped to `/gateway/`. Apply CSRF checks to every unsafe request. Never return the assertion or gateway token in HTML, JavaScript, JSON to the browser, a URL, browser storage, logs, traces, or an analytics event.
 
-Renew by calling the same `POST {gateway}/auth/external/exchange` endpoint with a fresh complete `gateway_session_exchange` assertion and `{"assertion":"..."}` body. Keep the subject, identity issuer, customer/binding, external session ID, original authentication time, and original Clerk expiry. Generate new assertion times and nonce. Send no Cookie, Origin, Authorization, or master header. Renewal returns the same response schema with a newer generation.
+Renew by calling the same `POST {gateway}/auth/external/exchange` endpoint with a fresh complete `gateway_session_exchange` assertion and `{"assertion":"..."}` body. Keep the subject, identity issuer, customer/binding, team, external session ID, original authentication time, and original Clerk expiry. Generate new assertion times and nonce. Send no Cookie, Origin, Authorization, or master header. Renewal returns the same response schema with a newer generation.
 
 Renew at the returned delay, with bounded jitter and one operation in flight per vault record across all Console replicas. Use a shared lease and compare-and-set the stored generation. Discard a renewal response if its generation is older, its scope differs, logout has started, or its Clerk session is no longer active. The gateway keeps at most two unexpired generations and allows at most 30 seconds for the previous token. Do not use the overlap as a retry loop.
 
@@ -117,9 +123,9 @@ The UI clears its raw key entry after selection. It sends inference through the 
 
 ## Logout, Clerk events, and errors
 
-On logout, atomically mark the vault record closing so renewals cannot replace it. Revoke the gateway parent with a fresh signed `gateway_session_revoke` assertion. Proxied `/auth/internal/logout` also revokes a parent when its child is still valid, but an expired child can return a harmless logged-out response without identifying a live parent. The Console must ensure signed parent revocation is delivered even in that case; preserve the verified scope/session metadata in its closing retry record. Revoke Clerk as required by the product flow, remove the vault record and selected API key, expire the reference cookie, and reject stale in-flight completions. If upstream revocation fails, deny the local vault immediately and retain a bounded encrypted durable retry record. Report incomplete upstream logout without reopening local access.
+On logout, atomically mark the vault records closing so renewals cannot replace them. Revoke each team's gateway parent with a fresh signed `gateway_session_revoke` assertion that uses that team's `external_session_id`. Proxied `/auth/internal/logout` also revokes a parent when its child is still valid, but an expired child can return a harmless logged-out response without identifying a live parent. The Console must ensure signed parent revocation is delivered even in that case; preserve the verified scope/session metadata in its closing retry record. Revoke Clerk as required by the product flow, remove the vault record and selected API key, expire the reference cookie, and reject stale in-flight completions. If upstream revocation fails, deny the local vault immediately and retain a bounded encrypted durable retry record. Report incomplete upstream logout without reopening local access.
 
-Verified Clerk session-revocation events use `POST /auth/external/revoke` with `gateway_session_revoke`. User suspension uses `gateway_subject_suspend`. Verify webhook signatures before generating an assertion. A revoke before first exchange creates a parent tombstone; subject suspension creates a suspended subject shell. Use the same complete claim set as exchange, replacing `purpose` and the assertion time/nonce fields. A revoke assertion includes the original Clerk session ID, authentication time, and expiry even after that session has expired; its **assertion** must still be fresh and signed. Submit `{"assertion":"<fresh signed JWT>"}` as the only JSON field. Success is `204` with no body or cookie. Subject suspension uses the authenticated subject's last verified identity metadata; do not invent verified email from untrusted webhook input. Repeat with a fresh nonce is harmless. Application API keys remain active unless explicitly revoked.
+Verified Clerk session-revocation events use `POST /auth/external/revoke` with `gateway_session_revoke`. Send one revocation for each team `external_session_id` of that Clerk session, including teams that the person has not opened yet. User suspension uses `gateway_subject_suspend`. Verify webhook signatures before generating an assertion. A revoke before first exchange creates a parent tombstone; subject suspension creates a suspended subject shell. Use the same complete claim set as exchange, replacing `purpose` and the assertion time/nonce fields. A revoke assertion includes the original Clerk session ID, authentication time, and expiry even after that session has expired; its **assertion** must still be fresh and signed. Submit `{"assertion":"<fresh signed JWT>"}` as the only JSON field. Success is `204` with no body or cookie. Subject suspension uses the authenticated subject's last verified identity metadata; do not invent verified email from untrusted webhook input. Repeat with a fresh nonce is harmless. Application API keys remain active unless explicitly revoked.
 
 | Status | Console behavior |
 | --- | --- |
@@ -136,6 +142,7 @@ Preserve the gateway's safe error code and correlation ID. Redact bodies, cookie
 
 - Configure the fixed gateway HTTPS URL, exact signer/Clerk issuers, audience, `kid`, private signing key, allowed browser origin, and vault encryption keys in backend secrets.
 - Extend the existing customer provisioning workflow to register its existing organization/team and retain the immutable binding ID. Keep the operator management credential in that workflow.
+- When a workspace owner creates a team or changes its members, call the attach, detach, grant, and revoke operator endpoints. Check the owner's Console role first; the gateway does not know Console roles. Use `GET /ui/api/external-auth/bindings/{binding_id}/subjects` to reconcile.
 - Add the strict assertion signer and fresh-nonce retry policy; verify Clerk and select the customer from backend authorization data.
 - Implement the encrypted shared vault, reference cookie, cross-replica renewal lease, generation compare-and-set, fixed parent deadline, and principal-switch cleanup.
 - Serve mounted gateway assets and customer APIs through the fixed allowlist with Origin/CSRF checks, secret-header stripping, uncached customer responses, deadlines, cancellation, and streaming backpressure.

@@ -72,6 +72,7 @@ class ExternalProvisioningRepository:
             account_id=subject.account_id or "",
             runtime_user_id=subject.runtime_user_id or "",
             binding=binding,
+            subject_id=subject.subject_id,
             identity_id=subject.identity_id,
         )
 
@@ -81,42 +82,63 @@ class ExternalProvisioningRepository:
         account_id: str,
         runtime_user_id: str,
         binding: ExternalBindingRecord,
+        team_id: str | None = None,
+        subject_id: str | None = None,
         identity_id: str | None = None,
         require_email: str | None = None,
         check_assets: bool = False,
     ) -> ExternalAccountState | None:
+        """Check one dedicated account for one team: the default team when team_id is None.
+
+        Memberships, asset grants and keys may use the default team or a team the
+        subject holds an active grant for on an active attachment.
+        """
+
         rows = await self.db.query_raw(
             """
+            WITH granted AS MATERIALIZED (
+                SELECT g.team_id, g.runtime_user_id FROM deltallm_externalauthsubjectteam g
+                JOIN deltallm_externalauthbindingteam bt ON bt.binding_id = g.binding_id AND bt.team_id = g.team_id
+                WHERE g.subject_id = $9 AND g.binding_id = $10 AND g.state = 'active' AND bt.state = 'active'
+            )
             SELECT a.account_id, COALESCE($5::text, '') AS identity_id, u.user_id, a.mfa_enabled, a.force_password_change
             FROM deltallm_platformaccount a JOIN deltallm_usertable u ON u.user_id = $2 AND u.team_id = $3
             JOIN deltallm_organizationmembership om ON om.account_id = a.account_id AND om.organization_id = $4
             JOIN deltallm_teammembership tm ON tm.account_id = a.account_id AND tm.team_id = $3
             WHERE a.account_id = $1 AND a.is_active AND a.role = 'org_user'
+              AND ($3 = $8 OR EXISTS (SELECT 1 FROM granted gr WHERE gr.team_id = $3))
               AND ($6::text IS NULL OR lower(a.email) = lower($6))
               AND ($5::text IS NULL OR EXISTS (SELECT 1 FROM deltallm_platformidentity i WHERE i.identity_id = $5 AND i.account_id = a.account_id))
               AND NOT EXISTS (SELECT 1 FROM deltallm_organizationmembership m WHERE m.account_id = a.account_id AND m.organization_id <> $4)
-              AND NOT EXISTS (SELECT 1 FROM deltallm_teammembership m WHERE m.account_id = a.account_id AND m.team_id <> $3)
+              AND NOT EXISTS (SELECT 1 FROM deltallm_teammembership m WHERE m.account_id = a.account_id
+                  AND m.team_id <> $8 AND NOT EXISTS (SELECT 1 FROM granted gr WHERE gr.team_id = m.team_id))
               AND (NOT $7::bool OR NOT EXISTS (
                 SELECT 1 FROM deltallm_managedasset asset JOIN deltallm_assetgrant g ON g.managed_asset_id = asset.asset_id
                 WHERE asset.owner_account_id = a.account_id AND (g.subject_type NOT IN ('team', 'organization')
-                    OR (g.subject_type = 'team' AND g.team_id <> $3)
+                    OR (g.subject_type = 'team' AND g.team_id <> $8
+                        AND NOT EXISTS (SELECT 1 FROM granted gr WHERE gr.team_id = g.team_id))
                     OR (g.subject_type = 'organization' AND g.organization_id <> $4))
               ))
               AND (NOT $7::bool OR NOT EXISTS (
                 SELECT 1 FROM deltallm_verificationtoken key
                 WHERE key.owner_account_id = a.account_id AND (
-                    key.team_id IS DISTINCT FROM $3 OR key.user_id IS DISTINCT FROM $2
-                    OR key.owner_service_account_id IS NOT NULL)
+                    key.owner_service_account_id IS NOT NULL OR NOT (
+                        (key.team_id IS NOT DISTINCT FROM $3 AND key.user_id IS NOT DISTINCT FROM $2)
+                        OR EXISTS (SELECT 1 FROM granted gr
+                                   WHERE gr.team_id = key.team_id AND gr.runtime_user_id = key.user_id)))
               ))
             FOR UPDATE OF a
             """,
             account_id,
             runtime_user_id,
-            binding.team_id,
+            team_id or binding.team_id,
             binding.organization_id,
             identity_id,
             require_email,
             check_assets,
+            binding.team_id,
+            subject_id,
+            binding.binding_id,
         )
         if not rows:
             return None

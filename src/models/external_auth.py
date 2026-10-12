@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+from src.auth.external_contracts import ExternalAssertionClaims
 
 
 class ExternalWorkspaceContext(BaseModel):
@@ -73,6 +75,16 @@ class ExternalBindingRequest(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     organization_id: str = Field(min_length=1, max_length=200)
     team_id: str = Field(min_length=1, max_length=200)
+
+
+class ExternalTeamGrantRequest(ExternalVersionRequest):
+    identity_issuer: str = Field(min_length=1, max_length=512)
+    subject: str = Field(min_length=1, max_length=200)
+
+    @field_validator("subject")
+    @classmethod
+    def require_bounded_subject(cls, value: str) -> str:
+        return ExternalAssertionClaims.require_bounded_reference(value)
 
 
 class ExternalLinkRequest(ExternalAssertionRequest):

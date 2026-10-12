@@ -22,7 +22,12 @@ class ExternalSubjectRepository:
     async def lock_identity(
         self, assertion: VerifiedExternalAssertion
     ) -> ExternalSubjectRecord | None:
-        canonical = assertion.claims.identity_issuer + "\x00" + assertion.claims.sub
+        return await self.lock_by_identity(assertion.claims.identity_issuer, assertion.claims.sub)
+
+    async def lock_by_identity(
+        self, identity_issuer: str, subject: str
+    ) -> ExternalSubjectRecord | None:
+        canonical = identity_issuer + "\x00" + subject
         # The read needs a new snapshot after the lock wait. One combined query
         # could miss a subject committed by the previous lock owner.
         await self.db.query_raw(
@@ -34,8 +39,8 @@ class ExternalSubjectRepository:
             SELECT * FROM deltallm_externalauthsubject
             WHERE identity_issuer = $1 AND subject = $2 FOR UPDATE
             """,
-            assertion.claims.identity_issuer,
-            assertion.claims.sub,
+            identity_issuer,
+            subject,
         )
         return ExternalSubjectRecord.model_validate(rows[0]) if rows else None
 
@@ -43,16 +48,33 @@ class ExternalSubjectRepository:
         self, assertion: VerifiedExternalAssertion, *, state: str = "pending"
     ) -> ExternalSubjectRecord:
         claims = assertion.claims
+        return await self.create_pending(
+            integration_id=assertion.integration_id,
+            binding_id=claims.binding_id,
+            identity_issuer=claims.identity_issuer,
+            subject=claims.sub,
+            state=state,
+        )
+
+    async def create_pending(
+        self,
+        *,
+        integration_id: str,
+        binding_id: str,
+        identity_issuer: str,
+        subject: str,
+        state: str = "pending",
+    ) -> ExternalSubjectRecord:
         rows = await self.db.query_raw(
             """
             INSERT INTO deltallm_externalauthsubject (
                 subject_id, integration_id, binding_id, identity_issuer, subject, state, updated_at)
             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW()) RETURNING *
             """,
-            assertion.integration_id,
-            claims.binding_id,
-            claims.identity_issuer,
-            claims.sub,
+            integration_id,
+            binding_id,
+            identity_issuer,
+            subject,
             state,
         )
         return ExternalSubjectRecord.model_validate(rows[0])

@@ -12,8 +12,10 @@ from src.api.external_auth_edge import (
 from src.auth.external_contracts import ExternalPurpose
 from src.db.identity.external.external_auth_records import (
     ExternalBindingRecord,
+    ExternalBindingTeamRecord,
     ExternalIntegrationRecord,
     ExternalSubjectRecord,
+    ExternalSubjectTeamRecord,
 )
 from src.middleware.admin import require_master_key
 from src.middleware.platform_auth import get_platform_auth_context
@@ -23,6 +25,7 @@ from src.models.external_auth import (
     ExternalIntegrationRequest,
     ExternalLinkRequest,
     ExternalRuntimeBindingRequest,
+    ExternalTeamGrantRequest,
     ExternalVersionRequest,
 )
 from src.services.identity.external.external_auth_linking import ExternalLinkApproval
@@ -224,3 +227,103 @@ async def bind_runtime(request: Request) -> ExternalSubjectRecord:
         purposes=(ExternalPurpose.RUNTIME_BIND,),
         operation=lambda assertion: runtime.linking.bind_runtime(assertion, approval, correlation),
     )
+
+
+@router.put(
+    "/bindings/{binding_id}/teams/{team_id}",
+    response_model=ExternalBindingTeamRecord,
+    openapi_extra=external_request_schema(ExternalVersionRequest),
+)
+async def attach_team(binding_id: str, team_id: str, request: Request) -> ExternalBindingTeamRecord:
+    payload = await read_external_body(request, ExternalVersionRequest)
+    return await external_runtime(request).teams.attach(
+        binding_id,
+        team_id,
+        request=payload,
+        correlation_id=correlation_id(request),
+        approved_by=_actor(request),
+    )
+
+
+@router.delete(
+    "/bindings/{binding_id}/teams/{team_id}",
+    response_model=ExternalBindingTeamRecord,
+    openapi_extra=external_request_schema(ExternalVersionRequest),
+)
+async def detach_team(binding_id: str, team_id: str, request: Request) -> ExternalBindingTeamRecord:
+    payload = await read_external_body(request, ExternalVersionRequest)
+    return await external_runtime(request).teams.detach(
+        binding_id,
+        team_id,
+        request=payload,
+        correlation_id=correlation_id(request),
+        approved_by=_actor(request),
+    )
+
+
+@router.get("/bindings/{binding_id}/teams")
+async def list_binding_teams(
+    binding_id: str,
+    request: Request,
+    after: str | None = Query(None, max_length=200),
+    limit: int = Query(50, ge=1, le=100),
+) -> dict[str, object]:
+    rows = await external_runtime(request).teams.list_teams(
+        binding_id, after=after, limit=limit + 1
+    )
+    attached = [row for row in rows if not row.is_default]
+    more = len(attached) > limit
+    items = rows[: len(rows) - 1] if more else rows
+    return {"items": items, "next_cursor": items[-1].team_id if more else None}
+
+
+@router.put(
+    "/bindings/{binding_id}/teams/{team_id}/subjects",
+    response_model=ExternalSubjectTeamRecord,
+    openapi_extra=external_request_schema(ExternalTeamGrantRequest),
+)
+async def grant_team(binding_id: str, team_id: str, request: Request) -> ExternalSubjectTeamRecord:
+    payload = await read_external_body(request, ExternalTeamGrantRequest)
+    return await external_runtime(request).teams.grant(
+        binding_id,
+        team_id,
+        request=payload,
+        correlation_id=correlation_id(request),
+        approved_by=_actor(request),
+    )
+
+
+@router.delete(
+    "/bindings/{binding_id}/teams/{team_id}/subjects/{subject_id}",
+    response_model=ExternalSubjectTeamRecord,
+    openapi_extra=external_request_schema(ExternalVersionRequest),
+)
+async def revoke_team(
+    binding_id: str, team_id: str, subject_id: str, request: Request
+) -> ExternalSubjectTeamRecord:
+    payload = await read_external_body(request, ExternalVersionRequest)
+    return await external_runtime(request).teams.revoke(
+        binding_id,
+        team_id,
+        subject_id,
+        request=payload,
+        correlation_id=correlation_id(request),
+        approved_by=_actor(request),
+    )
+
+
+@router.get("/bindings/{binding_id}/subjects")
+async def list_binding_subjects(
+    binding_id: str,
+    request: Request,
+    team_id: str | None = Query(None, max_length=200),
+    after: str | None = Query(None, max_length=200),
+    limit: int = Query(50, ge=1, le=100),
+) -> dict[str, object]:
+    rows = await external_runtime(request).teams.list_subjects(
+        binding_id, team_id=team_id, after=after, limit=limit + 1
+    )
+    return {
+        "items": rows[:limit],
+        "next_cursor": rows[limit - 1].subject_id if len(rows) > limit else None,
+    }

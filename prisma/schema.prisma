@@ -570,6 +570,8 @@ model DeltaLLM_PlatformSession {
   external_integration_epoch Int?
   external_binding_epoch Int?
   external_subject_epoch Int?
+  external_team_id String?
+  external_team_epoch Int?
 
   account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
   external_parent DeltaLLM_ExternalAuthParentSession? @relation(fields: [external_parent_id], references: [parent_id], onDelete: Restrict)
@@ -636,6 +638,7 @@ model DeltaLLM_ExternalAuthBinding {
   updated_at DateTime @updatedAt
   integration DeltaLLM_ExternalAuthIntegration @relation(fields: [integration_id], references: [integration_id], onDelete: Restrict)
   subjects DeltaLLM_ExternalAuthSubject[]
+  teams DeltaLLM_ExternalAuthBindingTeam[]
   @@unique([integration_id, external_customer_id])
   @@unique([integration_id, binding_id])
   @@index([organization_id])
@@ -659,10 +662,43 @@ model DeltaLLM_ExternalAuthSubject {
   updated_at DateTime @updatedAt
   binding DeltaLLM_ExternalAuthBinding @relation(fields: [integration_id, binding_id], references: [integration_id, binding_id], onDelete: Restrict)
   parents DeltaLLM_ExternalAuthParentSession[]
+  teams DeltaLLM_ExternalAuthSubjectTeam[]
   @@unique([identity_issuer, subject])
   @@unique([integration_id, subject_id])
+  @@unique([subject_id, binding_id])
   @@index([binding_id])
   @@map("deltallm_externalauthsubject")
+}
+
+model DeltaLLM_ExternalAuthBindingTeam {
+  binding_id String
+  team_id String
+  state String @default("active")
+  version Int @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  binding DeltaLLM_ExternalAuthBinding @relation(fields: [binding_id], references: [binding_id], onDelete: Restrict)
+  grants DeltaLLM_ExternalAuthSubjectTeam[]
+  @@id([binding_id, team_id])
+  @@index([team_id])
+  @@map("deltallm_externalauthbindingteam")
+}
+
+model DeltaLLM_ExternalAuthSubjectTeam {
+  subject_id String
+  binding_id String
+  team_id String
+  runtime_user_id String? @unique
+  state String @default("active")
+  epoch Int @default(0)
+  version Int @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  subject DeltaLLM_ExternalAuthSubject @relation(fields: [subject_id, binding_id], references: [subject_id, binding_id], onDelete: Restrict)
+  attachment DeltaLLM_ExternalAuthBindingTeam @relation(fields: [binding_id, team_id], references: [binding_id, team_id], onDelete: Restrict)
+  @@id([subject_id, team_id])
+  @@index([team_id, binding_id])
+  @@map("deltallm_externalauthsubjectteam")
 }
 
 model DeltaLLM_ExternalAuthParentSession {

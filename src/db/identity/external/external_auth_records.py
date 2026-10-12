@@ -72,3 +72,45 @@ class ExternalParentRecord(ExternalRecord):
         if value is None:
             return None
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+class ExternalBindingTeamRecord(ExternalRecord):
+    binding_id: str
+    team_id: str
+    state: Literal["active", "detached"]
+    version: StrictInt
+
+
+class ExternalSubjectTeamRecord(ExternalRecord):
+    subject_id: str
+    binding_id: str
+    team_id: str
+    runtime_user_id: str | None
+    state: Literal["active", "removed"]
+    epoch: StrictInt
+    version: StrictInt
+
+
+class ExternalBindingTeamView(BaseModel):
+    """One team a binding covers. The default team is the binding's own team."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    binding_id: str
+    team_id: str
+    is_default: bool
+    state: Literal["active", "detached"]
+    version: StrictInt | None
+
+
+class ExternalSubjectTeamsView(BaseModel):
+    """A subject of one binding and its grants on additional teams."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    subject_id: str
+    identity_issuer: str
+    subject: str
+    state: Literal["pending", "active", "suspended"]
+    version: StrictInt
+    account_id: str | None
+    runtime_user_id: str | None
+    team_grants: list[ExternalSubjectTeamRecord]
