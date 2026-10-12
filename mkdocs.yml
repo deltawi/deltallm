@@ -213,7 +213,7 @@ nav:
           - Telemetry ingestion rollout: deployment/telemetry-ingestion-rollout.md
           - Usage reporting rollout: deployment/usage-reporting-v2.md
       - Performance evidence:
-          - RPS results and merge status: project/issue-320-rps-report.md
+          - RPS results: project/issue-320-rps-report.md
           - Reproduce RPS tests: project/issue-320-rps-reproduction.md
           - Concrete concurrency measures: project/issue-320-50-to-500-rps-measures-and-integration.md
       - Policies and support:
