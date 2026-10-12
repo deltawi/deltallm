@@ -99,5 +99,6 @@ async def test_upstream_redirect_is_not_followed_or_exposed(test_app):
                     pytest.fail("redirect should not establish a session")
     assert caught.value.response.status_code == 503
     assert b"provider-secret" not in caught.value.response.body
-    assert paths == ["/v1/realtime"]
+    # The body names the gateway error if the upstream was never reached.
+    assert paths == ["/v1/realtime"], caught.value.response.body
     assert admission.closed == 1
