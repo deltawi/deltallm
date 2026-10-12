@@ -127,9 +127,19 @@ async def _clean(fixture: ExternalDatabase) -> None:
         fixture.organization_id,
     )
     references = await db.query_raw(
-        "SELECT account_id, runtime_user_id FROM deltallm_externalauthsubject WHERE integration_id = $1",
+        """SELECT account_id, runtime_user_id FROM deltallm_externalauthsubject WHERE integration_id = $1
+        UNION ALL SELECT NULL, g.runtime_user_id FROM deltallm_externalauthsubjectteam g
+        JOIN deltallm_externalauthbinding b ON b.binding_id = g.binding_id WHERE b.integration_id = $1""",
         fixture.integration_id,
     )
+    teams = [
+        str(row["team_id"])
+        for row in await db.query_raw(
+            "SELECT team_id FROM deltallm_teamtable WHERE organization_id = $1 OR team_id = $2",
+            fixture.organization_id,
+            fixture.team_id,
+        )
+    ]
     accounts = list(
         {
             fixture.account_id,
@@ -159,7 +169,11 @@ async def _clean(fixture: ExternalDatabase) -> None:
         accounts,
     )
     await db.execute_raw(
-        "DELETE FROM deltallm_verificationtoken WHERE team_id = $1", fixture.team_id
+        "DELETE FROM deltallm_cacheinvalidationoutbox WHERE reason LIKE 'external_team_%' AND scope_id = ANY($1::text[])",
+        [*runtime_users, *teams],
+    )
+    await db.execute_raw(
+        "DELETE FROM deltallm_verificationtoken WHERE team_id = ANY($1::text[])", teams
     )
     await AuditIngestionRepository(db).reconcile_capacity()
     await db.execute_raw(
@@ -170,6 +184,11 @@ async def _clean(fixture: ExternalDatabase) -> None:
         "DELETE FROM deltallm_externalauthparentsession WHERE integration_id = $1",
         fixture.integration_id,
     )
+    for table in ("deltallm_externalauthsubjectteam", "deltallm_externalauthbindingteam"):
+        await db.execute_raw(
+            f"DELETE FROM {table} WHERE binding_id IN (SELECT binding_id FROM deltallm_externalauthbinding WHERE integration_id = $1)",
+            fixture.integration_id,
+        )
     await db.execute_raw(
         "DELETE FROM deltallm_externalauthsubject WHERE integration_id = $1", fixture.integration_id
     )
@@ -188,9 +207,14 @@ async def _clean(fixture: ExternalDatabase) -> None:
         "DELETE FROM deltallm_platformaccount WHERE account_id = ANY($1::text[])", accounts
     )
     await db.execute_raw(
-        "DELETE FROM deltallm_usertable WHERE user_id = ANY($1::text[])", runtime_users
+        "DELETE FROM deltallm_usertable WHERE user_id = ANY($1::text[]) OR team_id = ANY($2::text[])",
+        runtime_users,
+        teams,
     )
-    await db.execute_raw("DELETE FROM deltallm_teamtable WHERE team_id = $1", fixture.team_id)
+    await db.execute_raw(
+        "DELETE FROM deltallm_teammembership WHERE team_id = ANY($1::text[])", teams
+    )
+    await db.execute_raw("DELETE FROM deltallm_teamtable WHERE team_id = ANY($1::text[])", teams)
     await db.execute_raw(
         "DELETE FROM deltallm_organizationtable WHERE organization_id = $1", fixture.organization_id
     )

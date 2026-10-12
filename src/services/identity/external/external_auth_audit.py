@@ -27,6 +27,7 @@ class ExternalAuditEvent:
     resource_type: str = "external_auth_binding"
     resource_id: str | None = None
     actor_type: str = "external_integration"
+    team_id: str | None = None
 
 
 class ExternalAuthAudit:
@@ -67,6 +68,7 @@ class ExternalAuthAudit:
                             "reason": event.reason,
                             "approval_reference": event.approval_reference,
                             "approved_by": event.approved_by,
+                            "team_id": event.team_id,
                         },
                     )
                 ),

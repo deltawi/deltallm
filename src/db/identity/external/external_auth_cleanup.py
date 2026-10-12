@@ -8,7 +8,7 @@ class ExternalAuthCleanupRepository:
         self.db = db
 
     async def protocol_ready(self) -> bool:
-        rows = await self.db.query_raw("""SELECT count(*)::int = 7 AS compatible
+        rows = await self.db.query_raw("""SELECT count(*)::int = 8 AS compatible
             FROM _prisma_migrations WHERE migration_name IN (
                 '20261006120000_external_customer_auth',
                 '20261006120100_external_customer_invariants',
@@ -16,7 +16,8 @@ class ExternalAuthCleanupRepository:
                 '20261006120300_external_customer_mfa_proof',
                 '20261006120400_external_customer_lifecycle',
                 '20261006120500_external_customer_rollback_indexes',
-                '20261006120600_external_customer_membership_lock')
+                '20261006120600_external_customer_membership_lock',
+                '20261012200000_external_customer_multi_team')
               AND finished_at IS NOT NULL AND rolled_back_at IS NULL""")
         return rows[0]["compatible"] is True
 

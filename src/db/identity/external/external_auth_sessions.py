@@ -77,7 +77,11 @@ class ExternalSessionRepository:
         expires_at: datetime,
         mfa_verified: bool,
         overlap_seconds: int,
+        team_id: str,
+        team_epoch: int,
     ) -> ExternalIssuedSession | None:
+        # A parent serves one team. A renewal that names another team finds no
+        # matching pin and fails; a child without a team acts in the default team.
         rows = await self.db.query_raw(
             """
             WITH mfa_proof AS MATERIALIZED (
@@ -97,6 +101,7 @@ class ExternalSessionRepository:
                     WHERE pin.external_parent_id = p.parent_id AND pin.external_generation = p.generation
                       AND pin.account_id = $2 AND pin.external_integration_epoch = $6
                       AND pin.external_binding_epoch = $7 AND pin.external_subject_epoch = $8
+                      AND COALESCE(pin.external_team_id, $13) = $11
                   )) RETURNING generation
             ), retired AS (
                 UPDATE deltallm_platformsession child SET
@@ -109,9 +114,10 @@ class ExternalSessionRepository:
                 RETURNING child.session_id
             ) INSERT INTO deltallm_platformsession (
                 session_id, account_id, session_token_hash, mfa_verified, expires_at, updated_at,
-                external_parent_id, external_generation, external_integration_epoch, external_binding_epoch, external_subject_epoch, external_mfa_secret_digest)
+                external_parent_id, external_generation, external_integration_epoch, external_binding_epoch, external_subject_epoch, external_mfa_secret_digest,
+                external_team_id, external_team_epoch)
             SELECT gen_random_uuid(), $2, $3, ($4 OR EXISTS (SELECT 1 FROM mfa_proof)), $5::timestamptz, NOW(),
-                $1, advanced.generation, $6, $7, $8, (SELECT external_mfa_secret_digest FROM mfa_proof)
+                $1, advanced.generation, $6, $7, $8, (SELECT external_mfa_secret_digest FROM mfa_proof), $11, $12
             FROM advanced CROSS JOIN (SELECT count(*) FROM retired) AS retirement
             WHERE $9::bool RETURNING external_generation, mfa_verified
             """,
@@ -125,6 +131,9 @@ class ExternalSessionRepository:
             subject.epoch,
             True,
             overlap_seconds,
+            team_id,
+            team_epoch,
+            binding.team_id,
         )
         if not rows:
             return None
@@ -145,6 +154,10 @@ class ExternalSessionRepository:
         )
 
     async def get_active(self, token_hash: str) -> ExternalSessionRecord | None:
+        # A child acts in one team: its stored team, or the binding's default team
+        # when an older binary issued it. An additional team needs an active grant
+        # with the child's team epoch on an active attachment. Scalar subqueries
+        # keep the join count, and so the planning cost, of the single-team query.
         rows = await self.db.query_raw(
             """
             SELECT child.account_id,
@@ -152,8 +165,8 @@ class ExternalSessionRepository:
                     child.mfa_verified AND child.external_mfa_secret_digest = encode(digest(a.mfa_secret, 'sha256'), 'hex')
                 END AS mfa_verified, child.expires_at, child.external_generation,
                 a.email, a.role, a.is_active, a.mfa_enabled, a.force_password_change,
-                p.parent_id, s.subject_id, s.runtime_user_id, b.binding_id, b.integration_id,
-                b.organization_id, b.team_id, om.role AS organization_role, tm.role AS team_role
+                p.parent_id, s.subject_id, u.user_id AS runtime_user_id, b.binding_id, b.integration_id,
+                b.organization_id, t.team_id, om.role AS organization_role, tm.role AS team_role
             FROM deltallm_platformsession child
             JOIN deltallm_platformaccount a ON a.account_id = child.account_id
             JOIN deltallm_externalauthparentsession p ON p.parent_id = child.external_parent_id
@@ -161,18 +174,32 @@ class ExternalSessionRepository:
             JOIN deltallm_externalauthbinding b ON b.binding_id = s.binding_id
             JOIN deltallm_externalauthintegration i ON i.integration_id = b.integration_id
             JOIN deltallm_organizationtable o ON o.organization_id = b.organization_id
-            JOIN deltallm_teamtable t ON t.team_id = b.team_id AND t.organization_id = o.organization_id
-            JOIN deltallm_usertable u ON u.user_id = s.runtime_user_id AND u.team_id = b.team_id
+            JOIN deltallm_teamtable t ON t.team_id = COALESCE(child.external_team_id, b.team_id)
+                AND t.organization_id = o.organization_id
+            JOIN deltallm_usertable u ON u.team_id = t.team_id AND u.user_id = CASE
+                WHEN t.team_id = b.team_id THEN s.runtime_user_id
+                ELSE (SELECT g.runtime_user_id FROM deltallm_externalauthsubjectteam g
+                    JOIN deltallm_externalauthbindingteam bt ON bt.binding_id = g.binding_id AND bt.team_id = g.team_id
+                    WHERE g.subject_id = s.subject_id AND g.team_id = t.team_id AND g.binding_id = b.binding_id
+                      AND g.state = 'active' AND bt.state = 'active' AND g.epoch = child.external_team_epoch)
+            END
             JOIN deltallm_organizationmembership om ON om.account_id = a.account_id AND om.organization_id = b.organization_id
-            JOIN deltallm_teammembership tm ON tm.account_id = a.account_id AND tm.team_id = b.team_id
+            JOIN deltallm_teammembership tm ON tm.account_id = a.account_id AND tm.team_id = t.team_id
             WHERE child.session_token_hash = $1 AND child.revoked_at IS NULL AND child.expires_at > NOW()
               AND a.is_active AND a.role = 'org_user' AND i.enabled AND b.state = 'active' AND s.state = 'active'
               AND o.lifecycle_state = 'active' AND p.revoked_at IS NULL AND p.expires_at > NOW()
               AND child.external_generation IN (p.generation, p.generation - 1)
               AND child.external_integration_epoch = i.epoch AND child.external_binding_epoch = b.epoch
               AND child.external_subject_epoch = s.epoch
+              AND (t.team_id <> b.team_id OR COALESCE(child.external_team_epoch, 0) = 0)
               AND NOT EXISTS (SELECT 1 FROM deltallm_organizationmembership other WHERE other.account_id = a.account_id AND other.organization_id <> b.organization_id)
-              AND NOT EXISTS (SELECT 1 FROM deltallm_teammembership other WHERE other.account_id = a.account_id AND other.team_id <> b.team_id)
+              AND NOT EXISTS (
+                SELECT 1 FROM deltallm_teammembership other WHERE other.account_id = a.account_id AND other.team_id <> b.team_id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM deltallm_externalauthsubjectteam og
+                    JOIN deltallm_externalauthbindingteam obt ON obt.binding_id = og.binding_id AND obt.team_id = og.team_id
+                    WHERE og.subject_id = s.subject_id AND og.team_id = other.team_id
+                      AND og.state = 'active' AND obt.state = 'active'))
             LIMIT 1
             """,
             token_hash,

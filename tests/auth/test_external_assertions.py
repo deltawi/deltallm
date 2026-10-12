@@ -148,7 +148,6 @@ def test_every_claim_is_required(private_key, name):
         "permissions",
         "account_id",
         "user_id",
-        "team_id",
         "organization_id",
         "paid",
         "budget",
@@ -159,6 +158,16 @@ def test_every_claim_is_required(private_key, name):
 def test_unsigned_policy_surface_cannot_be_added_to_signed_assertion(private_key, name):
     with pytest.raises(InvalidExternalAssertion):
         verify(private_key, sign(private_key, {**valid_claims(), name: "platform_admin"}))
+
+
+def test_team_claim_is_only_a_bounded_selector(private_key):
+    # team_id selects among operator grants at exchange; it grants nothing itself.
+    # tests/db/test_external_auth_teams.py proves ungranted selections are denied.
+    verified = verify(private_key, sign(private_key, {**valid_claims(), "team_id": "team-b"}))
+    assert verified.claims.team_id == "team-b"
+    for invalid in (["team-b"], "", " team-b", "team\nb", "t" * 201):
+        with pytest.raises(InvalidExternalAssertion):
+            verify(private_key, sign(private_key, {**valid_claims(), "team_id": invalid}))
 
 
 @pytest.mark.parametrize(

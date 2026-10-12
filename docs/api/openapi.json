@@ -1259,6 +1259,51 @@
         "title": "ExternalBindingRecord",
         "type": "object"
       },
+      "ExternalBindingTeamRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "binding_id": {
+            "title": "Binding Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "detached"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created_at",
+          "updated_at",
+          "binding_id",
+          "team_id",
+          "state",
+          "version"
+        ],
+        "title": "ExternalBindingTeamRecord",
+        "type": "object"
+      },
       "ExternalExchangeResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1516,6 +1561,73 @@
           "runtime_user_id"
         ],
         "title": "ExternalSubjectRecord",
+        "type": "object"
+      },
+      "ExternalSubjectTeamRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "binding_id": {
+            "title": "Binding Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "runtime_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime User Id"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "removed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created_at",
+          "updated_at",
+          "subject_id",
+          "binding_id",
+          "team_id",
+          "runtime_user_id",
+          "state",
+          "epoch",
+          "version"
+        ],
+        "title": "ExternalSubjectTeamRecord",
         "type": "object"
       },
       "ExternalWorkspaceResponse": {
@@ -16613,6 +16725,128 @@
         ]
       }
     },
+    "/ui/api/external-auth/bindings/{binding_id}/subjects": {
+      "get": {
+        "operationId": "list_binding_subjects_ui_api_external_auth_bindings__binding_id__subjects_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Binding Subjects Ui Api External Auth Bindings  Binding Id  Subjects Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Binding Subjects",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
     "/ui/api/external-auth/bindings/{binding_id}/suspend": {
       "post": {
         "operationId": "suspend_binding_ui_api_external_auth_bindings__binding_id__suspend_post",
@@ -16712,6 +16946,584 @@
           }
         },
         "summary": "Suspend Binding",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/bindings/{binding_id}/teams": {
+      "get": {
+        "operationId": "list_binding_teams_ui_api_external_auth_bindings__binding_id__teams_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Binding Teams Ui Api External Auth Bindings  Binding Id  Teams Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Binding Teams",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/bindings/{binding_id}/teams/{team_id}": {
+      "delete": {
+        "operationId": "detach_team_ui_api_external_auth_bindings__binding_id__teams__team_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "team_id",
+            "required": true,
+            "schema": {
+              "title": "Team Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason"
+                ],
+                "title": "ExternalVersionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalBindingTeamRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Detach Team",
+        "tags": [
+          "external-auth-admin"
+        ]
+      },
+      "put": {
+        "operationId": "attach_team_ui_api_external_auth_bindings__binding_id__teams__team_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "team_id",
+            "required": true,
+            "schema": {
+              "title": "Team Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason"
+                ],
+                "title": "ExternalVersionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalBindingTeamRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Attach Team",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/bindings/{binding_id}/teams/{team_id}/subjects": {
+      "put": {
+        "operationId": "grant_team_ui_api_external_auth_bindings__binding_id__teams__team_id__subjects_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "team_id",
+            "required": true,
+            "schema": {
+              "title": "Team Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "identity_issuer": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "title": "Identity Issuer",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Subject",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason",
+                  "identity_issuer",
+                  "subject"
+                ],
+                "title": "ExternalTeamGrantRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalSubjectTeamRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grant Team",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/bindings/{binding_id}/teams/{team_id}/subjects/{subject_id}": {
+      "delete": {
+        "operationId": "revoke_team_ui_api_external_auth_bindings__binding_id__teams__team_id__subjects__subject_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "team_id",
+            "required": true,
+            "schema": {
+              "title": "Team Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "title": "Subject Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason"
+                ],
+                "title": "ExternalVersionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalSubjectTeamRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Team",
         "tags": [
           "external-auth-admin"
         ]

@@ -40,6 +40,7 @@ from src.services.identity.external.external_auth_linking import ExternalAuthLin
 from src.services.identity.external.external_auth_revocation import ExternalAuthRevocation
 from src.services.identity.external.external_inference_keys import ExternalInferenceKeyService
 from src.services.identity.external.external_auth_sessions import ExternalSessionService
+from src.services.identity.external.external_auth_teams import ExternalTeamAdministration
 from src.services.identity.platform_identity_service import PlatformIdentityService
 
 T = TypeVar("T")
@@ -70,6 +71,7 @@ class ExternalAuthRuntime:
         self.revocation = ExternalAuthRevocation(self.transactions, audit, settings)
         self.linking = ExternalAuthLinking(self.transactions, audit, identities)
         self.administration = ExternalAuthAdministration(self.transactions, audit, settings)
+        self.teams = ExternalTeamAdministration(self.transactions, audit, settings)
         self.sessions = ExternalSessionService(self.transactions, audit)
         self.inference_keys = ExternalInferenceKeyService(
             self.transactions, identities.sessions.salt
