@@ -45,11 +45,13 @@ class BillingOperationRecovery:
         max_pending_events: int,
         max_attempts: int,
         selector_events_only: bool = False,
+        lane_seconds: float = 0.25,
     ) -> None:
         self.operations = operations
         self.max_pending_events = max_pending_events
         self.max_attempts = max_attempts
         self.selector_events_only = selector_events_only
+        self.lane_seconds = lane_seconds
 
     async def recover(self) -> int:
         # Prioritize one known receipt, then rotate one other open operation. Each
@@ -65,7 +67,7 @@ class BillingOperationRecovery:
     async def _recover_one(
         self, lane: Literal["receipts", "open"], *, skip_id: str | None = None
     ) -> RecoveryAttempt:
-        deadline = asyncio.get_running_loop().time() + 0.25
+        deadline = asyncio.get_running_loop().time() + self.lane_seconds
         predicate = "selector_state='accepted'" if lane == "receipts" else "closed_at IS NULL"
         operation_id = None
         try:

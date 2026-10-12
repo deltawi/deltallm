@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import secrets
 
 import pytest
@@ -57,7 +57,9 @@ def proof(fixture: ExternalDatabase, **updates) -> VerifiedExternalAssertion:
 
 def services(fixture: ExternalDatabase, *, writer: bool = False):
     db = fixture.writer if writer else fixture.db
-    transactions = ExternalAuthTransactions(db)
+    # These tests check exchange outcomes, not the 750 ms production transaction
+    # budget, which a shared CI runner can overrun.
+    transactions = ExternalAuthTransactions(db, transaction_timeout=timedelta(seconds=3))
     identities = PlatformIdentityService(db, salt="test-external-salt")
     audit = ExternalAuthAudit(
         AuditService(
