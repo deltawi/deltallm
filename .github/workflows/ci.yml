@@ -57,6 +57,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
@@ -119,6 +121,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
@@ -200,6 +204,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
@@ -250,6 +256,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
@@ -270,6 +278,8 @@ jobs:
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -278,6 +288,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
@@ -405,6 +417,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
