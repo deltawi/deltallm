@@ -34,8 +34,10 @@ def another_operation(operation, charge):
 
 
 def recovery(db):
+    # These tests check recovery outcomes, not the 250 ms production lane budget,
+    # which a shared CI runner can overrun.
     return BillingOperationRecovery(
-        BillingOperationRepository(db), max_pending_events=100000, max_attempts=10
+        BillingOperationRepository(db), max_pending_events=100000, max_attempts=10, lane_seconds=1
     )
 
 

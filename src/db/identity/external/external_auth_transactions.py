@@ -22,8 +22,14 @@ class ExternalTransactionDatabase(PlatformAccountDatabase, Protocol):
 class ExternalAuthTransactions:
     """Reserve mutation, validation, and maintenance capacity in one four-connection pool."""
 
-    def __init__(self, db: ExternalTransactionDatabase) -> None:
+    def __init__(
+        self,
+        db: ExternalTransactionDatabase,
+        *,
+        transaction_timeout: timedelta = timedelta(milliseconds=750),
+    ) -> None:
         self.db = db
+        self.transaction_timeout = transaction_timeout
         self.gates = {
             "mutation": BoundedCapacityGate(concurrency=2, max_waiters=8),
             "validation": BoundedCapacityGate(concurrency=1, max_waiters=8),
@@ -44,7 +50,7 @@ class ExternalAuthTransactions:
             raise ExternalAuthUnavailable() from exc
         try:
             async with self.db.tx(
-                max_wait=timedelta(milliseconds=50), timeout=timedelta(milliseconds=750)
+                max_wait=timedelta(milliseconds=50), timeout=self.transaction_timeout
             ) as tx:
                 await tx.query_raw(
                     "SELECT set_config('statement_timeout', '250ms', true), set_config('lock_timeout', '100ms', true), set_config('TimeZone', 'UTC', true)"

@@ -178,6 +178,9 @@ end, so a noisy server log hides the pytest summary. Plan assertions accept any
 bounded index access, including a bitmap over the same index: the planner's choice
 can change when autovacuum refreshes statistics during a run. Test Prisma clients
 that run accounting SQL use `jit=off`, like the accounting pool they stand in for.
+Tests that check outcomes rather than latency pass a wider budget to components
+with sub-second production transaction budgets, such as external-auth exchanges and
+billing recovery lanes, because a shared CI runner can overrun them.
 
 ## Reporting Issues
 
