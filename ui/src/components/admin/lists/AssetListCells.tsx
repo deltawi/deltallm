@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, type LucideIcon } from 'lucide-react';
+import { assetCreatorDisplay } from '../../../lib/assetCreator';
+import type { AssetCreatorFields } from '../../../lib/api/managedAssets';
 
-export function CopyIdentifier({ value, label = 'User ID' }: { value?: string | null; label?: string }) {
+export function CopyIdentifier({ value, label = 'User ID', display }: { value?: string | null; label?: string; display?: string | null }) {
   const [copied, setCopied] = useState(false);
   const [manual, setManual] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -11,7 +13,8 @@ export function CopyIdentifier({ value, label = 'User ID' }: { value?: string | 
   useEffect(() => { alive.current = true; return () => { alive.current = false; if (timer.current) clearTimeout(timer.current); }; }, []);
   useEffect(() => { if (manual) { input.current?.focus(); input.current?.select(); } }, [manual]);
   if (!value) return <span className="text-xs text-gray-400">Not recorded</span>;
-  const short = value.length > 20 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
+  const short = display || (value.length > 20 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value);
+  const full = display || value;
   const copy = async () => {
     if (timer.current) clearTimeout(timer.current);
     setCopied(false);
@@ -24,11 +27,17 @@ export function CopyIdentifier({ value, label = 'User ID' }: { value?: string | 
   };
   return <div className="relative min-w-0" onClick={(event) => event.stopPropagation()}>
     <button ref={button} type="button" aria-label={`Copy ${label.toLowerCase()} ${value}`} title={value} onClick={() => void copy()} className="inline-flex max-w-full items-center gap-1.5 rounded py-1 text-left text-xs text-gray-700 hover:text-brand-primary-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
-      <code className="min-w-0 break-all md:whitespace-nowrap md:break-normal"><span className="hidden md:inline">{short}</span><span className="md:hidden">{value}</span></code>{copied ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <Copy className="h-3.5 w-3.5 shrink-0 text-gray-400" />}
+      <code className="min-w-0 break-all md:whitespace-nowrap md:break-normal"><span className="hidden md:inline">{short}</span><span className="md:hidden">{full}</span></code>{copied ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <Copy className="h-3.5 w-3.5 shrink-0 text-gray-400" />}
     </button>
     <span className="sr-only" role="status">{copied ? `${label} copied` : ''}</span>
     {manual ? <label className="mt-1 block text-xs text-gray-500">Select the ID and copy it.<input ref={input} value={value} readOnly aria-label={`${label} to copy`} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setManual(false); button.current?.focus(); } }} className="mt-1 w-full min-w-0 rounded border border-gray-300 p-1.5 font-mono text-base md:text-xs" /></label> : null}
   </div>;
+}
+
+export function CreatedBy({ row }: { row: AssetCreatorFields }) {
+  const creator = assetCreatorDisplay(row);
+  if (creator.kind === 'label') return <span className="text-xs text-gray-400">{creator.label}</span>;
+  return <CopyIdentifier value={creator.accountId} display={creator.label} />;
 }
 
 export function UpdatedAt({ value }: { value?: string | null }) {

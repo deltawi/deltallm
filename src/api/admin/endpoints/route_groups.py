@@ -100,6 +100,7 @@ from src.services.access.managed_asset_access import (
     serialize_asset_access,
     validate_grant_subject_for_principal,
     namespace_creator_callable_key,
+    visible_creator_email,
 )
 from src.services.models.model_identity import (
     creator_route_group_key,
@@ -532,6 +533,11 @@ def _group_response_payload(
     payload = to_json_value(asdict(group))
     if isinstance(payload, dict):
         payload["metadata"] = public_metadata_without_owner_scope(payload.get("metadata"))
+        payload["created_by_email"] = visible_creator_email(
+            email=payload.get("created_by_email"),
+            creator_account_id=payload.get("created_by_user_id"),
+            principal=principal,
+        )
         if policy is not None and principal is not None:
             payload["access"] = serialize_asset_access(policy, principal)
     return payload
@@ -926,7 +932,7 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
             async with database.tx() as tx:
                 stored_policy = await access_repository.with_db(tx).create_policy(
                     policy,
-                    created_by_account_id=principal.account_id,
+                    created_by=principal.creator,
                 )
                 created = await repository.with_db(tx).create_group(
                     group_key=group_key,
@@ -942,7 +948,7 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
         elif policy is not None and access_repository is not None:
             policy = await access_repository.create_policy(
                 policy,
-                created_by_account_id=principal.account_id,
+                created_by=principal.creator,
             )
             try:
                 created = await repository.create_group(

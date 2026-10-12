@@ -47,6 +47,15 @@ class GovernanceSource(str, Enum):
     CREATOR = "creator"
 
 
+class AssetCreatorKind(str, Enum):
+    """How the actor that created an asset authenticated."""
+
+    ACCOUNT = "account"
+    MASTER_KEY = "master_key"
+    SYSTEM = "system"
+    UNKNOWN = "unknown"
+
+
 class AssetVisibility(str, Enum):
     PRIVATE = "private"
     TEAM = "team"
@@ -189,6 +198,38 @@ class AssetPrincipal:
     team_ids: frozenset[str] = frozenset()
     organization_ids: frozenset[str] = frozenset()
     is_platform_admin: bool = False
+
+    @property
+    def creator(self) -> AssetCreator:
+        if self.account_id:
+            return AssetCreator(account_id=self.account_id, kind=AssetCreatorKind.ACCOUNT)
+        # Only the master key authenticates a platform administrator without an account.
+        if self.is_platform_admin:
+            return AssetCreator(account_id=None, kind=AssetCreatorKind.MASTER_KEY)
+        return AssetCreator(account_id=None, kind=AssetCreatorKind.UNKNOWN)
+
+
+@dataclass(frozen=True, slots=True)
+class AssetCreator:
+    account_id: str | None
+    kind: AssetCreatorKind
+
+
+def visible_creator_email(
+    *,
+    email: str | None,
+    creator_account_id: str | None,
+    principal: AssetPrincipal | None,
+) -> str | None:
+    """Show a creator's email only to platform administrators and to the creator."""
+
+    if principal is None:
+        return None
+    if principal.is_platform_admin:
+        return email
+    if principal.account_id and principal.account_id == creator_account_id:
+        return email
+    return None
 
 
 @dataclass(frozen=True, slots=True)

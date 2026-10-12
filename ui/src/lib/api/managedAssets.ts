@@ -3,6 +3,14 @@ import { apiFetch } from './transport';
 export type AssetVisibility = 'private' | 'team' | 'organization' | 'public' | 'shared';
 export type AssetAccessRole = 'reader' | 'editor';
 export type AssetSubjectType = 'team' | 'organization' | 'public';
+export type AssetCreatorKind = 'account' | 'master_key' | 'system' | 'unknown';
+
+/** Creator fields on admin list rows. The API returns the email only to platform admins and the creator. */
+export interface AssetCreatorFields {
+  created_by_user_id?: string | null;
+  created_by_kind?: AssetCreatorKind | null;
+  created_by_email?: string | null;
+}
 
 export interface ManagedAssetGrantInput {
   subject_type: AssetSubjectType;

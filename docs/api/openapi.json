@@ -1694,6 +1694,34 @@
             ],
             "title": "Created At"
           },
+          "created_by_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Email"
+          },
+          "created_by_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "account",
+                  "master_key",
+                  "system",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Kind"
+          },
           "created_by_user_id": {
             "anyOf": [
               {
@@ -2532,6 +2560,34 @@
               }
             ],
             "title": "Created At"
+          },
+          "created_by_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Email"
+          },
+          "created_by_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "account",
+                  "master_key",
+                  "system",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Kind"
           },
           "created_by_user_id": {
             "anyOf": [
@@ -4392,6 +4448,34 @@
               }
             ],
             "title": "Created At"
+          },
+          "created_by_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Email"
+          },
+          "created_by_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "account",
+                  "master_key",
+                  "system",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Kind"
           },
           "created_by_user_id": {
             "anyOf": [

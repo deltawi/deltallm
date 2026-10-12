@@ -24,6 +24,7 @@ const testSources = [
   'tests/modelNamedCredentialCreate.test.tsx',
   'tests/modelsApi.test.ts',
   'tests/assetLists.test.tsx',
+  'tests/assetCreator.test.ts',
   'tests/assetListPermissions.test.tsx',
   'tests/modelDetailPermissions.test.tsx',
   'tests/managedAssetAccessPanel.test.tsx',

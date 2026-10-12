@@ -77,7 +77,7 @@ def _sort_value(row: dict[str, object], key: ModelSortKey) -> str | float | None
         "name": "display_name",
         "mode": "mode",
         "provider": "provider",
-        "created_by": "created_by_user_id",
+        "created_by": "created_by_email",
         "updated_at": "updated_at",
         "visibility": "visibility",
     }[key]

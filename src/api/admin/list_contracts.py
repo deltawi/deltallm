@@ -14,6 +14,8 @@ class ListPagination(BaseModel):
 class AssetListItem(BaseModel):
     model_config = ConfigDict(extra="allow")
     created_by_user_id: str | None = None
+    created_by_kind: Literal["account", "master_key", "system", "unknown"] | None = None
+    created_by_email: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     visibility: str | None = None

@@ -1448,6 +1448,7 @@ model DeltaLLM_ManagedAsset {
   governance_source     String   @default("platform")
   owner_account_id      String?
   created_by_account_id String?
+  created_by_kind       String   @default("unknown")
   policy_version        BigInt   @default(1)
   state                 String   @default("active")
   created_at            DateTime @default(now())

@@ -1,5 +1,5 @@
 import { apiFetch, withQuery } from './transport';
-import type { ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
+import type { AssetCreatorFields, ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
 
 export type ProviderHealthStatus = 'healthy' | 'degraded' | 'down';
 
@@ -124,7 +124,7 @@ export interface ModelInfo extends Record<string, unknown> {
   batch_output_cost_per_token?: number | null;
 }
 
-export interface ModelDeploymentDetail {
+export interface ModelDeploymentDetail extends AssetCreatorFields {
   deployment_id: string;
   model_id?: string | null;
   model_name: string;
@@ -152,7 +152,6 @@ export interface ModelDeploymentDetail {
   };
   healthy?: boolean | null;
   health_status?: 'healthy' | 'unhealthy' | 'unknown';
-  created_by_user_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   visibility?: string | null;

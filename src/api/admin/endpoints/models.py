@@ -75,6 +75,7 @@ from src.services.access.managed_asset_access import (
     validate_grant_subject_for_principal,
     validate_model_credential_audience,
     namespace_creator_callable_key,
+    visible_creator_email,
 )
 from src.services.models.model_identity import (
     creator_api_model_id,
@@ -285,6 +286,16 @@ async def scoped_model_entries_for_principal(
             str(logical_model.display_name or api_model_id) if logical_model else api_model_id
         )
         entry["created_by_user_id"] = logical_model.created_by_user_id if logical_model else None
+        entry["created_by_kind"] = logical_model.created_by_kind if logical_model else None
+        entry["created_by_email"] = (
+            visible_creator_email(
+                email=logical_model.created_by_email,
+                creator_account_id=logical_model.created_by_user_id,
+                principal=principal,
+            )
+            if logical_model
+            else None
+        )
         if logical_model:
             entry["created_at"] = entry.get("created_at") or logical_model.created_at
             if logical_model.updated_at and (
@@ -1792,7 +1803,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
                 )
             await access_repository.with_db(tx).create_policy(
                 policy,
-                created_by_account_id=principal.account_id,
+                created_by=principal.creator,
             )
             await logical_repository.with_db(tx).create(logical_model)
             await deployment_repository.with_db(tx).create(
@@ -1831,7 +1842,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
             )
         await access_repository.create_policy(
             policy,
-            created_by_account_id=principal.account_id,
+            created_by=principal.creator,
         )
         try:
             await logical_repository.create(logical_model)
