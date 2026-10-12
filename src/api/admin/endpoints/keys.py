@@ -611,8 +611,10 @@ async def list_keys(
             vt.tpd_limit,
             vt.expires,
             vt.created_at,
-            vt.updated_at
+            vt.updated_at,
+            lu.last_used_at
         FROM deltallm_verificationtoken vt {join_sql}
+        LEFT JOIN deltallm_verificationtoken_last_used lu ON lu.token = vt.token
         {where_sql}
         ORDER BY vt.created_at DESC
         LIMIT ${len(params) - 1} OFFSET ${len(params)}
@@ -1028,8 +1030,10 @@ async def update_key(
                     vt.tpd_limit,
                     vt.expires,
                     vt.created_at,
-                    vt.updated_at
+                    vt.updated_at,
+                    lu.last_used_at
                 FROM deltallm_verificationtoken vt
+                LEFT JOIN deltallm_verificationtoken_last_used lu ON lu.token = vt.token
                 LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
                 LEFT JOIN deltallm_platformaccount pa ON vt.owner_account_id = pa.account_id
                 LEFT JOIN deltallm_serviceaccount sa

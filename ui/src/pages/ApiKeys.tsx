@@ -24,6 +24,7 @@ import ApiKeyEditorDialog from '../components/api-keys/ApiKeyEditorDialog';
 import ApiKeySecretDialog from '../components/api-keys/ApiKeySecretDialog';
 import type { KeyTeamOption as TeamOption } from '../components/api-keys/ApiKeyDetailsFields';
 import { emptyKeyForm, keyMutationPayload, validateKeyForm, type KeyFormState } from '../lib/apiKeyForm';
+import { keyLastUsedDisplay } from '../lib/apiKeyLastUsed';
 
 type ViewTab = 'all' | 'my';
 const EMPTY_PAGINATION = { total: 0, limit: 200, offset: 0, has_more: false };
@@ -38,6 +39,12 @@ function KeyStatus({ row }: { row: ApiKey }) {
     if (exp < new Date()) return <StatusBadge status="expired" />;
   }
   return <StatusBadge status="active" />;
+}
+
+function LastUsed({ value }: { value: string | null | undefined }) {
+  const display = keyLastUsedDisplay(value);
+  if (!display.title) return <span className="text-gray-400 text-xs">{display.label}</span>;
+  return <span className="text-xs whitespace-nowrap" title={display.title}>{display.label}</span>;
 }
 
 function maskKey(token: string) {
@@ -428,6 +435,7 @@ export default function ApiKeys() {
     { key: 'team', header: 'Team', render: (row: ApiKey) => <span className="text-sm">{row.team_alias || row.team_id}</span> },
     { key: 'owner', header: 'Owner', render: (row: ApiKey) => <span className="text-sm">{ownerLabel(row)}</span> },
     { key: 'status', header: 'Status', render: (row: ApiKey) => <KeyStatus row={row} /> },
+    { key: 'last_used_at', header: 'Last used', render: (row: ApiKey) => <LastUsed value={row.last_used_at} /> },
     { key: 'budget', header: 'Budget', render: (row: ApiKey) => <BudgetBar spend={row.spend || 0} max_budget={row.max_budget} /> },
     { key: 'rpm_limit', header: 'RPM', render: (row: ApiKey) => row.rpm_limit != null ? <span className="text-xs font-medium">{Number(row.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     { key: 'output_tpm_limit', header: 'Output TPM', render: (row: ApiKey) => row.output_tpm_limit == null ? 'No limit' : row.output_tpm_limit.toLocaleString() },

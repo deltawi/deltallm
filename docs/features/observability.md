@@ -122,6 +122,7 @@ Core metrics include:
 | `deltallm_tier_capacity_pool_saturation` | Gauge | Current RPM or TPM pool saturation ratio |
 | `deltallm_tier_capacity_pool_active_organizations` | Gauge | Active organizations in advanced fair-share pools |
 | `deltallm_tier_capacity_fair_share_latency_seconds` | Histogram | Advanced fair-share admission latency |
+| `deltallm_key_last_used_events_total` | Counter | API-key last-used tracking by `event`: `flushed`, `flush_failed`, or `dropped` key hashes |
 
 Best-effort audit dependency failures increment both the write-failure counter and
 `deltallm_audit_events_dropped_total{reason="durable_enqueue_unavailable"}`. They
@@ -135,6 +136,10 @@ Blocked required audits need operator replay after the dependency is repaired;
 unknown delivery outcomes require provider reconciliation and explicit resolution.
 Sustained prompt singleflight overload or timeout outcomes indicate that the
 configured distinct-key bound or the prompt dependency latency needs attention.
+
+API-key last-used tracking is best effort. It never changes the result of a request.
+`dropped` increases when more than 10,000 different keys wait for one flush in a process.
+`flush_failed` counts key hashes in a failed batch write. A later request records the key again.
 
 Provider stream validation reasons come from a bounded set.
 `precommit_unknown_output_limit` identifies a compatibility failure that does not affect deployment health.
