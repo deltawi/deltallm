@@ -19,7 +19,6 @@ from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.middleware.admin import require_admin_permission, require_authenticated
-from src.middleware.platform_auth import get_platform_auth_context
 from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
@@ -382,13 +381,13 @@ async def create_named_credential(request: Request, payload: dict[str, Any]) -> 
             transactional_credentials = repository.with_db(tx)
             policy = await transactional_access.create_policy(
                 policy,
-                created_by_account_id=principal.account_id,
+                created_by=principal.creator,
             )
             record = await transactional_credentials.create(new_record)
     else:
         policy = await access_repository.create_policy(
             policy,
-            created_by_account_id=principal.account_id,
+            created_by=principal.creator,
         )
         try:
             record = await repository.create(new_record)
@@ -631,7 +630,6 @@ async def convert_inline_group_to_named_credential(
         }
     )
 
-    context = get_platform_auth_context(request)
     created_credential_id = str(payload.get("credential_id") or uuid4())
     managed_asset_id = str(uuid4())
     principal = _principal_for_request(request)
@@ -654,7 +652,7 @@ async def convert_inline_group_to_named_credential(
         updated_records: list[Any] = []
         await access_repository.create_policy(
             policy,
-            created_by_account_id=getattr(context, "account_id", None),
+            created_by=principal.creator,
         )
         created = await named_repository.create(
             NamedCredentialRecord(
@@ -663,7 +661,7 @@ async def convert_inline_group_to_named_credential(
                 provider=provider,
                 connection_config=baseline_config,
                 metadata=metadata,
-                created_by_account_id=getattr(context, "account_id", None),
+                created_by_account_id=principal.account_id,
                 managed_asset_id=managed_asset_id,
             )
         )

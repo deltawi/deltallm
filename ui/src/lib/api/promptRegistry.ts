@@ -1,8 +1,8 @@
 import { apiFetch, withQuery } from './transport';
 import type { Paginated } from './pagination';
-import type { ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
+import type { AssetCreatorFields, ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
 
-export interface PromptTemplate {
+export interface PromptTemplate extends AssetCreatorFields {
   prompt_template_id: string;
   template_key: string;
   name: string;
@@ -14,7 +14,6 @@ export interface PromptTemplate {
   binding_count: number;
   created_at?: string | null;
   updated_at?: string | null;
-  created_by_user_id?: string | null;
   visibility?: string | null;
   managed_asset_id?: string | null;
   access?: ManagedAssetAccess | null;

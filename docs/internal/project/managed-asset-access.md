@@ -254,6 +254,13 @@ are not ordinary asset CRUD.
   General Settings generated references were refreshed with the CI Python 3.12 environment. All
   generated-reference checks, documentation health checks, nine documentation tests, strict MkDocs
   build, public-artifact containment verification, Ruff, and whitespace validation passed.
+- 2026-10-12: managed assets now record `created_by_kind` (`account`, `master_key`, `system`, or
+  `unknown`). Before this change, the account ID was the only creator data, so a master-key create
+  showed **Not recorded** in the Admin UI. Application writes set the kind from the asset
+  principal. The compatibility triggers write `system`, or `account` when the source row names a
+  valid creator. The migration marks existing rows `account` when they have a creator ID and keeps
+  all other existing rows `unknown`, because the true creator cannot be recovered. List responses
+  add the creator email only for platform administrators and the creator.
 
 ### Remaining implementation sequence
 

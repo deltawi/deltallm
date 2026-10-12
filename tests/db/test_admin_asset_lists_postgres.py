@@ -8,9 +8,18 @@ from prisma import Prisma
 
 from src.db.catalog.admin_asset_lists import GroupSortKey, PromptSortKey, list_asset_rows
 from src.db.catalog.logical_models import LogicalModelRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.db.routing.route_groups import RouteGroupRepository
+from src.services.access.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetCreator,
+    AssetCreatorKind,
+    AssetKind,
+    GovernanceSource,
+    ManagedAsset,
+)
 from src.services.reporting.admin_list_health import ListHealthSnapshot
 
 pytestmark = pytest.mark.postgres
@@ -164,6 +173,7 @@ async def test_group_health_sort_counts_and_scope(list_database: tuple[Prisma, s
         groups[1].visibility == "team"
     )  # Two team grants must not multiply rows or change visibility.
     assert groups[1].created_by_user_id == prefix
+    assert groups[1].created_by_email == prefix + "@example.invalid"
     assert groups[2].healthy_member_count is None
     later, _ = await repo.list_groups(
         search=prefix,
@@ -204,6 +214,7 @@ async def test_prompt_counts_sort_before_paging_and_creator_id(
     assert rows[0].binding_count == 2
     assert rows[0].created_by_user_id == prefix
     assert "@" not in rows[0].created_by_user_id
+    assert rows[0].created_by_email == prefix + "@example.invalid"
     newest, _ = await repo.list_templates(
         search=prefix, sort_by="updated_at", sort_direction="desc", limit=1, offset=1
     )
@@ -275,6 +286,7 @@ async def test_model_metadata_uses_managed_creator_and_deployment_dates(
     models = await LogicalModelRepository(db).list_by_names([prefix + "-callable"])
     assert len(models) == 1
     assert models[0].created_by_user_id == prefix
+    assert models[0].created_by_email == prefix + "@example.invalid"
     assert models[0].updated_at is not None
     deployments = [
         row
@@ -283,3 +295,51 @@ async def test_model_metadata_uses_managed_creator_and_deployment_dates(
     ]
     assert len(deployments) == 3
     assert all(row.updated_at is not None and row.updated_at.day == 5 for row in deployments)
+
+
+@pytest.mark.asyncio
+async def test_creator_kind_records_master_key_and_compatibility_creates(
+    list_database: tuple[Prisma, str],
+) -> None:
+    db, prefix = list_database
+    access = ManagedAssetAccessRepository(db, use_transactions=False)
+    await access.create_policy(
+        AssetAccessPolicy(
+            asset=ManagedAsset(
+                asset_id=prefix + "-master-key-asset",
+                asset_kind=AssetKind.PROMPT_TEMPLATE,
+                governance_source=GovernanceSource.PLATFORM,
+                owner_account_id=None,
+            )
+        ),
+        created_by=AssetCreator(account_id=None, kind=AssetCreatorKind.MASTER_KEY),
+    )
+    await db.execute_raw(
+        """
+        INSERT INTO deltallm_prompttemplate(prompt_template_id,template_key,name,managed_asset_id,updated_at)
+        VALUES ($1 || '-p-master', $1 || '-prompt-master', 'Master', $1 || '-master-key-asset', NOW())
+        """,
+        prefix,
+    )
+    # The compatibility trigger links a row that arrives without a managed asset.
+    await db.execute_raw(
+        """
+        INSERT INTO deltallm_prompttemplate(prompt_template_id,template_key,name,updated_at)
+        VALUES ($1 || '-p-legacy', $1 || '-prompt-legacy', 'Legacy', NOW())
+        """,
+        prefix,
+    )
+    rows, _ = await PromptRegistryRepository(db).list_templates(
+        search=prefix, sort_by="created_by", sort_direction="asc", limit=10
+    )
+    by_key = {row.template_key: row for row in rows}
+    master = by_key[prefix + "-prompt-master"]
+    assert (master.created_by_kind, master.created_by_user_id, master.created_by_email) == (
+        "master_key",
+        None,
+        None,
+    )
+    assert by_key[prefix + "-prompt-legacy"].created_by_kind == "system"
+    # Rows with an email sort before rows without one.
+    assert rows[0].created_by_email == prefix + "@example.invalid"
+    assert rows[-1].created_by_email is None

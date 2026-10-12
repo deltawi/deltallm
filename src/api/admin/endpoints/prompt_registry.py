@@ -38,6 +38,7 @@ from src.services.access.managed_asset_access import (
     serialize_asset_access,
     validate_grant_subject_for_principal,
     namespace_creator_callable_key,
+    visible_creator_email,
 )
 from src.services.models.model_identity import (
     creator_prompt_template_key,
@@ -259,6 +260,11 @@ def _template_response_payload(
     payload = to_json_value(asdict(template))
     if isinstance(payload, dict):
         payload["metadata"] = public_metadata_without_owner_scope(payload.get("metadata"))
+        payload["created_by_email"] = visible_creator_email(
+            email=payload.get("created_by_email"),
+            creator_account_id=payload.get("created_by_user_id"),
+            principal=principal,
+        )
         if policy is not None and principal is not None:
             payload["access"] = serialize_asset_access(policy, principal)
     return payload
@@ -511,7 +517,7 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
     ):  # noqa: ANN202
         stored_policy = await policy_repository.create_policy(
             policy,
-            created_by_account_id=principal.account_id,
+            created_by=principal.creator,
         )
         created_template = await prompt_repository.create_template(
             template_key=template_key,
@@ -539,7 +545,7 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
         else:
             policy = await access_repository.create_policy(
                 policy,
-                created_by_account_id=principal.account_id,
+                created_by=principal.creator,
             )
             try:
                 created = await repository.create_template(

@@ -23,10 +23,18 @@ Select a column heading or use **Sort list** to change the order.
 The server sorts all permitted results before it selects a page.
 The initial order is **Updated at**, newest first. Search resets the page.
 
-**Created by** shows the creator account ID, including platform administrator IDs.
-Select the copy control to copy the full ID. The list does not show creator email addresses.
+**Created by** shows who created the item:
+
+- An account: platform administrators and the creator see the creator email address. Other users see a short account ID.
+  Select the copy control to copy the full account ID.
+- **Master key**: an operator created the item with the master key. A master key has no account.
+- **System**: DeltaLLM created the item, for example from configuration.
+- **Deleted account**: the creator account was deleted after the item was created.
+- **Not recorded**: the item was created before DeltaLLM recorded the creator.
+
+Sort by **Created by** to order items by creator email address. Items without a visible email address appear last.
 **Updated at** shows the stored update time in your local time zone.
-If an old record has no creator ID or update time, the cell shows **Not recorded**.
+If an old record has no update time, the cell shows **Not recorded**.
 **Visibility** is the last data column. Edit and delete controls sit in a trailing actions column at the end of each row,
 so the name column only shows the name and key. Open a row for the full detail page.
 On small screens, each row becomes a card with the same fields and the actions in its header.

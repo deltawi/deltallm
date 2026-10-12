@@ -7,6 +7,7 @@ from src.db.routing.routing_runtime import RoutingRuntimeRevisionRepository
 from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
+    AssetCreator,
     AssetGrant,
     AssetKind,
     AssetPrincipal,
@@ -345,6 +346,7 @@ class ManagedAssetAccessRepository:
                     asset_kind,
                     governance_source,
                     created_by_account_id,
+                    created_by_kind,
                     created_at,
                     updated_at
                 )
@@ -353,6 +355,7 @@ class ManagedAssetAccessRepository:
                     $2,
                     'platform',
                     created_by_account_id,
+                    CASE WHEN created_by_account_id IS NULL THEN 'unknown' ELSE 'account' END,
                     created_at,
                     updated_at
                 FROM candidates
@@ -376,16 +379,13 @@ class ManagedAssetAccessRepository:
         self,
         policy: AssetAccessPolicy,
         *,
-        created_by_account_id: str | None,
+        created_by: AssetCreator,
     ) -> AssetAccessPolicy:
         if self.prisma is None:
             return policy
         if self._use_transactions and hasattr(self.prisma, "tx"):
             async with self.prisma.tx() as tx:
-                return await self.with_db(tx).create_policy(
-                    policy,
-                    created_by_account_id=created_by_account_id,
-                )
+                return await self.with_db(tx).create_policy(policy, created_by=created_by)
 
         await self.validate_audience_subjects(policy)
         asset = policy.asset
@@ -397,23 +397,25 @@ class ManagedAssetAccessRepository:
                 governance_source,
                 owner_account_id,
                 created_by_account_id,
+                created_by_kind,
                 policy_version,
                 state,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
             """,
             asset.asset_id,
             asset.asset_kind.value,
             asset.governance_source.value,
             asset.owner_account_id,
-            created_by_account_id,
+            created_by.account_id,
+            created_by.kind.value,
             asset.policy_version,
             asset.state,
         )
         for grant in policy.grants:
-            await self._insert_grant(grant, created_by_account_id=created_by_account_id)
+            await self._insert_grant(grant, created_by_account_id=created_by.account_id)
         if asset.asset_kind in _RUNTIME_AUTHORIZATION_KINDS:
             await RoutingRuntimeRevisionRepository(self.prisma).bump_revision()
         return policy

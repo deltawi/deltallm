@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import AssetList from '../src/components/admin/lists/AssetList';
-import { CopyIdentifier, ListIdentity } from '../src/components/admin/lists/AssetListCells';
+import { CopyIdentifier, CreatedBy, ListIdentity } from '../src/components/admin/lists/AssetListCells';
 import { assetMetadataColumns } from '../src/components/admin/lists/assetMetadataColumns';
 import DataTable, { type Column, type TableSort } from '../src/components/DataTable';
 import { ApiError, models, routeGroups, promptRegistry } from '../src/lib/api';
@@ -126,6 +126,24 @@ test('blocked clipboard exposes the full selected ID and Escape restores focus',
     assert.equal(document.activeElement, button);
     await act(async () => fixture.root.render(<CopyIdentifier />));
     assert.equal(document.body.textContent, 'Not recorded');
+  } finally { await fixture.close(); }
+});
+
+test('created by shows the creator email, copies the account ID, and labels non-account creates', async () => {
+  const fixture = mountDom();
+  let copied = '';
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { async writeText(value: string) { copied = value; } } });
+  try {
+    await act(async () => fixture.root.render(<CreatedBy row={{ created_by_user_id: USER_ID, created_by_kind: 'account', created_by_email: 'ana@example.com' }} />));
+    const copy = document.querySelector<HTMLButtonElement>(`button[aria-label="Copy user id ${USER_ID}"]`)!;
+    assert.ok(copy.textContent?.includes('ana@example.com'));
+    assert.ok(!copy.textContent?.includes(USER_ID.slice(0, 8)));
+    await act(async () => copy.click());
+    assert.equal(copied, USER_ID);
+    await act(async () => fixture.root.render(<CreatedBy row={{ created_by_kind: 'master_key' }} />));
+    assert.equal(document.body.textContent, 'Master key');
+    await act(async () => fixture.root.render(<CreatedBy row={{ created_by_kind: 'account' }} />));
+    assert.equal(document.body.textContent, 'Deleted account');
   } finally { await fixture.close(); }
 });
 

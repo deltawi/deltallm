@@ -12,6 +12,7 @@ from src.services.access.managed_asset_access import (
     GovernanceSource,
     ManagedAsset,
     resolve_asset_capabilities,
+    AssetCreator,
 )
 from src.services.models.named_credentials import connection_fingerprint
 
@@ -135,9 +136,9 @@ class _FakeManagedAssetAccessRepository:
         self,
         policy: AssetAccessPolicy,
         *,
-        created_by_account_id: str | None,
+        created_by: AssetCreator,
     ) -> AssetAccessPolicy:
-        del created_by_account_id
+        del created_by
         self.policies[policy.asset.asset_id] = policy
         return policy
 

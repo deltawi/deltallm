@@ -30,6 +30,7 @@ def model_rows() -> list[dict[str, object]]:
             "provider": "openai",
             "mode": "chat",
             "created_by_user_id": "user-b",
+            "created_by_email": "bob@example.invalid",
             "updated_at": "2026-10-01T10:00:00Z",
         },
         {
@@ -38,6 +39,7 @@ def model_rows() -> list[dict[str, object]]:
             "provider": "anthropic",
             "mode": "chat",
             "created_by_user_id": "user-a",
+            "created_by_email": "alice@example.invalid",
             "updated_at": "2026-10-02T10:00:00Z",
             "access": {"visibility": "team"},
         },
@@ -47,6 +49,7 @@ def model_rows() -> list[dict[str, object]]:
             "provider": "openai",
             "mode": "embedding",
             "created_by_user_id": "platform-admin-id",
+            "created_by_email": "admin@example.invalid",
             "updated_at": "2026-10-03T10:00:00Z",
         },
         {
@@ -240,7 +243,8 @@ async def test_asset_list_binds_search_scope_health_and_pages_in_two_queries() -
     assert params == ("%support'%", ["asset-1"], ["dep-good"], ["dep-unknown"], True, 10, 20)
     assert "support'" not in query
     assert "created_by_account_id AS created_by_user_id" in query
-    assert "email" not in query
+    assert "creator.email AS created_by_email" in query
+    assert "asset.created_by_kind" in query
 
 
 @pytest.mark.asyncio
@@ -277,6 +281,8 @@ async def test_models_api_returns_creator_id_and_stored_dates(
                     "asset-1",
                     updated_at=datetime(2026, 10, 3, tzinfo=UTC),
                     created_by_user_id="platform-admin-account-id",
+                    created_by_kind="account",
+                    created_by_email="admin@example.invalid",
                 ),
             ]
         )
@@ -289,8 +295,10 @@ async def test_models_api_returns_creator_id_and_stored_dates(
     assert response.status_code == 200
     row = response.json()["data"][0]
     assert row["created_by_user_id"] == "platform-admin-account-id"
+    assert row["created_by_kind"] == "account"
+    # Platform administrators see creator emails; other viewers get null.
+    assert row["created_by_email"] == "admin@example.invalid"
     assert row["updated_at"].startswith("2026-10-03T00:00:00")
-    assert "email" not in row
 
 
 @pytest.mark.asyncio

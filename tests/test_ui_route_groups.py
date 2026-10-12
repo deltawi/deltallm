@@ -45,6 +45,7 @@ from src.services.access.managed_asset_access import (
     AssetPrincipal,
     ManagedAsset,
     resolve_asset_capabilities,
+    AssetCreator,
 )
 
 
@@ -622,9 +623,9 @@ class _FakeManagedAssetAccessRepository:
         self,
         policy: AssetAccessPolicy,
         *,
-        created_by_account_id: str | None,
+        created_by: AssetCreator,
     ):
-        del created_by_account_id
+        del created_by
         self.policies[policy.asset.asset_id] = policy
         return policy
 

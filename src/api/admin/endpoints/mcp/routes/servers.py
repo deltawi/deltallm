@@ -461,7 +461,7 @@ async def create_mcp_server(
         ) -> tuple[MCPServerRecord, AssetAccessPolicy]:
             stored_policy = await policy_repository.create_policy(
                 policy,
-                created_by_account_id=principal.account_id,
+                created_by=principal.creator,
             )
             server = await mcp_repository.create_server(
                 **create_kwargs,
@@ -484,7 +484,7 @@ async def create_mcp_server(
         else:
             policy = await access_repository.create_policy(
                 policy,
-                created_by_account_id=principal.account_id,
+                created_by=principal.creator,
             )
             try:
                 created = await repository.create_server(

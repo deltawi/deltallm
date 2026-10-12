@@ -12,6 +12,8 @@ from src.db.catalog.managed_assets import (
 from src.services.access.managed_asset_access import (
     AssetAccessRole,
     AssetAccessPolicy,
+    AssetCreator,
+    AssetCreatorKind,
     AssetGrant,
     AssetKind,
     AssetPrincipal,
@@ -19,6 +21,8 @@ from src.services.access.managed_asset_access import (
     GovernanceSource,
     ManagedAsset,
 )
+
+_ACCOUNT_CREATOR = AssetCreator(account_id="account-1", kind=AssetCreatorKind.ACCOUNT)
 
 
 def test_policy_rows_are_grouped_into_multiple_audience_grants() -> None:
@@ -261,7 +265,7 @@ async def test_policy_create_rejects_missing_audience_before_writing_asset() -> 
     )
 
     with pytest.raises(ManagedAssetAudienceNotFoundError, match="missing-team"):
-        await repository.create_policy(policy, created_by_account_id="account-1")
+        await repository.create_policy(policy, created_by=_ACCOUNT_CREATOR)
 
     assert prisma.calls[0][1] == (["missing-team"], [])
 
@@ -429,7 +433,7 @@ async def test_runtime_asset_policy_create_and_delete_bump_durable_revision() ->
                 owner_account_id="account-1",
             )
         ),
-        created_by_account_id="account-1",
+        created_by=_ACCOUNT_CREATOR,
     )
     await repository.delete_policy("mcp-asset")
 
@@ -451,7 +455,7 @@ async def test_named_credential_policy_create_does_not_reload_runtime_snapshots(
                 owner_account_id="account-1",
             )
         ),
-        created_by_account_id="account-1",
+        created_by=_ACCOUNT_CREATOR,
     )
 
     assert not any("UPDATE deltallm_routeruntimestate" in query for query, _ in prisma.calls)

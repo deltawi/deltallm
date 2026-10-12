@@ -102,6 +102,8 @@ class RouteGroupRecord:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     created_by_user_id: str | None = None
+    created_by_kind: str | None = None
+    created_by_email: str | None = None
     visibility: str | None = None
     health_status: str | None = None
     active_member_count: int | None = None
@@ -1005,6 +1007,8 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             created_by_user_id=str(row["created_by_user_id"])
             if row.get("created_by_user_id")
             else None,
+            created_by_kind=str(row["created_by_kind"]) if row.get("created_by_kind") else None,
+            created_by_email=str(row["created_by_email"]) if row.get("created_by_email") else None,
             visibility=str(row["visibility"]) if row.get("visibility") else None,
             health_status=str(row["health_status"]) if row.get("health_status") else None,
             active_member_count=int(row["active_member_count"])

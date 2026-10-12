@@ -54,6 +54,8 @@ class PromptTemplateRecord:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     created_by_user_id: str | None = None
+    created_by_kind: str | None = None
+    created_by_email: str | None = None
     visibility: str | None = None
 
 
@@ -1090,6 +1092,8 @@ class PromptRegistryRepository:
             created_by_user_id=str(row["created_by_user_id"])
             if row.get("created_by_user_id")
             else None,
+            created_by_kind=str(row["created_by_kind"]) if row.get("created_by_kind") else None,
+            created_by_email=str(row["created_by_email"]) if row.get("created_by_email") else None,
             visibility=str(row["visibility"]) if row.get("visibility") else None,
         )
 

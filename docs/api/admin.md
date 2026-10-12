@@ -77,8 +77,19 @@ Equal values use a stable asset key as the final sort key. Missing values appear
 
 The UI requests `sort_by=updated_at&sort_direction=desc` initially.
 If you omit `sort_by`, the existing API order applies.
-List items include `created_by_user_id`, `created_at`, `updated_at`, and `visibility`.
-The creator ID is the stored account ID for all roles, including platform administrators. Creator email addresses are not added to the response.
+List items include `created_by_user_id`, `created_by_kind`, `created_by_email`, `created_at`, `updated_at`, and `visibility`.
+The creator ID is the stored account ID for all roles, including platform administrators.
+`created_by_kind` tells how the creator authenticated:
+
+| Value | Meaning |
+| --- | --- |
+| `account` | A signed-in account. The creator ID is null if the account was deleted. |
+| `master_key` | The master key. The creator ID is null. |
+| `system` | DeltaLLM, for example configuration seeding. |
+| `unknown` | The item was created before DeltaLLM recorded the creator kind. |
+
+`created_by_email` is the creator account email address. The API returns it only to platform administrators and to the creator. For other callers, the value is null.
+`sort_by=created_by` sorts by the creator email address. Items without an email address appear last.
 Old records can have null creator IDs or timestamps.
 
 Model list items include `health_status`: `healthy`, `unhealthy`, or `unknown`.

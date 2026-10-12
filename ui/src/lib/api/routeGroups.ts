@@ -1,7 +1,7 @@
 import { apiFetch, withQuery } from './transport';
-import type { ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
+import type { AssetCreatorFields, ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
 
-export interface RouteGroup {
+export interface RouteGroup extends AssetCreatorFields {
   route_group_id: string;
   group_key: string;
   name: string | null;
@@ -13,7 +13,6 @@ export interface RouteGroup {
   default_prompt?: { template_key: string; label?: string | null } | null;
   created_at?: string | null;
   updated_at?: string | null;
-  created_by_user_id?: string | null;
   visibility?: string | null;
   health_status?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown' | 'paused' | 'empty' | null;
   active_member_count?: number | null;

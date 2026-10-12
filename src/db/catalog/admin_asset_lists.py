@@ -26,6 +26,7 @@ class AssetListRows:
 
 _GRANTS_JOIN = """
 LEFT JOIN deltallm_managedasset asset ON asset.asset_id = {alias}.managed_asset_id
+LEFT JOIN deltallm_platformaccount creator ON creator.account_id = asset.created_by_account_id
 LEFT JOIN LATERAL (
     SELECT CASE
         WHEN COUNT(*) = 0 THEN 'private'
@@ -62,7 +63,7 @@ _GROUP_SORT = {
     "routing": "COALESCE(routing_strategy, 'simple-shuffle')",
     "members": "member_count",
     "health": "health_rank",
-    "created_by": "created_by_user_id",
+    "created_by": "created_by_email",
     "updated_at": "updated_at",
     "visibility": "visibility",
     "created_at": "created_at",
@@ -72,7 +73,7 @@ _PROMPT_SORT = {
     "versions": "version_count",
     "labels": "label_count",
     "bindings": "binding_count",
-    "created_by": "created_by_user_id",
+    "created_by": "created_by_email",
     "updated_at": "updated_at",
     "visibility": "visibility",
     "created_at": "created_at",
@@ -138,7 +139,7 @@ def _list_select(
     params: list[object],
     health: ListHealthSnapshot | None,
 ) -> tuple[str, str]:
-    select = f"{alias}.*, asset.created_by_account_id AS created_by_user_id, CASE WHEN asset.asset_id IS NULL THEN 'platform' ELSE audience.visibility END AS visibility"
+    select = f"{alias}.*, asset.created_by_account_id AS created_by_user_id, asset.created_by_kind, creator.email AS created_by_email, CASE WHEN asset.asset_id IS NULL THEN 'platform' ELSE audience.visibility END AS visibility"
     joins = _GRANTS_JOIN.format(alias=alias)
     if kind == "group":
         snapshot = health or ListHealthSnapshot([], [])
