@@ -9,6 +9,7 @@ from redis.exceptions import RedisError
 
 from src.metrics.key_auth_cache import KeyAuthCacheFailureReason, record_key_auth_cache_failure
 from src.services.identity.keys.key_auth_cache import KeyAuthCache, KeyCacheLookup
+from src.services.identity.keys.key_last_used import KeyLastUsedRecorder
 
 from src.db.identity.key_repository import KeyTokenScope, read_key_tokens_for_scope
 from src.db.runtime.allocated_client import DatabaseUnavailableError
@@ -43,8 +44,10 @@ class KeyService:
         lifecycle_authorizer: OrganizationLifecycleAuthorizer | None = None,
         invalidation_repository: KeyRepository | None = None,
         fallback_limits: AuthFallbackLimits | None = None,
+        last_used: KeyLastUsedRecorder | None = None,
     ) -> None:
         self.repository = repository
+        self.last_used = last_used
         self.invalidation_repository = (
             invalidation_repository if invalidation_repository is not None else repository
         )
@@ -65,7 +68,11 @@ class KeyService:
     async def validate_key(self, raw_key: str) -> UserAPIKeyAuth:
         if not raw_key or len(raw_key) > 8192:
             raise AuthenticationError(message="Invalid API key", code="invalid_api_key")
-        return await self.get_auth_by_token_hash(self.hash_key(raw_key))
+        token_hash = self.hash_key(raw_key)
+        auth = await self.get_auth_by_token_hash(token_hash)
+        if self.last_used is not None:
+            self.last_used.record(token_hash)
+        return auth
 
     async def get_auth_by_token_hash(self, token_hash: str) -> UserAPIKeyAuth:
         token_hash = str(token_hash or "").strip()

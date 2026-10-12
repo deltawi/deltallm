@@ -15,6 +15,7 @@ import {
   Inbox,
 } from 'lucide-react';
 import type { ApiKey } from '../../lib/api';
+import { keyLastUsedDisplay } from '../../lib/apiKeyLastUsed';
 
 type Pagination = {
   total: number;
@@ -259,6 +260,7 @@ export default function ApiKeysMobileList({
               ? Math.min(100, ((key.spend || 0) / key.max_budget) * 100)
               : 0;
             const owner = ownerInfo(key, currentUserId);
+            const lastUsed = keyLastUsedDisplay(key.last_used_at);
             const teamLabel = key.team_alias || key.team_id || 'No team';
             const initials = ownerInitials(owner.name);
             const colorClass = ownerColor(owner.name);
@@ -388,6 +390,13 @@ export default function ApiKeysMobileList({
                           <div className="text-xs text-gray-700 flex items-center gap-1">
                             <Clock className="w-3 h-3 text-gray-400" />
                             {formatDate(key.created_at) || '—'}
+                          </div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-[10px] text-gray-400 font-medium uppercase tracking-wider mb-0.5">Last used</div>
+                          <div className="text-xs text-gray-700 flex items-center gap-1 justify-center" title={lastUsed.title ?? undefined}>
+                            <Activity className="w-3 h-3 text-gray-400" />
+                            {lastUsed.label}
                           </div>
                         </div>
                         <div className="text-right">
