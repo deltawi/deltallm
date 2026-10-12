@@ -109,8 +109,12 @@ async def capture_accounting_plans(
             # Penalized join costs must not cause JIT to dominate this probe.
             await connection.execute("SET jit=off")
         connection.add_log_listener(capture.capture)
+        # NOTICE reaches this client but stays below the server's default
+        # log_min_messages, so plans never flood the server log (in CI that
+        # log is dumped after the tests and hides the pytest summary).
         await connection.execute(
             "SET client_min_messages=log;"
+            "SET auto_explain.log_level=notice;"
             "SET auto_explain.log_analyze=on;"
             "SET auto_explain.log_buffers=on;"
             "SET auto_explain.log_nested_statements=on;"
