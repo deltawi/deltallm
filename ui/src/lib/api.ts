@@ -363,6 +363,8 @@ export interface ApiKey {
   expires: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  /** Null when no use is recorded. Batched by the gateway, so about one minute coarse. */
+  last_used_at?: string | null;
   model_output_tpm_limit?: Record<string, number> | null;
 }
 

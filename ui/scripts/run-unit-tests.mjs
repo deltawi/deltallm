@@ -25,6 +25,7 @@ const testSources = [
   'tests/modelsApi.test.ts',
   'tests/assetLists.test.tsx',
   'tests/assetCreator.test.ts',
+  'tests/apiKeyLastUsed.test.ts',
   'tests/assetListPermissions.test.tsx',
   'tests/modelDetailPermissions.test.tsx',
   'tests/managedAssetAccessPanel.test.tsx',

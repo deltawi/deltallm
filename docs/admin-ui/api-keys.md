@@ -80,6 +80,18 @@ A failed clipboard operation shows an error so you can copy the displayed key ma
 - **RPH**: request throttle per hour
 - **RPD / TPD**: request and token throttles per day
 
+## Last used
+
+The **Last used** column shows when a key last authenticated a request.
+
+- **Never** means that DeltaLLM has no recorded use of the key. Keys that were not used after the upgrade that added this column also show **Never**.
+- Recent values show as relative time, for example `5 min ago`. Values older than 30 days show the date. Hold the pointer on a value to see the full local time.
+- The gateway writes this value in batches about once per minute. The value can be up to one minute old. A replica that stops without a clean shutdown can lose its last minute of values.
+- A request with the master key, a JWT, or custom authentication does not change the value.
+- A regenerated key keeps its last used time. A deleted key removes it.
+
+Use this column to find keys that are not in use before you revoke them.
+
 ## Key Asset Access
 
 Keys normally inherit the callable-target universe from their team. Use key-level restriction when an integration needs a smaller model set than the team owns.

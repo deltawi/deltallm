@@ -24,6 +24,7 @@ from src.auth import (
     SSOConfig,
     SSOProvider,
 )
+from src.db.identity.key_last_used import KeyLastUsedRepository
 from src.db.identity.key_repository import KeyRepository
 from src.services.invalidation.cache_invalidation import (
     CacheInvalidationService,
@@ -34,6 +35,7 @@ from src.services.email.email_token_service import EmailTokenService
 from src.services.identity.invitation_service import InvitationService
 from src.services.identity.keys.key_service import KeyService
 from src.services.identity.keys.auth_fallback import AuthFallbackLimits
+from src.services.identity.keys.key_last_used import KeyLastUsedRecorder
 from src.config_startup import startup_field_values
 from src.services.admission.limit_counter import LimitCounter
 from src.services.admission.output_policy_configuration import validate_output_policy_configuration
@@ -59,6 +61,8 @@ _AUTH_BOOT_ID = uuid4().hex[:12]
 class AuthRuntime:
     initialized: bool = True
     key_service: KeyService | None = None
+    key_last_used: KeyLastUsedRecorder | None = None
+    key_last_used_task: Task[None] | None = None
     external_auth: ExternalAuthRuntime | None = None
     organization_lifecycle_task: Task[None] | None = None
     cache_invalidation_worker: CacheInvalidationWorker | None = None
@@ -163,6 +167,10 @@ async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRu
             )
         ),
     )
+    # Background writes use the control pool, not the foreground pool.
+    runtime.key_last_used = KeyLastUsedRecorder(
+        KeyLastUsedRepository(app.state.prisma_manager.client)
+    )
     app.state.key_service = KeyService(
         repository=KeyRepository(app.state.foreground_prisma_manager.client),
         invalidation_repository=KeyRepository(app.state.prisma_manager.client),
@@ -178,6 +186,7 @@ async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRu
                 prefix="auth_fallback_",
             )
         ),
+        last_used=runtime.key_last_used,
     )
     runtime.key_service = app.state.key_service
     cache_invalidation_repository = getattr(
@@ -376,6 +385,7 @@ async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRu
     runtime.external_auth = await init_external_auth_runtime(app, cfg)
 
     start_organization_deletion_tasks(app, runtime)
+    runtime.key_last_used_task = create_task(runtime.key_last_used.run())
     if runtime.cache_invalidation_worker is not None:
         runtime.cache_invalidation_task = create_task(runtime.cache_invalidation_worker.run())
 
@@ -407,6 +417,13 @@ async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
         for worker in (runtime.cache_invalidation_worker, runtime.organization_deletion_worker):
             if worker is not None:
                 worker.stop()
+        if runtime.key_last_used is not None:
+            # A stopped loop writes pending uses once, within its flush timeout.
+            runtime.key_last_used.stop()
+            await stop_tasks_before_deadline(
+                (runtime.key_last_used_task,),
+                deadline=cleanup_deadline(runtime.key_last_used.limits.flush_timeout_seconds),
+            )
         await stop_tasks_before_deadline(
             (
                 runtime.organization_lifecycle_task,

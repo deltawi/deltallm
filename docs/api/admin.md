@@ -463,6 +463,8 @@ another group has since been created with the same key.
 | `POST` | `/ui/api/keys/{token_hash}/revoke` | Revoke a key |
 | `DELETE` | `/ui/api/keys/{token_hash}` | Delete a key |
 
+`GET /ui/api/keys` and `PUT /ui/api/keys/{token_hash}` return `last_used_at` for each key. The value is an ISO 8601 UTC time, or `null` when no use is recorded. The gateway writes this value in batches about once per minute, so the value can be up to one minute old.
+
 ### Service Accounts
 
 | Method | Endpoint | Purpose |

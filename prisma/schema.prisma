@@ -228,6 +228,7 @@ model DeltaLLM_VerificationToken {
   team       DeltaLLM_TeamTable? @relation(fields: [team_id], references: [team_id])
   owner_account DeltaLLM_PlatformAccount? @relation("verificationtoken_account_owner", fields: [owner_account_id], references: [account_id])
   owner_service_account DeltaLLM_ServiceAccount? @relation("verificationtoken_service_account_owner", fields: [owner_service_account_id], references: [service_account_id])
+  last_used             DeltaLLM_VerificationTokenLastUsed?
   @@index([token])
   @@index([user_id])
   @@index([team_id])
@@ -235,6 +236,16 @@ model DeltaLLM_VerificationToken {
   @@index([owner_service_account_id])
   @@index([expires])
   @@map("deltallm_verificationtoken")
+}
+
+// Best-effort usage time, kept apart from the key row so that usage writes do
+// not fire key-update triggers or contend with key edits.
+model DeltaLLM_VerificationTokenLastUsed {
+  token        String   @id
+  last_used_at DateTime @db.Timestamptz(6)
+
+  key DeltaLLM_VerificationToken @relation(fields: [token], references: [token], onDelete: Cascade, onUpdate: Cascade)
+  @@map("deltallm_verificationtoken_last_used")
 }
 
 model DeltaLLM_UserTable {
