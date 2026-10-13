@@ -6,7 +6,7 @@ Use it when you want prompts to be treated like managed configuration instead of
 
 ![Prompt Registry List](images/prompt-registry-list.png)
 
-![Prompt Template Detail](images/prompt-template-detail.png)
+![Prompt template detail page with label cards for production and staging, and the Prompt tab that shows the production messages](images/prompt-template-detail.png)
 
 **Access:** platform admin. Templates, versions, labels, tests, and bindings are control-plane
 configuration. See [Access requirements](access-requirements.md) and the [Prompt Registry admin
@@ -41,11 +41,66 @@ hover over it to read the rest.
 
 ## Quick Success Workflow
 
-1. Create a prompt template
-2. Add the first version of the template body
-3. Define the variables it expects
-4. Publish or label the version you want to use
-5. Bind that prompt from a consuming surface such as a route group
+1. Create a prompt template.
+2. Open the template and select **New version**. Write the prompt with `{variable}` placeholders.
+3. Select **Test** and render the version with sample values.
+4. Point the `production` label at the version.
+5. Bind the prompt from a consuming surface, for example a route group.
+
+## Template Detail Page
+
+The detail page shows the prompt that requests get now. The page has these parts:
+
+- **Header**: the name, the template key with a copy control, the description, the sharing summary,
+  the creator, and the update date. Select **Test** or **New version** from the header.
+- **Labels**: one card for each label. A card shows the version that the label points to and the date
+  when the label moved. Platform administrators also see the bindings that use the label.
+  Select **Change version** to point the label at a different version, or to remove the label.
+  A label other than `production` shows **Promote to production** when it points to a different version.
+- **Setup steps**: if the template has no `production` label, the page shows the steps to write a version
+  and to point `production` at it. The steps go away when `production` exists.
+
+The page has five tabs:
+
+| Tab | What it shows |
+| --- | --- |
+| **Prompt** | The messages of the version that a label or version points to. Placeholders are highlighted. Select **Show JSON** to see the stored template body. The tab also lists the variables, the model hints, and the route preferences. |
+| **Versions** | All versions with their labels and creation dates. Select a version to read it. Select a version in **Compare with** to see the added and removed words. |
+| **Test** | A dry-run render. Select a label or a version, then enter one value for each variable. Select **Edit as JSON** to enter the variables as one JSON object. The result shows the rendered messages. |
+| **Used by** | The bindings that use this template, with the label and the version that each binding gets. This tab is for platform administrators. A binding that names a missing label shows a warning, because requests skip that binding. |
+| **Settings** | The name, the description, sharing and access, legacy metadata for platform administrators, and **Delete prompt**. |
+
+Only platform administrators see **Used by**. Users without write access to the prompt do not see the controls that change it.
+
+### Write a New Version
+
+**New version** opens an editor that starts from the latest version. **New version from vN** on the
+**Versions** tab starts from a different version. A saved version cannot change.
+
+- Edit each message and its role, add a message, or remove a message.
+- Select **Edit as JSON** to edit the full template body. Use JSON for a body that has a custom shape,
+  for example message content parts.
+- The editor finds the `{variable}` placeholders in the prompt. Every placeholder becomes a required
+  variable. The editor keeps the type and other settings of a variable that the earlier version declared.
+- Use `{{` and `}}` for literal braces.
+- **After saving, point** moves a label to the new version when you save it. The default is `staging`
+  when that label exists. The editor does not move an existing `production` label. Use
+  **Promote to production** for that change, so that you can review it first.
+
+### Move a Label
+
+Before a label moves, the page shows the words that change between the two versions and the bindings
+that get the new version on their next request. It also shows the variables that the new version
+requires and the old version does not require. Requests that do not send these variables fail to render.
+
+When you move `production` or `prod`, you can enter a name in **Approved by**. The audit log records
+this name with the change.
+
+### Published Status
+
+Labels decide which version a request gets. The API still records a published status for each version,
+but this status does not change the version that requests get. For this reason, the detail page does
+not show the published status.
 
 ## What the Registry Owns
 
@@ -73,10 +128,10 @@ In practice:
 
 This gives operators a stable promotion flow:
 
-1. create a new version
-2. test it
-3. move a label such as `production`
-4. let the bound consumer resolve the new labeled version
+1. Create a new version.
+2. Test it.
+3. Move a label such as `production` to it.
+4. The bound consumer gets the new version on its next request.
 
 ## Validation and Safety
 

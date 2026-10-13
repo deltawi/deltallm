@@ -159,3 +159,10 @@ export function fmtUtcDateTime(value: string | null | undefined): string {
     timeZoneName: 'short',
   });
 }
+
+/** Local calendar day, for example "9 Oct 2026". Returns "Not recorded" for a missing or bad value. */
+export function fmtLocalDay(value: string | null | undefined): string {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'Not recorded';
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}

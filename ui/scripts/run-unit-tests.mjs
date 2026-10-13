@@ -67,6 +67,8 @@ const testSources = [
   'tests/useRoutePolicySimulation.test.ts',
   'tests/mcpApprovals.test.ts',
   'tests/mcpPage.test.tsx',
+  'tests/promptVersions.test.ts',
+  'tests/promptTemplateDetail.test.tsx',
 ];
 
 await rm(outputDir, { recursive: true, force: true });
