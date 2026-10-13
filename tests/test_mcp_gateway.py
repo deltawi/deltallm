@@ -264,19 +264,12 @@ class _FakeApprovalRepository:
         self.records_by_fingerprint: dict[str, list[MCPApprovalRequestRecord]] = {}
         self.create_calls = 0
 
-    async def find_pending_approval_request(self, *, request_fingerprint: str):  # noqa: ANN201
-        records = self.records_by_fingerprint.get(request_fingerprint, [])
-        for record in reversed(records):
-            if record.status == "pending":
-                return record
-        return None
-
     async def expire_stale_approval_requests(self, *, request_fingerprint: str):  # noqa: ANN201
         now = datetime.now(tz=UTC)
         updated = 0
         for record in self.records_by_fingerprint.get(request_fingerprint, []):
             if (
-                record.status in {"pending", "approved", "rejected"}
+                record.status == "pending"
                 and record.expires_at is not None
                 and record.expires_at <= now
             ):
@@ -285,10 +278,29 @@ class _FakeApprovalRepository:
         return updated
 
     async def find_active_approval_request(self, *, request_fingerprint: str):  # noqa: ANN201
+        now = datetime.now(tz=UTC)
         records = self.records_by_fingerprint.get(request_fingerprint, [])
         for record in reversed(records):
-            if record.status in {"pending", "approved", "rejected"}:
+            if (
+                record.status in {"pending", "approved", "rejected"}
+                and record.consumed_at is None
+                and (record.expires_at is None or record.expires_at > now)
+            ):
                 return record
+        return None
+
+    async def consume_approval_request(self, approval_request_id: str):  # noqa: ANN201
+        now = datetime.now(tz=UTC)
+        for records in self.records_by_fingerprint.values():
+            for record in records:
+                if (
+                    record.mcp_approval_request_id == approval_request_id
+                    and record.status == "approved"
+                    and record.consumed_at is None
+                    and (record.expires_at is None or record.expires_at > now)
+                ):
+                    record.consumed_at = now
+                    return record
         return None
 
     async def create_approval_request(self, **kwargs):  # noqa: ANN003, ANN201
@@ -1620,7 +1632,13 @@ async def test_mcp_gateway_manual_approval_creates_pending_request() -> None:
     auth = type(
         "Auth",
         (),
-        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+        {
+            "api_key": "sk-test",
+            "team_id": "team-ops",
+            "organization_id": None,
+            "metadata": None,
+            "owner_account_id": "acct-requester",
+        },
     )()
 
     with pytest.raises(MCPApprovalRequiredError) as exc:
@@ -1634,6 +1652,8 @@ async def test_mcp_gateway_manual_approval_creates_pending_request() -> None:
 
     assert exc.value.approval_request_id == "approval-1"
     assert approval_repo.create_calls == 1
+    created = next(iter(approval_repo.records_by_fingerprint.values()))[-1]
+    assert created.requested_by_account_id == "acct-requester"
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
     assert "deltallm_mcp_approval_request_total" in metrics_text
 
@@ -1852,6 +1872,16 @@ async def test_mcp_gateway_manual_approval_approved_retry_executes() -> None:
 
     assert result.structured_content["tool"] == "search"
     assert transport.calls == [("docs", "search", None, {"query": "hello"})]
+    assert approval_repo.records_by_fingerprint[fingerprint][-1].consumed_at is not None
+
+    # One approval allows one execution: the same call needs a new approval.
+    with pytest.raises(MCPApprovalRequiredError) as exc:
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+        )
+
+    assert exc.value.approval_request_id == "approval-2"
+    assert len(transport.calls) == 1
 
 
 @pytest.mark.asyncio

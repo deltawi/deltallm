@@ -58,6 +58,15 @@ class MCPApprovalService:
         )
         await self.repository.expire_stale_approval_requests(request_fingerprint=fingerprint)
         active = await self.repository.find_active_approval_request(request_fingerprint=fingerprint)
+        if active is not None and active.status == "approved":
+            # One approval allows one execution. A concurrent call that loses
+            # this update gets a new pending request below.
+            consumed = await self.repository.consume_approval_request(
+                active.mcp_approval_request_id
+            )
+            if consumed is not None:
+                return MCPApprovalAuthorization(status="approved", approval_request=consumed)
+            active = None
         if active is not None:
             if active.status == "pending":
                 record_mcp_approval_request(
@@ -81,6 +90,8 @@ class MCPApprovalService:
                 "server_key": server.server_key,
                 "policy_scope_type": policy.scope_type,
                 "policy_scope_id": policy.scope_id,
+                # The admin API uses this to stop a requester approving their own call.
+                "requested_by_account_id": getattr(auth, "owner_account_id", None),
             },
         )
         if created is not None:

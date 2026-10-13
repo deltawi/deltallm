@@ -681,10 +681,12 @@ async def get_mcp_server_operations(
         f"""
         SELECT
             COUNT(*)::int AS total_requests,
-            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_requests,
+            COUNT(*) FILTER (
+                WHERE status = 'pending' AND (expires_at IS NULL OR expires_at > NOW())
+            )::int AS pending_requests,
             COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_requests,
             COUNT(*) FILTER (WHERE status = 'rejected')::int AS rejected_requests
-        FROM deltallm_mcpapprovalrequest
+        FROM deltallm_mcpapprovalrequest r
         WHERE mcp_server_id = $1
           AND created_at >= NOW() - ($2::int * INTERVAL '1 hour')
           {approval_scope_sql}

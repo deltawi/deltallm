@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.mcp.mcp import MCPRepository
+from src.db.mcp.mcp_approvals import (
+    APPROVAL_SELECT_COLUMNS,
+    APPROVAL_STATUS_FILTERS,
+    approval_status_clause,
+    to_approval_request_record,
+)
 from src.mcp.approvals import MCPApprovalService
 from src.mcp.metrics import record_mcp_approval_decision
 from src.middleware.admin import require_admin_permission
@@ -46,12 +51,7 @@ async def list_mcp_approval_requests(
     scope = get_auth_scope(
         request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
     )
-    if status_value is not None and status_value not in {
-        "pending",
-        "approved",
-        "rejected",
-        "expired",
-    }:
+    if status_value is not None and status_value not in APPROVAL_STATUS_FILTERS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="status must be pending, approved, rejected, or expired",
@@ -96,8 +96,7 @@ async def list_mcp_approval_requests(
         params.append(server_id)
         clauses.append(f"r.mcp_server_id = ${len(params)}")
     if status_value:
-        params.append(status_value)
-        clauses.append(f"r.status = ${len(params)}")
+        clauses.append(approval_status_clause(status_value, params))
     clauses.append(f"({_approval_visibility_clause(scope, params)})")
     where_sql = f" WHERE {' AND '.join(clauses)}"
 
@@ -110,27 +109,7 @@ async def list_mcp_approval_requests(
     page_params = [*params, limit, offset]
     rows = await db.query_raw(
         f"""
-        SELECT
-            r.mcp_approval_request_id,
-            r.mcp_server_id,
-            r.tool_name,
-            r.scope_type,
-            r.scope_id,
-            r.status,
-            r.request_fingerprint,
-            r.requested_by_api_key,
-            r.requested_by_user,
-            r.organization_id,
-            r.request_id,
-            r.correlation_id,
-            r.arguments_json,
-            r.decision_comment,
-            r.decided_by_account_id,
-            r.decided_at,
-            r.expires_at,
-            r.metadata,
-            r.created_at,
-            r.updated_at
+        SELECT {APPROVAL_SELECT_COLUMNS}
         FROM deltallm_mcpapprovalrequest r
         {where_sql}
         ORDER BY r.created_at DESC, r.mcp_approval_request_id ASC
@@ -138,7 +117,7 @@ async def list_mcp_approval_requests(
         """,
         *page_params,
     )
-    approvals = [MCPRepository._to_approval_request_record(row) for row in rows]
+    approvals = [to_approval_request_record(row) for row in rows]
     servers = await _load_server_summary_map(request, [item.mcp_server_id for item in approvals])
     return {
         "data": [
@@ -185,11 +164,26 @@ async def decide_mcp_approval_request(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
         )
+    if existing.status == "expired":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MCP approval request has expired. The caller must send the call again.",
+        )
     context = get_platform_auth_context(request)
+    decider_account_id = getattr(context, "account_id", None)
+    if (
+        decision == "approved"
+        and decider_account_id
+        and decider_account_id == existing.requested_by_account_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot approve an MCP tool call that you requested",
+        )
     decided = await repository.decide_approval_request(
         approval_request_id,
         status=decision,
-        decided_by_account_id=getattr(context, "account_id", None),
+        decided_by_account_id=decider_account_id,
         decision_comment=str(payload.get("decision_comment")).strip()
         if payload.get("decision_comment") is not None
         else None,

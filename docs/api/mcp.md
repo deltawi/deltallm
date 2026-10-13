@@ -122,6 +122,23 @@ Common codes:
 | `-32029` | Tool rate limited |
 | `-32030` | Tool execution timed out |
 
+### Manual approval
+
+When a tool policy has `require_approval: manual`, a `tools/call` does not run the tool immediately.
+
+1. DeltaLLM creates an approval request and returns error `-32008`. The error `data.approval_request_id` field contains the request ID.
+2. An operator approves or rejects the request in the Admin UI or with the admin API.
+3. The caller sends the identical call again: the same API key, tool, arguments, and forwarded headers.
+4. If the request is approved, DeltaLLM runs the tool one time. If the request is rejected, DeltaLLM returns error `-32009` with the same `approval_request_id`.
+
+Rules:
+
+- One approval allows one execution. A second identical call creates a new approval request.
+- An approval stays usable for 15 minutes after the decision. After that time, the next identical call creates a new request.
+- A rejection applies to identical calls for 15 minutes.
+- A pending request expires after 24 hours if nobody decides it. An expired request cannot be approved.
+- DeltaLLM uses the approval before it calls the upstream server. If the upstream call then fails, the caller must get a new approval.
+
 ## Chat and Responses Tool Bridge
 
 DeltaLLM accepts MCP tool definitions inside OpenAI-compatible requests.
@@ -186,7 +203,7 @@ curl http://localhost:8000/v1/responses \
 
 - streaming chat requests do not support MCP tools yet
 - streaming responses requests do not support MCP tools yet
-- manual-approval tools are not auto-executed in chat or responses flows
+- chat and responses requests do not support manual approval. If a tool that the request can use requires manual approval, DeltaLLM rejects the full request with HTTP `400`. Use `allowed_tools` to remove that tool from the request, or call the tool through `/mcp`
 - the upstream model/provider must support tool calling well enough for the bridge to work reliably
 
 ## Admin MCP Endpoints
@@ -200,7 +217,7 @@ These endpoints back the MCP pages in the Admin UI.
 | `GET` | `/ui/api/mcp-servers` | List servers visible to the admin scope |
 | `POST` | `/ui/api/mcp-servers` | Create a server |
 | `GET` | `/ui/api/mcp-servers/{server_id}` | Get one server with visible tools, bindings, and policies |
-| `GET` | `/ui/api/mcp-servers/{server_id}/operations` | Read recent usage, failures, and approvals |
+| `GET` | `/ui/api/mcp-servers/{server_id}/operations` | Read recent usage, failures, and approval counts |
 | `PATCH` | `/ui/api/mcp-servers/{server_id}` | Update a server |
 | `DELETE` | `/ui/api/mcp-servers/{server_id}` | Delete a server |
 | `POST` | `/ui/api/mcp-servers/{server_id}/refresh-capabilities` | Refresh upstream tools |
@@ -239,6 +256,23 @@ Policy fields include:
 | --- | --- | --- |
 | `GET` | `/ui/api/mcp-approval-requests` | List approval requests |
 | `POST` | `/ui/api/mcp-approval-requests/{approval_request_id}/decision` | Approve or reject a pending request |
+
+`GET /ui/api/mcp-approval-requests` accepts these query parameters:
+
+| Parameter | Description |
+| --- | --- |
+| `server_id` | Show only requests for this MCP server |
+| `status` | `pending`, `approved`, `rejected`, or `expired`. A pending request that is past its expiry time shows as `expired` |
+| `limit` | Page size, from 1 to 500. The default is 100 |
+| `offset` | Number of rows to skip |
+
+Each request contains `consumed_at`. It is set when an approved request was used for its one execution.
+
+The decision body is `{"status": "approved" | "rejected", "decision_comment": "optional text"}`. The decision endpoint returns:
+
+- `403` if the account that decides the request is the owner of the API key that made the call. Another operator must approve it. The requester can reject their own request.
+- `404` if the request is not pending, for example because somebody decided it already.
+- `409` if the pending request expired.
 
 ## Example Admin Payloads
 
