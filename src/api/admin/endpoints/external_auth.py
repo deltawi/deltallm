@@ -268,13 +268,10 @@ async def list_binding_teams(
     after: str | None = Query(None, max_length=200),
     limit: int = Query(50, ge=1, le=100),
 ) -> dict[str, object]:
-    rows = await external_runtime(request).teams.list_teams(
-        binding_id, after=after, limit=limit + 1
+    items, next_cursor = await external_runtime(request).teams.list_teams(
+        binding_id, after=after, limit=limit
     )
-    attached = [row for row in rows if not row.is_default]
-    more = len(attached) > limit
-    items = rows[: len(rows) - 1] if more else rows
-    return {"items": items, "next_cursor": items[-1].team_id if more else None}
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @router.put(
