@@ -91,3 +91,9 @@ During code rollback, keep the added columns, indexes, and compatibility trigger
 Their removal while older and newer writers run together can permanently lose owner attribution.
 
 Historical spend rows whose owner was not recorded remain unattributed. Do not backfill them from current API-key ownership because keys can be transferred or deleted after the request occurred.
+
+## Time filters on the spend read view
+
+Usage reports and request logs read `deltallm_spend_read_events_v2`. This view joins native accounting rows (`timestamptz`) and legacy spend rows (`timestamp`, stored as UTC). Migration `20261013090000_spend_read_view_utc_times` converts the legacy times as UTC. Both branches then have the same type, so PostgreSQL applies the time range and the sort limit in each branch and uses the time indexes of the native table. Before this migration, a request log page read the full organization or team history. The legacy times also depended on the session time zone.
+
+The migration replaces only the view definition. It keeps the column names and types and does not touch table data. A code rollback can keep the new view.
