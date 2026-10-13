@@ -22,6 +22,7 @@ organization or bypass an endpoint permission.
 | Teams | Platform administrator or `team.read` | Changes require the relevant organization or team permission | [Accounts and access](../concepts/tenancy-and-access.md) |
 | People and permissions | Platform administrator | Accounts, invitations, and memberships affect platform access | [Authentication](../features/authentication.md) |
 | Usage and spending | Platform administrator or an enabled spending-reader role | Reports are limited to platform, organization, team, or personal scope | [Budgets and spending](../features/budgets.md) |
+| Workspace request logs | External customer session with `spend.read.self` | Rows are limited to the session's organization and selected team | [Administration API](../api/admin.md#workspace-request-logs) |
 | Audit logs | Platform administrator or `audit.read` | Results are limited to authorized scope | [Audit records](../features/audit-log.md) |
 | Batch jobs | Platform administrator or `key.read` | Cancel, retry, and replay require update access in the batch's scope | [Batch processing](../features/batching.md) |
 | Guardrails | Platform administrator | Definitions and assignments are platform administration actions | [Guardrails](../features/guardrails.md) |
