@@ -71,6 +71,18 @@ function setStoredMfaSkip(value: boolean) {
   }
 }
 
+const SESSION_DEADLINE_FIELDS = new Set(['expires_at', 'idle_expires_at', 'server_time']);
+
+function sameSessionIgnoringDeadlines(current: SessionInfo | null, next: SessionInfo): boolean {
+  if (!current) return false;
+  const stable = (session: SessionInfo) => JSON.stringify(
+    Object.entries(session)
+      .filter(([key]) => !SESSION_DEADLINE_FIELDS.has(key))
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  return stable(current) === stable(next);
+}
+
 function authenticatedState(session: SessionInfo): AuthState {
   return {
     status: 'authenticated',
@@ -110,7 +122,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [idleWarningDeadline, setIdleWarningDeadline] = useState<number | null>(null);
   const [idleTimeoutMs, setIdleTimeoutMs] = useState<number | null>(null);
   const clockRef = useRef<SessionClock | null>(null);
-  const verifyInFlightRef = useRef<Promise<void> | null>(null);
+  const verifyInFlightRef = useRef<{ promise: Promise<void>; renew: boolean } | null>(null);
   const lastVerifyAtRef = useRef(0);
   const lastInteractionAtRef = useRef(0);
 
@@ -156,7 +168,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Re-check the session without the loading screen. `renew` counts the check as activity.
   const verifySession = useCallback((renew = false): Promise<void> => {
-    if (verifyInFlightRef.current) return verifyInFlightRef.current;
+    const inFlight = verifyInFlightRef.current;
+    if (inFlight) {
+      // A background check cannot stand in for a renewal; renew once it settles.
+      return inFlight.renew || !renew ? inFlight.promise : inFlight.promise.then(() => verifySession(true));
+    }
     const attempt = sessionAttemptRef.current;
     lastVerifyAtRef.current = Date.now();
     const run = (async () => {
@@ -173,14 +189,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (sessionAttemptRef.current !== attempt || logoutInFlightRef.current) return;
       if (next.authenticated) {
         rememberSession(next);
-        setState(authenticatedState(next));
+        // Keep the same session object when only deadlines moved, so effects keyed on it
+        // (unsaved forms, pending saves) are not reset by a routine check.
+        setState((current) => (
+          current.status === 'authenticated' && sameSessionIgnoringDeadlines(current.session, next)
+            ? current
+            : authenticatedState(next)
+        ));
       } else {
         endSessionLocally();
       }
     })().finally(() => {
       verifyInFlightRef.current = null;
     });
-    verifyInFlightRef.current = run;
+    verifyInFlightRef.current = { promise: run, renew };
     return run;
   }, [endSessionLocally, rememberSession]);
 

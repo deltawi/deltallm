@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from src.db.identity.platform_accounts import PlatformAccountDatabase
+from src.services.identity.session_activity import nonnegative_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,18 +39,9 @@ class PlatformSessionRecord:
             mfa_verified=row.get("mfa_verified") is True,
             force_password_change=row.get("force_password_change") is True,
             expires_at=expiry.astimezone(UTC),
-            idle_seconds=_optional_seconds(row.get("idle_seconds")),
-            remaining_seconds=_optional_seconds(row.get("remaining_seconds")),
+            idle_seconds=nonnegative_seconds(row.get("idle_seconds")),
+            remaining_seconds=nonnegative_seconds(row.get("remaining_seconds")),
         )
-
-
-def _optional_seconds(value: object) -> float | None:
-    if value is None:
-        return None
-    try:
-        return max(0.0, float(value))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
 
 
 @dataclass(frozen=True, slots=True)

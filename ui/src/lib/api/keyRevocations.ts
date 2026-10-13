@@ -1,4 +1,5 @@
 import { apiFetch } from './transport';
+import { backgroundRequestHeaders } from '../sessionActivity';
 
 export interface KeyRemovalResult {
   enforcement?: 'enforced' | 'pending';
@@ -7,5 +8,9 @@ export interface KeyRemovalResult {
 }
 
 export function keyRevocationStatus(id: string, signal?: AbortSignal): Promise<KeyRemovalResult> {
-  return apiFetch(`/ui/api/key-revocations/${encodeURIComponent(id)}`, { signal });
+  // Only ever polled, so it must not keep an idle session signed in.
+  return apiFetch(`/ui/api/key-revocations/${encodeURIComponent(id)}`, {
+    signal,
+    headers: backgroundRequestHeaders(),
+  });
 }

@@ -164,6 +164,5 @@ async def test_master_session_idle_timeout_renewal_and_background_checks(session
     expired = await service.check_session(token, master_key="mk-idle", idle_timeout_seconds=IDLE)
     assert expired.status == MasterSessionStatus.INVALID
     assert (
-        await service.validate_session(token, master_key="mk-idle", idle_timeout_seconds=0)
-        == MasterSessionStatus.ACTIVE
-    )
+        await service.check_session(token, master_key="mk-idle", idle_timeout_seconds=0)
+    ).status == MasterSessionStatus.ACTIVE

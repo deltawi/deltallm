@@ -48,7 +48,10 @@ from src.api.auth_sessions import (
     router as session_router,
 )  # Compatibility export.
 from src.services.identity.sso_state_store import SSOStateStoreError
-from src.services.identity.session_activity import master_session_ttl_seconds
+from src.services.identity.session_activity import (
+    master_session_ttl_seconds,
+    session_ttl_seconds,
+)
 from src.services.identity.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
     MasterSessionStoreUnavailable,
@@ -569,10 +572,7 @@ async def internal_login(request: Request, payload: InternalLoginRequest) -> Res
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials or MFA code"
             )
 
-        ttl_hours = getattr(
-            getattr(request.app.state, "app_config", None), "general_settings", None
-        )
-        ttl = int(getattr(ttl_hours, "auth_session_ttl_hours", 12) * 3600)
+        ttl = session_ttl_seconds(request)
 
         response = JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -1035,10 +1035,7 @@ async def accept_invitation(request: Request, payload: InvitationAcceptRequest) 
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation is invalid or expired"
             )
 
-        ttl_hours = getattr(
-            getattr(request.app.state, "app_config", None), "general_settings", None
-        )
-        ttl = int(getattr(ttl_hours, "auth_session_ttl_hours", 12) * 3600)
+        ttl = session_ttl_seconds(request)
         response_payload = InvitationAcceptResponse(
             accepted=True,
             session_established=login.session_established,
@@ -1508,7 +1505,7 @@ async def auth_callback(
                 detail="Failed to establish session",
             )
 
-        ttl = int(getattr(general_settings, "auth_session_ttl_hours", 12) * 3600)
+        ttl = session_ttl_seconds(request)
 
         return_to = _safe_return_to(login_state.return_to)
         response = RedirectResponse(url=return_to, status_code=302)

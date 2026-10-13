@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import Request
@@ -33,3 +34,29 @@ def master_session_ttl_seconds(request: Request) -> int:
 def idle_timeout_seconds(request: Request) -> int:
     minutes = getattr(_general_settings(request), "auth_session_idle_timeout_minutes", 0)
     return max(0, int(minutes or 0)) * 60
+
+
+def nonnegative_seconds(value: object) -> float | None:
+    """Parse a duration the database computed; None when it is missing or unreadable."""
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def idle_expiry(
+    *,
+    now: datetime,
+    idle_timeout_seconds: int,
+    idle_seconds: float | None,
+    renewed: bool,
+    expires_at: datetime | None,
+) -> datetime | None:
+    """When an idle session ends, never later than its hard cap; None when idle is off."""
+    if not idle_timeout_seconds:
+        return None
+    unused = 0.0 if renewed or idle_seconds is None else idle_seconds
+    idle_expires_at = now + timedelta(seconds=idle_timeout_seconds - unused)
+    return idle_expires_at if expires_at is None else min(idle_expires_at, expires_at)

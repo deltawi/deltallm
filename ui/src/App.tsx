@@ -194,15 +194,15 @@ function AppRoutes() {
   const loginReturnTo = returnToFromSearch(location.search, defaultRoute);
 
   if (authMode === 'session' && session?.mfa_enabled && !session?.mfa_verified) {
-    return <MFAVerify />;
+    return <><IdleSessionWarning /><MFAVerify /></>;
   }
 
   if (authMode === 'session' && session?.force_password_change) {
-    return <ForcePasswordChange />;
+    return <><IdleSessionWarning /><ForcePasswordChange /></>;
   }
 
   if (authMode === 'session' && session?.mfa_prompt && !session?.mfa_enabled && !mfaSkipped) {
-    return <MFAEnrollment />;
+    return <><IdleSessionWarning /><MFAEnrollment /></>;
   }
 
   return (

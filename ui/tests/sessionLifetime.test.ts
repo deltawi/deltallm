@@ -119,3 +119,19 @@ test('only foreground requests count as session activity', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('server errors do not count as session activity', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ detail: 'Authentication service unavailable' }), {
+    status: 503,
+    headers: { 'content-type': 'application/json' },
+  })) as typeof fetch;
+  try {
+    const before = lastSessionActivityAt();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await assert.rejects(apiFetch('/ui/api/models'));
+    assert.equal(lastSessionActivityAt(), before);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

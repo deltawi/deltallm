@@ -515,6 +515,10 @@ export default function Usage() {
   }, [activeView, backgroundRefresh, forceReportingRefresh, markReportingOutcome, pageVisible, rangeRequestKey, refreshNonce, reportingGeneration, reportingV2Enabled, selectedRange, tab, usageScopeReady]);
 
   useEffect(() => {
+    // Track the nonce even when this effect skips, so a later fetch the user causes
+    // (opening the Logs tab) is not mistaken for an auto-refresh.
+    const logsRefreshTriggered = logsRefreshNonceRef.current !== refreshNonce;
+    logsRefreshNonceRef.current = refreshNonce;
     if (
       !pageVisible
       || tab !== 'logs'
@@ -542,8 +546,6 @@ export default function Usage() {
       setLogsError(null);
     });
 
-    const logsRefreshTriggered = logsRefreshNonceRef.current !== refreshNonce;
-    logsRefreshNonceRef.current = refreshNonce;
     void spend.logs(
       logsParams,
       reportingRequestInit(controller.signal, false, backgroundRefresh && logsRefreshTriggered),

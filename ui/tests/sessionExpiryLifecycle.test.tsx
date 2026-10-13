@@ -132,3 +132,44 @@ test('signing in again clears the sign-out reason', async () => {
     assert.equal(auth().signedOutReason, null);
   } finally { await view.close(); }
 });
+
+test('a renewal requested during a background check still renews', async () => {
+  const view = browser();
+  try {
+    let releaseBackground!: () => void;
+    let meCalls = 0;
+    const { calls, auth } = await mount(view, ({ background }) => {
+      meCalls += 1;
+      if (meCalls === 2 && background) {
+        return new Promise<Response>((resolve) => { releaseBackground = () => resolve(json(session)); });
+      }
+      return json(session);
+    });
+    let renewal!: Promise<void>;
+    await act(async () => {
+      view.dom.window.dispatchEvent(new view.dom.window.Event('focus'));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      renewal = auth().staySignedIn();
+    });
+    await act(async () => { releaseBackground(); await renewal; });
+    assert.deepEqual(calls.map((call) => call.background), [false, true, false]);
+  } finally { await view.close(); }
+});
+
+test('a routine check keeps the same session object when only deadlines move', async () => {
+  const view = browser();
+  try {
+    let meCalls = 0;
+    const { auth } = await mount(view, () => {
+      meCalls += 1;
+      return json(meCalls === 1 ? session : { ...session, idle_expires_at: '2030-10-06T01:30:00Z', server_time: '2030-10-06T00:30:00Z' });
+    });
+    const before = auth().session;
+    await act(async () => {
+      view.dom.window.dispatchEvent(new view.dom.window.Event('focus'));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.equal(meCalls, 2);
+    assert.equal(auth().session, before);
+  } finally { await view.close(); }
+});

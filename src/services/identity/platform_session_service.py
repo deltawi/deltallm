@@ -11,7 +11,10 @@ from src.auth.external_policy import EXTERNAL_SESSION_PREFIX
 from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole
 from src.db.identity.platform_sessions import PlatformSessionRepository
 from src.models.platform_auth import PlatformAuthContext
-from src.services.identity.session_activity import LAST_SEEN_WRITE_INTERVAL_SECONDS
+from src.services.identity.session_activity import (
+    LAST_SEEN_WRITE_INTERVAL_SECONDS,
+    idle_expiry,
+)
 
 
 class ExternalSessionResolver(Protocol):
@@ -83,12 +86,13 @@ class PlatformSessionService:
             if row.remaining_seconds is not None
             else row.expires_at
         )
-        idle_expires_at = None
-        if idle_timeout_seconds:
-            idle_seconds = 0.0 if renewed or row.idle_seconds is None else row.idle_seconds
-            idle_expires_at = min(
-                expires_at, now + timedelta(seconds=idle_timeout_seconds - idle_seconds)
-            )
+        idle_expires_at = idle_expiry(
+            now=now,
+            idle_timeout_seconds=idle_timeout_seconds,
+            idle_seconds=row.idle_seconds,
+            renewed=renewed,
+            expires_at=expires_at,
+        )
         role = PlatformRole.ADMIN if row.role == "platform_co_admin" else row.role
         organizations = await self.repository.organization_memberships(row.account_id)
         teams = await self.repository.team_memberships(row.account_id)

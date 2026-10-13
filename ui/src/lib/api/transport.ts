@@ -95,7 +95,8 @@ export async function apiFetch<T>(
 
   if (response.status === 401) {
     if (!isSessionNeutralPath(path)) notifySessionRejected();
-  } else if (!isBackgroundRequest(new Headers(headers))) {
+  } else if (response.status < 500 && !isBackgroundRequest(new Headers(headers))) {
+    // A 5xx (such as the session store being unavailable) may not have renewed anything.
     markSessionActivity();
   }
 

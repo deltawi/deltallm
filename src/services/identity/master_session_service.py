@@ -8,7 +8,11 @@ import hmac
 import secrets
 from typing import Any
 
-from src.services.identity.session_activity import LAST_SEEN_WRITE_INTERVAL_SECONDS
+from src.services.identity.session_activity import (
+    LAST_SEEN_WRITE_INTERVAL_SECONDS,
+    idle_expiry,
+    nonnegative_seconds,
+)
 
 
 MASTER_SESSION_COOKIE_NAME = "deltallm_master_session"
@@ -32,15 +36,6 @@ class MasterSessionCheck:
     status: MasterSessionStatus
     expires_at: datetime | None = None
     idle_expires_at: datetime | None = None
-
-
-def _seconds(value: object) -> float | None:
-    if value is None:
-        return None
-    try:
-        return max(0.0, float(value))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
 
 
 class MasterSessionService:
@@ -77,22 +72,6 @@ class MasterSessionService:
         except Exception as exc:
             raise MasterSessionStoreUnavailable("failed to create master session") from exc
         return token
-
-    async def validate_session(
-        self,
-        token: str | None,
-        *,
-        master_key: str | None,
-        idle_timeout_seconds: int = 0,
-        renew: bool = True,
-    ) -> MasterSessionStatus:
-        check = await self.check_session(
-            token,
-            master_key=master_key,
-            idle_timeout_seconds=idle_timeout_seconds,
-            renew=renew,
-        )
-        return check.status
 
     async def check_session(
         self,
@@ -157,14 +136,15 @@ class MasterSessionService:
             return MasterSessionCheck(MasterSessionStatus.INVALID)
         row = rows[0]
         now = datetime.now(UTC)
-        remaining = _seconds(row.get("remaining_seconds"))
+        remaining = nonnegative_seconds(row.get("remaining_seconds"))
         expires_at = now + timedelta(seconds=remaining) if remaining is not None else None
-        idle_expires_at = None
-        if idle_timeout_seconds:
-            idle = 0.0 if row.get("renewed") else (_seconds(row.get("idle_seconds")) or 0.0)
-            idle_expires_at = now + timedelta(seconds=idle_timeout_seconds - idle)
-            if expires_at is not None:
-                idle_expires_at = min(idle_expires_at, expires_at)
+        idle_expires_at = idle_expiry(
+            now=now,
+            idle_timeout_seconds=idle_timeout_seconds,
+            idle_seconds=nonnegative_seconds(row.get("idle_seconds")),
+            renewed=bool(row.get("renewed")),
+            expires_at=expires_at,
+        )
         return MasterSessionCheck(MasterSessionStatus.ACTIVE, expires_at, idle_expires_at)
 
     async def revoke_session(self, token: str | None) -> None:
