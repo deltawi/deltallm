@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import clsx from 'clsx';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'success' | 'danger' | 'ghost' | 'link';
+export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'success' | 'danger' | 'ghost' | 'link';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -15,6 +15,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 const variantClasses: Record<ButtonVariant, string> = {
   primary: 'border-transparent bg-brand-primary text-brand-on-primary hover:bg-brand-primary-hover',
   secondary: 'border-brand-secondary bg-white text-brand-secondary-ink hover:bg-brand-secondary-soft',
+  outline: 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 hover:text-gray-900',
   success: 'border-transparent bg-emerald-600 text-white hover:bg-emerald-700',
   danger: 'border-transparent bg-red-600 text-white hover:bg-red-700',
   ghost: 'border-transparent bg-transparent text-gray-600 hover:bg-gray-100 hover:text-gray-900',

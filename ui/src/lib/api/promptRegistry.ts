@@ -74,6 +74,40 @@ export interface PromptResolutionCandidate {
   [key: string]: unknown;
 }
 
+export interface PromptVersionCreateInput {
+  template_body: Record<string, unknown>;
+  variables_schema: Record<string, unknown>;
+  model_hints: Record<string, unknown>;
+  route_preferences: Record<string, unknown>;
+}
+
+export interface PromptLabelAssignInput {
+  label: string;
+  version: number;
+  require_approval?: boolean;
+  approved_by?: string | null;
+}
+
+export type PromptRenderInput = {
+  template_key: string;
+  variables: Record<string, unknown>;
+} & ({ label: string } | { version: number });
+
+export interface PromptRenderMessage {
+  role: string;
+  content: unknown;
+  [key: string]: unknown;
+}
+
+export interface PromptRenderResult {
+  template_key: string;
+  version: number;
+  label: string | null;
+  rendered_prompt: unknown;
+  messages: PromptRenderMessage[];
+  [key: string]: unknown;
+}
+
 export type PromptListSortKey = 'name' | 'versions' | 'labels' | 'bindings' | 'created_by' | 'updated_at' | 'visibility';
 
 export const promptRegistry = {
@@ -89,7 +123,7 @@ export const promptRegistry = {
     apiFetch<PromptTemplate>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'PUT', json: payload }),
   deleteTemplate: (templateKey: string) =>
     apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'DELETE' }),
-  createVersion: (templateKey: string, payload: object) =>
+  createVersion: (templateKey: string, payload: PromptVersionCreateInput) =>
     apiFetch<PromptVersion>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/versions`, { method: 'POST', json: payload }),
   publishVersion: (templateKey: string, version: number) =>
     apiFetch<PromptVersion>(
@@ -98,7 +132,7 @@ export const promptRegistry = {
     ),
   listLabels: (templateKey: string) =>
     apiFetch<PromptLabel[]>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`),
-  assignLabel: (templateKey: string, payload: object) =>
+  assignLabel: (templateKey: string, payload: PromptLabelAssignInput) =>
     apiFetch<PromptLabel>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`, { method: 'POST', json: payload }),
   deleteLabel: (templateKey: string, label: string) =>
     apiFetch<{ deleted: boolean }>(
@@ -111,8 +145,8 @@ export const promptRegistry = {
     apiFetch<PromptBinding>('/ui/api/prompt-registry/bindings', { method: 'POST', json: payload, signal }),
   deleteBinding: (bindingId: string, signal?: AbortSignal) =>
     apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE', signal }),
-  dryRunRender: (payload: object) =>
-    apiFetch<Record<string, unknown>>('/ui/api/prompt-registry/render', { method: 'POST', json: payload }),
+  dryRunRender: (payload: PromptRenderInput, signal?: AbortSignal) =>
+    apiFetch<PromptRenderResult>('/ui/api/prompt-registry/render', { method: 'POST', json: payload, signal }),
   previewResolution: (payload: object, signal?: AbortSignal) =>
     apiFetch<{
       winner: PromptResolutionCandidate | null;

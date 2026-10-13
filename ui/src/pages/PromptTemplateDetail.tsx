@@ -1,439 +1,304 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Trash2 } from 'lucide-react';
-import Card from '../components/Card';
+import { ArrowLeft, FilePlus2, FileText, FlaskConical, History, Link2, Settings } from 'lucide-react';
+import Button from '../components/Button';
 import ConfirmDialog from '../components/ConfirmDialog';
 import JourneyChecklist from '../components/JourneyChecklist';
-import ManagedAssetAccessPanel from '../components/ManagedAssetAccessPanel';
 import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
-import { promptRegistry } from '../lib/api';
-import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
-import PromptVersionComposerCard from '../components/prompt-registry/PromptVersionComposerCard';
-import PromptRolloutCard from '../components/prompt-registry/PromptRolloutCard';
-import PromptTestingCard from '../components/prompt-registry/PromptTestingCard';
-import PromptHistoryCard from '../components/prompt-registry/PromptHistoryCard';
-import { RecordDetailShell } from '../components/admin/shells';
-import { useBranding } from '../lib/brandingContext';
-import { DEFAULT_BRANDING } from '../lib/branding';
+import { IconTabs, RecordDetailShell } from '../components/admin/shells';
+import { CopyIdentifier, CreatedBy } from '../components/admin/lists/AssetListCells';
+import PromptLabelCards from '../components/prompt-registry/PromptLabelCards';
+import PromptLabelDialog, { type PromptLabelDialogStart, type PromptLabelMove } from '../components/prompt-registry/PromptLabelDialog';
+import PromptOverviewTab from '../components/prompt-registry/PromptOverviewTab';
+import PromptSettingsTab, { type PromptTemplateDetailsForm } from '../components/prompt-registry/PromptSettingsTab';
+import PromptTestTab from '../components/prompt-registry/PromptTestTab';
+import PromptUsageTab from '../components/prompt-registry/PromptUsageTab';
+import PromptVersionEditor from '../components/prompt-registry/PromptVersionEditor';
+import PromptVersionsTab from '../components/prompt-registry/PromptVersionsTab';
+import { promptRegistry, type PromptLabel, type PromptVersionCreateInput } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
+import { useBranding } from '../lib/brandingContext';
+import { fmtLocalDay } from '../lib/format';
+import { useApi } from '../lib/hooks';
+import { bindingsForLabel, latestVersion, PRODUCTION_LABEL, resolveReference, sortLabels, type PromptReference } from '../lib/promptVersions';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
-const DEFAULT_RENDER_VARIABLES = JSON.stringify({ product_name: DEFAULT_BRANDING.instance_name }, null, 2);
+type TabId = 'prompt' | 'versions' | 'test' | 'usage' | 'settings';
+type Busy = 'version' | 'label' | 'remove' | 'details' | 'delete' | null;
 
-function parseJsonObject(value: string, fieldName: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`${fieldName} must be a JSON object`);
-    }
-    return parsed as Record<string, unknown>;
-  } catch (error: any) {
-    throw new Error(error?.message || `Invalid JSON in ${fieldName}`);
-  }
-}
-
-function buildTemplateBody(systemPrompt: string): Record<string, unknown> {
-  return {
-    messages: [
-      {
-        role: 'system',
-        content: systemPrompt.trim(),
-      },
-    ],
-  };
-}
-
-function buildVariablesSchema(rawVariables: string): Record<string, unknown> {
-  const variables = rawVariables
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const properties = Object.fromEntries(variables.map((name) => [name, { type: 'string' }]));
-  return {
-    type: 'object',
-    required: variables,
-    properties,
-    additionalProperties: true,
-  };
+function errorText(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 export default function PromptTemplateDetail() {
-  const { branding } = useBranding();
   const { templateKey } = useParams<{ templateKey: string }>();
+  // A new key starts a fresh page state, so tabs and dialogs never carry over between prompts.
+  return templateKey ? <PromptTemplateDetailView key={templateKey} templateKey={templateKey} /> : null;
+}
+
+function PromptTemplateDetailView({ templateKey }: { templateKey: string }) {
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const { branding } = useBranding();
   const { session, authMode } = useAuth();
   const isPlatformAdmin = isPlatformAdminSession(authMode, session);
-  const { teamOptions, organizationOptions, loading: audiencesLoading, error: audiencesError, refetch: refetchAudiences } = useManagedAssetAudienceOptions(
-    session,
-    isPlatformAdmin,
-  );
-  const detail = useApi(() => promptRegistry.getTemplate(templateKey!), [templateKey]);
-  const [savingTemplate, setSavingTemplate] = useState(false);
-  const [creatingVersion, setCreatingVersion] = useState(false);
-  const [assigningLabel, setAssigningLabel] = useState(false);
-  const [publishingVersion, setPublishingVersion] = useState<number | null>(null);
-  const [deletingTemplate, setDeletingTemplate] = useState(false);
-  const [confirmDeleteTemplate, setConfirmDeleteTemplate] = useState(false);
-  const [templateForm, setTemplateForm] = useState({ name: '', description: '', owner_scope: '' });
-  const [versionForm, setVersionForm] = useState({
-    system_prompt: 'You are a helpful assistant for {product_name}.',
-    variables: 'product_name',
-    model_hints: '{\n  "preferred_mode": "chat"\n}',
-    route_preferences: '{}',
-    publish: false,
-  });
-  const [labelForm, setLabelForm] = useState({ label: 'production', version: '', require_approval: false, approved_by: '' });
-  const [renderForm, setRenderForm] = useState({
-    label: 'production',
-    version: '',
-    variables: DEFAULT_RENDER_VARIABLES,
-  });
-  const [renderResult, setRenderResult] = useState<any>(null);
-  const [rendering, setRendering] = useState(false);
-  const [diffLeftVersion, setDiffLeftVersion] = useState('');
-  const [diffRightVersion, setDiffRightVersion] = useState('');
+  const audiences = useManagedAssetAudienceOptions(session, isPlatformAdmin);
+  const detail = useApi((signal) => promptRegistry.getTemplate(templateKey, signal), [templateKey]);
 
-  const template = detail.data?.template;
-  const versions = detail.data?.versions || [];
-  const labels = detail.data?.labels || [];
+  const [tab, setTab] = useState<TabId>('prompt');
+  const [viewRef, setViewRef] = useState<PromptReference | null>(null);
+  const [testRef, setTestRef] = useState<PromptReference | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [compareWith, setCompareWith] = useState<number | null | undefined>(undefined);
+  const [editorBase, setEditorBase] = useState<number | null | undefined>(undefined);
+  const [labelDialog, setLabelDialog] = useState<PromptLabelDialogStart | null>(null);
+  const [labelToRemove, setLabelToRemove] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState<Busy>(null);
+
+  const template = detail.data?.template ?? null;
+  const versions = useMemo(() => [...(detail.data?.versions ?? [])].sort((a, b) => b.version - a.version), [detail.data]);
+  const labels = useMemo(() => sortLabels(detail.data?.labels ?? []), [detail.data]);
+  const bindings = useMemo(() => detail.data?.bindings ?? [], [detail.data]);
+  const latest = latestVersion(versions);
+  const production = labels.find((label) => label.label === PRODUCTION_LABEL) ?? null;
+  const defaultRef: PromptReference = labels[0] ? { label: labels[0].label } : { version: latest?.version ?? 0 };
+  const shownRef = viewRef && resolveReference(viewRef, versions, labels) ? viewRef : defaultRef;
+  const testedRef = testRef && resolveReference(testRef, versions, labels) ? testRef : defaultRef;
+  const selected = versions.find((item) => item.version === selectedVersion)?.version ?? latest?.version ?? 0;
+  const compared = compareWith === undefined ? versions.find((item) => item.version < selected)?.version ?? null : compareWith;
+  const targetOptions = { teamOptions: audiences.teamOptions, organizationOptions: audiences.organizationOptions };
   const canWrite = !template?.access || Boolean(template.access.capabilities.write);
   const canDelete = !template?.access || Boolean(template.access.capabilities.delete);
 
-  useEffect(() => {
-    setRenderForm((current) => current.variables === DEFAULT_RENDER_VARIABLES
-      ? { ...current, variables: JSON.stringify({ product_name: branding.instance_name }, null, 2) }
-      : current);
-  }, [branding.instance_name]);
-
-  useEffect(() => {
-    if (!template) return;
-    setTemplateForm({
-      name: template.name || '',
-      description: template.description || '',
-      owner_scope: template.owner_scope || '',
-    });
-  }, [template]);
-
-  if (detail.loading) {
+  if (!template) {
+    if (detail.loading || (!detail.data && !detail.error)) {
+      return <div className="flex min-h-[300px] items-center justify-center p-6"><div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" role="status" aria-label="Loading prompt" /></div>;
+    }
     return (
-      <div className="p-6 flex items-center justify-center min-h-[300px]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
+      <div className="space-y-4 p-6">
+        <button onClick={() => navigate('/prompts')} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700"><ArrowLeft className="h-4 w-4" /> Back to Prompt Registry</button>
+        <p role="alert" className="text-sm text-gray-600">{errorText(detail.error, 'Prompt template not found.')}</p>
       </div>
     );
   }
 
-  if (!templateKey || !template) {
-    return (
-      <div className="p-6">
-        <button onClick={() => navigate('/prompts')} className="mb-4 flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft className="w-4 h-4" /> Back to Prompt Registry
-        </button>
-        <p className="text-sm text-gray-500">Prompt template not found.</p>
-      </div>
-    );
-  }
-
-  const checklistSteps = [
-    { label: 'Create version', done: versions.length > 0, hint: 'A template shell does nothing until it has at least one version.' },
-    {
-      label: 'Register label',
-      done: labels.length > 0 || versions.some((version) => version.status === 'published'),
-      hint: 'Move a stable label such as production or staging onto a version before consumer pages bind it.',
-    },
-    { label: 'Run test', done: !!renderResult, hint: 'Use a render test before this prompt is used anywhere.' },
-  ];
-
-  const handleUpdateTemplate = async () => {
-    setSavingTemplate(true);
+  const run = async (kind: Exclude<Busy, null>, action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(kind);
     try {
-      await promptRegistry.updateTemplate(template.template_key, {
-        name: templateForm.name.trim(),
-        description: templateForm.description.trim() || null,
-        ...(isPlatformAdmin ? { owner_scope: templateForm.owner_scope.trim() || null } : {}),
-      });
-      pushToast({ tone: 'success', title: 'Template updated', message: 'Template metadata was saved.' });
-      detail.refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Update failed', message: error?.message || 'Failed to update template.' });
+      await action();
     } finally {
-      setSavingTemplate(false);
+      setBusy(null);
     }
   };
 
-  const handleCreateVersion = async () => {
-    setCreatingVersion(true);
+  const createVersion = (payload: PromptVersionCreateInput, pointLabel: string | null) => run('version', async () => {
+    let created;
     try {
-      if (!versionForm.system_prompt.trim()) {
-        throw new Error('system prompt is required');
-      }
-      const templateBody = buildTemplateBody(versionForm.system_prompt);
-      const variablesSchema = buildVariablesSchema(versionForm.variables);
-      const modelHints = parseJsonObject(versionForm.model_hints, 'model_hints');
-      const routePreferences = parseJsonObject(versionForm.route_preferences, 'route_preferences');
-      const created = await promptRegistry.createVersion(template.template_key, {
-        template_body: templateBody,
-        variables_schema: variablesSchema,
-        model_hints: modelHints,
-        route_preferences: routePreferences,
-        publish: versionForm.publish,
-      });
-      pushToast({ tone: 'success', title: 'Version created', message: `Created v${created.version}.` });
-      detail.refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Create version failed', message: error?.message || 'Failed to create version.' });
-    } finally {
-      setCreatingVersion(false);
-    }
-  };
-
-  const handlePublishVersion = async (version: number) => {
-    setPublishingVersion(version);
-    try {
-      await promptRegistry.publishVersion(template.template_key, version);
-      pushToast({ tone: 'success', title: 'Version published', message: `Published v${version}.` });
-      detail.refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Publish failed', message: error?.message || 'Failed to publish version.' });
-    } finally {
-      setPublishingVersion(null);
-    }
-  };
-
-  const handleAssignLabel = async () => {
-    const targetVersion = Number(labelForm.version || 0);
-    if (!targetVersion) {
-      pushToast({ tone: 'error', title: 'Missing version', message: 'Select a version before assigning label.' });
+      created = await promptRegistry.createVersion(template.template_key, payload);
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Version not saved', message: errorText(error, 'Could not save the version.') });
       return;
     }
-    setAssigningLabel(true);
+    let labelError: string | null = null;
+    if (pointLabel) {
+      try {
+        await promptRegistry.assignLabel(template.template_key, { label: pointLabel, version: created.version });
+      } catch (error) {
+        labelError = errorText(error, 'Could not move the label.');
+      }
+    }
+    pushToast({ tone: 'success', title: `Saved v${created.version}`, message: pointLabel && !labelError ? `${pointLabel} now points to v${created.version}.` : 'No label points to it yet.' });
+    if (labelError) pushToast({ tone: 'error', title: `${pointLabel} did not move`, message: labelError });
+    setEditorBase(undefined);
+    setTab('versions');
+    setSelectedVersion(created.version);
+    setCompareWith(undefined);
+    detail.refetch();
+  });
+
+  const moveLabel = (move: PromptLabelMove) => run('label', async () => {
     try {
       await promptRegistry.assignLabel(template.template_key, {
-        label: labelForm.label.trim(),
-        version: targetVersion,
-        require_approval: labelForm.require_approval,
-        approved_by: labelForm.approved_by.trim() || null,
+        label: move.label,
+        version: move.version,
+        require_approval: Boolean(move.approvedBy),
+        approved_by: move.approvedBy || null,
       });
-      pushToast({ tone: 'success', title: 'Label assigned', message: `${labelForm.label} now points to v${targetVersion}.` });
+      pushToast({ tone: 'success', title: 'Label moved', message: `${move.label} now points to v${move.version}.` });
+      setLabelDialog(null);
       detail.refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Assign label failed', message: error?.message || 'Failed to assign label.' });
-    } finally {
-      setAssigningLabel(false);
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Label not moved', message: errorText(error, 'Could not move the label.') });
     }
-  };
+  });
 
-  const handleDryRun = async () => {
-    setRendering(true);
+  const removeLabel = (label: string) => run('remove', async () => {
     try {
-      const variables = parseJsonObject(renderForm.variables, 'variables');
-      const payload: any = { template_key: template.template_key, variables };
-      if (renderForm.version.trim()) payload.version = Number(renderForm.version);
-      else payload.label = renderForm.label.trim() || 'production';
-      const result = await promptRegistry.dryRunRender(payload);
-      setRenderResult(result);
-      pushToast({ tone: 'success', title: 'Dry-run successful', message: 'Prompt rendered successfully.' });
-    } catch (error: any) {
-      setRenderResult(null);
-      pushToast({ tone: 'error', title: 'Dry-run failed', message: error?.message || 'Prompt render failed.' });
-    } finally {
-      setRendering(false);
+      await promptRegistry.deleteLabel(template.template_key, label);
+      pushToast({ tone: 'success', title: 'Label removed', message: `${label} no longer points to a version.` });
+      setLabelToRemove(null);
+      detail.refetch();
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Label not removed', message: errorText(error, 'Could not remove the label.') });
     }
-  };
+  });
 
-  const handleDeleteTemplate = async () => {
-    setDeletingTemplate(true);
+  const saveDetails = (form: PromptTemplateDetailsForm) => run('details', async () => {
+    try {
+      await promptRegistry.updateTemplate(template.template_key, {
+        name: form.name.trim(),
+        description: form.description.trim() || null,
+        ...(isPlatformAdmin ? { owner_scope: form.owner_scope.trim() || null } : {}),
+      });
+      pushToast({ tone: 'success', title: 'Details saved', message: 'The name and description were saved.' });
+      detail.refetch();
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Details not saved', message: errorText(error, 'Could not save the details.') });
+    }
+  });
+
+  const deleteTemplate = () => run('delete', async () => {
     try {
       await promptRegistry.deleteTemplate(template.template_key);
-      pushToast({ tone: 'success', title: 'Template deleted', message: `${template.template_key} was deleted.` });
+      pushToast({ tone: 'success', title: 'Prompt deleted', message: `${template.template_key} was deleted.` });
       navigate('/prompts');
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete template.' });
-    } finally {
-      setDeletingTemplate(false);
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Prompt not deleted', message: errorText(error, 'Could not delete the prompt.') });
     }
+  });
+
+  const openVersion = (version: number) => { setTab('versions'); setSelectedVersion(version); setCompareWith(undefined); };
+  const testVersion = (version: number) => { setTab('test'); setTestRef({ version }); };
+  const promote = (label: PromptLabel) => setLabelDialog({ label: PRODUCTION_LABEL, version: label.version, confirm: Boolean(production) });
+
+  const tabs = [
+    { id: 'prompt' as const, label: 'Prompt', icon: FileText },
+    { id: 'versions' as const, label: 'Versions', icon: History, count: versions.length },
+    { id: 'test' as const, label: 'Test', icon: FlaskConical },
+    ...(isPlatformAdmin ? [{ id: 'usage' as const, label: 'Used by', icon: Link2, count: bindings.length }] : []),
+    { id: 'settings' as const, label: 'Settings', icon: Settings },
+  ];
+  const noVersions = (
+    <div className="rounded-xl border border-dashed border-gray-300 bg-white px-4 py-8 text-center">
+      <p className="text-sm text-gray-600">This prompt has no versions yet.</p>
+      {canWrite ? <Button size="sm" className="mt-3" onClick={() => setEditorBase(null)}><FilePlus2 className="h-3.5 w-3.5" aria-hidden="true" /> Write the first version</Button> : null}
+    </div>
+  );
+  const panels: Record<TabId, ReactNode> = {
+    prompt: versions.length ? <PromptOverviewTab versions={versions} labels={labels} reference={shownRef} onReferenceChange={setViewRef} onOpenVersion={openVersion} /> : noVersions,
+    versions: versions.length ? (
+      <PromptVersionsTab versions={versions} labels={labels} selected={selected} compareWith={compared} canWrite={canWrite}
+        onSelect={(version) => { setSelectedVersion(version); setCompareWith(undefined); }} onCompareChange={setCompareWith}
+        onPointLabel={(version) => setLabelDialog({ label: production ? PRODUCTION_LABEL : null, version })}
+        onNewFrom={(version) => setEditorBase(version)} onTest={testVersion} />
+    ) : noVersions,
+    test: versions.length ? (
+      <PromptTestTab templateKey={template.template_key} versions={versions} labels={labels} reference={testedRef} onReferenceChange={setTestRef}
+        initialValues={{ product_name: branding.instance_name }} />
+    ) : noVersions,
+    usage: <PromptUsageTab bindings={bindings} labels={labels} targetOptions={targetOptions} />,
+    settings: (
+      <PromptSettingsTab key={`${template.name}\n${template.description ?? ''}\n${template.owner_scope ?? ''}`} template={template} canWrite={canWrite} canDelete={canDelete}
+        isPlatformAdmin={isPlatformAdmin} bindingCount={bindings.length} saving={busy === 'details'} onSave={saveDetails}
+        onAccessSaved={() => detail.refetch()} onDelete={() => setConfirmDelete(true)}
+        teamOptions={audiences.teamOptions} organizationOptions={audiences.organizationOptions} audiencesLoading={audiences.loading}
+        audiencesError={audiences.error} onRetryAudiences={audiences.refetch} />
+    ),
   };
+  const removeUsers = labelToRemove ? bindingsForLabel(bindings, labelToRemove) : [];
 
   return (
     <RecordDetailShell
       backAction={(
         <button onClick={() => navigate('/prompts')} className="flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-700">
-          <ArrowLeft className="w-4 h-4" /> Back to Prompt Registry
+          <ArrowLeft className="h-4 w-4" /> Back to Prompt Registry
         </button>
       )}
       header={(
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{template.name}</h1>
-            <p className="mt-1 text-sm text-gray-500">
-              Template key: <code className="rounded bg-gray-100 px-1.5 py-0.5">{template.template_key}</code>
-            </p>
-            {template.access ? (
-              <ManagedAssetAccessSummary
-                access={template.access}
-                teamOptions={teamOptions}
-                organizationOptions={organizationOptions}
-                className="mt-2"
-              />
-            ) : null}
+          <div className="min-w-0 space-y-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="break-words text-2xl font-bold text-gray-900">{template.name}</h1>
+              <div className="rounded-md bg-gray-100 px-2"><CopyIdentifier value={template.template_key} display={template.template_key} label="Template key" /></div>
+            </div>
+            {template.description ? <p className="max-w-3xl text-sm text-gray-600">{template.description}</p> : null}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+              {template.access ? <ManagedAssetAccessSummary access={template.access} teamOptions={audiences.teamOptions} organizationOptions={audiences.organizationOptions} /> : null}
+              <span className="flex items-center gap-1">Created by <CreatedBy row={template} /></span>
+              <span>Updated {fmtLocalDay(template.updated_at)}</span>
+            </div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Versions</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{versions.length}</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Labels</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{labels.length}</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Published</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900">
-                {versions.find((version) => version.status === 'published') ? 'Version ready' : 'Not yet'}
-              </div>
-            </div>
+          <div className="flex shrink-0 gap-2">
+            {versions.length ? <Button variant="outline" onClick={() => setTab('test')}><FlaskConical className="h-4 w-4" aria-hidden="true" /> Test</Button> : null}
+            {canWrite ? <Button onClick={() => setEditorBase(latest?.version ?? null)}><FilePlus2 className="h-4 w-4" aria-hidden="true" /> New version</Button> : null}
           </div>
         </div>
       )}
       intro={(
-        <JourneyChecklist
-          title="Rollout Progress"
-          description="Prompt setup is simplest when you author first, register a stable version second, and test before any consuming page binds it."
-          steps={checklistSteps}
-        />
+        <div className="space-y-4">
+          {detail.error ? <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Could not refresh this prompt. The page shows the last loaded data. {errorText(detail.error, '')}</p> : null}
+          {!production ? (
+            <JourneyChecklist
+              title="Set up this prompt"
+              description="Bindings and API calls get the version that a label points to. They use the production label unless they name another one."
+              steps={[
+                { label: 'Write a version', done: versions.length > 0, hint: 'Write the prompt and its {variables}. Saved versions cannot change.' },
+                { label: 'Point production at a version', done: false, hint: 'Test the version, then point the production label at it.' },
+              ]}
+            />
+          ) : null}
+          {versions.length ? (
+            <PromptLabelCards labels={labels} latestVersion={latest?.version ?? null} bindings={bindings} showUsage={isPlatformAdmin} canWrite={canWrite}
+              targetOptions={targetOptions} onView={(label) => { setTab('prompt'); setViewRef({ label }); }}
+              onChangeVersion={(label) => setLabelDialog({ label, version: labels.find((item) => item.label === label)?.version ?? selected })}
+              onPromote={promote} onAdd={() => setLabelDialog({ label: null, version: latest?.version ?? 0 })} />
+          ) : null}
+        </div>
       )}
     >
-      <div className="space-y-5">
-        <Card
-          title="1. Template"
-          action={canDelete ? (
-            <button
-              onClick={() => setConfirmDeleteTemplate(true)}
-              className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete
-            </button>
-          ) : undefined}
-        >
-          <div className="space-y-4">
-            <div>
-              <h4 className="text-sm font-semibold text-slate-900">Define the prompt shell</h4>
-              <p className="mt-1 text-xs text-slate-500">Keep metadata concise. Most work happens in versions and rollout, not here.</p>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Name</label>
-                <input
-                  value={templateForm.name}
-                  disabled={!canWrite}
-                  onChange={(event) => setTemplateForm({ ...templateForm, name: event.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                />
-              </div>
-              <div className="lg:col-span-2">
-                <label className="mb-1 block text-sm font-medium text-gray-700">Description</label>
-                <textarea
-                  value={templateForm.description}
-                  disabled={!canWrite}
-                  onChange={(event) => setTemplateForm({ ...templateForm, description: event.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                />
-              </div>
-            </div>
-
-            {template.access ? (
-              <ManagedAssetAccessPanel
-                access={template.access}
-                assetLabel="Prompt"
-                teamOptions={teamOptions}
-                organizationOptions={organizationOptions}
-                allowPublic={isPlatformAdmin}
-                audiencesLoading={audiencesLoading}
-                audiencesError={audiencesError}
-                onRetryAudiences={refetchAudiences}
-                onSaved={() => detail.refetch()}
-                className="shadow-none"
-              />
-            ) : null}
-
-            {isPlatformAdmin ? (
-              <details className="rounded-xl border border-slate-200 px-3 py-3">
-                <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Legacy metadata</summary>
-                <div className="mt-4">
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Owner Scope</label>
-                  <input
-                    value={templateForm.owner_scope}
-                    disabled={!canWrite}
-                    onChange={(event) => setTemplateForm({ ...templateForm, owner_scope: event.target.value })}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                  />
-                </div>
-              </details>
-            ) : null}
-
-            {canWrite ? <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={handleUpdateTemplate}
-                disabled={savingTemplate}
-                className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
-              >
-                {savingTemplate ? 'Saving...' : 'Save Template'}
-              </button>
-            </div> : (
-              <p className="text-sm text-slate-500">You have read-only access to this prompt.</p>
-            )}
+      <div>
+        <IconTabs id="prompt-tabs" label="Prompt sections" active={tab} onChange={setTab} items={tabs} />
+        {tabs.map(({ id }) => (
+          <div key={id} role="tabpanel" id={`prompt-tabs-panel-${id}`} aria-labelledby={`prompt-tabs-tab-${id}`} hidden={tab !== id}>
+            {panels[id]}
           </div>
-        </Card>
-
-        <PromptVersionComposerCard value={versionForm} creating={creatingVersion} disabled={!canWrite} onChange={setVersionForm} onCreate={handleCreateVersion} />
-
-        <PromptRolloutCard
-          versions={versions}
-          labels={labels}
-          labelForm={labelForm}
-          assigningLabel={assigningLabel}
-          disabled={!canWrite}
-          onLabelFormChange={setLabelForm}
-          onAssignLabel={handleAssignLabel}
-        />
-
-        <PromptTestingCard
-          hasVersions={versions.length > 0}
-          renderForm={renderForm}
-          renderResult={renderResult}
-          rendering={rendering}
-          onRenderFormChange={setRenderForm}
-          onDryRun={handleDryRun}
-        />
-
-        <PromptHistoryCard
-          versions={versions}
-          diffLeftVersion={diffLeftVersion}
-          diffRightVersion={diffRightVersion}
-          publishingVersion={publishingVersion}
-          canPublish={canWrite}
-          onDiffLeftChange={setDiffLeftVersion}
-          onDiffRightChange={setDiffRightVersion}
-          onPublishVersion={handlePublishVersion}
-        />
+        ))}
       </div>
 
+      {editorBase !== undefined ? (
+        <PromptVersionEditor base={versions.find((item) => item.version === editorBase) ?? null} nextVersion={(latest?.version ?? 0) + 1}
+          labels={labels} saving={busy === 'version'} onClose={() => setEditorBase(undefined)} onSave={(payload, pointLabel) => void createVersion(payload, pointLabel)} />
+      ) : null}
+      {labelDialog ? (
+        <PromptLabelDialog start={labelDialog} labels={labels} versions={versions} bindings={bindings} showUsage={isPlatformAdmin} targetOptions={targetOptions}
+          saving={busy === 'label'} onClose={() => setLabelDialog(null)} onConfirm={(move) => void moveLabel(move)}
+          onRemove={(label) => { setLabelDialog(null); setLabelToRemove(label); }} />
+      ) : null}
       <ConfirmDialog
-        open={confirmDeleteTemplate}
-        title="Delete prompt template"
-        description={`Delete "${template.template_key}"? This removes all versions, labels, and render logs. Consumer pages using this prompt will stop resolving it.`}
-        confirmLabel="Delete Template"
+        open={labelToRemove !== null}
+        title={`Remove ${labelToRemove ?? ''}?`}
+        description={removeUsers.length
+          ? `${removeUsers.length} ${removeUsers.length === 1 ? 'binding uses' : 'bindings use'} this label. Requests skip ${removeUsers.length === 1 ? 'it' : 'them'} until the label exists again. API calls that ask for the label fail.`
+          : 'API calls that ask for this label fail until you add it again. The versions stay.'}
+        confirmLabel="Remove label"
         destructive
-        confirming={deletingTemplate}
-        onConfirm={handleDeleteTemplate}
-        onClose={() => {
-          if (!deletingTemplate) setConfirmDeleteTemplate(false);
-        }}
+        confirming={busy === 'remove'}
+        onConfirm={() => { if (labelToRemove) void removeLabel(labelToRemove); }}
+        onClose={() => { if (busy !== 'remove') setLabelToRemove(null); }}
+      />
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete prompt"
+        description={`Delete "${template.template_key}"? This removes all versions, labels, and render logs.${bindings.length ? ` ${bindings.length} ${bindings.length === 1 ? 'binding stops' : 'bindings stop'} resolving it.` : ''}`}
+        confirmLabel="Delete prompt"
+        destructive
+        confirming={busy === 'delete'}
+        onConfirm={() => void deleteTemplate()}
+        onClose={() => { if (busy !== 'delete') setConfirmDelete(false); }}
       />
     </RecordDetailShell>
   );
