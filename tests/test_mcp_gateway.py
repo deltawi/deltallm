@@ -1884,6 +1884,86 @@ async def test_mcp_gateway_manual_approval_approved_retry_executes() -> None:
     assert len(transport.calls) == 1
 
 
+class _RateLimitedEnforcer:
+    async def acquire(self, **_kwargs):  # noqa: ANN003, ANN201
+        raise MCPRateLimitError("rate limited", retry_after=1)
+
+    async def release(self, lease) -> None:  # noqa: ANN001
+        return None
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_rate_limited_call_keeps_the_approval() -> None:
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
+        ],
+    )
+    approval_repo = _FakeApprovalRepository()
+    transport = _FakeTransport()
+    service = MCPApprovalService(approval_repo)
+    auth = type(
+        "Auth",
+        (),
+        {
+            "api_key": "sk-test",
+            "team_id": "team-ops",
+            "organization_id": "org-acme",
+            "metadata": None,
+        },
+    )()
+    limited = MCPGatewayService(
+        registry,
+        transport,
+        _RateLimitedEnforcer(),
+        approval_service=service,  # type: ignore[arg-type]
+    )
+    with pytest.raises(MCPApprovalRequiredError):
+        await limited.call_tool(auth, namespaced_tool_name="docs.search", arguments={"q": 1})
+    record = next(iter(approval_repo.records_by_fingerprint.values()))[-1]
+    record.status = "approved"
+    record.expires_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+
+    with pytest.raises(MCPRateLimitError):
+        await limited.call_tool(auth, namespaced_tool_name="docs.search", arguments={"q": 1})
+
+    assert record.consumed_at is None
+    assert transport.calls == []
+    open_gateway = MCPGatewayService(
+        registry,
+        transport,
+        MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+        approval_service=service,  # type: ignore[arg-type]
+    )  # type: ignore[arg-type]
+    await open_gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"q": 1})
+    assert record.consumed_at is not None
+    assert len(transport.calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_mcp_gateway_manual_approval_rejected_retry_denies() -> None:
     registry = _FakeRegistry(

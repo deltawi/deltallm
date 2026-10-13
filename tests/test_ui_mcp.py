@@ -1931,6 +1931,10 @@ async def test_requester_cannot_approve_own_approval_request(client, test_app, m
     )
     url = f"/ui/api/mcp-approval-requests/{approval.mcp_approval_request_id}/decision"
 
+    listed = await client.get("/ui/api/mcp-approval-requests")
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["capabilities"] == {"can_decide": True, "can_approve": False}
+
     approved = await client.post(url, json={"status": "approved"})
     assert approved.status_code == 403
     assert repository.approvals[approval.mcp_approval_request_id].status == "pending"

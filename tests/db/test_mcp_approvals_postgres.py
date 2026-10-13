@@ -131,3 +131,34 @@ async def test_approval_is_consumed_once_under_concurrency() -> None:
         assert loaded is not None and loaded.status == "approved"
     finally:
         await _cleanup(db, server_id)
+
+
+async def test_unused_approval_reads_as_expired_after_its_window() -> None:
+    db = await connect_prisma()
+    server_id = uuid4().hex
+    repository = MCPRepository(db)
+    try:
+        await _seed_server(db, server_id)
+        created = await _create(repository, server_id, f"fp-{server_id}")
+        assert created is not None
+        await repository.decide_approval_request(
+            created.mcp_approval_request_id,
+            status="approved",
+            decided_by_account_id="acct-admin",
+            decision_comment=None,
+            expires_at=None,
+        )
+        await _expire(db, created.mcp_approval_request_id)
+
+        loaded = await repository.get_approval_request(created.mcp_approval_request_id)
+        assert loaded is not None and loaded.status == "expired"
+        _, approved_total = await repository.list_approval_requests(
+            server_id=server_id, status="approved"
+        )
+        _, expired_total = await repository.list_approval_requests(
+            server_id=server_id, status="expired"
+        )
+        assert (approved_total, expired_total) == (0, 1)
+        assert await repository.consume_approval_request(created.mcp_approval_request_id) is None
+    finally:
+        await _cleanup(db, server_id)
