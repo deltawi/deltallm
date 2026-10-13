@@ -286,7 +286,7 @@ async def test_customer_fixture_diagnostics_preserve_result_and_do_not_log_token
     failure = ExternalAuthUnavailable()
     failure.__cause__ = TransactionExpiredError("test-only private transaction detail")
 
-    async def lookup(token):
+    async def lookup(token, **_kwargs):
         assert token == "test-only-private-session-token"
         if unavailable:
             raise failure

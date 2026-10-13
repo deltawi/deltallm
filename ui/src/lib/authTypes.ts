@@ -17,6 +17,9 @@ export interface SessionInfo {
   session_source?: 'operator' | 'external_customer' | null;
   workspace?: ExternalWorkspace | null;
   expires_at?: string | null;
+  idle_expires_at?: string | null;
+  idle_timeout_seconds?: number | null;
+  server_time?: string | null;
   account_id?: string | null;
   email?: string | null;
   role?: string | null;

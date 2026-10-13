@@ -48,6 +48,7 @@ from src.api.auth_sessions import (
     router as session_router,
 )  # Compatibility export.
 from src.services.identity.sso_state_store import SSOStateStoreError
+from src.services.identity.session_activity import master_session_ttl_seconds
 from src.services.identity.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
     MasterSessionStoreUnavailable,
@@ -636,10 +637,7 @@ async def master_key_login(request: Request, payload: MasterKeyLoginRequest) -> 
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key"
             )
 
-        general_settings = getattr(
-            getattr(request.app.state, "app_config", None), "general_settings", None
-        )
-        ttl = int(getattr(general_settings, "auth_session_ttl_hours", 12) * 3600)
+        ttl = master_session_ttl_seconds(request)
         salt = str(getattr(request.app.state, "salt_key", "") or "")
         if not salt:
             raise HTTPException(

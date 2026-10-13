@@ -84,7 +84,7 @@ async def test_evaluation_unauthenticated_is_denied_before_body_validation(clien
 
 async def test_member_session_cannot_evaluate_or_select_a_broader_spend_view(client, report_app):
     class MemberIdentity:
-        async def get_context_for_session(self, token):
+        async def get_context_for_session(self, token, **_kwargs):
             if token != "member-session":
                 return None
             return PlatformAuthContext(

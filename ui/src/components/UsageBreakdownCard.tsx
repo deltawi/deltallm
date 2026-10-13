@@ -62,6 +62,7 @@ interface UsageBreakdownCardProps {
   reportingGeneration: string;
   reportingV2Enabled: boolean;
   forceRefresh: boolean;
+  backgroundRefresh?: boolean;
   onReportingAttempt: (attempt: ReportingPartAttempt) => void;
   onReportingOutcome: (outcome: ReportingPartOutcome) => void;
 }
@@ -114,6 +115,7 @@ export default function UsageBreakdownCard({
   reportingGeneration,
   reportingV2Enabled,
   forceRefresh,
+  backgroundRefresh = false,
   onReportingAttempt,
   onReportingOutcome,
 }: UsageBreakdownCardProps) {
@@ -240,7 +242,11 @@ export default function UsageBreakdownCard({
       limit: OWNER_PAGE_SIZE,
       offset,
       view,
-    }, reportingRequestInit(controller.signal, forceRefresh && refreshTriggered)).then((response) => (
+    }, reportingRequestInit(
+      controller.signal,
+      forceRefresh && refreshTriggered,
+      backgroundRefresh && refreshTriggered,
+    )).then((response) => (
       reportingV2Enabled ? verifiedReportingResponse(response, view) : response
     )).then((nextReport) => {
       if (controller.signal.aborted) return;
@@ -290,6 +296,7 @@ export default function UsageBreakdownCard({
     ownerOffsetScopeKey,
     refreshNonce,
     forceRefresh,
+    backgroundRefresh,
     ownerRetryNonce,
     reportingV2Enabled,
     view,
@@ -331,7 +338,11 @@ export default function UsageBreakdownCard({
       limit: MODEL_LIMIT,
       offset: 0,
       view,
-    }, reportingRequestInit(controller.signal, forceRefresh && refreshTriggered)).then((response) => (
+    }, reportingRequestInit(
+      controller.signal,
+      forceRefresh && refreshTriggered,
+      backgroundRefresh && refreshTriggered,
+    )).then((response) => (
       reportingV2Enabled ? verifiedReportingResponse(response, view) : response
     )).then((nextReport) => {
       if (controller.signal.aborted) return;
@@ -366,6 +377,7 @@ export default function UsageBreakdownCard({
     reportingV2Enabled,
     refreshNonce,
     forceRefresh,
+    backgroundRefresh,
     settleReportingRequest,
     view,
   ]);

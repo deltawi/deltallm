@@ -57,7 +57,7 @@ class _FakeMasterSessionDB:
         if "UPDATE deltallm_mastersession" not in query:
             raise AssertionError(f"unexpected read query: {query}")
 
-        token_hash, fingerprint = (str(value) for value in args)
+        token_hash, fingerprint = (str(value) for value in args[:2])
         record = self.records.get(token_hash)
         if (
             record is None

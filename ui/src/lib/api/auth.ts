@@ -1,4 +1,5 @@
 import { apiFetch } from './transport';
+import { backgroundRequestHeaders } from '../sessionActivity';
 import type { InvitationAcceptResult } from '../api';
 
 export interface SelfRegistrationPublicConfig {
@@ -14,7 +15,11 @@ export interface AuthSsoConfig {
 }
 
 export const auth = {
-  me: () => apiFetch<unknown>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
+  me: (options: { background?: boolean } = {}) => apiFetch<unknown>('/auth/me', {
+    headers: options.background
+      ? backgroundRequestHeaders({ 'Content-Type': 'application/json' })
+      : new Headers({ 'Content-Type': 'application/json' }),
+  }),
   internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
     apiFetch<unknown>('/auth/internal/login', { method: 'POST', json: payload }),
   masterLogin: (masterKey: string) =>

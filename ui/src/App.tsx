@@ -2,6 +2,7 @@ import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react
 import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
+import IdleSessionWarning from './components/auth/IdleSessionWarning';
 import AcceptInvite from './pages/AcceptInvite';
 import ForgotPassword from './pages/ForgotPassword';
 import Login from './pages/Login';
@@ -205,52 +206,55 @@ function AppRoutes() {
   }
 
   return (
-    <Routes>
-      <Route element={<Layout key={sessionPrincipal(session)} />}>
-        <Route path="/" element={uiAccess.dashboard ? <Dashboard /> : <Navigate to={defaultRoute} replace />} />
-        <Route path="/models" element={uiAccess.models ? <ChunkedRoute><Models /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/models/new" element={uiAccess.model_admin ? <ChunkedRoute><ModelCreate /></ChunkedRoute> : <Navigate to="/models" replace />} />
-        <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
-        <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ChunkedRoute><ModelEdit /></ChunkedRoute> : <Navigate to="/models" replace />} />
-        <Route path="/tiers" element={uiAccess.tiers ? <ChunkedRoute><Tiers /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/tiers/:tierId" element={uiAccess.tiers ? <ChunkedRoute><TierDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/named-credentials" element={uiAccess.named_credentials ? <NamedCredentials /> : <Navigate to="/" replace />} />
-        <Route path="/route-groups" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroups /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/route-groups/by-id/:routeGroupId" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/route-groups/*" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/prompts" element={uiAccess.prompts ? <ChunkedRoute><PromptRegistry /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <ChunkedRoute><PromptTemplateDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServers /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServerDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/mcp-approvals" element={uiAccess.mcp_servers ? <MCPApprovalsRedirect /> : <Navigate to="/" replace />} />
-        <Route path="/keys" element={uiAccess.keys ? <ChunkedRoute><ApiKeys /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/organizations" element={uiAccess.organizations ? <ChunkedRoute><Organizations /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/organizations/new" element={uiAccess.organization_create ? <ChunkedRoute><OrganizationCreate /></ChunkedRoute> : <Navigate to="/organizations" replace />} />
-        <Route path="/organizations/:orgId" element={uiAccess.organizations ? <ChunkedRoute><OrganizationDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/teams" element={uiAccess.teams ? <ChunkedRoute><Teams /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/teams/new" element={uiAccess.team_create ? <ChunkedRoute><TeamCreate /></ChunkedRoute> : <Navigate to="/teams" replace />} />
-        <Route path="/teams/:teamId" element={uiAccess.teams ? <ChunkedRoute><TeamDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/users" element={uiAccess.people_access ? <ChunkedRoute><UsersPage /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/audit" element={uiAccess.audit ? <AuditLogs /> : <Navigate to="/" replace />} />
-        <Route path="/usage" element={uiAccess.usage ? <Usage /> : <Navigate to="/" replace />} />
-        <Route path="/batches" element={uiAccess.batches ? <BatchJobs /> : <Navigate to="/" replace />} />
-        <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
-        <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />
-        <Route path="/playground" element={uiAccess.playground ? <ChunkedRoute><Playground /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route
-          path="/settings"
-          element={uiAccess.settings ? (
-            <ChunkedRoute><SettingsPage /></ChunkedRoute>
-          ) : <Navigate to="/" replace />}
-        />
-        <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : defaultRoute} replace />} />
-        <Route path="/login" element={<Navigate to={loginReturnTo} replace />} />
-        <Route path="/forgot-password" element={<Navigate to={defaultRoute} replace />} />
-        <Route path="/reset-password" element={<Navigate to={defaultRoute} replace />} />
-        <Route path="/accept-invite" element={<Navigate to={defaultRoute} replace />} />
-        <Route path="*" element={<div className="p-6"><h1 className="text-xl font-semibold text-gray-900">Page not found</h1><p className="my-3 text-sm text-gray-500">Check the address or return to the home page.</p><Link to={defaultRoute} className="rounded text-sm text-brand-primary-ink underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Return to home</Link></div>} />
-      </Route>
-    </Routes>
+    <>
+      <IdleSessionWarning />
+      <Routes>
+        <Route element={<Layout key={sessionPrincipal(session)} />}>
+          <Route path="/" element={uiAccess.dashboard ? <Dashboard /> : <Navigate to={defaultRoute} replace />} />
+          <Route path="/models" element={uiAccess.models ? <ChunkedRoute><Models /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/models/new" element={uiAccess.model_admin ? <ChunkedRoute><ModelCreate /></ChunkedRoute> : <Navigate to="/models" replace />} />
+          <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
+          <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ChunkedRoute><ModelEdit /></ChunkedRoute> : <Navigate to="/models" replace />} />
+          <Route path="/tiers" element={uiAccess.tiers ? <ChunkedRoute><Tiers /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/tiers/:tierId" element={uiAccess.tiers ? <ChunkedRoute><TierDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/named-credentials" element={uiAccess.named_credentials ? <NamedCredentials /> : <Navigate to="/" replace />} />
+          <Route path="/route-groups" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroups /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/route-groups/by-id/:routeGroupId" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/route-groups/*" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/prompts" element={uiAccess.prompts ? <ChunkedRoute><PromptRegistry /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <ChunkedRoute><PromptTemplateDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServers /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServerDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/mcp-approvals" element={uiAccess.mcp_servers ? <MCPApprovalsRedirect /> : <Navigate to="/" replace />} />
+          <Route path="/keys" element={uiAccess.keys ? <ChunkedRoute><ApiKeys /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/organizations" element={uiAccess.organizations ? <ChunkedRoute><Organizations /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/organizations/new" element={uiAccess.organization_create ? <ChunkedRoute><OrganizationCreate /></ChunkedRoute> : <Navigate to="/organizations" replace />} />
+          <Route path="/organizations/:orgId" element={uiAccess.organizations ? <ChunkedRoute><OrganizationDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/teams" element={uiAccess.teams ? <ChunkedRoute><Teams /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/teams/new" element={uiAccess.team_create ? <ChunkedRoute><TeamCreate /></ChunkedRoute> : <Navigate to="/teams" replace />} />
+          <Route path="/teams/:teamId" element={uiAccess.teams ? <ChunkedRoute><TeamDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/users" element={uiAccess.people_access ? <ChunkedRoute><UsersPage /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/audit" element={uiAccess.audit ? <AuditLogs /> : <Navigate to="/" replace />} />
+          <Route path="/usage" element={uiAccess.usage ? <Usage /> : <Navigate to="/" replace />} />
+          <Route path="/batches" element={uiAccess.batches ? <BatchJobs /> : <Navigate to="/" replace />} />
+          <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
+          <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />
+          <Route path="/playground" element={uiAccess.playground ? <ChunkedRoute><Playground /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route
+            path="/settings"
+            element={uiAccess.settings ? (
+              <ChunkedRoute><SettingsPage /></ChunkedRoute>
+            ) : <Navigate to="/" replace />}
+          />
+          <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : defaultRoute} replace />} />
+          <Route path="/login" element={<Navigate to={loginReturnTo} replace />} />
+          <Route path="/forgot-password" element={<Navigate to={defaultRoute} replace />} />
+          <Route path="/reset-password" element={<Navigate to={defaultRoute} replace />} />
+          <Route path="/accept-invite" element={<Navigate to={defaultRoute} replace />} />
+          <Route path="*" element={<div className="p-6"><h1 className="text-xl font-semibold text-gray-900">Page not found</h1><p className="my-3 text-sm text-gray-500">Check the address or return to the home page.</p><Link to={defaultRoute} className="rounded text-sm text-brand-primary-ink underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Return to home</Link></div>} />
+        </Route>
+      </Routes>
+    </>
   );
 }
 

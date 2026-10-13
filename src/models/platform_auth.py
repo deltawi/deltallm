@@ -18,6 +18,7 @@ class PlatformAuthContext(BaseModel):
     organization_memberships: list[dict[str, Any]] = Field(default_factory=list)
     team_memberships: list[dict[str, Any]] = Field(default_factory=list)
     session_expires_at: datetime | None = None
+    session_idle_expires_at: datetime | None = None
     external_workspace: ExternalWorkspaceContext | None = None
 
 
@@ -129,6 +130,9 @@ class CurrentSessionResponse(BaseModel):
     auth_mode: str | None = None
     session_source: Literal["operator", "external_customer"] | None = None
     expires_at: datetime | None = None
+    idle_expires_at: datetime | None = None
+    idle_timeout_seconds: int | None = None
+    server_time: datetime | None = None
     workspace: ExternalWorkspaceResponse | None = None
     account_id: str | None = None
     email: str | None = None

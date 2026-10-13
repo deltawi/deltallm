@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth';
 import { auth as authApi, type AuthSsoConfig } from '../lib/api';
 import { hasSandboxSelfRegistration } from '../lib/selfRegistration';
 import { returnToFromSearch } from '../lib/authRedirect';
+import { signedOutMessage } from '../lib/sessionLifetime';
 import { Mail, KeyRound, Globe } from 'lucide-react';
 import BrandLogo from '../components/BrandLogo';
 import Button from '../components/Button';
@@ -23,7 +24,7 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 
 export default function Login() {
-  const { loginWithCredentials, loginWithMasterKey, isLoading } = useAuth();
+  const { loginWithCredentials, loginWithMasterKey, isLoading, signedOutReason, idleTimeoutMs } = useAuth();
   const location = useLocation();
   const returnTo = returnToFromSearch(location.search);
   const [tab, setTab] = useState<Tab>('credentials');
@@ -158,6 +159,11 @@ export default function Login() {
           </div>
 
           <div className="p-6">
+            {signedOutReason && !error && (
+              <div role="status" className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                {signedOutMessage(signedOutReason, idleTimeoutMs)}
+              </div>
+            )}
             {error && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
                 {error}

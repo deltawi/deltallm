@@ -308,7 +308,7 @@ async def test_auth_me_gates_scoped_usage_access(
     client, test_app, reporting_v2_enabled, expected_usage
 ):
     class StubIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "session-token":
                 return None
             return PlatformAuthContext(
@@ -355,7 +355,7 @@ async def test_auth_me_gates_scoped_usage_access(
 @pytest.mark.asyncio
 async def test_auth_me_allows_platform_admin_to_access_named_credentials(client, test_app):
     class StubIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "session-token":
                 return None
             return PlatformAuthContext(
@@ -381,7 +381,7 @@ async def test_auth_me_allows_platform_admin_to_access_named_credentials(client,
 @pytest.mark.asyncio
 async def test_auth_me_hides_team_create_for_team_scoped_admin_only(client, test_app):
     class StubIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "session-token":
                 return None
             return PlatformAuthContext(
@@ -429,7 +429,7 @@ async def test_batch_feature_status_returns_embeddings_batch_flag(client, test_a
 @pytest.mark.asyncio
 async def test_batch_feature_status_requires_batch_page_permission(client, test_app):
     class StubIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "session-token":
                 return None
             return PlatformAuthContext(

@@ -7,8 +7,18 @@ import type { AuthMode, AuthStatus, SessionInfo } from './authTypes';
 export type { AuthStatus, SessionInfo } from './authTypes';
 import {
   classifySessionCheckError,
+  isValidSessionPayload,
   type SessionFailure,
 } from './authSession';
+import { lastSessionActivityAt, onSessionRejected } from './sessionActivity';
+import {
+  idleDeadline,
+  idlePhase,
+  sessionClock,
+  signedOutReason as reasonForSignOut,
+  type SessionClock,
+  type SignedOutReason,
+} from './sessionLifetime';
 type AuthErrorState = Exclude<SessionFailure, { kind: 'anonymous' }>;
 
 interface AuthState {
@@ -20,6 +30,12 @@ interface AuthState {
 
 const MASTER_KEY_STORAGE = 'deltallm_master_key';
 const MFA_SKIP_STORAGE = 'deltallm_mfa_skip';
+const SESSION_TICK_MS = 5_000;
+// Minimum gap between session checks triggered by focus, deadlines or failed calls.
+const VERIFY_THROTTLE_MS = 15_000;
+const REJECTED_VERIFY_THROTTLE_MS = 5_000;
+const WARN_VERIFY_GAP_MS = 60_000;
+const INTERACTION_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
 
 function getStoredMasterKey(): string | null {
   try {
@@ -90,6 +106,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [mfaSkipped, setMfaSkipped] = useState(getStoredMfaSkip());
   const sessionAttemptRef = useRef(0);
   const logoutInFlightRef = useRef(false);
+  const [signedOutReason, setSignedOutReason] = useState<SignedOutReason | null>(null);
+  const [idleWarningDeadline, setIdleWarningDeadline] = useState<number | null>(null);
+  const [idleTimeoutMs, setIdleTimeoutMs] = useState<number | null>(null);
+  const clockRef = useRef<SessionClock | null>(null);
+  const verifyInFlightRef = useRef<Promise<void> | null>(null);
+  const lastVerifyAtRef = useRef(0);
+  const lastInteractionAtRef = useRef(0);
+
+  const rememberSession = useCallback((session: SessionInfo) => {
+    const clock = sessionClock(session);
+    clockRef.current = clock;
+    setIdleTimeoutMs(clock.idleTimeoutMs);
+  }, []);
+
+  const endSessionLocally = useCallback(() => {
+    const reason = reasonForSignOut(clockRef.current, lastSessionActivityAt());
+    clockRef.current = null;
+    setStoredMasterKey(null);
+    setIdleWarningDeadline(null);
+    setSignedOutReason(reason);
+    setState(anonymousState());
+  }, []);
 
   const refreshSession = useCallback(async () => {
     if (logoutInFlightRef.current) return;
@@ -104,13 +142,108 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const me = await resolveSession(authApi, external ? null : getStoredMasterKey(), external);
       setStoredMasterKey(null);
+      if (sessionAttemptRef.current === attempt && me.authenticated) {
+        rememberSession(me);
+        setSignedOutReason(null);
+      }
       applyState(me.authenticated ? authenticatedState(me) : anonymousState());
     } catch (error: unknown) {
       const failure = classifySessionCheckError(error);
       if (failure.kind === 'anonymous') setStoredMasterKey(null);
       applyState(failureState(failure));
     }
-  }, []);
+  }, [rememberSession]);
+
+  // Re-check the session without the loading screen. `renew` counts the check as activity.
+  const verifySession = useCallback((renew = false): Promise<void> => {
+    if (verifyInFlightRef.current) return verifyInFlightRef.current;
+    const attempt = sessionAttemptRef.current;
+    lastVerifyAtRef.current = Date.now();
+    const run = (async () => {
+      let next: SessionInfo;
+      try {
+        const value = await authApi.me({ background: !renew });
+        if (!isValidSessionPayload(value)) return;
+        next = value;
+      } catch (error: unknown) {
+        // Network or server trouble is not proof the session ended; keep the page.
+        if (classifySessionCheckError(error).kind !== 'anonymous') return;
+        next = { authenticated: false };
+      }
+      if (sessionAttemptRef.current !== attempt || logoutInFlightRef.current) return;
+      if (next.authenticated) {
+        rememberSession(next);
+        setState(authenticatedState(next));
+      } else {
+        endSessionLocally();
+      }
+    })().finally(() => {
+      verifyInFlightRef.current = null;
+    });
+    verifyInFlightRef.current = run;
+    return run;
+  }, [endSessionLocally, rememberSession]);
+
+  const staySignedIn = useCallback(async () => {
+    await verifySession(true);
+    setIdleWarningDeadline(null);
+  }, [verifySession]);
+
+  const isSignedIn = state.status === 'authenticated';
+
+  useEffect(() => {
+    if (!isSignedIn) return undefined;
+    const verifyIfStale = (minGapMs: number) => {
+      if (Date.now() - lastVerifyAtRef.current < minGapMs) return;
+      void verifySession();
+    };
+    const stopRejected = onSessionRejected(() => verifyIfStale(REJECTED_VERIFY_THROTTLE_MS));
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') verifyIfStale(VERIFY_THROTTLE_MS);
+    };
+    const onInteraction = () => {
+      lastInteractionAtRef.current = Date.now();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    INTERACTION_EVENTS.forEach((name) => {
+      window.addEventListener(name, onInteraction, { capture: true, passive: true });
+    });
+    return () => {
+      stopRejected();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+      INTERACTION_EVENTS.forEach((name) => {
+        window.removeEventListener(name, onInteraction, { capture: true });
+      });
+    };
+  }, [isSignedIn, verifySession]);
+
+  useEffect(() => {
+    // Console-hosted sessions are refreshed by the Console; only 401s and focus apply there.
+    if (!isSignedIn || uiMount().external_console) return undefined;
+    const tick = () => {
+      const clock = clockRef.current;
+      if (!clock) return;
+      const lastActivityAt = lastSessionActivityAt();
+      const phase = idlePhase(clock, lastActivityAt, lastInteractionAtRef.current);
+      if (phase === 'warn') {
+        // Another tab may have kept the session alive; ask the gateway before prompting.
+        if (Date.now() - lastVerifyAtRef.current >= WARN_VERIFY_GAP_MS) {
+          void verifySession();
+          return;
+        }
+        setIdleWarningDeadline(idleDeadline(clock, lastActivityAt));
+        return;
+      }
+      setIdleWarningDeadline(null);
+      if (phase === 'active' || Date.now() - lastVerifyAtRef.current < VERIFY_THROTTLE_MS) return;
+      void verifySession(phase === 'renew');
+    };
+    tick();
+    const timer = window.setInterval(tick, SESSION_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [isSignedIn, verifySession]);
 
   const retrySession = useCallback(async () => {
     await refreshSession();
@@ -152,6 +285,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setStoredMasterKey(null);
       setStoredMfaSkip(false);
       setMfaSkipped(false);
+      clockRef.current = null;
+      setIdleWarningDeadline(null);
+      setSignedOutReason(null);
       setState(anonymousState());
     } catch (error: unknown) {
       const message = error instanceof Error && error.message
@@ -183,6 +319,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isLoggingOut,
     logoutError,
     mfaSkipped,
+    signedOutReason,
+    idleWarningDeadline,
+    idleTimeoutMs,
+    staySignedIn,
     loginWithCredentials,
     loginWithMasterKey,
     logout,
@@ -196,6 +336,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isLoggingOut,
     logoutError,
     mfaSkipped,
+    signedOutReason,
+    idleWarningDeadline,
+    idleTimeoutMs,
+    staySignedIn,
     loginWithCredentials,
     loginWithMasterKey,
     logout,

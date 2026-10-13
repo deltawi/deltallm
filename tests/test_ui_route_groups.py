@@ -710,7 +710,7 @@ class _IdentityService:
     def __init__(self, context: PlatformAuthContext) -> None:
         self.context = context
 
-    async def get_context_for_session(self, token: str) -> PlatformAuthContext | None:
+    async def get_context_for_session(self, token: str, **_kwargs) -> PlatformAuthContext | None:
         return self.context if token == "route-group-session" else None
 
 

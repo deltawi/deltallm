@@ -96,6 +96,33 @@ POST /auth/internal/login
 
 The login response sets the session cookie used by the UI.
 
+### Session Lifetime and Idle Timeout
+
+A browser session ends at whichever limit comes first:
+
+- **Idle timeout**: after `auth_session_idle_timeout_minutes` (default `60`) with no activity. Every request you make renews it, so an active user is not interrupted. Set it to `0` to turn the idle timeout off.
+- **Hard cap**: `auth_session_ttl_hours` (default `12`) after sign-in, however active the session is.
+
+Master-key sign-ins use the same idle timeout. Their hard cap is `auth_master_session_ttl_hours` when set, otherwise `auth_session_ttl_hours`.
+
+```yaml
+general_settings:
+  auth_session_idle_timeout_minutes: 60
+  auth_session_ttl_hours: 12
+  auth_master_session_ttl_hours: 4
+```
+
+Recommended values for an admin console: an idle timeout of 30 to 60 minutes, a hard cap of 12 to 24 hours, and 1 to 4 hours for master-key sign-ins.
+
+How the Admin UI behaves:
+
+- Two minutes before an idle session ends, the UI asks **Are you still there?** with a **Stay signed in** button. If you used the keyboard or mouse in the tab during the last few minutes, the session renews without asking.
+- When a session ends, the UI sends you to the login page with the reason (inactivity, time limit, or ended elsewhere), then back to the page you were on after you sign in.
+- Returning to a tab whose session already ended goes straight to the login page.
+- Background requests, such as auto-refresh on the Usage page, send `X-DeltaLLM-Background: 1` and do not count as activity, so an unattended tab still signs out.
+
+Activity is recorded at most once a minute per session, so the idle timeout can end up to a minute early. Trusted Console customer sessions are not affected; the Console keeps refreshing them.
+
 ### Password Change
 
 ```text
