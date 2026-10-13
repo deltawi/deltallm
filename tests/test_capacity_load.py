@@ -2,9 +2,10 @@
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
-from tests.performance.capacity_load import assert_valid_arrival
+from tests.performance.capacity_load import assert_valid_arrival, rejection_code
 
 
 def result(*statuses: int | None, errors: tuple[str | None, ...] = (), dropped: int = 0):
@@ -39,3 +40,13 @@ def test_arrival_rejects_candidate_shedding_or_invalid_baseline_measurements(
             run,
             allow_controlled_rejections=allow_controlled_rejections,
         )
+
+
+def test_rejection_code_names_gateway_errors_and_other_responders() -> None:
+    gateway = httpx.Response(
+        503,
+        json={"error": {"code": "spend_persistence_unavailable", "type": "service_unavailable"}},
+    )
+    edge = httpx.Response(503, text="<html>503 Service Unavailable</html>")
+    assert rejection_code(gateway) == "spend_persistence_unavailable"
+    assert rejection_code(edge) == "non_gateway_body"
