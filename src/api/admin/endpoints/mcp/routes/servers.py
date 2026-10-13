@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
+from src.db.mcp.mcp_approvals import APPROVAL_EFFECTIVE_STATUS_SQL
 from src.api.admin.auth_scope import scope_for_permissions
 from src.api.admin.endpoints.common import (
     AuthScope,
@@ -681,11 +682,9 @@ async def get_mcp_server_operations(
         f"""
         SELECT
             COUNT(*)::int AS total_requests,
-            COUNT(*) FILTER (
-                WHERE status = 'pending' AND (expires_at IS NULL OR expires_at > NOW())
-            )::int AS pending_requests,
-            COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_requests,
-            COUNT(*) FILTER (WHERE status = 'rejected')::int AS rejected_requests
+            COUNT(*) FILTER (WHERE {APPROVAL_EFFECTIVE_STATUS_SQL} = 'pending')::int AS pending_requests,
+            COUNT(*) FILTER (WHERE {APPROVAL_EFFECTIVE_STATUS_SQL} = 'approved')::int AS approved_requests,
+            COUNT(*) FILTER (WHERE r.status = 'rejected')::int AS rejected_requests
         FROM deltallm_mcpapprovalrequest r
         WHERE mcp_server_id = $1
           AND created_at >= NOW() - ($2::int * INTERVAL '1 hour')

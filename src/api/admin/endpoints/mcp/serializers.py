@@ -91,10 +91,17 @@ def _serialize_approval_request(
     *,
     server: MCPServerRecord | None = None,
     can_decide: bool = False,
+    viewer_account_id: str | None = None,
 ) -> dict[str, Any]:
     payload = to_json_value(asdict(record))
     payload["server"] = _serialize_server_summary(server, server_id=record.mcp_server_id)
-    payload["capabilities"] = {"can_decide": bool(can_decide and record.status == "pending")}
+    decidable = bool(can_decide and record.status == "pending")
+    is_requester = bool(viewer_account_id and viewer_account_id == record.requested_by_account_id)
+    payload["capabilities"] = {
+        "can_decide": decidable,
+        # The requester can reject their own call but cannot approve it.
+        "can_approve": decidable and not is_requester,
+    }
     return payload
 
 

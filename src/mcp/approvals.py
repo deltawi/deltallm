@@ -58,15 +58,6 @@ class MCPApprovalService:
         )
         await self.repository.expire_stale_approval_requests(request_fingerprint=fingerprint)
         active = await self.repository.find_active_approval_request(request_fingerprint=fingerprint)
-        if active is not None and active.status == "approved":
-            # One approval allows one execution. A concurrent call that loses
-            # this update gets a new pending request below.
-            consumed = await self.repository.consume_approval_request(
-                active.mcp_approval_request_id
-            )
-            if consumed is not None:
-                return MCPApprovalAuthorization(status="approved", approval_request=consumed)
-            active = None
         if active is not None:
             if active.status == "pending":
                 record_mcp_approval_request(
@@ -100,6 +91,19 @@ class MCPApprovalService:
             )
             return MCPApprovalAuthorization(status=created.status, approval_request=created)
         return None
+
+    async def consume_approval(self, approval_request_id: str) -> bool:
+        """Use an approval for one execution.
+
+        The gateway calls this after it gets its rate and concurrency lease,
+        just before it runs the tool, so a call that the gateway itself stops
+        does not use the approval. Returns ``False`` when another call used
+        it first or it expired.
+        """
+        if self.repository is None:
+            return False
+        consumed = await self.repository.consume_approval_request(approval_request_id)
+        return consumed is not None
 
     def decision_expiry_for_status(self, status: str) -> datetime | None:
         now = datetime.now(tz=UTC)

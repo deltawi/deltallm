@@ -90,6 +90,32 @@ class MCPGatewayService:
         )
         return tools
 
+    @staticmethod
+    async def _consume_approval_or_raise(
+        approval_service: MCPApprovalService,
+        approved_request_id: str,
+        *,
+        namespaced_tool_name: str,
+        approval_inputs: dict[str, Any],
+    ) -> None:
+        if await approval_service.consume_approval(approved_request_id):
+            return
+        # Another call used this approval first, or it expired. This call needs
+        # its own approval, so return the request that now covers it.
+        retry = await approval_service.authorize_execution(**approval_inputs)
+        retry_request_id = (
+            retry.approval_request.mcp_approval_request_id if retry is not None else None
+        )
+        if retry is not None and retry.status == "rejected":
+            raise MCPApprovalDeniedError(
+                f"MCP tool '{namespaced_tool_name}' approval was rejected",
+                approval_request_id=retry_request_id,
+            )
+        raise MCPApprovalRequiredError(
+            f"MCP tool '{namespaced_tool_name}' requires approval",
+            approval_request_id=retry_request_id,
+        )
+
     async def call_tool(
         self,
         auth: UserAPIKeyAuth,
@@ -123,6 +149,8 @@ class MCPGatewayService:
             raise MCPToolNotFoundError(f"Unknown MCP tool '{namespaced_tool_name}'")
 
         policy = await self._effective_tool_policy(auth, visible.server.mcp_server_id, tool_name)
+        approved_request_id: str | None = None
+        approval_inputs: dict[str, Any] = {}
         if policy is not None:
             if not policy.enabled:
                 record_mcp_tool_call(
@@ -155,16 +183,17 @@ class MCPGatewayService:
                     raise MCPPolicyDeniedError(
                         f"MCP tool '{namespaced_tool_name}' requires approval, but the approval service is unavailable"
                     )
-                approval = await self.approval_service.authorize_execution(
-                    server=server_record_to_config(visible.server),
-                    tool_name=tool_name,
-                    policy=policy,
-                    auth=auth,
-                    arguments=arguments,
-                    request_headers=request_headers,
-                    request_id=request_id,
-                    correlation_id=correlation_id,
-                )
+                approval_inputs = {
+                    "server": server_record_to_config(visible.server),
+                    "tool_name": tool_name,
+                    "policy": policy,
+                    "auth": auth,
+                    "arguments": arguments,
+                    "request_headers": request_headers,
+                    "request_id": request_id,
+                    "correlation_id": correlation_id,
+                }
+                approval = await self.approval_service.authorize_execution(**approval_inputs)
                 if approval is None:
                     record_mcp_tool_call(
                         server_key=server_key,
@@ -176,7 +205,7 @@ class MCPGatewayService:
                         f"MCP tool '{namespaced_tool_name}' requires approval, but no approval record could be created"
                     )
                 if approval.status == "approved":
-                    pass
+                    approved_request_id = approval.approval_request.mcp_approval_request_id
                 elif approval.status == "rejected":
                     record_mcp_tool_call(
                         server_key=server_key,
@@ -214,6 +243,13 @@ class MCPGatewayService:
                     server_key=server_key,
                     tool_name=tool_name,
                     policy=policy,
+                )
+            if approved_request_id is not None and self.approval_service is not None:
+                await self._consume_approval_or_raise(
+                    self.approval_service,
+                    approved_request_id,
+                    namespaced_tool_name=namespaced_tool_name,
+                    approval_inputs=approval_inputs,
                 )
 
             async def _execute_tool_call() -> MCPToolCallResult:

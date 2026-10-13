@@ -33,6 +33,8 @@ from src.api.admin.endpoints.mcp.sql_visibility import _approval_visibility_clau
 
 router = APIRouter(tags=["Admin MCP"])
 
+_EXPIRED_DETAIL = "MCP approval request has expired. The caller must send the call again."
+
 
 @router.get(
     "/ui/api/mcp-approval-requests",
@@ -51,6 +53,7 @@ async def list_mcp_approval_requests(
     scope = get_auth_scope(
         request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
     )
+    viewer_account_id = getattr(get_platform_auth_context(request), "account_id", None)
     if status_value is not None and status_value not in APPROVAL_STATUS_FILTERS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -72,6 +75,7 @@ async def list_mcp_approval_requests(
                     item,
                     server=servers.get(item.mcp_server_id),
                     can_decide=item.status == "pending",
+                    viewer_account_id=viewer_account_id,
                 )
                 for item in approvals
             ],
@@ -125,6 +129,7 @@ async def list_mcp_approval_requests(
                 item,
                 server=servers.get(item.mcp_server_id),
                 can_decide=item.status == "pending",
+                viewer_account_id=viewer_account_id,
             )
             for item in approvals
         ],
@@ -167,7 +172,7 @@ async def decide_mcp_approval_request(
     if existing.status == "expired":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="MCP approval request has expired. The caller must send the call again.",
+            detail=_EXPIRED_DETAIL,
         )
     context = get_platform_auth_context(request)
     decider_account_id = getattr(context, "account_id", None)
@@ -190,6 +195,12 @@ async def decide_mcp_approval_request(
         expires_at=approval_service.decision_expiry_for_status(decision),
     )
     if decided is None:
+        current = await repository.get_approval_request(approval_request_id)
+        if current is not None and current.status == "expired":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_EXPIRED_DETAIL,
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Pending MCP approval request not found"
         )

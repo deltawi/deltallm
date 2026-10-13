@@ -10,8 +10,9 @@ An approved row allows exactly one execution. The gateway sets
 ``consumed_at`` in the same statement that checks the row is still usable,
 so two concurrent calls cannot both use one approval.
 
-Expiry of pending rows is lazy. Reads report a pending row past its
-``expires_at`` as ``expired`` so lists and counts do not show dead requests.
+Expiry is lazy. Reads report a pending row past its ``expires_at``, and an
+approval that nobody used before its window ended, as ``expired`` so lists
+and counts do not show dead requests.
 """
 
 from __future__ import annotations
@@ -24,10 +25,11 @@ from src.db.mcp.mcp_scope_policies import _parse_datetime, _parse_json_object
 
 APPROVAL_STATUS_FILTERS: frozenset[str] = frozenset({"pending", "approved", "rejected", "expired"})
 
-# Status as callers see it: a pending row past its expiry reads as expired.
+# Status as callers see it. A pending row past its expiry, and an approval
+# that nobody used before its window ended, read as expired.
 APPROVAL_EFFECTIVE_STATUS_SQL = (
-    "CASE WHEN r.status = 'pending' AND r.expires_at IS NOT NULL AND r.expires_at <= NOW() "
-    "THEN 'expired' ELSE r.status END"
+    "CASE WHEN r.status IN ('pending', 'approved') AND r.consumed_at IS NULL "
+    "AND r.expires_at <= NOW() THEN 'expired' ELSE r.status END"
 )
 
 APPROVAL_SELECT_COLUMNS = f"""
@@ -64,10 +66,16 @@ _RETURNING_COLUMNS = """
 
 def approval_status_clause(status: str, params: list[Any]) -> str:
     """Return a filter on the effective status. Appends bind values to ``params``."""
+    still_open = "(r.consumed_at IS NOT NULL OR r.expires_at IS NULL OR r.expires_at > NOW())"
     if status == "pending":
-        return "(r.status = 'pending' AND (r.expires_at IS NULL OR r.expires_at > NOW()))"
+        return f"(r.status = 'pending' AND {still_open})"
+    if status == "approved":
+        return f"(r.status = 'approved' AND {still_open})"
     if status == "expired":
-        return "(r.status = 'expired' OR (r.status = 'pending' AND r.expires_at <= NOW()))"
+        return (
+            "(r.status = 'expired' OR (r.status IN ('pending', 'approved') "
+            "AND r.consumed_at IS NULL AND r.expires_at <= NOW()))"
+        )
     params.append(status)
     return f"r.status = ${len(params)}"
 
