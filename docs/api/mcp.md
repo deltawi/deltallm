@@ -335,4 +335,4 @@ Streamable HTTP servers may return either JSON or `text/event-stream` JSON-RPC r
 
 - [Connect your first MCP server](../getting-started/mcp-quickstart.md)
 - [MCP Gateway & Tools](../features/mcp.md)
-- [Admin UI: MCP Servers](../admin-ui/mcp.md)
+- [Admin UI: MCP](../admin-ui/mcp.md)

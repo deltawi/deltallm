@@ -33,6 +33,7 @@ type DetailMetricCardProps = {
 };
 
 type TextTabsProps<T extends string> = {
+  label?: string;
   items: Array<{
     id: T;
     label: ReactNode;
@@ -143,7 +144,7 @@ export function DetailMetricCard({
   );
 }
 
-export function TextTabs<T extends string>({ items, active, onChange }: TextTabsProps<T>) {
+export function TextTabs<T extends string>({ items, active, onChange, label }: TextTabsProps<T>) {
   const focusTab = (current: HTMLButtonElement, index: number) => {
     current.parentElement
       ?.querySelector<HTMLElement>(`[role="tab"][data-tab-index="${index}"]`)
@@ -156,7 +157,7 @@ export function TextTabs<T extends string>({ items, active, onChange }: TextTabs
   };
 
   return (
-    <div role="tablist" className="contents">
+    <div role="tablist" aria-label={label} className="contents">
       {items.map((item, index) => (
         <button
           key={item.id}

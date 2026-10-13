@@ -216,5 +216,5 @@ Notes:
 ## Next steps
 
 - [MCP Gateway & Tools](../features/mcp.md)
-- [Admin UI: MCP Servers](../admin-ui/mcp.md)
+- [Admin UI: MCP](../admin-ui/mcp.md)
 - [API Reference: MCP Gateway & Tooling](../api/mcp.md)

@@ -15,8 +15,8 @@ organization or bypass an endpoint permission.
 | Provider credentials | Platform administrator | Secret values remain hidden after they are saved | [Provider credential API](../api/admin.md#named-credentials) |
 | Route groups | Platform administrator | Group, member, and routing-policy changes | [Route-group API](../api/admin.md#route-groups) |
 | Prompts | Platform administrator | Template, version, label, and binding changes | [Administration API](../api/admin.md) |
-| MCP servers | Platform administrator or `key.read` | Changes require `org.update` for the affected organization | [MCP API](../api/mcp.md) |
-| Tool approvals | Platform administrator or `key.update` | Results remain limited to authorized scope | [MCP API](../api/mcp.md) |
+| MCP, Servers tab | Platform administrator or `key.read` | Changes require `org.update` for the affected organization | [MCP API](../api/mcp.md) |
+| MCP, Approvals tab | Platform administrator or `key.update` | Results are limited to the authorized scope | [MCP approvals](../admin-ui/mcp.md#approvals-tab) |
 | Application keys | `key.read`, `key.update`, or eligible `key.create_self` | Ownership, team policy, and scope limit each action | [Authentication](../features/authentication.md) |
 | Organizations | Platform administrator or `org.read` | Changes require the relevant organization permission | [Accounts and access](../concepts/tenancy-and-access.md) |
 | Teams | Platform administrator or `team.read` | Changes require the relevant organization or team permission | [Accounts and access](../concepts/tenancy-and-access.md) |

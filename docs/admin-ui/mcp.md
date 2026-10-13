@@ -1,6 +1,16 @@
-# MCP Servers
+# MCP
 
-The MCP Servers page is where operators register upstream MCP servers, decide who can use them, and govern how each tool executes.
+Use the MCP page to register upstream MCP servers, control who can use them, set how each tool
+runs, and decide tool calls that need approval.
+
+To open the page, select **AI Gateway**, then **MCP**. The page has two tabs:
+
+- **Servers**: register, check, and manage MCP servers.
+- **Approvals**: approve or reject tool calls that need manual approval. This tab shows only when
+  your account can decide approvals.
+
+The tab is part of the page URL (for example, `/mcp-servers?tab=approvals`). You can bookmark or
+share a link to a tab. The old `/mcp-approvals` link opens the **Approvals** tab.
 
 **Access:** `key.read` can expose read views; `org.update` is required for server, binding, and tool-
 policy mutations; `key.update` is required for approval decisions. Resource scope is still enforced
@@ -19,7 +29,7 @@ Use this area when you need to:
 
 ## Quick Success Workflow
 
-1. Open **AI Gateway -> MCP Servers**
+1. Open **AI Gateway -> MCP**, then the **Servers** tab
 2. Create one server with a real `base_url`
 3. Refresh capabilities and confirm the expected tool list appears
 4. Run a health check and confirm the server is healthy
@@ -110,20 +120,71 @@ Available controls:
 
 Use policies to keep the server broadly visible but still control the riskiest tools narrowly.
 
-## Approval Requests
+## Approvals tab
 
-If a policy uses manual approval, DeltaLLM creates approval requests for `/mcp tools/call` attempts.
+Some MCP tools can require a person to approve each call before DeltaLLM sends it to the external
+server. When a tool policy uses manual approval, DeltaLLM creates an approval request for each
+direct `/mcp` `tools/call` attempt.
 
-From the UI, operators can:
+**Access:** platform administrator or a role with `key.update`. Results show only the
+organizations and teams that your account can manage.
 
-- inspect the requested tool and arguments
-- approve or reject the request
-- add a decision comment
+### How an approval works
 
-Important limitation:
+- One approval allows one call. After DeltaLLM runs the approved call, the request shows
+  **Approved · used**. A new call needs a new approval.
+- The caller must send the identical call again after the approval. A call with a different tool
+  or different arguments needs a different approval.
+- The caller must send the call again within 15 minutes after the approval. If not, the request
+  shows **Expired**.
+- A pending request expires after 24 hours.
+- The person who made the call cannot approve it. That person can reject it. The row shows
+  **Your request**, and another operator must approve it.
 
-- manual approval is currently part of the direct `/mcp` flow
-- chat and responses auto-execution do not support manual-approval tools yet
+### Review a request
+
+1. Open **AI Gateway -> MCP**, then the **Approvals** tab. The tab shows the number of pending
+   requests.
+2. The **Pending** filter shows by default. Use **Approved**, **Rejected**, **Expired**, or **All**
+   to see other requests.
+3. Select the arrow button at the end of a row to show the details. Examine the MCP server, tool
+   name, arguments, caller, and creation time.
+4. Approve the request only when you expect the action and the input. If not, reject it.
+5. To reject a request, show its details, then select **Reject**. You can add a short comment for
+   a later review.
+
+To show the requests of one server only, open the server, select the **Activity** tab, then select
+**Open in Approvals**. The **Approvals** tab then shows a server filter. Select the **x** on the
+filter to remove it. With a server filter, the line above the table shows the number of pending
+requests for that server only. The tab number always shows the pending requests for all servers.
+
+### Export requests
+
+Select **Export** to download the requests of the current filter as a CSV file. The export
+contains all pages of the filter, up to 500 requests. If the filter has more than 500 requests, a
+message tells you that the file is not complete. Use a narrower filter to export the remaining
+requests.
+
+### Server detail Activity tab
+
+The **Activity** tab of a server shows the approval requests of that server. It has the same
+status filters, and **Pending** shows by default.
+
+### Important limitation
+
+Manual approval applies to direct `/mcp` tool calls only. A model cannot stop a chat or Responses
+API request and continue it after approval. Thus, those requests reject tools that require manual
+approval.
+
+### If no request appears
+
+Make sure that:
+
+- the MCP tool policy requires manual approval
+- the request used the direct `/mcp` tool-call flow
+- your account has `key.update` for the scope of the request
+- the request did not expire
+- the status filter and the server filter are correct
 
 ## Operations View
 

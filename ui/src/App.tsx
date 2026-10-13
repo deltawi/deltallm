@@ -21,14 +21,12 @@ const TeamDetail = lazy(() => import('./pages/TeamDetail'));
 import ModelDetail from './pages/ModelDetail';
 import NamedCredentials from './pages/NamedCredentials';
 import AuditLogs from './pages/AuditLogs';
-import MCPServers from './pages/MCPServers';
-import MCPServerDetail from './pages/MCPServerDetail';
-import MCPApprovalQueue from './pages/MCPApprovalQueue';
 import { ToastProvider } from './components/ToastProvider';
 import BrandingProvider from './components/BrandingProvider';
 import Button from './components/Button';
 import { defaultRouteForUiAccess, resolveUiAccess } from './lib/authorization';
 import { consoleSignInPath, uiMount } from './lib/uiMount';
+import { mcpApprovalsTabPath } from './lib/mcpApprovals';
 import { sessionPrincipal } from './lib/authTypes';
 import { loginPathFor, returnToFromSearch, safeReturnTo } from './lib/authRedirect';
 
@@ -47,6 +45,8 @@ const ModelEdit = lazy(() => import('./pages/ModelEdit'));
 const Models = lazy(() => import('./pages/Models'));
 const PromptRegistry = lazy(() => import('./pages/PromptRegistry'));
 const PromptTemplateDetail = lazy(() => import('./pages/PromptTemplateDetail'));
+const MCPServers = lazy(() => import('./pages/MCPServers'));
+const MCPServerDetail = lazy(() => import('./pages/MCPServerDetail'));
 
 class RouteChunkBoundary extends Component<
   { children: ReactNode },
@@ -80,6 +80,12 @@ class RouteChunkBoundary extends Component<
     }
     return this.props.children;
   }
+}
+
+// The Tool Approvals page is now a tab of the MCP page. Keep old links working.
+function MCPApprovalsRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={mcpApprovalsTabPath(search)} replace />;
 }
 
 function RouteLoading() {
@@ -214,9 +220,9 @@ function AppRoutes() {
         <Route path="/route-groups/*" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/prompts" element={uiAccess.prompts ? <ChunkedRoute><PromptRegistry /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <ChunkedRoute><PromptTemplateDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <MCPServers /> : <Navigate to="/" replace />} />
-        <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <MCPServerDetail /> : <Navigate to="/" replace />} />
-        <Route path="/mcp-approvals" element={uiAccess.mcp_approvals ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
+        <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServers /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServerDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/mcp-approvals" element={uiAccess.mcp_servers ? <MCPApprovalsRedirect /> : <Navigate to="/" replace />} />
         <Route path="/keys" element={uiAccess.keys ? <ChunkedRoute><ApiKeys /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/organizations" element={uiAccess.organizations ? <ChunkedRoute><Organizations /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/organizations/new" element={uiAccess.organization_create ? <ChunkedRoute><OrganizationCreate /></ChunkedRoute> : <Navigate to="/organizations" replace />} />

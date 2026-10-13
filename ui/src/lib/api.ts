@@ -286,6 +286,8 @@ export interface MCPApprovalRequest {
   decided_by_account_id?: string | null;
   decided_at?: string | null;
   expires_at?: string | null;
+  /** Set when the gateway ran the approved call. An approval allows one call only. */
+  consumed_at?: string | null;
   metadata?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -298,6 +300,8 @@ export interface MCPApprovalRequest {
   } | null;
   capabilities?: {
     can_decide: boolean;
+    /** False when the viewer made the call. The viewer can still reject it. Older servers omit it. */
+    can_approve?: boolean;
   };
 }
 
@@ -1059,7 +1063,8 @@ export const serviceAccounts = {
 export const mcpServers = {
   list: (params?: { search?: string; enabled?: boolean; limit?: number; offset?: number }) =>
     apiFetch<Paginated<MCPServer>>(withQuery('/ui/api/mcp-servers', params)),
-  get: (serverId: string) => apiFetch<MCPServerDetail>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`),
+  get: (serverId: string, signal?: AbortSignal) =>
+    apiFetch<MCPServerDetail>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`, { signal }),
   operations: (serverId: string, params?: { window_hours?: number; top_tools_limit?: number; failures_limit?: number }) =>
     apiFetch<MCPServerOperations>(withQuery(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}/operations`, params)),
   create: (payload: object) => apiFetch<MCPServer>('/ui/api/mcp-servers', { method: 'POST', json: payload }),
@@ -1088,8 +1093,10 @@ export const mcpServers = {
     apiFetch<MCPToolPolicy>('/ui/api/mcp-tool-policies', { method: 'POST', json: payload }),
   deleteToolPolicy: (policyId: string) =>
     apiFetch<{ deleted: boolean; mcp_tool_policy_id: string }>(`/ui/api/mcp-tool-policies/${encodeURIComponent(policyId)}`, { method: 'DELETE' }),
-  listApprovalRequests: (params?: { server_id?: string; status?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<MCPApprovalRequest>>(withQuery('/ui/api/mcp-approval-requests', params)),
+  listApprovalRequests: (
+    params?: { server_id?: string; status?: string; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ) => apiFetch<Paginated<MCPApprovalRequest>>(withQuery('/ui/api/mcp-approval-requests', params), { signal }),
   decideApprovalRequest: (approvalRequestId: string, payload: { status: 'approved' | 'rejected'; decision_comment?: string }) =>
     apiFetch<MCPApprovalRequest>(`/ui/api/mcp-approval-requests/${encodeURIComponent(approvalRequestId)}/decision`, { method: 'POST', json: payload }),
 };

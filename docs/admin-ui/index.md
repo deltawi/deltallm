@@ -23,7 +23,7 @@ access](access-requirements.md) if a page or action is missing.
 | [Provider credentials](../guides/admin-provider-credentials.md) | Reuse and rotate provider secrets |
 | [Route groups](../guides/admin-route-groups.md) | Control routing and failover across models |
 | [Prompts](prompt-registry.md) | Manage reusable, versioned prompts |
-| [MCP servers](mcp.md) | Connect external tools |
+| [MCP](mcp.md) | Connect external tools and approve protected tool calls |
 | [API keys](api-keys.md) | Give applications controlled access |
 | [Organizations](organizations.md) and [teams](teams.md) | Set ownership, budgets, and limits |
 | [People and permissions](people-and-access.md) | Manage user access |
@@ -32,7 +32,6 @@ access](access-requirements.md) if a page or action is missing.
 | [Budgets](../guides/admin-budgets.md) and [rate limits](../guides/admin-rate-limits.md) | Control spending and request volume |
 | [Guardrails](guardrails.md) | Check prompts and responses for risky content |
 | [Audit logs](audit-logs.md) | Review important system changes |
-| [Tool approvals](tool-approvals.md) | Approve or reject protected MCP tool calls |
 | [Batch jobs](batch-jobs.md) | Monitor background jobs |
 | [Settings](settings.md) | Change installation-wide defaults |
 | [Playground](playground.md) | Test a model with a real key |
