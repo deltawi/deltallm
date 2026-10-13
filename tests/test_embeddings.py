@@ -339,7 +339,7 @@ async def test_embeddings_custom_provider_does_not_inherit_openai_classification
         json={"model": "text-embedding-3-small", "input": "hello"},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 400, response.text
     assert response.json()["error"]["message"] == "Provider rejected request"
     assert "sk-upstream" not in response.text
     assert attempts == ["Bearer primary-key"]

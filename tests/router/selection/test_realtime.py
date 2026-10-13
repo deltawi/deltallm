@@ -314,7 +314,8 @@ async def test_parent_deadline_cancels_selector_and_leaves_no_answer_or_reported
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as upstream:
         billing, policy = configure(test_app, upstream)
-        policy["timeouts"] = {"global_ms": 100}
+        # Leave a slow runner time to reach the selector before the deadline fires.
+        policy["timeouts"] = {"global_ms": 1000}
         _publish(test_app, [policy])
         result = await client.post(
             "/v1/chat/completions",

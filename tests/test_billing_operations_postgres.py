@@ -8,6 +8,7 @@ import pytest
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.db.billing import billing_transaction
 from src.db.billing.billing_operations import BillingOperationRepository
 from src.db.billing.billing_operation_recovery import BillingOperationRecovery
 from tests.test_operation_reservation import make_operation
@@ -16,6 +17,14 @@ from tests import test_selector_charge_db_integration as selector_db_fixtures
 selector_billing_db = selector_db_fixtures.selector_billing_db
 
 pytestmark = [pytest.mark.integration, pytest.mark.postgres]
+
+
+@pytest.fixture(autouse=True)
+def billing_invariant_transaction_budget(monkeypatch):
+    # Like test_billing_operation_locking_postgres.py, this module verifies SQL
+    # invariants, not shared-runner throughput within the production 250-ms cap.
+    # Hermetic repository tests assert the production cap.
+    monkeypatch.setattr(billing_transaction, "DB_BUDGET_SECONDS", 2)
 
 
 @pytest.fixture

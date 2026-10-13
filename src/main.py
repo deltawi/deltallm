@@ -121,7 +121,10 @@ async def lifespan(app: FastAPI):
 
 
 def create_app(
-    *, startup: StartupConfig | None = None, lifecycle: ProcessLifecycle | None = None
+    *,
+    startup: StartupConfig | None = None,
+    lifecycle: ProcessLifecycle | None = None,
+    include_routes: bool = True,
 ) -> FastAPI:
     app = FastAPI(title="DeltaLLM Core API", version="0.1.0", lifespan=lifespan)
     if startup is not None:
@@ -157,10 +160,12 @@ def create_app(
     app.add_middleware(RequestDeadlineMiddleware)
     app.add_middleware(RequestTimingMiddleware)
 
-    app.include_router(v1_router)
-    app.include_router(admin_router)
-
-    install_ui_fallback(app)
+    # Tests build many applications and copy routes from one prebuilt app,
+    # because FastAPI analyses every endpoint signature again per include.
+    if include_routes:
+        app.include_router(v1_router)
+        app.include_router(admin_router)
+        install_ui_fallback(app)
     return app
 
 
