@@ -95,6 +95,8 @@ Each policy can control:
 
 Use manual approval when a tool can take irreversible or sensitive actions. Use `never` when you want low-friction retrieval and read-only integrations.
 
+With manual approval, one approval allows one tool call. The caller sends the identical call again after an operator approves it. For the full flow and the time limits, see [Manual approval](../api/mcp.md#manual-approval).
+
 ## Call a tool directly
 
 Use `POST /mcp` when your application should choose the tool instead of asking a model to choose it.
@@ -145,7 +147,7 @@ DeltaLLM translates the visible MCP tools into OpenAI-style function tools, exec
 
 - MCP tools are not supported on streaming chat requests yet
 - MCP tools are not supported on streaming responses requests yet
-- tools that require manual approval are not auto-executed in chat or responses flows
+- chat and responses requests do not support manual approval. DeltaLLM rejects the request if a tool that it can use requires manual approval. Use `allowed_tools` to remove that tool, or call it through `/mcp`
 - the upstream model still needs reliable tool-calling support
 
 For early production rollouts, verify the provider and model combination with a real tool call path before enabling it broadly.
@@ -201,7 +203,7 @@ For the day-to-day UI workflow, see [Admin UI: MCP Servers](../admin-ui/mcp.md).
 | `Unknown MCP tool 'docs.search'` | The tool is not visible to that caller, or the upstream capabilities changed and were not refreshed |
 | Health check reports `unhealthy` | Base URL, upstream auth, or network reachability is wrong |
 | `/mcp` works but chat fails | The provider/model may not support tool calling well enough, or the request is streaming |
-| Chat returns a manual approval error | Use `/mcp tools/call`, approve the request, and retry there |
+| Chat returns a manual approval error | Remove the tool with `allowed_tools`, or use `/mcp tools/call`, approve the request, and send the identical call again |
 
 ## Related pages
 

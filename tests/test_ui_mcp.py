@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from prometheus_client import generate_latest
@@ -326,7 +326,15 @@ class _FakeMCPRepository(MCPRepository):
         return items[offset : offset + limit], len(items)
 
     async def get_approval_request(self, approval_request_id: str):  # noqa: ANN201
-        return self.approvals.get(approval_request_id)
+        record = self.approvals.get(approval_request_id)
+        if (
+            record is not None
+            and record.status == "pending"
+            and record.expires_at is not None
+            and record.expires_at <= _utcnow()
+        ):
+            return replace(record, status="expired")
+        return record
 
     async def decide_approval_request(
         self,
@@ -337,7 +345,7 @@ class _FakeMCPRepository(MCPRepository):
         decision_comment,
         expires_at,
     ):  # noqa: ANN001, ANN201
-        existing = self.approvals.get(approval_request_id)
+        existing = await self.get_approval_request(approval_request_id)
         if existing is None or existing.status != "pending":
             return None
         updated = replace(
@@ -1866,6 +1874,85 @@ async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(
     )
     assert decision.status_code == 200
     assert decision.json()["status"] == "approved"
+
+
+async def _approval_test_setup(test_app, monkeypatch, approval_overrides):  # noqa: ANN001, ANN202
+    repository = _FakeMCPRepository()
+    server = await repository.create_server(
+        server_key="docs",
+        name="Docs MCP",
+        description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
+        transport="streamable_http",
+        base_url="https://mcp.example.com",
+        enabled=True,
+        auth_mode="none",
+        auth_config={},
+        forwarded_headers_allowlist=[],
+        request_timeout_ms=30000,
+        metadata=None,
+        created_by_account_id=None,
+    )
+    approval = MCPApprovalRequestRecord(
+        mcp_approval_request_id="approval-guard-1",
+        mcp_server_id=server.mcp_server_id,
+        tool_name="search",
+        scope_type="team",
+        scope_id="team-ops",
+        status="pending",
+        request_fingerprint="fp-guard-1",
+        requested_by_api_key="sk-key-1",
+        organization_id="org-main",
+        arguments_json={"query": "delta"},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+        **approval_overrides,
+    )
+    repository.approvals[approval.mcp_approval_request_id] = approval
+    test_app.state.mcp_repository = repository
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeApprovalScopeQueryClient([approval.__dict__])}
+    )()
+    test_app.state.audit_service = _RecordingAuditService()
+    context = _make_context(org_role=OrganizationRole.ADMIN)
+    _set_auth_context(monkeypatch, context)
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.mcp.routes.approvals.get_platform_auth_context",
+        lambda request: context,
+    )
+    return repository, approval
+
+
+@pytest.mark.asyncio
+async def test_requester_cannot_approve_own_approval_request(client, test_app, monkeypatch):
+    repository, approval = await _approval_test_setup(
+        test_app, monkeypatch, {"metadata": {"requested_by_account_id": "acct-1"}}
+    )
+    url = f"/ui/api/mcp-approval-requests/{approval.mcp_approval_request_id}/decision"
+
+    approved = await client.post(url, json={"status": "approved"})
+    assert approved.status_code == 403
+    assert repository.approvals[approval.mcp_approval_request_id].status == "pending"
+
+    rejected = await client.post(url, json={"status": "rejected"})
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_expired_approval_request_cannot_be_decided(client, test_app, monkeypatch):
+    repository, approval = await _approval_test_setup(
+        test_app, monkeypatch, {"expires_at": _utcnow() - timedelta(minutes=1)}
+    )
+
+    response = await client.post(
+        f"/ui/api/mcp-approval-requests/{approval.mcp_approval_request_id}/decision",
+        json={"status": "approved"},
+    )
+
+    assert response.status_code == 409
+    assert repository.approvals[approval.mcp_approval_request_id].status == "pending"
 
 
 @pytest.mark.asyncio
