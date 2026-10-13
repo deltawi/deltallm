@@ -57,6 +57,26 @@ async def seed_reservation_history(db, generation, window):
     await db.execute_raw("ANALYZE deltallm_accounting_grant_windows")
 
 
+async def seed_operation_history(db, generation):
+    # 10k closed operations fit in ~370 pages on a freshly vacuumed table, where
+    # a hash join over a Seq Scan costs less than 100 primary-key probes. Real
+    # retention is far larger, so keep enough history that the index is the
+    # cheaper plan whatever bloat earlier tests left behind.
+    await db.execute_raw(
+        "INSERT INTO deltallm_billing_operations "
+        "(operation_id,owner_token,api_key,model,snapshot,selector_event_id,"
+        "selector_allowance,answer_allowance,selector_state,answer_state,closed_at,expires_at,"
+        "accounting_protocol,accounting_generation,accounting_partition,request_fingerprint,"
+        "accounting_state,provisional_debit_exact) "
+        "SELECT 'lease-history-op-'||$1::text||'-'||value,'fixture-owner','fixture-key',"
+        "'fixture-model','{}'::jsonb,'lease-history-event-'||$1::text||'-'||value,"
+        "0,0,'unattempted','unattempted',NOW(),NOW()+INTERVAL '5 minutes',"
+        "'primary',$1::bigint,0,repeat('a',64),'released',0 FROM generate_series(1,40000) value",
+        generation,
+    )
+    await db.execute_raw("ANALYZE deltallm_billing_operations")
+
+
 def assert_bounded_plans(captured, phase):
     assert captured.errors == []
     observed = set()
@@ -98,6 +118,7 @@ async def test_nested_local_persistence_does_not_scan_retained_history(
     items = [_reservation(generation, window, explicit_window=explicit) for _ in range(6)]
     await seed_history(db, generation, items[0])
     await seed_closed_accounting_history(db, generation)
+    await seed_operation_history(db, generation)
     await seed_event_history(db, generation)
     await seed_reservation_history(db, generation, window)
     allocations = [allocation(item) for item in items]
