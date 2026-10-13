@@ -67,21 +67,30 @@ jobs:
         run: uv run prisma generate --schema=./prisma/schema.prisma
 
       - name: Run ${{ matrix.lane }} tests
+        # An explicit bash shell adds pipefail, so tee keeps pytest's exit code.
+        shell: bash
         env:
           DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only-0000
           DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
         run: >-
           uv run pytest -q -m "${{ matrix.lane }}"
           --durations=25 --durations-min=0.5
+          | tee pytest-output.txt
+
+      - name: Annotate failed tests
+        if: failure()
+        run: >-
+          grep -E '^(FAILED|ERROR) ' pytest-output.txt | head -n 50
+          | sed 's/^/::error title=pytest::/' || true
 
   postgres-tests:
-    name: Python tests (postgres ${{ matrix.shard }}/2)
+    name: Python tests (postgres ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        shard: [0, 1, 2, 3]
     services:
       postgres:
         image: postgres:15
@@ -141,6 +150,8 @@ jobs:
           uv pip sync --python /tmp/deltallm-realtime-sdk/bin/python tests/realtime/sdk-requirements.txt
 
       - name: Run PostgreSQL tests
+        # An explicit bash shell adds pipefail, so tee keeps pytest's exit code.
+        shell: bash
         env:
           CI: 'true'
           DELTALLM_TEST_REDIS_URL: redis://localhost:6379/0
@@ -150,8 +161,17 @@ jobs:
           DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
         run: >-
           uv run pytest -q -m postgres
-          --postgres-shard=${{ matrix.shard }}/2
+          --postgres-shard=${{ matrix.shard }}/4
           --tb=short --durations=25 --durations-min=0.5
+          | tee pytest-output.txt
+
+      # The PostgreSQL service log is printed after the job and can push the
+      # pytest summary out of the readable log, so failures also go to annotations.
+      - name: Annotate failed tests
+        if: failure()
+        run: >-
+          grep -E '^(FAILED|ERROR) ' pytest-output.txt | head -n 50
+          | sed 's/^/::error title=pytest::/' || true
 
   redis-tests:
     name: Python tests (redis)

@@ -158,18 +158,31 @@ running in a fake-only job.
 
 In GitHub Actions, the exact `-m app` selection uses two pytest-xdist worker
 processes. Each test still creates its own application and fake stores. The
+`test_app` fixture builds the full route table once per process and gives each
+application its own copies of those routes, bound to that application so
+`dependency_overrides` still apply. Rebuilding the routes for every test took
+about a second each and most of the lane's time. The
 other lanes, collection-only commands, and local commands remain serial by
 default. Use `-n 0` to request serial execution or `-n 2` to reproduce the
 application CI run locally. Explicit worker settings take precedence. This
 policy keeps the existing CI deadline and all required checks.
 
-The PostgreSQL lane uses two CI runners. Each runner has its own PostgreSQL and
-Redis services. `--postgres-shard=0/2` and `--postgres-shard=1/2` divide all collected
-PostgreSQL modules by a stable path hash. Each test runs once, and each module stays
-on one runner. Both shards must pass the `test` check. The time limit stays at
+The PostgreSQL lane uses four CI runners. Each runner has its own PostgreSQL and
+Redis services. `--postgres-shard=0/4` through `--postgres-shard=3/4` divide all
+collected PostgreSQL modules by a stable path hash. Each test runs once, and each
+module stays on one runner. With two shards the hash split was about 40/60 by run
+time, so one runner took about 12 minutes; with four the largest shard holds under
+a third of the lane. All shards must pass the `test` check. The time limit stays at
 20 minutes per runner. To reproduce a shard, add its option to `-m postgres` and
 use an isolated test database and Redis service. Local runs without this option
 still run the full lane.
+
+When a Python test lane fails in CI, the failing test IDs are also posted as
+job annotations, so they stay visible even when a long service log follows them.
+
+Tests that check a deadline should give the code enough time to reach the step
+under test on a busy runner (about a second), and tests that wait for background
+work should poll for it rather than sleep for a fixed few milliseconds.
 
 Query-plan tests read plans from `auto_explain` at the `NOTICE` level, so the plans
 reach the test connection but not the PostgreSQL server log. GitHub Actions prints
