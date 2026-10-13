@@ -113,7 +113,7 @@ class LifecycleCluster:
             (result.stdout + result.stderr)[-2 * 1024 * 1024 :]
         )
         elapsed = time.monotonic() - started
-        if elapsed >= 5 or result.returncode:
+        if elapsed >= 5 or (check and result.returncode):
             print(
                 f"[{time.monotonic() - self.started:7.1f}s] command-{sequence:03} "
                 f"{_command_label(command)} exited {result.returncode} after {elapsed:.1f}s",
