@@ -266,7 +266,12 @@ Policy fields include:
 | `limit` | Page size, from 1 to 500. The default is 100 |
 | `offset` | Number of rows to skip |
 
-Each request contains `consumed_at`. It is set when an approved request was used for its one execution.
+Each request contains `consumed_at`. It is set when an approved request was used for its one execution. An approval that nobody used before its window ended shows as `expired`.
+
+Each request also contains `capabilities`:
+
+- `can_decide`: the request is pending and you can decide it.
+- `can_approve`: you can approve it. This is `false` when you own the API key that made the call.
 
 The decision body is `{"status": "approved" | "rejected", "decision_comment": "optional text"}`. The decision endpoint returns:
 
