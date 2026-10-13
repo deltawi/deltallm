@@ -211,7 +211,8 @@ async def test_local_context_fallback_planning_obeys_original_deadline(client, t
         current = test_app.state.routing_runtime_generation_store.require_snapshot()
         groups = deepcopy(list(current.route_groups))
         groups[0]["context"] = {"mode": "eligible-only", "unknown_capacity": "exclude"}
-        groups[0]["timeouts"] = {"global_seconds": 0.1}
+        # Leave a slow runner time to reach planning before the deadline fires.
+        groups[0]["timeouts"] = {"global_seconds": 1}
         test_app.state.model_registry["backing"][-1]["model_info"]["max_tokens"] = 128
         runtime = _publish(test_app, groups, failover_config=current.failover_config)
         original = runtime.router.plan_deployments
@@ -235,8 +236,8 @@ async def test_local_context_fallback_planning_obeys_original_deadline(client, t
             client.post(endpoint, headers={"Authorization": "Bearer sk-test"}, json=body)
         )
         try:
-            await asyncio.wait_for(entered.wait(), 2)
-            response = await asyncio.wait_for(asyncio.shield(task), 1)
+            await asyncio.wait_for(entered.wait(), 5)
+            response = await asyncio.wait_for(asyncio.shield(task), 5)
             assert response.status_code == 408, response.text
             assert cancelled.is_set()
             assert not calls

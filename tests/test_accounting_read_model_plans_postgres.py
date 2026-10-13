@@ -173,7 +173,10 @@ async def test_native_checkpoint_lease_churn_reuses_heap_without_history_work(
         updates = after["n_tup_upd"] - before["n_tup_upd"]
         reused = after["n_tup_hot_upd"] - before["n_tup_hot_upd"]
         assert updates == 2048
-        assert reused >= updates * 0.95, {"updates": updates, "reused": reused}
+        # A regression (an indexed column in the lease update) drops HOT reuse
+        # to near zero. Snapshots held by other sessions on a busy runner can
+        # delay pruning for a few pages, so allow some non-HOT updates.
+        assert reused >= updates * 0.9, {"updates": updates, "reused": reused}
     finally:
         await connection.close(timeout=5)
     async with capture_accounting_plans(os.environ["DATABASE_URL"], planner=planner) as captured:

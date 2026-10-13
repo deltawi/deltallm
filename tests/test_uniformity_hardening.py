@@ -36,6 +36,15 @@ class _SpendRecorder:
         self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
 
 
+async def _wait_for_spend_events(app, timeout: float = 5.0) -> None:
+    # Spend logging finishes after the response is sent; poll instead of a
+    # fixed sleep so a slow CI runner does not read the recorder too early.
+    recorder = app.state.spend_tracking_service
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not recorder.events and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+
+
 class _CapturingFailoverManager:
     def __init__(self, captured: dict[str, object]) -> None:
         self.captured = captured
@@ -174,7 +183,7 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     assert test_app.state.spend_tracking_service.events
     last = test_app.state.spend_tracking_service.events[-1]
     assert (last.get("metadata") or {}).get("api_base") == "https://fallback.example/v1"
@@ -213,7 +222,7 @@ async def test_explicit_provider_keeps_spend_logging_intact(
     response = await client.post(path, headers=headers, json=body)
     assert response.status_code == 200
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     assert test_app.state.spend_tracking_service.events
     last = test_app.state.spend_tracking_service.events[-1]
     assert last.get("model") == body["model"]
@@ -247,7 +256,7 @@ async def test_chat_failure_writes_error_request_log(client, test_app):
     )
     assert response.status_code == 503
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     assert len(test_app.state.spend_tracking_service.events) == 1
     last = test_app.state.spend_tracking_service.events[-1]
     assert last["status"] == "error"
@@ -279,7 +288,7 @@ async def test_embedding_failure_writes_error_request_log(client, test_app):
     )
     assert response.status_code == 503
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     assert len(test_app.state.spend_tracking_service.events) == 1
     last = test_app.state.spend_tracking_service.events[-1]
     assert last["status"] == "error"
@@ -337,7 +346,7 @@ async def test_embedding_failover_failure_uses_last_attempted_deployment_metadat
     )
     assert response.status_code == 503
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     assert len(test_app.state.spend_tracking_service.events) == 1
     last = test_app.state.spend_tracking_service.events[-1]
     metadata = last.get("metadata") or {}
@@ -382,7 +391,7 @@ async def test_denied_model_preflight_writes_request_log_and_audit_event(client,
     payload = response.json()["error"]
     assert payload["type"] == "permission_denied"
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     assert len(test_app.state.spend_tracking_service.events) == 1
     last = test_app.state.spend_tracking_service.events[-1]
     assert last["status"] == "error"
@@ -421,7 +430,7 @@ async def test_invalid_json_writes_request_log_without_audit_event(client, test_
     detail = response.json()["detail"]
     assert detail[0]["type"] == "json_invalid"
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     assert len(test_app.state.spend_tracking_service.events) == 1
     last = test_app.state.spend_tracking_service.events[-1]
     assert last["status"] == "error"
@@ -461,7 +470,7 @@ async def test_audio_transcription_spend_log_includes_billing_metadata(client, t
     )
     assert response.status_code == 200
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     last = test_app.state.spend_tracking_service.events[-1]
     billing = (last.get("metadata") or {}).get("billing") or {}
     assert billing["billing_unit"] == "second"
@@ -639,7 +648,7 @@ async def test_audio_transcription_forces_verbose_json_for_second_pricing_and_pr
     assert response.json() == {"text": "hello"}
     assert captured_formats == ["verbose_json"]
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     last = test_app.state.spend_tracking_service.events[-1]
     billing = (last.get("metadata") or {}).get("billing") or {}
     assert billing["cost"] == 1.11
@@ -673,7 +682,7 @@ async def test_audio_speech_spend_log_marks_unpriced_without_matching_pricing_un
     )
     assert response.status_code == 200
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     last = test_app.state.spend_tracking_service.events[-1]
     billing = (last.get("metadata") or {}).get("billing") or {}
     assert billing["cost"] == 0.0
@@ -730,7 +739,7 @@ async def test_audio_speech_forces_sse_for_token_pricing_and_preserves_audio_res
     assert response.content == b"hello-audio"
     assert captured_stream_formats == ["sse"]
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     last = test_app.state.spend_tracking_service.events[-1]
     billing = (last.get("metadata") or {}).get("billing") or {}
     assert billing["billing_unit"] == "token"
@@ -806,7 +815,7 @@ async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_met
     assert response.headers["content-type"].startswith("audio/wav")
     assert response.content.startswith(b"RIFF")
 
-    await asyncio.sleep(0.05)
+    await _wait_for_spend_events(test_app)
     last = test_app.state.spend_tracking_service.events[-1]
     billing = (last.get("metadata") or {}).get("billing") or {}
     assert billing["billing_unit"] == "token"
