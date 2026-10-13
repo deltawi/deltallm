@@ -52,6 +52,7 @@ from src.router import (
 )
 from src.services.access.callable_target_grants import CallableTargetGrantService
 from src.services.access.callable_targets import build_callable_target_catalog
+from src.services.identity.keys.auth_fallback import AuthFallbackLimits
 from src.services.identity.keys.key_service import KeyService
 from src.services.admission.limit_counter import LimitCounter
 
@@ -1559,7 +1560,17 @@ async def test_app() -> FastAPI:
     app.state.settings = type(
         "Settings", (), {"openai_base_url": "https://api.openai.com/v1", "master_key": None}
     )()
-    app.state.key_service = KeyService(repository=repo, redis_client=redis, salt=salt)
+    # Production auth budgets are tens of milliseconds; a busy CI runner can
+    # miss them and turn an unrelated test into a 503. Auth budget behaviour
+    # has its own tests with explicit limits.
+    app.state.key_service = KeyService(
+        repository=repo,
+        redis_client=redis,
+        salt=salt,
+        fallback_limits=AuthFallbackLimits(
+            queue_timeout_ms=1_000, timeout_seconds=5, cache_timeout_seconds=1
+        ),
+    )
     app.state.organization_lifecycle_authorizer = ActiveOrganizationLifecycleAuthorizer()
     app.state.limit_counter = LimitCounter(redis_client=redis)
     app.state.callable_target_grant_service = CallableTargetGrantService(

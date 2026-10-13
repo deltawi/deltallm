@@ -76,7 +76,7 @@ def assert_bounded_plans(captured, phase):
                 and node["Actual Loops"]
             ):
                 observed.add(relation)
-                assert node["Node Type"] != "Seq Scan", entry.safe_report()
+                assert node["Node Type"] != "Seq Scan", (relation, entry.safe_report())
                 assert node["Actual Rows"] <= 45, entry.safe_report()
                 assert node.get("Rows Removed by Filter", 0) <= 45, entry.safe_report()
     assert "deltallm_accounting_grants" in observed
