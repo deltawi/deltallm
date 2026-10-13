@@ -169,6 +169,11 @@ metrics, recovery and pod loss. The experiment uses 1 process, CPU request/limit
 from 30–50 held streams without requiring hundreds of local test connections.
 Preflight limits apply only during the preflight phase. Neither target is an
 SLO. The runner retains bounded raw samples in its output directory.
+The HPA phase shortens the scale-down window to 90 seconds, the shortest the
+chart accepts for its 90-second termination grace, and holds the adapter
+outage for 120 seconds, so the outage still outlasts the window. The runner
+prints each phase and any command that takes 5 seconds or more with its
+elapsed time, so the job log shows where the time went.
 The disposable cluster makes both owned nodes schedulable. This gives Kubernetes
 enough requested CPU for four 1-core API pods, rolling-update surge, monitoring
 and dependency pods on a standard public GitHub runner. The nodes share the

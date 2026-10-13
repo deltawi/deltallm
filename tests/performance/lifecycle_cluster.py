@@ -29,6 +29,22 @@ SALT_KEY = "pr8-local-salt-only-0000000000000000"
 LOAD_KEY = "sk-concurrency-pr8-local-only-000000000000"
 
 
+def _command_label(command: tuple[str, ...]) -> str:
+    """Name a command by its tool and verb, never by values or file contents."""
+    words = [Path(command[0]).name]
+    skip = False
+    for word in command[1:]:
+        if skip:
+            skip = False
+        elif word in {"--kubeconfig", "-n", "--name"}:
+            skip = True
+        elif not word.startswith("-"):
+            words.append(word)
+            if len(words) == 3:
+                break
+    return " ".join(words)
+
+
 class LifecycleCluster:
     def __init__(
         self,
@@ -67,7 +83,11 @@ class LifecycleCluster:
             raise RuntimeError("lifecycle event allocation exceeded")
         if {"event", "seconds"} & details.keys():
             raise ValueError("Lifecycle event details cannot replace reserved fields")
-        self.events.append({"event": name, "seconds": time.monotonic() - self.started, **details})
+        seconds = time.monotonic() - self.started
+        self.events.append({"event": name, "seconds": seconds, **details})
+        # The job log otherwise shows nothing until the run ends; print the
+        # phase name only, since details stay in the retained evidence.
+        print(f"[{seconds:7.1f}s] {name}", flush=True)
         (self.output / "events.json").write_text(json.dumps(self.events, indent=2) + "\n")
 
     def run(
@@ -78,6 +98,7 @@ class LifecycleCluster:
             sequence = self.sequence
         # Artifact logs are bounded by command time, and retained only on this
         # disposable fixture. No environment or production credentials are logged.
+        started = time.monotonic()
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired as error:
@@ -91,6 +112,13 @@ class LifecycleCluster:
         (self.output / f"command-{sequence:03}.log").write_text(
             (result.stdout + result.stderr)[-2 * 1024 * 1024 :]
         )
+        elapsed = time.monotonic() - started
+        if elapsed >= 5 or result.returncode:
+            print(
+                f"[{time.monotonic() - self.started:7.1f}s] command-{sequence:03} "
+                f"{_command_label(command)} exited {result.returncode} after {elapsed:.1f}s",
+                flush=True,
+            )
         if check and result.returncode:
             raise RuntimeError(f"{command[0]} failed; see command-{sequence:03}.log")
         return result

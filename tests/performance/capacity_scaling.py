@@ -16,6 +16,12 @@ from tests.performance.lifecycle_cluster import LifecycleCluster
 from tests.performance.lifecycle_cluster import LOAD_KEY
 
 
+# The experiment shortens the production 300 s scale-down window to the
+# termination grace the chart requires it to cover. The checks below measure
+# against this window, so they keep their meaning at a quarter of the wait.
+SCALE_DOWN_WINDOW_SECONDS = 90
+
+
 def metric_value(raw: str) -> float:
     return float(Decimal(raw[:-1]) / 1000 if raw.endswith("m") else Decimal(raw))
 
@@ -34,7 +40,15 @@ async def wait_metrics(cluster: LifecycleCluster, count: int, *, timeout: float 
 
 
 async def exercise_scaling(cluster: LifecycleCluster, values: Path, url: str) -> None:
-    await asyncio.to_thread(capacity_release, cluster, values, "--set", "autoscaling.enabled=true")
+    await asyncio.to_thread(
+        capacity_release,
+        cluster,
+        values,
+        "--set",
+        "autoscaling.enabled=true",
+        "--set",
+        f"autoscaling.scaleDownStabilizationSeconds={SCALE_DOWN_WINDOW_SECONDS}",
+    )
     # Empty fixture setup: start at the declared warm minimum before offered load.
     await asyncio.to_thread(
         cluster.kubectl, "scale", "deployment/" + API_DEPLOYMENT, "--replicas=2"
@@ -174,9 +188,9 @@ async def missing_metrics(cluster: LifecycleCluster, scaled_at: float) -> None:
         detection_seconds=monotonic() - started,
         conditions=conditions,
     )
-    # Hold the adapter outage beyond the 300 s HPA scale-down window. A short
+    # Hold the adapter outage beyond the HPA scale-down window. A short
     # outage inside the window would be hidden by stabilization, not tested.
-    while monotonic() - scaled_at < 330:
+    while monotonic() - scaled_at < SCALE_DOWN_WINDOW_SECONDS + 30:
         assert len(await asyncio.to_thread(api_pods, cluster)) == 4
         await asyncio.sleep(10)
     hpa = json.loads(

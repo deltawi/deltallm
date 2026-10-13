@@ -1,6 +1,7 @@
 """Reuse the arrival generator and retain every rejection in the capacity fixture."""
 
 import asyncio
+from collections import Counter
 import json
 from pathlib import Path
 from time import monotonic
@@ -31,7 +32,12 @@ def assert_valid_arrival(result: RunResult, *, allow_controlled_rejections: bool
         sample.error is not None or sample.status_code not in expected_statuses
         for sample in result.samples
     ):
-        raise AssertionError("Controlled capacity arrival workload lost or rejected requests")
+        outcomes = Counter(sample.error or str(sample.status_code) for sample in result.samples)
+        raise AssertionError(
+            "Controlled capacity arrival workload lost or rejected requests: "
+            f"outcomes={dict(sorted(outcomes.items()))} "
+            f"generator_dropped={result.generator_dropped_count}"
+        )
     if allow_controlled_rejections and not any(
         sample.status_code == 200 for sample in result.samples
     ):
