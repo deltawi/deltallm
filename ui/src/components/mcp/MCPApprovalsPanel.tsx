@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Clock, Download, ExternalLink, RefreshCw, X } from 'lucide-react';
 import MCPApprovalTable from './MCPApprovalTable';
@@ -14,6 +14,7 @@ import {
   mcpApprovalsTabPath,
   MCP_APPROVAL_EXPORT_LIMIT,
   MCP_APPROVAL_STATUS_FILTERS,
+  offsetAfterEmptyPage,
   type MCPApprovalStatusFilter,
 } from '../../lib/mcpApprovals';
 
@@ -28,10 +29,13 @@ type MCPApprovalsPanelProps = {
   onStatusChange: (status: MCPApprovalStatusFilter) => void;
   /** Removes the server filter. Required to show the removable server chip. */
   onClearServer?: () => void;
-  /** Number of pending requests. `null` or `undefined` means unknown, and the panel shows no number. */
+  /**
+   * Number of pending requests for all servers. The panel uses it only when no
+   * server filter is set. `null` or `undefined` means unknown, and the panel shows no number.
+   */
   pendingCount?: number | null;
-  /** Called after a decision is saved, so the parent can refresh its own counts. */
-  onDecided?: () => void;
+  /** Called after a decision or a manual refresh, so the parent can reload its own counts. */
+  onRefresh?: () => void;
 };
 
 function downloadCsv(csv: string, fileName: string) {
@@ -53,7 +57,7 @@ export default function MCPApprovalsPanel({
   onStatusChange,
   onClearServer,
   pendingCount,
-  onDecided,
+  onRefresh,
 }: MCPApprovalsPanelProps) {
   const { pushToast } = useToast();
   const filterKey = `${serverId ?? ''}|${status}`;
@@ -62,16 +66,6 @@ export default function MCPApprovalsPanel({
   const offset = page.key === filterKey ? page.offset : 0;
   const [decidingId, setDecidingId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  const exportController = useRef<AbortController | null>(null);
-  const mounted = useRef(true);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      exportController.current?.abort();
-    };
-  }, []);
 
   const filterParams = {
     server_id: serverId || undefined,
@@ -82,10 +76,38 @@ export default function MCPApprovalsPanel({
     (signal) => mcpServers.listApprovalRequests({ ...filterParams, limit: PAGE_SIZE, offset }, signal),
     [serverId, status, offset],
   );
+  // With a server filter, the notice counts the pending requests of that server only.
+  const serverPending = useApi(
+    (signal) => (serverId
+      ? mcpServers.listApprovalRequests({ server_id: serverId, status: 'pending', limit: 1 }, signal)
+      : Promise.resolve(null)),
+    [serverId],
+  );
+  // The chip needs the server name also when the filtered list is empty.
+  const serverDetail = useApi(
+    (signal) => (serverId && !serverFixed ? mcpServers.get(serverId, signal) : Promise.resolve(null)),
+    [serverId, serverFixed],
+  );
 
   const approvals = data?.data ?? [];
   const pagination = data?.pagination;
-  const serverName = approvals[0]?.server?.name || serverId;
+  const serverName = serverDetail.data?.server?.name || approvals[0]?.server?.name || serverId;
+  const shownPendingCount = serverId
+    ? (serverPending.data && !serverPending.error ? serverPending.data.pagination.total : null)
+    : pendingCount;
+
+  // A decision can remove the last row of a page. Go back to a page that has rows.
+  // Use only a response for the current offset, so one empty page moves back one time only.
+  if (data && !loading && page.key === filterKey && data.pagination.offset === offset) {
+    const nextOffset = offsetAfterEmptyPage(offset, approvals.length, data.pagination.total, PAGE_SIZE);
+    if (nextOffset !== null && nextOffset !== offset) setPage({ key: filterKey, offset: nextOffset });
+  }
+
+  const refreshAll = () => {
+    refetch();
+    serverPending.refetch();
+    onRefresh?.();
+  };
 
   const handleDecide = async (request: MCPApprovalRequest, decision: 'approved' | 'rejected', comment?: string) => {
     if (decidingId) return;
@@ -99,31 +121,22 @@ export default function MCPApprovalsPanel({
         tone: decision === 'approved' ? 'success' : 'info',
         title: decision === 'approved' ? 'Approved' : 'Rejected',
         message: decision === 'approved'
-          ? `"${request.tool_name}" can run one time. The caller must send the same call again.`
+          ? `"${request.tool_name}" can run one time. The caller must send the same call again within 15 minutes.`
           : `"${request.tool_name}" was rejected.`,
       });
-      refetch();
-      onDecided?.();
     } catch (decisionError) {
       pushToast({ tone: 'error', title: 'Decision failed', message: errorMessage(decisionError, 'Failed to process decision.') });
-      refetch();
     } finally {
-      if (mounted.current) setDecidingId(null);
+      setDecidingId(null);
+      refreshAll();
     }
   };
 
   const handleExport = async () => {
     if (exporting) return;
-    exportController.current?.abort();
-    const controller = new AbortController();
-    exportController.current = controller;
     setExporting(true);
     try {
-      const result = await mcpServers.listApprovalRequests(
-        { ...filterParams, limit: MCP_APPROVAL_EXPORT_LIMIT, offset: 0 },
-        controller.signal,
-      );
-      if (controller.signal.aborted) return;
+      const result = await mcpServers.listApprovalRequests({ ...filterParams, limit: MCP_APPROVAL_EXPORT_LIMIT, offset: 0 });
       downloadCsv(buildApprovalsCsv(result.data), approvalsExportFileName(status, serverId));
       if (result.pagination.has_more) {
         pushToast({
@@ -135,10 +148,9 @@ export default function MCPApprovalsPanel({
         pushToast({ tone: 'success', title: 'Export ready', message: `The file contains ${result.data.length} requests.` });
       }
     } catch (exportError) {
-      if (controller.signal.aborted) return;
       pushToast({ tone: 'error', title: 'Export failed', message: errorMessage(exportError, 'Could not export approval requests.') });
     } finally {
-      if (mounted.current && exportController.current === controller) setExporting(false);
+      setExporting(false);
     }
   };
 
@@ -167,7 +179,7 @@ export default function MCPApprovalsPanel({
           ) : null}
           <button
             type="button"
-            onClick={() => refetch()}
+            onClick={refreshAll}
             aria-label="Refresh approval requests"
             title="Refresh approval requests"
             className="rounded-lg border border-gray-200 p-1.5 text-gray-600 transition hover:bg-gray-50"
@@ -186,12 +198,12 @@ export default function MCPApprovalsPanel({
         </div>
       </div>
 
-      {(typeof pendingCount === 'number' && pendingCount > 0) || (!serverFixed && serverId) ? (
+      {(typeof shownPendingCount === 'number' && shownPendingCount > 0) || (!serverFixed && serverId) ? (
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          {typeof pendingCount === 'number' && pendingCount > 0 ? (
+          {typeof shownPendingCount === 'number' && shownPendingCount > 0 ? (
             <span className="inline-flex items-center gap-1.5 font-medium text-amber-800">
               <Clock className="h-4 w-4 text-amber-600" aria-hidden="true" />
-              {pendingCount} request{pendingCount === 1 ? '' : 's'} wait{pendingCount === 1 ? 's' : ''} for a decision.
+              {shownPendingCount} request{shownPendingCount === 1 ? '' : 's'} wait{shownPendingCount === 1 ? 's' : ''} for a decision.
             </span>
           ) : null}
           {!serverFixed && serverId ? (

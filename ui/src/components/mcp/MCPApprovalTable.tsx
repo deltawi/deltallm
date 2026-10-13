@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react';
 import { CheckCircle2, ChevronDown, ChevronUp, Clock, Filter, Hourglass, RefreshCw, XCircle } from 'lucide-react';
 import type { MCPApprovalRequest } from '../../lib/api';
-import { approvalStatusView } from '../../lib/mcpApprovals';
+import { approvalDecisionActions, approvalStatusView } from '../../lib/mcpApprovals';
 
 function fmtDate(value?: string | null) {
   if (!value) return '—';
@@ -173,7 +173,10 @@ export default function MCPApprovalTable({
             {approvals.map((request) => {
               const isExpanded = expandedId === request.mcp_approval_request_id;
               const isDeciding = decidingId === request.mcp_approval_request_id;
-              const canDecide = Boolean(onDecision && request.capabilities?.can_decide);
+              const actions = approvalDecisionActions(request);
+              const canDecide = Boolean(onDecision) && actions.canReject;
+              const canApprove = Boolean(onDecision) && actions.canApprove;
+              const ownRequest = Boolean(onDecision) && actions.ownRequest;
               return (
                 <Fragment key={request.mcp_approval_request_id}>
                   <tr className="group border-b border-gray-100 transition hover:bg-gray-50">
@@ -206,10 +209,11 @@ export default function MCPApprovalTable({
                     </td>
                     <td className="px-4 py-3.5 align-top">
                       <ApprovalStatusBadge request={request} />
+                      {ownRequest ? <p className="mt-1 text-[11px] text-gray-500">Your request</p> : null}
                     </td>
                     <td className="sticky right-0 bg-white px-4 py-3.5 align-top group-hover:bg-gray-50">
                       <div className="flex items-center justify-end gap-2">
-                        {canDecide ? (
+                        {canApprove ? (
                           <button
                             type="button"
                             disabled={isDeciding}
@@ -280,6 +284,9 @@ export default function MCPApprovalTable({
                             {canDecide ? (
                               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Review</p>
+                                {ownRequest ? (
+                                  <p className="mt-1 text-xs text-amber-800">You requested this call. Another operator must approve it.</p>
+                                ) : null}
                                 <textarea
                                   value={rejectComment}
                                   onChange={(event) => setRejectComment(event.target.value)}
@@ -297,14 +304,16 @@ export default function MCPApprovalTable({
                                   >
                                     Reject
                                   </button>
-                                  <button
-                                    type="button"
-                                    disabled={isDeciding}
-                                    onClick={() => void onDecision?.(request, 'approved')}
-                                    className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50"
-                                  >
-                                    Approve
-                                  </button>
+                                  {canApprove ? (
+                                    <button
+                                      type="button"
+                                      disabled={isDeciding}
+                                      onClick={() => void onDecision?.(request, 'approved')}
+                                      className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                                    >
+                                      Approve
+                                    </button>
+                                  ) : null}
                                 </div>
                               </div>
                             ) : null}

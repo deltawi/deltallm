@@ -135,8 +135,11 @@ organizations and teams that your account can manage.
   **Approved · used**. A new call needs a new approval.
 - The caller must send the identical call again after the approval. A call with a different tool
   or different arguments needs a different approval.
+- The caller must send the call again within 15 minutes after the approval. If not, the request
+  shows **Expired**.
 - A pending request expires after 24 hours.
-- The person who made the call cannot approve it.
+- The person who made the call cannot approve it. That person can reject it. The row shows
+  **Your request**, and another operator must approve it.
 
 ### Review a request
 
@@ -152,7 +155,8 @@ organizations and teams that your account can manage.
 
 To show the requests of one server only, open the server, select the **Activity** tab, then select
 **Open in Approvals**. The **Approvals** tab then shows a server filter. Select the **x** on the
-filter to remove it.
+filter to remove it. With a server filter, the line above the table shows the number of pending
+requests for that server only. The tab number always shows the pending requests for all servers.
 
 ### Export requests
 

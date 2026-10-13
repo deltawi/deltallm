@@ -1145,7 +1145,7 @@ export default function MCPServerDetail() {
                     serverFixed
                     status={approvalStatus}
                     onStatusChange={setApprovalStatus}
-                    onDecided={refetchOperations}
+                    onRefresh={refetchOperations}
                   />
                 </div>
               ) : null}

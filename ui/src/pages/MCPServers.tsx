@@ -36,12 +36,13 @@ export default function MCPServers() {
   // When the count read fails, show no number. A failed read is not zero.
   const pendingCount = pendingData && !pendingError ? pendingData.pagination.total : null;
 
+  // Replace the history entry, so Back leaves the page and does not step through tabs and filters.
   const updateParams = (change: (next: URLSearchParams) => void) => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       change(next);
       return next;
-    });
+    }, { replace: true });
   };
 
   const selectTab = (tab: MCPPageTab) => {
@@ -88,7 +89,7 @@ export default function MCPServers() {
             onStatusChange={selectStatus}
             onClearServer={() => updateParams((next) => next.delete('server_id'))}
             pendingCount={pendingCount}
-            onDecided={refetchPending}
+            onRefresh={refetchPending}
           />
         ) : (
           <MCPServersTab canRegister={uiAccess.mcp_servers} />

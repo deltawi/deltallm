@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { MCPApprovalRequest } from '../src/lib/api';
 import {
+  approvalDecisionActions,
   approvalStatusQueryValue,
   approvalStatusView,
   approvalsExportFileName,
@@ -9,6 +10,7 @@ import {
   csvCell,
   mcpApprovalsTabPath,
   MCP_APPROVAL_STATUS_FILTERS,
+  offsetAfterEmptyPage,
   parseApprovalStatusFilter,
   resolveMCPPageTab,
 } from '../src/lib/mcpApprovals';
@@ -101,4 +103,21 @@ test('the csv export has one header row and one row for each request', () => {
 test('export file names name the filter and a safe server id', () => {
   assert.equal(approvalsExportFileName('pending'), 'mcp-approvals-pending.csv');
   assert.equal(approvalsExportFileName('all', 'srv/1 x'), 'mcp-approvals-all-srv_1_x.csv');
+});
+
+test('a requester can reject an own call but cannot approve it', () => {
+  assert.deepEqual(approvalDecisionActions({ capabilities: { can_decide: true, can_approve: false } }), { canApprove: false, canReject: true, ownRequest: true });
+  assert.deepEqual(approvalDecisionActions({ capabilities: { can_decide: true, can_approve: true } }), { canApprove: true, canReject: true, ownRequest: false });
+  // An older API does not send can_approve.
+  assert.deepEqual(approvalDecisionActions({ capabilities: { can_decide: true } }), { canApprove: true, canReject: true, ownRequest: false });
+  assert.deepEqual(approvalDecisionActions({ capabilities: { can_decide: false, can_approve: false } }), { canApprove: false, canReject: false, ownRequest: false });
+  assert.deepEqual(approvalDecisionActions({}), { canApprove: false, canReject: false, ownRequest: false });
+});
+
+test('an empty page moves back to a page that has rows', () => {
+  assert.equal(offsetAfterEmptyPage(0, 0, 0, 20), null);
+  assert.equal(offsetAfterEmptyPage(20, 3, 23, 20), null);
+  assert.equal(offsetAfterEmptyPage(20, 0, 20, 20), 0);
+  assert.equal(offsetAfterEmptyPage(60, 0, 25, 20), 20);
+  assert.equal(offsetAfterEmptyPage(40, 0, 0, 20), 0);
 });

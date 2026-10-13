@@ -43,7 +43,8 @@ async function withPage(entry: string, options: Options, run: (ctx: { requests: 
     }
     if (url.pathname === '/ui/api/mcp-approval-requests') {
       if (url.searchParams.get('limit') === '1') {
-        return options.pendingCountFails ? json({ detail: 'unavailable' }, 503) : json(page([], 3));
+        if (options.pendingCountFails) return json({ detail: 'unavailable' }, 503);
+        return json(page([], url.searchParams.get('server_id') ? 1 : 3));
       }
       return json(page([{
         mcp_approval_request_id: 'apr-1',
@@ -57,6 +58,9 @@ async function withPage(entry: string, options: Options, run: (ctx: { requests: 
         server: { mcp_server_id: 'srv-1', server_key: 'github', name: 'GitHub' },
         capabilities: { can_decide: false },
       }], 1));
+    }
+    if (url.pathname === '/ui/api/mcp-servers/srv-1') {
+      return json({ server: { mcp_server_id: 'srv-1', server_key: 'github', name: 'GitHub Cloud' }, tools: [], bindings: [], tool_policies: [] });
     }
     return json(page([], 0));
   };
@@ -97,13 +101,19 @@ test('the approvals tab opens from the URL, shows the pending count, and filters
     assert.equal(list?.searchParams.get('status'), 'pending');
     assert.equal(list?.searchParams.get('server_id'), 'srv-1');
 
-    assert.ok(document.body.textContent?.includes('3 requests wait for a decision.'));
+    // The tab badge counts all servers. The notice counts the filtered server only.
+    assert.ok(document.body.textContent?.includes('1 request waits for a decision.'));
     assert.ok(document.body.textContent?.includes('Approved · used'));
-    assert.ok(document.body.textContent?.includes('Server: GitHub'));
+    assert.ok(document.body.textContent?.includes('Server: GitHub Cloud'));
     assert.equal(document.querySelectorAll('.bg-amber-50').length, 0, 'no second pending banner');
 
     await act(async () => (document.querySelector('[aria-label="Remove server filter"]') as HTMLButtonElement).click());
     assert.equal(location(), '/mcp-servers?tab=approvals');
+    assert.ok(document.body.textContent?.includes('3 requests wait for a decision.'));
+
+    const before = requests.filter((url) => url.searchParams.get('limit') === '1').length;
+    await act(async () => (document.querySelector('[aria-label="Refresh approval requests"]') as HTMLButtonElement).click());
+    assert.ok(requests.filter((url) => url.searchParams.get('limit') === '1').length > before, 'refresh reloads the pending count');
 
     await act(async () => (statusTabs[4] as HTMLButtonElement).click());
     assert.equal(location(), '/mcp-servers?tab=approvals&status=all');

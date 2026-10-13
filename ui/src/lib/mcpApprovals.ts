@@ -128,3 +128,28 @@ export function approvalsExportFileName(filter: MCPApprovalStatusFilter, serverI
   if (serverId) parts.push(serverId.replace(/[^A-Za-z0-9_-]/g, '_'));
   return `${parts.join('-')}.csv`;
 }
+
+export type ApprovalDecisionActions = { canApprove: boolean; canReject: boolean; ownRequest: boolean };
+
+/**
+ * The decisions that the viewer can make on one request. A requester cannot
+ * approve an own call but can reject it. An older API does not send
+ * `can_approve`; then approval follows `can_decide`.
+ */
+export function approvalDecisionActions(request: Pick<MCPApprovalRequest, 'capabilities'>): ApprovalDecisionActions {
+  const canDecide = Boolean(request.capabilities?.can_decide);
+  const approveBlocked = request.capabilities?.can_approve === false;
+  return { canApprove: canDecide && !approveBlocked, canReject: canDecide, ownRequest: canDecide && approveBlocked };
+}
+
+/**
+ * The offset to use when a page has no rows, for example after the last
+ * pending row of the page was decided. Returns `null` when no change is
+ * necessary.
+ */
+export function offsetAfterEmptyPage(offset: number, rowCount: number, total: number, pageSize: number): number | null {
+  if (rowCount > 0 || offset <= 0) return null;
+  if (total <= 0) return 0;
+  const lastPageOffset = Math.floor((total - 1) / pageSize) * pageSize;
+  return Math.max(0, Math.min(offset - pageSize, lastPageOffset));
+}

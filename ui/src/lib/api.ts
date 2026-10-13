@@ -300,6 +300,8 @@ export interface MCPApprovalRequest {
   } | null;
   capabilities?: {
     can_decide: boolean;
+    /** False when the viewer made the call. The viewer can still reject it. Older servers omit it. */
+    can_approve?: boolean;
   };
 }
 
@@ -1061,7 +1063,8 @@ export const serviceAccounts = {
 export const mcpServers = {
   list: (params?: { search?: string; enabled?: boolean; limit?: number; offset?: number }) =>
     apiFetch<Paginated<MCPServer>>(withQuery('/ui/api/mcp-servers', params)),
-  get: (serverId: string) => apiFetch<MCPServerDetail>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`),
+  get: (serverId: string, signal?: AbortSignal) =>
+    apiFetch<MCPServerDetail>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`, { signal }),
   operations: (serverId: string, params?: { window_hours?: number; top_tools_limit?: number; failures_limit?: number }) =>
     apiFetch<MCPServerOperations>(withQuery(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}/operations`, params)),
   create: (payload: object) => apiFetch<MCPServer>('/ui/api/mcp-servers', { method: 'POST', json: payload }),
