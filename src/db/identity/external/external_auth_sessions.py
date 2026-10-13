@@ -80,8 +80,9 @@ class ExternalSessionRepository:
         team_id: str,
         team_epoch: int,
     ) -> ExternalIssuedSession | None:
-        # A parent serves one team. A renewal that names another team finds no
-        # matching pin and fails; a child without a team acts in the default team.
+        # A parent serves one team. A renewal that names another team, or the same
+        # team after its grant was removed and granted again (a new epoch), finds
+        # no matching pin and fails; a child without a team acts in the default team.
         rows = await self.db.query_raw(
             """
             WITH mfa_proof AS MATERIALIZED (
@@ -102,6 +103,7 @@ class ExternalSessionRepository:
                       AND pin.account_id = $2 AND pin.external_integration_epoch = $6
                       AND pin.external_binding_epoch = $7 AND pin.external_subject_epoch = $8
                       AND COALESCE(pin.external_team_id, $13) = $11
+                      AND COALESCE(pin.external_team_epoch, 0) = $12
                   )) RETURNING generation
             ), retired AS (
                 UPDATE deltallm_platformsession child SET

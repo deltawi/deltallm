@@ -158,6 +158,9 @@ class ExternalTeamAdministration:
                 )
             if subject.binding_id != binding_id or subject.integration_id != binding.integration_id:
                 raise _conflict()
+            if subject.state == "suspended":
+                # A grant would restore team access that suspension must keep closed.
+                raise _conflict()
             teams = ExternalTeamRepository(db)
             attachment = await teams.lock_attachment(binding_id, team_id)
             if attachment is None or attachment.state != "active":
@@ -238,7 +241,14 @@ class ExternalTeamAdministration:
 
     async def list_teams(
         self, binding_id: str, *, after: str | None, limit: int
-    ) -> list[ExternalBindingTeamView]:
+    ) -> tuple[list[ExternalBindingTeamView], str | None]:
+        """Return one page of teams and the next cursor.
+
+        The first page starts with the implicit default team, which takes one of
+        its `limit` slots. A page that holds only the default team continues with
+        the empty cursor, which sorts before every attached team.
+        """
+
         async with self.transactions.transaction("validation") as db:
             binding = await ExternalBindingRepository(db).get(binding_id)
             if binding is None or binding.integration_id not in self.identity_issuers:
@@ -254,9 +264,11 @@ class ExternalTeamAdministration:
                         version=None,
                     )
                 )
-            for row in await ExternalTeamRepository(db).list_attachments(
-                binding_id, after=after, limit=limit
-            ):
+            room = limit - len(views)
+            rows = await ExternalTeamRepository(db).list_attachments(
+                binding_id, after=after, limit=room + 1
+            )
+            for row in rows[:room]:
                 views.append(
                     ExternalBindingTeamView(
                         binding_id=row.binding_id,
@@ -266,7 +278,9 @@ class ExternalTeamAdministration:
                         version=row.version,
                     )
                 )
-            return views
+            if len(rows) <= room:
+                return views, None
+            return views, "" if views[-1].is_default else views[-1].team_id
 
     async def list_subjects(
         self, binding_id: str, *, team_id: str | None, after: str | None, limit: int

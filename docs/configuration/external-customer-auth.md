@@ -63,8 +63,8 @@ Only an operator management credential can manage additional teams. The customer
 | --- | --- |
 | `PUT /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}` | Attach an existing team of the binding's organization. Use `expected_version` `0` for a new attachment, or the current version to attach a detached team again. A repeat on an active attachment returns it unchanged. |
 | `DELETE /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}` | Detach the team. This removes every grant on it, as below. |
-| `GET /ui/api/external-auth/bindings/{binding_id}/teams` | List the default team (`is_default: true`, first page only) and the attachments, with `after` and `limit`. |
-| `PUT /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}/subjects` | Grant one person the team. The body also has `identity_issuer` and `subject`. The issuer must be the integration's configured identity issuer. If the person has not signed in, this creates a pending subject. |
+| `GET /ui/api/external-auth/bindings/{binding_id}/teams` | List the default team (`is_default: true`, first page only) and the attachments, with `after` and `limit`. The default team counts against `limit`. |
+| `PUT /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}/subjects` | Grant one person the team. The body also has `identity_issuer` and `subject`. The issuer must be the integration's configured identity issuer. If the person has not signed in, this creates a pending subject. A suspended subject cannot get a grant (`409`). |
 | `DELETE /ui/api/external-auth/bindings/{binding_id}/teams/{team_id}/subjects/{subject_id}` | Remove the grant. |
 | `GET /ui/api/external-auth/bindings/{binding_id}/subjects` | List subjects and their grants on additional teams, with `team_id`, `after`, and `limit`. |
 
@@ -79,7 +79,7 @@ Grant removal applies immediately and in one transaction:
 - The grant epoch increases, so live sessions in that team fail on their next request.
 - The team membership is deleted, and the team's child sessions are revoked.
 - The team's runtime user is blocked. Billing admission reads this flag from the primary database on each request, so its keys stop at once. A durable cache invalidation record also removes the cached keys.
-- Keys are not deleted. A new grant unblocks the same runtime user and restores the membership, so its keys work again. Sessions from before the removal stay invalid.
+- Keys are not deleted. A new grant unblocks the same runtime user and restores the membership, so its keys work again. Sessions from before the removal stay invalid, and their cloud session must sign in again.
 
 Sessions in the person's other teams do not change. This is different from subject or binding suspension, which leaves application keys unchanged.
 
@@ -103,7 +103,7 @@ Integration disable, binding suspension, and subject suspension commit their sta
 
 Key removal commits deletion, required audit, and an exact-hash invalidation record together. Its response contains `enforcement`, `invalidation_id`, and `maximum_enforcement_delay_seconds`. `pending` means the durable worker must finish cache enforcement; the configured upper bound is 61 seconds with a 60-second cache lifetime. The UI displays that pending state and polls `GET /ui/api/key-revocations/{invalidation_id}`. The endpoint permits only the requesting account or an authorized operator and returns no key hash.
 
-Organization deletion or deletion of a mapped account, identity, default runtime user, or default team suspends external access and revokes parents and children in the same database transaction. Deletion of an additional team detaches it and removes its grants. Deletion of the runtime user of an additional team removes that grant. In both cases the database revokes that team's child sessions, and the binding and other teams stay active. Immutable historical IDs remain in the external tables. Cancellation of organization deletion does not resume external access automatically. An operator must recheck and resume it. A deleted tenant or mapped identity cannot be resumed.
+Organization deletion or deletion of a mapped account, identity, default runtime user, or default team suspends external access and revokes parents and children in the same database transaction. Deletion of an additional team detaches it and removes its grants. Deletion of the runtime user of an additional team removes that grant and its team membership. A new grant then creates a new runtime user on the next exchange. In both cases the database revokes that team's child sessions, and the binding and other teams stay active. Immutable historical IDs remain in the external tables. Cancellation of organization deletion does not resume external access automatically. An operator must recheck and resume it. A deleted tenant or mapped identity cannot be resumed.
 
 ## Diagnostics, retention, and signer rotation
 

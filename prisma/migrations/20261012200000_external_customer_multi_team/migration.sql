@@ -65,7 +65,8 @@ BEGIN
     END IF;
   ELSIF NEW.subject_id IS DISTINCT FROM OLD.subject_id OR NEW.binding_id IS DISTINCT FROM OLD.binding_id
     OR NEW.team_id IS DISTINCT FROM OLD.team_id OR NEW.epoch < OLD.epoch
-    OR (OLD.runtime_user_id IS NOT NULL AND NEW.runtime_user_id IS DISTINCT FROM OLD.runtime_user_id) THEN
+    OR (OLD.runtime_user_id IS NOT NULL AND NEW.runtime_user_id IS DISTINCT FROM OLD.runtime_user_id
+        AND NOT (NEW.runtime_user_id IS NULL AND NEW.state = 'removed')) THEN
     RAISE EXCEPTION 'External team grant mapping is immutable' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
@@ -215,6 +216,8 @@ END $$;
 CREATE FUNCTION deltallm_external_retire_team_grants(team TEXT DEFAULT NULL, runtime_user TEXT DEFAULT NULL)
 RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
+  -- A deleted runtime user is cleared from its grant, so a later grant creates a
+  -- new runtime user on first use. The team membership goes with the grant.
   WITH detached AS (
     UPDATE deltallm_externalauthbindingteam bt
     SET state = 'detached', version = version + 1, updated_at = clock_timestamp() AT TIME ZONE 'UTC'
@@ -222,14 +225,22 @@ BEGIN
     RETURNING bt.binding_id
   ), removed AS (
     UPDATE deltallm_externalauthsubjectteam g
-    SET state = 'removed', epoch = epoch + 1, version = version + 1,
+    SET state = 'removed',
+        epoch = CASE WHEN g.state = 'removed' THEN g.epoch ELSE g.epoch + 1 END,
+        version = version + 1,
+        runtime_user_id = CASE WHEN g.runtime_user_id = runtime_user THEN NULL ELSE g.runtime_user_id END,
         updated_at = clock_timestamp() AT TIME ZONE 'UTC'
-    WHERE g.state <> 'removed' AND (g.team_id = team OR g.runtime_user_id = runtime_user)
+    WHERE (g.state <> 'removed' AND g.team_id = team) OR g.runtime_user_id = runtime_user
     RETURNING g.subject_id, g.team_id
+  ), memberships AS (
+    DELETE FROM deltallm_teammembership m
+    USING removed r JOIN deltallm_externalauthsubject s ON s.subject_id = r.subject_id
+    WHERE m.account_id = s.account_id AND m.team_id = r.team_id
+    RETURNING m.membership_id
   )
   UPDATE deltallm_platformsession c
   SET revoked_at = clock_timestamp() AT TIME ZONE 'UTC'
-  FROM deltallm_externalauthparentsession p, removed r
+  FROM deltallm_externalauthparentsession p, removed r, (SELECT count(*) FROM memberships) AS cleared
   WHERE c.revoked_at IS NULL AND c.external_parent_id = p.parent_id
     AND p.subject_id = r.subject_id AND c.external_team_id = r.team_id;
 END $$;

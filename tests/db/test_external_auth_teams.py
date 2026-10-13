@@ -251,6 +251,10 @@ async def test_grant_removal_ends_team_access_and_a_new_grant_restores_it(
         approved_by="op",
     )
     assert restored.state == "active" and restored.runtime_user_id == in_b.inference_user_id
+    # The parent of the revoked child must sign in again, also after the new grant.
+    with pytest.raises(ExternalAuthError) as stale_parent:
+        await exchange.exchange(proof(fixture, team_id=team_b, external_session_id="tab-b"), "b4")
+    assert stale_parent.value.code == "external_reauthentication_required"
     back = await exchange.exchange(
         proof(fixture, team_id=team_b, external_session_id="tab-b3"), "b3"
     )
@@ -340,11 +344,38 @@ async def test_invite_before_first_sign_in_provisions_default_and_granted_team(
     listed = await admin.list_subjects(fixture.binding_id, team_id=team_b, after=None, limit=10)
     assert [item.subject_id for item in listed] == [grant.subject_id]
     assert listed[0].team_grants[0].runtime_user_id == response.inference_user_id
-    views = await admin.list_teams(fixture.binding_id, after=None, limit=10)
+    views, cursor = await admin.list_teams(fixture.binding_id, after=None, limit=10)
     assert [(view.team_id, view.is_default) for view in views] == [
         (fixture.team_id, True),
         (team_b, False),
     ]
+    assert cursor is None
+
+
+async def test_team_pages_count_the_default_team_against_the_limit(
+    external_database: ExternalDatabase,
+):
+    fixture = external_database
+    await enable(fixture)
+    admin = teams_admin(fixture)
+    attached = []
+    for suffix in ("b", "c"):
+        team_id = await add_team(fixture, suffix)
+        await admin.attach(
+            fixture.binding_id, team_id, request=version(0), correlation_id="a", approved_by="op"
+        )
+        attached.append(team_id)
+    pages, after = [], None
+    while True:
+        views, after = await admin.list_teams(fixture.binding_id, after=after, limit=1)
+        assert len(views) == 1
+        pages.append(views[0].team_id)
+        if after is None:
+            break
+    assert pages == [fixture.team_id, *sorted(attached)]
+    views, after = await admin.list_teams(fixture.binding_id, after=None, limit=2)
+    assert [view.team_id for view in views] == [fixture.team_id, sorted(attached)[0]]
+    assert after == sorted(attached)[0]
 
 
 async def test_operator_team_api_refuses_the_default_team_and_foreign_issuers(
@@ -471,3 +502,70 @@ async def test_rollback_preview_counts_live_attachments(external_database: Exter
     await attach_and_grant(fixture)
     counts = await ExternalAuthRollbackRepository(fixture.db).counts()
     assert counts["attached_teams"] >= 1
+
+
+async def test_runtime_user_deletion_clears_the_grant_and_a_new_grant_provisions_again(
+    external_database: ExternalDatabase,
+):
+    fixture = external_database
+    await enable(fixture)
+    team_b = await attach_and_grant(fixture)
+    exchange, _, _ = services(fixture)
+    in_b = await exchange.exchange(proof(fixture, team_id=team_b, external_session_id="b"), "b")
+    await fixture.db.execute_raw(
+        "DELETE FROM deltallm_usertable WHERE user_id = $1", in_b.inference_user_id
+    )
+    grants = await fixture.db.query_raw(
+        "SELECT state, epoch, runtime_user_id, version FROM deltallm_externalauthsubjectteam WHERE subject_id = $1 AND team_id = $2",
+        fixture.subject_id,
+        team_b,
+    )
+    removed_version = grants[0].pop("version")
+    assert grants == [{"state": "removed", "epoch": 1, "runtime_user_id": None}]
+    assert await context_for(fixture, in_b) is None
+    memberships = await fixture.db.query_raw(
+        "SELECT 1 FROM deltallm_teammembership WHERE account_id = $1 AND team_id = $2",
+        fixture.account_id,
+        team_b,
+    )
+    assert memberships == []
+    admin = teams_admin(fixture)
+    granted = await admin.grant(
+        fixture.binding_id,
+        team_b,
+        request=grant_request(fixture, removed_version),
+        correlation_id="g2",
+        approved_by="op",
+    )
+    assert granted.state == "active" and granted.runtime_user_id is None
+    again = await exchange.exchange(proof(fixture, team_id=team_b, external_session_id="b2"), "b2")
+    assert again.inference_user_id not in (None, in_b.inference_user_id)
+    assert (await context_for(fixture, again)).external_workspace.team_id == team_b
+
+
+async def test_grant_is_refused_for_a_suspended_subject(external_database: ExternalDatabase):
+    fixture = external_database
+    await enable(fixture)
+    team_b = await attach_and_grant(fixture)
+    admin = teams_admin(fixture)
+    await admin.revoke(
+        fixture.binding_id,
+        team_b,
+        fixture.subject_id,
+        request=version(0),
+        correlation_id="r",
+        approved_by="op",
+    )
+    await fixture.db.execute_raw(
+        "UPDATE deltallm_externalauthsubject SET state = 'suspended', version = version + 1 WHERE subject_id = $1",
+        fixture.subject_id,
+    )
+    with pytest.raises(ExternalAuthError) as refused:
+        await admin.grant(
+            fixture.binding_id,
+            team_b,
+            request=grant_request(fixture, 1),
+            correlation_id="g",
+            approved_by="op",
+        )
+    assert refused.value.status_code == 409
