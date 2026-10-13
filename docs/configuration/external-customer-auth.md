@@ -87,6 +87,8 @@ Sessions in the person's other teams do not change. This is different from subje
 
 The session permits work in its bound organization and in its selected team only. It can create private credentials and models, share eligible assets within that workspace, view its own usage, and manage its own keys under the current team self-service policy. It cannot create public grants, change budgets or owners, rotate keys, or administer other customers.
 
+The session can read the request logs of its selected team with `GET /ui/api/workspace/logs` and `GET /ui/api/workspace/logs/{log_id}` when it has `spend.read.self`. Each member with that permission sees all rows of the team. The rows contain a fixed set of fields and no request content, metadata, or upstream URLs. See [Workspace request logs](../api/admin.md#workspace-request-logs). The customer permission ceiling does not include `spend.read` or `audit.read`.
+
 Team lists and detail reads return only the session's team, including when other teams use the same organization or the person has other granted teams. Organization-wide member lists and member searches require an operator session. Stored administrator membership roles do not override the customer permission ceiling.
 
 Batch administration and batch create-session routes require an operator session. External customer sessions cannot read batch records, prompts, responses, costs, or scheduler details, or run batch maintenance actions. A scope request with a required permission fails with HTTP 403 when the customer has no live grant for that permission.

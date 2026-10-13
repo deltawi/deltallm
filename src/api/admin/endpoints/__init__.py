@@ -23,6 +23,7 @@ from src.api.admin.endpoints.rbac import router as rbac_router
 from src.api.admin.endpoints.route_groups import router as route_groups_router
 from src.api.admin.endpoints.service_accounts import router as service_accounts_router
 from src.api.admin.endpoints.spend import router as spend_router
+from src.api.admin.endpoints.workspace_logs import router as workspace_logs_router
 from src.api.admin.endpoints.teams import router as teams_router
 from src.api.admin.endpoints.telemetry_ingestion import router as telemetry_ingestion_router
 from src.api.admin.endpoints.tier_policy_preview import (
@@ -56,6 +57,7 @@ __all__ = [
     "route_groups_router",
     "service_accounts_router",
     "spend_router",
+    "workspace_logs_router",
     "teams_router",
     "telemetry_ingestion_router",
     "tier_capacity_router",

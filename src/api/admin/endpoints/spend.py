@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import base64
-import binascii
 from datetime import UTC, date, datetime, time
-import json
 import logging
 from time import perf_counter
 from typing import Any, Literal
@@ -21,6 +18,11 @@ from src.billing.spend.spend_read import SpendReadSource, get_spend_read_source
 from src.db.billing.spend_components import external_request_sql
 from src.middleware.admin import require_any_admin_permission
 from src.providers.resolution import provider_from_model, resolve_provider
+from src.services.reporting.request_log_cursor import (
+    InvalidRequestLogCursor,
+    decode_request_log_cursor,
+    encode_request_log_cursor,
+)
 from src.services.reporting.spend_reporting_cache import reporting_cache_ttl
 from src.api.admin.spend_reporting_dependencies import (
     _resolve_reporting_visibility,
@@ -64,34 +66,10 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
-def _encode_request_log_cursor(start_time: Any, row_id: Any) -> str:
-    if isinstance(start_time, datetime):
-        timestamp = start_time.isoformat()
-    else:
-        timestamp = str(start_time or "").strip()
-    identifier = str(row_id or "").strip()
-    if not timestamp or not identifier:
-        raise ValueError("Request log cursor rows require start_time and id")
-    payload = json.dumps(
-        {"start_time": timestamp, "id": identifier},
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
-
-
 def _decode_request_log_cursor(value: str) -> tuple[datetime, str]:
     try:
-        padding = "=" * (-len(value) % 4)
-        decoded = base64.urlsafe_b64decode(f"{value}{padding}".encode("ascii"))
-        payload = json.loads(decoded.decode("utf-8"))
-        timestamp = datetime.fromisoformat(str(payload["start_time"]).replace("Z", "+00:00"))
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=UTC)
-        identifier = str(payload["id"]).strip()
-        if not identifier:
-            raise ValueError("empty cursor id")
-        return timestamp.astimezone(UTC), identifier
-    except (binascii.Error, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return decode_request_log_cursor(value)
+    except InvalidRequestLogCursor as exc:
         raise HTTPException(status_code=422, detail="Invalid request log cursor") from exc
 
 
@@ -991,7 +969,7 @@ async def request_logs(
             next_cursor = None
             if has_more and page_logs and not offset_pagination:
                 last_row = page_logs[-1]
-                next_cursor = _encode_request_log_cursor(
+                next_cursor = encode_request_log_cursor(
                     last_row.get("start_time"),
                     last_row.get("id"),
                 )

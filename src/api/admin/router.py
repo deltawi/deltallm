@@ -30,6 +30,7 @@ from src.api.admin.endpoints import (
     tier_policy_preview_router,
     tiers_router,
     users_router,
+    workspace_logs_router,
 )
 from src.api.admin.endpoints.route_groups_by_id import router as route_groups_by_id_router
 from src.api.admin.endpoints.route_group_selectors import router as route_group_selectors_router
@@ -80,6 +81,7 @@ admin_router.include_router(prompt_registry_router)
 admin_router.include_router(config_router)
 admin_router.include_router(audit_router)
 admin_router.include_router(spend_router)
+admin_router.include_router(workspace_logs_router)
 admin_router.include_router(routing_costs_router)
 
 # Include remaining UI endpoints not yet split (static files only).

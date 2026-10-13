@@ -604,6 +604,30 @@ Grouped rows return a nullable `group_key` and an explicit `is_unassigned` boole
 
 For `view=self`, the report accepts only `group_by=organization|team` in addition to the common day, model, and provider groupings. A model drill-down may use only `scope_type=organization|team`. Both the grouping and drill-down retain the authenticated account's owner predicate and active membership boundary, so they partition personal usage without exposing another account's traffic. User/API-key groupings and request logs remain unavailable to self-only accounts.
 
+### Workspace request logs
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/workspace/logs` | List the request logs of the session's workspace |
+| `GET` | `/ui/api/workspace/logs/{log_id}` | Read one request log of the session's workspace |
+
+These routes accept only an external customer session (`external_customer_v1`) that has `spend.read.self`. They also require `general_settings.spend_reporting_v2_enabled`. Operator sessions and the master key get HTTP 403, because they have no workspace.
+
+The scope is fixed. The organization and the team come from the session binding. After a team switch, the scope is the selected team. The routes refuse `organization_id`, `team_id`, `user_id`, and `view` with HTTP 422. The detail route returns HTTP 404 for a row of another workspace and for a missing row.
+
+List parameters:
+
+- `start` and `end`: ISO 8601 timestamps. `start` is inclusive and `end` is exclusive. A timestamp without an offset is UTC. The default window is the last 24 hours.
+- `model`: exact model name.
+- `api_key`: the key hash that `GET /ui/api/keys` returns in `token`.
+- `status`: `success` or `error`.
+- `cursor`: the `pagination.next_cursor` value of the previous page. Rows are newest first.
+- `limit`: 1 to 100. The default is 50.
+
+Each row contains only these fields: `id`, `request_id`, `start_time`, `end_time`, `latency_ms`, `call_type`, `model`, `api_key`, `status`, `http_status_code`, `error_type`, `prompt_tokens`, `completion_tokens`, `prompt_tokens_cached`, `completion_tokens_cached`, `spend`, and `cache_hit`. `spend` is the amount that the gateway charged to the workspace budget. `api_key` is null when the row has no stored key hash, for example for a `jwt:<user or email>` or `master_key` credential label. The routes never return request or response bodies, metadata, `api_base`, cache keys, end users, owners, tags, or provider error text.
+
+The list response also contains `pagination` (`limit`, `count`, `has_more`, `next_cursor`) and the resolved `start` and `end`. Both routes use the spend-reporting capacity gate. When the gate is full, they return HTTP 503 with `Retry-After`.
+
 ### Batches
 
 | Method | Endpoint | Purpose |
