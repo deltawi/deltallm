@@ -286,6 +286,8 @@ export interface MCPApprovalRequest {
   decided_by_account_id?: string | null;
   decided_at?: string | null;
   expires_at?: string | null;
+  /** Set when the gateway ran the approved call. An approval allows one call only. */
+  consumed_at?: string | null;
   metadata?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -1088,8 +1090,10 @@ export const mcpServers = {
     apiFetch<MCPToolPolicy>('/ui/api/mcp-tool-policies', { method: 'POST', json: payload }),
   deleteToolPolicy: (policyId: string) =>
     apiFetch<{ deleted: boolean; mcp_tool_policy_id: string }>(`/ui/api/mcp-tool-policies/${encodeURIComponent(policyId)}`, { method: 'DELETE' }),
-  listApprovalRequests: (params?: { server_id?: string; status?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<MCPApprovalRequest>>(withQuery('/ui/api/mcp-approval-requests', params)),
+  listApprovalRequests: (
+    params?: { server_id?: string; status?: string; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ) => apiFetch<Paginated<MCPApprovalRequest>>(withQuery('/ui/api/mcp-approval-requests', params), { signal }),
   decideApprovalRequest: (approvalRequestId: string, payload: { status: 'approved' | 'rejected'; decision_comment?: string }) =>
     apiFetch<MCPApprovalRequest>(`/ui/api/mcp-approval-requests/${encodeURIComponent(approvalRequestId)}/decision`, { method: 'POST', json: payload }),
 };

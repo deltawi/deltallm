@@ -25,17 +25,18 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import DataTable from '../components/DataTable';
 import ManagedAssetAccessPanel from '../components/ManagedAssetAccessPanel';
 import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
-import MCPApprovalTable from '../components/mcp/MCPApprovalTable';
+import MCPApprovalsPanel from '../components/mcp/MCPApprovalsPanel';
 import MCPServerForm, {
   buildMCPServerPayload,
   formFromMCPServer,
   type MCPServerFormValues,
 } from '../components/mcp/MCPServerForm';
 import {
-  type MCPApprovalRequest,
   type MCPBinding,
   mcpServers,
   type MCPNamespacedTool,
+  type MCPOperationsFailureRow,
+  type MCPOperationsToolRow,
   type MCPServerDetail,
   type MCPServerOperations,
   type MCPToolPolicy,
@@ -43,6 +44,8 @@ import {
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
+import { DEFAULT_MCP_APPROVAL_STATUS, type MCPApprovalStatusFilter } from '../lib/mcpApprovals';
+import { errorMessage } from '../lib/errorMessage';
 import { useToast } from '../components/ToastProvider';
 import { HeroTabbedDetailShell } from '../components/admin/shells';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
@@ -149,7 +152,6 @@ function FormField({ label, children }: { label: string; children: ReactNode }) 
 const inputCls =
   'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30';
 const selectCls = inputCls;
-const APPROVALS_LIMIT = 20;
 
 export default function MCPServerDetail() {
   const { serverId = '' } = useParams();
@@ -179,7 +181,7 @@ export default function MCPServerDetail() {
   const [showPolicyForm, setShowPolicyForm] = useState(false);
   const [editingBindingId, setEditingBindingId] = useState<string | null>(null);
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
-  const [approvalsOffset, setApprovalsOffset] = useState(0);
+  const [approvalStatus, setApprovalStatus] = useState<MCPApprovalStatusFilter>(DEFAULT_MCP_APPROVAL_STATUS);
 
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -188,7 +190,6 @@ export default function MCPServerDetail() {
   const [deleting, setDeleting] = useState(false);
   const [savingBinding, setSavingBinding] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
-  const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
 
   const { data, loading, refetch } = useApi<MCPServerDetail | null>(
     () => (serverId ? mcpServers.get(serverId) : Promise.resolve(null)),
@@ -198,20 +199,11 @@ export default function MCPServerDetail() {
     () => (serverId ? mcpServers.operations(serverId) : Promise.resolve(null)),
     [serverId]
   );
-  const { data: approvalsData, loading: approvalsLoading, refetch: refetchApprovals } = useApi<{ data: MCPApprovalRequest[]; pagination: any } | null>(
-    () => (serverId && canReviewApprovals ? mcpServers.listApprovalRequests({ server_id: serverId, limit: APPROVALS_LIMIT, offset: approvalsOffset }) : Promise.resolve(null)),
-    [serverId, canReviewApprovals, approvalsOffset]
-  );
-
   useEffect(() => {
     if (data?.server) {
       setForm(formFromMCPServer(data.server));
     }
   }, [data?.server]);
-
-  useEffect(() => {
-    setApprovalsOffset(0);
-  }, [serverId]);
 
   const resetBindingForm = () => {
     setBindingForm(EMPTY_BINDING);
@@ -241,9 +233,8 @@ export default function MCPServerDetail() {
       pushToast({ tone: 'success', title: 'Server updated', message: 'MCP server settings were saved.' });
       refetch();
       refetchOperations();
-      refetchApprovals();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Save failed', message: error?.message || 'Failed to save MCP server.' });
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Save failed', message: errorMessage(error, 'Failed to save MCP server.') });
     } finally {
       setSaving(false);
     }
@@ -257,9 +248,8 @@ export default function MCPServerDetail() {
       pushToast({ tone: 'success', title: 'Capabilities refreshed', message: 'Discovered tools were updated.' });
       refetch();
       refetchOperations();
-      refetchApprovals();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Refresh failed', message: error?.message || 'Failed to refresh tools.' });
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Refresh failed', message: errorMessage(error, 'Failed to refresh tools.') });
     } finally {
       setRefreshing(false);
     }
@@ -280,9 +270,8 @@ export default function MCPServerDetail() {
       });
       refetch();
       refetchOperations();
-      refetchApprovals();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Health check failed', message: error?.message || 'Failed to run health check.' });
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Health check failed', message: errorMessage(error, 'Failed to run health check.') });
     } finally {
       setCheckingHealth(false);
     }
@@ -295,8 +284,8 @@ export default function MCPServerDetail() {
       await mcpServers.delete(serverId);
       pushToast({ tone: 'success', title: 'Server deleted', message: `"${server.server_key}" was deleted.` });
       navigate('/mcp-servers');
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete server.' });
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Delete failed', message: errorMessage(error, 'Failed to delete server.') });
     } finally {
       setDeleting(false);
     }
@@ -325,9 +314,8 @@ export default function MCPServerDetail() {
       });
       refetch();
       refetchOperations();
-      refetchApprovals();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Binding failed', message: error?.message || 'Failed to save binding.' });
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Binding failed', message: errorMessage(error, 'Failed to save binding.') });
     } finally {
       setSavingBinding(false);
     }
@@ -343,9 +331,8 @@ export default function MCPServerDetail() {
       pushToast({ tone: 'success', title: 'Binding removed', message: `${binding.scope_type}:${binding.scope_id} access removed.` });
       refetch();
       refetchOperations();
-      refetchApprovals();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete binding.' });
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Delete failed', message: errorMessage(error, 'Failed to delete binding.') });
     }
   };
 
@@ -374,9 +361,8 @@ export default function MCPServerDetail() {
       });
       refetch();
       refetchOperations();
-      refetchApprovals();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Policy failed', message: error?.message || 'Failed to save policy.' });
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Policy failed', message: errorMessage(error, 'Failed to save policy.') });
     } finally {
       setSavingPolicy(false);
     }
@@ -392,30 +378,8 @@ export default function MCPServerDetail() {
       pushToast({ tone: 'success', title: 'Policy removed', message: `Policy for "${policy.tool_name}" deleted.` });
       refetch();
       refetchOperations();
-      refetchApprovals();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete policy.' });
-    }
-  };
-
-  const handleApprovalDecision = async (approval: MCPApprovalRequest, decision: 'approved' | 'rejected', decisionComment?: string) => {
-    setDecidingApprovalId(approval.mcp_approval_request_id);
-    try {
-      await mcpServers.decideApprovalRequest(approval.mcp_approval_request_id, {
-        status: decision,
-        decision_comment: decision === 'rejected' ? decisionComment : undefined,
-      });
-      pushToast({
-        tone: 'success',
-        title: decision === 'approved' ? 'Approved' : 'Rejected',
-        message: `${approval.tool_name} request ${decision}.`,
-      });
-      refetchApprovals();
-      refetchOperations();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Decision failed', message: error?.message || 'Failed to update approval.' });
-    } finally {
-      setDecidingApprovalId(null);
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Delete failed', message: errorMessage(error, 'Failed to delete policy.') });
     }
   };
 
@@ -445,9 +409,7 @@ export default function MCPServerDetail() {
   const tools = data.tools || [];
   const bindings = data.bindings || [];
   const policies = data.tool_policies || [];
-  const approvals = approvalsData?.data || [];
-  const pendingApprovals = operations?.summary.pending_approvals ?? approvals.filter((approval) => approval.status === 'pending').length;
-  const approvalsPagination = approvalsData?.pagination;
+  const pendingApprovals = operations?.summary.pending_approvals ?? 0;
 
   const healthStatus = server.last_health_status;
   const latencyMs = server.last_health_latency_ms;
@@ -479,7 +441,7 @@ export default function MCPServerDetail() {
             className="group flex items-center text-sm text-gray-500 transition-colors hover:text-gray-900"
           >
             <ArrowLeft className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-600" />
-            <span className="font-medium text-gray-600">MCP Servers</span>
+            <span className="font-medium text-gray-600">MCP</span>
             <span className="mx-2 text-gray-300">/</span>
             <span className="font-semibold text-gray-900">{server.name}</span>
           </button>
@@ -1177,29 +1139,13 @@ export default function MCPServerDetail() {
             <div className="space-y-6 p-6">
               {canReviewApprovals ? (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-gray-900">
-                      Approval Requests
-                      {pendingApprovals > 0 ? (
-                        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-700">
-                          {pendingApprovals} pending
-                        </span>
-                      ) : null}
-                    </h3>
-                  </div>
-                  <MCPApprovalTable
-                    approvals={approvals}
-                    loading={approvalsLoading}
-                    totalCount={approvalsPagination?.total ?? 0}
-                    offset={approvalsOffset}
-                    limit={APPROVALS_LIMIT}
-                    hasMore={approvalsPagination?.has_more ?? false}
-                    decidingId={decidingApprovalId}
-                    onDecision={handleApprovalDecision}
-                    onPageChange={setApprovalsOffset}
-                    showServerColumn={false}
-                    emptyMessage="No approval requests"
-                    emptyHint="No approval requests yet."
+                  <h3 className="text-sm font-semibold text-gray-900">Approval Requests</h3>
+                  <MCPApprovalsPanel
+                    serverId={serverId}
+                    serverFixed
+                    status={approvalStatus}
+                    onStatusChange={setApprovalStatus}
+                    onDecided={refetchOperations}
                   />
                 </div>
               ) : null}
@@ -1228,10 +1174,10 @@ export default function MCPServerDetail() {
                         <p className="mb-2 text-sm font-semibold text-gray-700">Top Tools</p>
                         <DataTable
                           columns={[
-                            { key: 'tool_name', header: 'Tool', render: (row: any) => <span className="font-mono text-xs">{row.tool_name}</span> },
+                            { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsToolRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
                             { key: 'total_calls', header: 'Calls' },
                             { key: 'failed_calls', header: 'Failures' },
-                            { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: any) => `${Math.round(Number(row.avg_latency_ms || 0))}ms` },
+                            { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: MCPOperationsToolRow) => `${Math.round(Number(row.avg_latency_ms || 0))}ms` },
                           ]}
                           data={operations.top_tools}
                           emptyMessage="No tool calls in the last 24h"
@@ -1241,12 +1187,12 @@ export default function MCPServerDetail() {
                         <p className="mb-2 text-sm font-semibold text-gray-700">Recent Failures</p>
                         <DataTable
                           columns={[
-                            { key: 'occurred_at', header: 'Time', render: (row: any) => fmtDate(row.occurred_at) },
-                            { key: 'tool_name', header: 'Tool', render: (row: any) => <span className="font-mono text-xs">{row.tool_name}</span> },
+                            { key: 'occurred_at', header: 'Time', render: (row: MCPOperationsFailureRow) => fmtDate(row.occurred_at) },
+                            { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsFailureRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
                             {
                               key: 'error_type',
                               header: 'Error',
-                              render: (row: any) => (row.error_code ? `${row.error_type || 'Error'} (${row.error_code})` : row.error_type || 'Error'),
+                              render: (row: MCPOperationsFailureRow) => (row.error_code ? `${row.error_type || 'Error'} (${row.error_code})` : row.error_type || 'Error'),
                             },
                           ]}
                           data={operations.recent_failures}

@@ -1,3 +1,4 @@
+import { errorMessage } from './errorMessage';
 import { parseOutputTpm } from './outputTpm';
 import type {
   Tier,
@@ -123,14 +124,7 @@ export function tierToForm(tier?: Tier | null): TierFormValues {
   };
 }
 
-export function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) return message;
-  }
-  return fallback;
-}
+export { errorMessage };
 
 export function formatLimit(value?: number | null): string {
   return value == null ? 'Unlimited' : Number(value).toLocaleString();

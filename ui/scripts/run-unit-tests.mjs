@@ -65,6 +65,8 @@ const testSources = [
   'tests/usageBreakdown.test.ts',
   'tests/useApi.test.ts',
   'tests/useRoutePolicySimulation.test.ts',
+  'tests/mcpApprovals.test.ts',
+  'tests/mcpPage.test.tsx',
 ];
 
 await rm(outputDir, { recursive: true, force: true });
