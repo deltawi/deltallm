@@ -144,10 +144,11 @@ organizations and teams that your account can manage.
    requests.
 2. The **Pending** filter shows by default. Use **Approved**, **Rejected**, **Expired**, or **All**
    to see other requests.
-3. Select **Details** on a request. Examine the MCP server, tool name, arguments, caller, and
-   creation time.
+3. Select the arrow button at the end of a row to show the details. Examine the MCP server, tool
+   name, arguments, caller, and creation time.
 4. Approve the request only when you expect the action and the input. If not, reject it.
-5. When you reject a request, you can add a short comment for a later review.
+5. To reject a request, show its details, then select **Reject**. You can add a short comment for
+   a later review.
 
 To show the requests of one server only, open the server, select the **Activity** tab, then select
 **Open in Approvals**. The **Approvals** tab then shows a server filter. Select the **x** on the

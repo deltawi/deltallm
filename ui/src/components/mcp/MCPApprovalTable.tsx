@@ -72,7 +72,7 @@ function ApprovalStatusBadge({ request }: { request: MCPApprovalRequest }) {
   }
   if (view.tone === 'approved') {
     return (
-      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-emerald-700">
+      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
         <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
         {view.label}
       </span>
@@ -134,17 +134,20 @@ export default function MCPApprovalTable({
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        {/* The wrapper keeps a minimum width, so the Tool column keeps space on small screens.
+            A fixed-layout table ignores its own min-width. */}
+        <div className={showServerColumn ? 'min-w-[60rem]' : 'min-w-[53rem]'}>
+        <table className="w-full table-fixed text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
-              <th className="w-28 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Requested</th>
-              {showServerColumn ? <th className="w-32 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Server</th> : null}
+              <th className="w-24 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Requested</th>
+              {showServerColumn ? <th className="w-28 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Server</th> : null}
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Tool</th>
-              <th className="w-32 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Requestor</th>
-              <th className="w-32 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Scope</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Input preview</th>
+              <th className="w-28 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Requestor</th>
+              <th className="w-28 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Scope</th>
+              <th className="w-36 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Input preview</th>
               <th className="w-28 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Status</th>
-              <th className="w-44 px-4 py-3" />
+              <th className="sticky right-0 w-32 bg-gray-50 px-4 py-3"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -173,33 +176,38 @@ export default function MCPApprovalTable({
               const canDecide = Boolean(onDecision && request.capabilities?.can_decide);
               return (
                 <Fragment key={request.mcp_approval_request_id}>
-                  <tr className="border-b border-gray-100 transition hover:bg-gray-50/60">
+                  <tr className="group border-b border-gray-100 transition hover:bg-gray-50">
                     <td className="px-4 py-3.5 align-top">
-                      <div className="text-xs font-medium text-gray-800">{fmtRelative(request.created_at)}</div>
-                      <div className="mt-0.5 text-[11px] text-gray-400">{fmtDate(request.created_at)}</div>
+                      <time
+                        dateTime={request.created_at ?? undefined}
+                        title={fmtDate(request.created_at)}
+                        className="whitespace-nowrap text-xs font-medium text-gray-800"
+                      >
+                        {fmtRelative(request.created_at)}
+                      </time>
                     </td>
                     {showServerColumn ? (
                       <td className="px-4 py-3.5 align-top">
-                        <div className="font-medium text-gray-800">{serverLabel(request)}</div>
+                        <div className="truncate font-medium text-gray-800" title={serverLabel(request)}>{serverLabel(request)}</div>
                         {request.server?.server_key && request.server.server_key !== request.server.name ? (
-                          <div className="mt-0.5 font-mono text-[11px] text-gray-400">{request.server.server_key}</div>
+                          <div className="mt-0.5 truncate font-mono text-[11px] text-gray-400">{request.server.server_key}</div>
                         ) : null}
                       </td>
                     ) : null}
                     <td className="px-4 py-3.5 align-top">
-                      <div className="font-mono text-xs text-gray-800">{request.tool_name}</div>
+                      <div className="break-all font-mono text-xs text-gray-800">{request.tool_name}</div>
                     </td>
-                    <td className="px-4 py-3.5 align-top text-xs text-gray-600">{fmtRequestor(request)}</td>
+                    <td className="truncate px-4 py-3.5 align-top text-xs text-gray-600" title={fmtRequestor(request)}>{fmtRequestor(request)}</td>
                     <td className="px-4 py-3.5 align-top">
-                      <div className="font-mono text-xs text-gray-600">{request.scope_type}:{request.scope_id}</div>
+                      <div className="break-all font-mono text-xs text-gray-600">{request.scope_type}:{request.scope_id}</div>
                     </td>
                     <td className="px-4 py-3.5 align-top">
-                      <code className="rounded bg-gray-100 px-2 py-1 font-mono text-[11px] text-gray-600">{fmtInputPreview(request)}</code>
+                      <code className="block truncate rounded bg-gray-100 px-2 py-1 font-mono text-[11px] text-gray-600" title={fmtInputPreview(request)}>{fmtInputPreview(request)}</code>
                     </td>
                     <td className="px-4 py-3.5 align-top">
                       <ApprovalStatusBadge request={request} />
                     </td>
-                    <td className="px-4 py-3.5 align-top">
+                    <td className="sticky right-0 bg-white px-4 py-3.5 align-top group-hover:bg-gray-50">
                       <div className="flex items-center justify-end gap-2">
                         {canDecide ? (
                           <button
@@ -217,10 +225,12 @@ export default function MCPApprovalTable({
                             setExpandedId(isExpanded ? null : request.mcp_approval_request_id);
                             setRejectComment('');
                           }}
-                          className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
+                          aria-expanded={isExpanded}
+                          aria-label={isExpanded ? 'Hide details' : canDecide ? 'Show details and reject' : 'Show details'}
+                          title={isExpanded ? 'Hide details' : canDecide ? 'Details and reject' : 'Details'}
+                          className="inline-flex items-center rounded-md border border-gray-200 bg-white p-1.5 text-gray-600 transition hover:bg-gray-50"
                         >
-                          Details
-                          {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                          {isExpanded ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
                         </button>
                       </div>
                     </td>
@@ -308,6 +318,7 @@ export default function MCPApprovalTable({
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       <div className="flex items-center justify-between border-t border-gray-100 bg-gray-50/50 px-4 py-3">
