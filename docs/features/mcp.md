@@ -191,7 +191,7 @@ Operator workflows include:
 - inspecting recent call counts, failures, and approval volume per server
 - reviewing and deciding approval requests
 
-For the day-to-day UI workflow, see [Admin UI: MCP Servers](../admin-ui/mcp.md).
+For the day-to-day UI workflow, see [Admin UI: MCP](../admin-ui/mcp.md).
 
 ## Troubleshooting
 
@@ -206,5 +206,5 @@ For the day-to-day UI workflow, see [Admin UI: MCP Servers](../admin-ui/mcp.md).
 ## Related pages
 
 - [Connect your first MCP server](../getting-started/mcp-quickstart.md)
-- [Admin UI: MCP Servers](../admin-ui/mcp.md)
+- [Admin UI: MCP](../admin-ui/mcp.md)
 - [API Reference: MCP Gateway & Tooling](../api/mcp.md)

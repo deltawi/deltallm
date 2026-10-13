@@ -101,7 +101,7 @@ nav:
           - Reuse provider credentials: guides/admin-provider-credentials.md
           - Manage route groups: guides/admin-route-groups.md
           - Prompts: admin-ui/prompt-registry.md
-          - MCP servers: admin-ui/mcp.md
+          - MCP servers and approvals: admin-ui/mcp.md
           - Test a model: admin-ui/playground.md
       - Manage organizations and access:
           - Organizations: admin-ui/organizations.md
@@ -119,7 +119,6 @@ nav:
           - Set rate limits: guides/admin-rate-limits.md
           - Guardrails: admin-ui/guardrails.md
           - Audit logs: admin-ui/audit-logs.md
-          - Tool approvals: admin-ui/tool-approvals.md
       - Run operations:
           - Administration workflows: guides/admin-workflows.md
           - Batch jobs: admin-ui/batch-jobs.md
