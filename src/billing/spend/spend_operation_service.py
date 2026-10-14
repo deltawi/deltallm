@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 from src.billing.spend.spend_operations import OperationHandle, SpendPersistenceUnavailable
@@ -16,6 +17,8 @@ from src.metrics.spend_operations import record_operation_transition, observe_un
 
 if TYPE_CHECKING:
     from prisma import Prisma
+
+logger = logging.getLogger(__name__)
 
 
 class SpendOperationService:
@@ -41,6 +44,7 @@ class SpendOperationService:
             record_operation_transition("dispatched")
         except Exception:
             increment_spend_ingestion_failure("operation_admission")
+            logger.warning("spend operation failed stage=operation_admission")
             raise SpendPersistenceUnavailable() from None
 
     async def accept(self, handle: OperationHandle, payload: dict[str, object]) -> None:
@@ -62,6 +66,7 @@ class SpendOperationService:
             record_operation_transition("accepted")
         except Exception:
             increment_spend_ingestion_failure("operation_receipt")
+            logger.warning("spend operation failed stage=operation_receipt")
             raise SpendPersistenceUnavailable() from None
 
     async def unknown(self, handle: OperationHandle) -> None:

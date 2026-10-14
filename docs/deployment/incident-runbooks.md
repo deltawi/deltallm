@@ -75,6 +75,16 @@ ERROR:src.middleware.errors:unhandled exception: POST /ui/api/tiers/bootstrap re
 4. Reconcile unknown email/webhook/provider outcomes manually; record replay decisions in the audit trail.
 5. Confirm oldest-event age trends down and no new failures accumulate.
 
+When requests fail with `spend_persistence_unavailable` or `audit_persistence_unavailable`, the gateway
+log names the failing write. Search for these lines:
+
+- `spend operation failed stage=...`: the usage admission or receipt write failed.
+- `billing transaction failed reason=... budget_ms=...`: the database reason (lock, pool, deadline or
+  connection) behind a spend write.
+- `telemetry acceptance failed queue=... phase=... reason=...`: an audit or spend outbox enqueue failed.
+
+They hold no keys or payloads.
+
 ## Suspected credential or data compromise
 
 1. Restrict affected routes/accounts and preserve logs, audit records, and deployment state.

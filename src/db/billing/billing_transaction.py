@@ -4,12 +4,16 @@ import asyncio
 import math
 from contextlib import asynccontextmanager
 from datetime import timedelta
+import logging
 from typing import TYPE_CHECKING, AsyncIterator
 
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
 
 if TYPE_CHECKING:
     from prisma import Prisma
+
+logger = logging.getLogger(__name__)
 
 DB_BUDGET_SECONDS = 0.25
 
@@ -34,5 +38,14 @@ async def billing_transaction(
                     f"{max(1, int(remaining * 1000))}ms",
                 )
                 yield tx
-    except Exception:
+    except Exception as exc:
+        reason = classify_acceptance_failure(exc)
+        # Domain rejections raised by callers classify as unknown and stay quiet;
+        # a lock, pool, deadline or connection failure is named for operators.
+        if reason != AcceptanceFailure.UNKNOWN:
+            logger.warning(
+                "billing transaction failed reason=%s budget_ms=%d",
+                reason.value,
+                round(remaining * 1000),
+            )
         raise BillingOperationUnavailable() from None

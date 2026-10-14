@@ -60,7 +60,17 @@ def install_dependencies(cluster: LifecycleCluster, image: str) -> None:
             {"name": "POSTGRES_PASSWORD", "value": "fixture-only"},
             {"name": "POSTGRES_DB", "value": "deltallm_concurrency"},
         ],
-        args=["-c", "shared_preload_libraries=pg_stat_statements", "-c", "max_connections=300"],
+        args=[
+            "-c",
+            "shared_preload_libraries=pg_stat_statements",
+            "-c",
+            "max_connections=300",
+            # Name lock waits over 100 ms in the log for rejection evidence.
+            "-c",
+            "log_lock_waits=on",
+            "-c",
+            "deadlock_timeout=100ms",
+        ],
     )
     documents += dependency("redis", "redis:7", 6379)
     documents += [

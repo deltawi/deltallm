@@ -22,8 +22,8 @@ from tests.performance.capacity_fixture import (
     capacity_values,
     install_capacity_dependencies,
     install_edge,
-    print_rejection_evidence,
 )
+from tests.performance.lifecycle_cluster import print_rejection_evidence
 from tests.performance.lifecycle_fixtures import CHART
 from tests.performance.capacity_load import arrival
 from tests.performance.capacity_monitoring import install_monitoring
