@@ -40,11 +40,15 @@ ERROR:src.middleware.errors:unhandled exception: POST /ui/api/tiers/bootstrap re
 - `request_id` matches the `X-Request-ID` response header, so a user-reported failure can be found
   from the header in their browser's network tab.
 - The route is the template (`/ui/api/tiers/{tier_id}`), not the raw URL, so IDs and query strings
-  are not logged.
+  are not logged. An error raised before routing logs `(unmatched route)`.
+- `cause_type` appears only when the code wrapped another error with `raise ... from`.
 - `raised_at` is where the error was raised, often inside a library; `app_frame` is the last
   DeltaLLM frame on the way there, which is usually the place to start reading.
-- The exception message, arguments, and stack locals are deliberately not logged, because they can
-  contain credentials or customer content. Reproduce from the route and code location instead.
+- This line deliberately leaves out the exception message, arguments, and stack locals, because they
+  can contain credentials or customer content.
+- Uvicorn separately logs `Exception in ASGI application` with the full traceback, including the
+  exception message, at `ERROR` on the `uvicorn.error` logger. Treat server logs as sensitive, or
+  filter that logger in your log pipeline if exception text must never be stored.
 
 ## Dependency outage
 

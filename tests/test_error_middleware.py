@@ -120,6 +120,7 @@ async def test_unhandled_exception_logging_names_route_type_and_code_location(ca
             response = await client.post("/items/private-id", headers={"x-request-id": "req-123"})
 
     assert response.status_code == 500
+    assert response.headers["x-request-id"] == "req-123"
     record = next(r for r in caplog.records if r.getMessage().startswith("unhandled exception"))
     message = record.getMessage()
     assert "POST /items/{item_id}" in message
@@ -131,6 +132,30 @@ async def test_unhandled_exception_logging_names_route_type_and_code_location(ca
     assert "super-secret-value" not in caplog.text
     assert "private-id" not in caplog.text
     assert record.exc_info is None
+
+
+@pytest.mark.asyncio
+async def test_unhandled_exception_in_full_app_returns_logged_request_id(caplog):
+    from src.main import create_app
+
+    app = create_app(include_routes=False)
+
+    @app.post("/ui/api/things/{thing_id}")
+    async def boom(thing_id: str):
+        raise RuntimeError("api_key=super-secret-value")
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        with caplog.at_level("ERROR"):
+            response = await client.post("/ui/api/things/private-id")
+
+    assert response.status_code == 500
+    request_id = response.headers["x-request-id"]
+    message = next(
+        r.getMessage() for r in caplog.records if r.getMessage().startswith("unhandled exception")
+    )
+    assert f"request_id={request_id}" in message
+    assert "cause_type" not in message
 
 
 @pytest.mark.asyncio

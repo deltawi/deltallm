@@ -79,8 +79,13 @@ def _unhandled_exception_context(request: Request, exc: BaseException) -> dict[s
     app_frames = [
         frame for frame in frames if _short_source_path(frame.filename).startswith("src/")
     ]
-    route = getattr(request.scope.get("route"), "path", None) or request.url.path
-    cause = exc.__cause__ or exc.__context__
+    # The raw URL can carry IDs, so an error raised before routing logs no path at all.
+    route = getattr(request.scope.get("route"), "path", None) or "(unmatched route)"
+    # Only an explicit ``raise ... from`` cause. Starlette's middleware re-raises errors from its
+    # task group with the group as cause, which says nothing about the failure.
+    cause = exc.__cause__
+    if isinstance(cause, BaseExceptionGroup):
+        cause = None
     return {
         "method": request.method,
         "route": route,
@@ -214,5 +219,9 @@ def register_exception_handlers(app: FastAPI) -> None:
             context["app_frame"],
             extra=context,
         )
-        proxy_error = ProxyError()
-        return _proxy_error_response_for_request(request, proxy_error)
+        response = _proxy_error_response_for_request(request, ProxyError())
+        # This handler runs outside the request-identity middleware, so the ID it would have
+        # added to the response is attached here to let a reported 500 be matched to its log.
+        if context["request_id"]:
+            response.headers["X-Request-ID"] = context["request_id"]
+        return response
