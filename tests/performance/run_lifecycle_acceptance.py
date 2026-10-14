@@ -20,7 +20,13 @@ import yaml
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.gateway_concurrency_fixture import seed
 from tests.performance.gateway_concurrency_manifest import local_manifest
-from tests.performance.lifecycle_cluster import LifecycleCluster, LOAD_KEY, MASTER_KEY, SALT_KEY
+from tests.performance.lifecycle_cluster import (
+    LOAD_KEY,
+    MASTER_KEY,
+    SALT_KEY,
+    LifecycleCluster,
+    print_rejection_evidence,
+)
 from tests.performance.lifecycle_fixtures import chart_values, install_dependencies, release
 from tests.performance.run_gateway_concurrency import measure
 from tests.performance.lifecycle_economics import (
@@ -174,6 +180,9 @@ async def exercise(cluster: LifecycleCluster, values: Path) -> None:
         try:
             await exercise_ready_cluster(cluster, values)
             completed = True
+        except AssertionError:
+            await asyncio.to_thread(print_rejection_evidence, cluster)
+            raise
         finally:
             try:
                 await export_records(cluster.output / "accepted-records.json")

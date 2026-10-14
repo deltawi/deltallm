@@ -1,7 +1,6 @@
 """Production-shaped allocations and a bounded reference edge for PR9 experiments."""
 
 from pathlib import Path
-import re
 
 import yaml
 
@@ -29,30 +28,6 @@ def install_capacity_dependencies(cluster: LifecycleCluster, image: str) -> None
     )
     for name in ("postgres", "redis"):
         cluster.kubectl("rollout", "status", "deployment/" + name, "--timeout=180s")
-
-
-# Lines that name why a request was rejected: the gateway's classified telemetry
-# failure and PostgreSQL's lock-wait and cancellation reports. They hold no keys
-# or payloads, only queue, phase, reason and lock identities.
-REJECTION_EVIDENCE = re.compile(
-    r"telemetry acceptance failed|still waiting for|acquired \S+ on|"
-    r"canceling statement|deadlock detected|remaining connection slots"
-)
-
-
-def print_rejection_evidence(cluster: LifecycleCluster, *, limit: int = 40) -> None:
-    """Show the cause in the job log, since run artifacts may not be readable."""
-    for name, source in (
-        ("gateway", ("-l", "app.kubernetes.io/instance=gateway", "--prefix", "--tail=5000")),
-        ("postgres", ("deployment/postgres", "--tail=5000")),
-    ):
-        result = cluster.kubectl(
-            "logs", *source, "--all-containers", "--request-timeout=10s", check=False, timeout=30
-        )
-        lines = [line for line in result.stdout.splitlines() if REJECTION_EVIDENCE.search(line)]
-        print(f"{name} rejection evidence: {len(lines)} matching lines", flush=True)
-        for line in lines[-limit:]:
-            print("  " + line[:400], flush=True)
 
 
 def capacity_values(cluster: LifecycleCluster, image: str) -> Path:
