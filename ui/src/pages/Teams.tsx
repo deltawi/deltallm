@@ -19,6 +19,7 @@ import {
   isScopedAssetAccessFor,
 } from '../lib/assetAccess';
 import RateLimitSummary from '../components/admin/RateLimitSummary';
+import Button from '../components/Button';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
@@ -404,12 +405,11 @@ export default function Teams() {
       titleIcon={UsersRound}
       count={pagination?.total ?? null}
       action={uiAccess.team_create ? (
-        <button
+        <Button
           onClick={() => navigate('/teams/new')}
-          className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" /> Create Team
-        </button>
+        </Button>
       ) : undefined}
       toolbar={(
         <div className="flex flex-wrap items-center gap-3">

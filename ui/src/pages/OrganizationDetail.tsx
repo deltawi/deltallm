@@ -27,21 +27,24 @@ import {
   fmtUtcDateTime,
   toUtcDateTimeLocalInputValue,
 } from '../lib/format';
+import Button from '../components/Button';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import OrganizationTierPanel from '../components/tiers/OrganizationTierPanel';
 import {
   DetailMetricCard,
-  EntityDetailShell,
-  TextTabs,
+  EntityAvatar,
+  IconTabs,
+  PageShell,
 } from '../components/admin/shells';
+import { navTrail } from '../lib/navigation';
 import {
   OrganizationLifecycleBadge,
   OrganizationLifecycleNotice,
 } from '../components/admin/OrganizationLifecycleStatus';
 import {
-  ArrowLeft, Building2, Users, DollarSign, Gauge, TrendingUp, Pencil, Plus,
+  Box, Building2, LayoutGrid, Users, UsersRound, DollarSign, Gauge, TrendingUp, Pencil, Plus,
   UserPlus, Trash2, ChevronRight, Shield, CheckCircle2, AlertTriangle,
   MoreHorizontal, ExternalLink, Info, CalendarDays, LockKeyhole,
 } from 'lucide-react';
@@ -595,16 +598,9 @@ export default function OrganizationDetail() {
   const orgName = org.organization_name || org.organization_id;
 
   return (
-    <EntityDetailShell
-      breadcrumbs={[
-        { label: 'Organizations', onClick: () => navigate('/organizations'), icon: ArrowLeft },
-        { label: orgName },
-      ]}
-      avatar={(
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-sm">
-          <span className="text-lg font-bold text-white">{orgName[0].toUpperCase()}</span>
-        </div>
-      )}
+    <PageShell
+      breadcrumbs={[...navTrail('/organizations'), { label: orgName }]}
+      avatar={<EntityAvatar initial={orgName} />}
       title={orgName}
       badges={(
         <OrganizationLifecycleBadge state={org.lifecycle_state} />
@@ -621,15 +617,12 @@ export default function OrganizationDetail() {
           )}
         </div>
       )}
-      action={canEditOrganization ? (
-        <button
-          onClick={openEditSettings}
-          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-        >
-          <Pencil className="h-3.5 w-3.5" /> Edit
-        </button>
+      actions={canEditOrganization ? (
+        <Button variant="outline" onClick={openEditSettings}>
+          <Pencil className="h-4 w-4" /> Edit
+        </Button>
       ) : undefined}
-      metrics={(
+      stats={(
         <>
           <DetailMetricCard
             icon={DollarSign}
@@ -668,39 +661,17 @@ export default function OrganizationDetail() {
         </>
       )}
       tabs={(
-        <TextTabs
+        <IconTabs
+          variant="header"
+          label="Organization sections"
           active={tab}
           onChange={setTab}
           items={[
-            { id: 'overview', label: 'Overview' },
-            {
-              id: 'teams',
-              label: (
-                <>
-                  Teams
-                  {teamList.length > 0 && (
-                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
-                      {teamList.length}
-                    </span>
-                  )}
-                </>
-              ),
-            },
-            {
-              id: 'members',
-              label: (
-                <>
-                  Members
-                  {memberList.length > 0 && (
-                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
-                      {memberList.length}
-                    </span>
-                  )}
-                </>
-              ),
-            },
-            ...(isPlatformAdmin ? [{ id: 'tiers' as const, label: 'Service Policy' }] : []),
-            ...(canManageAssets ? [{ id: 'assets' as const, label: 'Asset Access' }] : []),
+            { id: 'overview', label: 'Overview', icon: LayoutGrid },
+            { id: 'teams', label: 'Teams', icon: UsersRound, count: teamList.length > 0 ? teamList.length : undefined },
+            { id: 'members', label: 'Members', icon: Users, count: memberList.length > 0 ? memberList.length : undefined },
+            ...(isPlatformAdmin ? [{ id: 'tiers' as const, label: 'Service Policy', icon: Shield }] : []),
+            ...(canManageAssets ? [{ id: 'assets' as const, label: 'Asset Access', icon: Box }] : []),
           ]}
         />
       )}
@@ -1739,6 +1710,6 @@ export default function OrganizationDetail() {
           </div>
         </div>
       </Modal>
-    </EntityDetailShell>
+    </PageShell>
   );
 }

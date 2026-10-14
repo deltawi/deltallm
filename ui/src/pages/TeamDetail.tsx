@@ -17,16 +17,19 @@ import {
   isAssetVisibilityFor,
   isScopedAssetAccessFor,
 } from '../lib/assetAccess';
+import Button from '../components/Button';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import {
   DetailMetricCard,
-  EntityDetailShell,
-  TextTabs,
+  EntityAvatar,
+  IconTabs,
+  PageShell,
 } from '../components/admin/shells';
+import { navTrail } from '../lib/navigation';
 import {
-  ArrowLeft, Users, DollarSign, Gauge, Shield, Pencil, UserPlus, Trash2,
+  Box, LayoutGrid, Users, UsersRound, DollarSign, Gauge, Shield, Pencil, UserPlus, Trash2,
   Building2, AlertOctagon, CheckCircle2, TrendingUp,
   Lock, Unlock, Info, Key, ToggleLeft, ToggleRight,
 } from 'lucide-react';
@@ -440,21 +443,9 @@ export default function TeamDetail() {
   const orgName = orgData?.organization_name || orgData?.organization_id || team.organization_id;
 
   return (
-    <EntityDetailShell
-      breadcrumbs={[
-        { label: 'Teams', onClick: () => navigate('/teams'), icon: ArrowLeft },
-        ...(team.organization_id
-          ? canAccessOrganizations
-            ? [{ label: orgName, onClick: () => navigate(`/organizations/${team.organization_id}`), icon: Building2 }]
-            : [{ label: orgName, icon: Building2 }]
-          : []),
-        { label: teamName },
-      ]}
-      avatar={(
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-sm">
-          <Users className="h-6 w-6 text-white" />
-        </div>
-      )}
+    <PageShell
+      breadcrumbs={[...navTrail('/teams'), { label: teamName }]}
+      avatar={<EntityAvatar icon={UsersRound} />}
       title={teamName}
       badges={(
         <>
@@ -467,11 +458,18 @@ export default function TeamDetail() {
               <CheckCircle2 className="h-3.5 w-3.5" /> Active
             </span>
           )}
-          {orgName && (
+          {orgName && (canAccessOrganizations && team.organization_id ? (
+            <Link
+              to={`/organizations/${team.organization_id}`}
+              className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 transition hover:bg-gray-200 hover:text-gray-800"
+            >
+              <Building2 className="h-3 w-3" /> {orgName}
+            </Link>
+          ) : (
             <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
               <Building2 className="h-3 w-3" /> {orgName}
             </span>
-          )}
+          ))}
         </>
       )}
       meta={(
@@ -484,15 +482,12 @@ export default function TeamDetail() {
           )}
         </div>
       )}
-      action={canEditTeam ? (
-        <button
-          onClick={openEditSettings}
-          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-        >
-          <Pencil className="h-3.5 w-3.5" /> Edit
-        </button>
+      actions={canEditTeam ? (
+        <Button variant="outline" onClick={openEditSettings}>
+          <Pencil className="h-4 w-4" /> Edit
+        </Button>
       ) : undefined}
-      metrics={(
+      stats={(
         <>
           <DetailMetricCard
             icon={DollarSign}
@@ -529,25 +524,15 @@ export default function TeamDetail() {
         </>
       )}
       tabs={(
-        <TextTabs
+        <IconTabs
+          variant="header"
+          label="Team sections"
           active={tab}
           onChange={setTab}
           items={[
-            { id: 'overview', label: 'Overview' },
-            {
-              id: 'members',
-              label: (
-                <>
-                  Members
-                  {memberList.length > 0 && (
-                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
-                      {memberList.length}
-                    </span>
-                  )}
-                </>
-              ),
-            },
-            { id: 'assets', label: 'Asset Access' },
+            { id: 'overview', label: 'Overview', icon: LayoutGrid },
+            { id: 'members', label: 'Members', icon: Users, count: memberList.length > 0 ? memberList.length : undefined },
+            { id: 'assets', label: 'Asset Access', icon: Box },
           ]}
         />
       )}
@@ -1374,6 +1359,6 @@ export default function TeamDetail() {
           </div>
         </div>
       </Modal>
-    </EntityDetailShell>
+    </PageShell>
   );
 }

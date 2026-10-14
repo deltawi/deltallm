@@ -8,11 +8,13 @@ import {
 } from '../lib/api';
 import { modelDetailPath } from '../lib/modelRoutes';
 import ModelForm from '../components/ModelForm';
+import { PageShell } from '../components/admin/shells';
 import ManagedAssetAccessFields from '../components/ManagedAssetAccessFields';
 import { EMPTY_FORM, type ModelPayload } from '../components/modelFormShared';
-import { ArrowLeft } from 'lucide-react';
+import { Box } from 'lucide-react';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
+import { navTrail } from '../lib/navigation';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
@@ -78,17 +80,16 @@ export default function ModelCreate() {
   };
 
   return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto">
-      <div className="mb-6">
-        <button
-          onClick={() => navigate('/models')}
-          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to Models
-        </button>
-        <h1 className="text-2xl font-bold text-gray-900">Add Model Deployment</h1>
-        <p className="text-sm text-gray-500 mt-1">Configure a new model deployment with provider connection, routing, and pricing settings.</p>
-      </div>
+    <PageShell
+      breadcrumbs={[
+        ...navTrail('/models'),
+        { label: 'Add model' },
+      ]}
+      title="Add Model Deployment"
+      icon={Box}
+      width="form"
+      description="Configure a new model deployment with provider connection, routing, and pricing settings."
+    >
       {isPlatformAdmin ? (
         <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 shadow-sm">
           <div className="font-semibold">Availability is managed by tiers</div>
@@ -151,6 +152,6 @@ export default function ModelCreate() {
           error={error}
         />
       )}
-    </div>
+    </PageShell>
   );
 }

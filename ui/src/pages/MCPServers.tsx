@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle2, Server } from 'lucide-react';
+import { CheckCircle2, Plug, Server } from 'lucide-react';
 import MCPApprovalsPanel from '../components/mcp/MCPApprovalsPanel';
 import MCPServersTab from '../components/mcp/MCPServersTab';
 import { IconTabs, IndexShell } from '../components/admin/shells';
@@ -76,11 +76,10 @@ export default function MCPServers() {
     <IndexShell
       eyebrowPrefix={navSectionLabel('/mcp-servers')}
       title="MCP"
+      titleIcon={Plug}
       description="Connect external tool servers and review the tool calls that need approval."
-      toolbar={tabs.length > 1 ? (
-        <div className="-mb-4">
-          <IconTabs id={TABS_ID} label="MCP sections" items={tabs} active={activeTab} onChange={selectTab} />
-        </div>
+      tabs={tabs.length > 1 ? (
+        <IconTabs id={TABS_ID} label="MCP sections" variant="header" items={tabs} active={activeTab} onChange={selectTab} />
       ) : null}
     >
       <div role={tabs.length > 1 ? 'tabpanel' : undefined} id={`${TABS_ID}-panel-${activeTab}`} aria-labelledby={tabs.length > 1 ? `${TABS_ID}-tab-${activeTab}` : undefined}>

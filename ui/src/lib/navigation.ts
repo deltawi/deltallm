@@ -116,3 +116,12 @@ export function visibleNavFooterItems(uiAccess: UIAccess): NavItem[] {
 export function navSectionLabel(to: string): string | undefined {
   return NAV_SECTIONS.find((section) => section.items.some((item) => item.to === to))?.label;
 }
+
+// Breadcrumb trail for pages below a list page: menu section, then the list page as a link.
+export function navTrail(to: string): Array<{ label: string; to?: string }> {
+  for (const section of NAV_SECTIONS) {
+    const item = section.items.find((entry) => entry.to === to);
+    if (item) return [...(section.label ? [{ label: section.label }] : []), { label: item.label, to: item.to }];
+  }
+  return [];
+}

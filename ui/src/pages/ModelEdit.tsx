@@ -4,10 +4,12 @@ import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
 import { modelDetailPath } from '../lib/modelRoutes';
 import ModelForm from '../components/ModelForm';
+import { PageShell } from '../components/admin/shells';
 import { formFromModel, type ModelPayload } from '../components/modelFormShared';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Box } from 'lucide-react';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
+import { navTrail } from '../lib/navigation';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
 import ManagedAssetAccessPanel from '../components/ManagedAssetAccessPanel';
@@ -81,11 +83,16 @@ export default function ModelEdit() {
   };
 
   return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto">
-      <button onClick={() => navigate(modelDetailPath(deploymentId!))} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-5 transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back to Model
-      </button>
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Edit Model Deployment</h1>
+    <PageShell
+      breadcrumbs={[
+        ...navTrail('/models'),
+        { label: model.display_name || model.model_name, to: modelDetailPath(deploymentId!) },
+        { label: 'Edit' },
+      ]}
+      title="Edit Model Deployment"
+      icon={Box}
+      width="form"
+    >
       {model.access?.governance_source === 'creator' ? (
         <ManagedAssetAccessPanel
           access={model.access}
@@ -127,6 +134,6 @@ export default function ModelEdit() {
         saving={saving}
         error={error}
       />
-    </div>
+    </PageShell>
   );
 }

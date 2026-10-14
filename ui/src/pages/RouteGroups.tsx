@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Workflow } from 'lucide-react';
+import Button from '../components/Button';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CreateDrawer from '../components/route-groups/CreateRouteGroupDrawer';
 import type { Column } from '../components/DataTable';
@@ -162,12 +163,11 @@ export default function RouteGroups() {
       count={pagination?.total ?? null}
       description={`Group deployments behind a single key — clients call the group, ${branding.instance_name} routes traffic.`}
       action={(
-        <button
+        <Button
           onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-medium text-brand-on-primary shadow-sm hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" /> Create Group
-        </button>
+        </Button>
       )}
 
     >

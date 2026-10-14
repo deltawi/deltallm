@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import clsx from 'clsx';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'success' | 'danger' | 'ghost' | 'link';
+export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'success' | 'danger' | 'danger-outline' | 'warning-outline' | 'ghost' | 'link';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -18,6 +18,8 @@ const variantClasses: Record<ButtonVariant, string> = {
   outline: 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 hover:text-gray-900',
   success: 'border-transparent bg-emerald-600 text-white hover:bg-emerald-700',
   danger: 'border-transparent bg-red-600 text-white hover:bg-red-700',
+  'danger-outline': 'border-red-200 bg-white text-red-600 hover:bg-red-50',
+  'warning-outline': 'border-amber-200 bg-white text-amber-700 hover:bg-amber-50',
   ghost: 'border-transparent bg-transparent text-gray-600 hover:bg-gray-100 hover:text-gray-900',
   link: 'border-transparent bg-transparent text-brand-primary-ink hover:text-brand-primary-ink-hover',
 };
@@ -26,7 +28,8 @@ const sizeClasses: Record<ButtonSize, string> = {
   sm: 'gap-1.5 rounded-lg px-3 py-1.5 text-xs',
   md: 'gap-2 rounded-lg px-4 py-2 text-sm',
   lg: 'gap-2 rounded-lg px-5 py-2.5 text-sm',
-  icon: 'h-9 w-9 rounded-lg p-0',
+  // Same height as md, so icon-only buttons line up with labelled ones.
+  icon: 'h-[38px] w-[38px] rounded-lg p-0',
 };
 
 export default function Button({

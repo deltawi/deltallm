@@ -1,6 +1,7 @@
 import { BadgeDollarSign, ChevronRight, Plus, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import Button from '../components/Button';
 import StatusBadge from '../components/StatusBadge';
 import IndexShell from '../components/admin/shells/IndexShell';
 import TierCapacityDashboardPanel from '../components/tiers/TierCapacityDashboardPanel';
@@ -159,15 +160,13 @@ export default function Tiers() {
       count={pagination?.total ?? null}
       description="Manage reusable model, pricing, and capacity packages for organizations."
       action={(
-        <button
-          type="button"
+        <Button
           onClick={openCreate}
           disabled={saving}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
           <Plus aria-hidden="true" className="h-4 w-4" />
           Create tier
-        </button>
+        </Button>
       )}
       toolbar={(
         <div className="space-y-3">

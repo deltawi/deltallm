@@ -4,10 +4,14 @@ import {
   ArrowLeft,
   GitBranch,
   Layers,
+  Pencil,
   Server,
   Settings,
   Terminal,
+  Trash2,
+  Workflow,
 } from 'lucide-react';
+import Button from '../components/Button';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../lib/auth';
@@ -38,8 +42,9 @@ import RouteGroupSettingsPanel from '../components/route-groups/RouteGroupSettin
 import RouteGroupMembersCard from '../components/route-groups/RouteGroupMembersCard';
 import RouteGroupUsageCard from '../components/route-groups/RouteGroupUsageCard';
 import RouteGroupAdvancedTab from '../components/route-groups/RouteGroupAdvancedTab';
-import { HeroTabbedDetailShell, IconTabs, PanelCard } from '../components/admin/shells';
-import RouteGroupHero from '../components/route-groups/RouteGroupHero';
+import { EntityAvatar, IconTabs, PageShell, PanelCard } from '../components/admin/shells';
+import { navTrail } from '../lib/navigation';
+import { RouteGroupBadges, RouteGroupStats } from '../components/route-groups/RouteGroupHeader';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 /* ─── Tab definitions ────────────────────────────────────────────────────── */
@@ -558,134 +563,154 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
 
   return (
     <>
-      <HeroTabbedDetailShell
-      backBar={(
-        <button
-          onClick={() => navigate('/route-groups')}
-          className="flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-800"
-        >
-          <ArrowLeft className="h-4 w-4" /> Back to Route Groups
-        </button>
-      )}
-      hero={(
-        <RouteGroupHero group={group} publishedPolicy={publishedPolicy} members={members.length}
-          healthyMembers={healthyMembers} unknownHealth={unknownHealth} missingMembers={missingMembers}
-          promptKey={promptSummary?.templateKey ?? null} teamOptions={teamOptions} organizationOptions={organizationOptions}
-          canWrite={canWrite} canDelete={canDelete} onEdit={() => setActiveTab('settings')}
-          onDelete={() => setConfirmDeleteGroup(true)} />
-      )}
-      body={(
-        <>
+      <PageShell
+        breadcrumbs={[...navTrail('/route-groups'), { label: group.name || group.group_key }]}
+        avatar={<EntityAvatar icon={Workflow} />}
+        title={group.name || group.group_key}
+        badges={<RouteGroupBadges group={group} publishedPolicy={publishedPolicy} teamOptions={teamOptions} organizationOptions={organizationOptions} />}
+        meta={(
+          <>
+            Group key:{' '}
+            <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700">{group.group_key}</code>
+          </>
+        )}
+        actions={canWrite || canDelete ? (
+          <>
+            {canWrite ? (
+              <Button variant="outline" onClick={() => setActiveTab('settings')}>
+                <Pencil className="h-4 w-4" /> Edit
+              </Button>
+            ) : null}
+            {canDelete ? (
+              <Button
+                variant="danger-outline"
+                size="icon"
+                onClick={() => setConfirmDeleteGroup(true)}
+                title="Delete group"
+                aria-label="Delete group"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            ) : null}
+          </>
+        ) : undefined}
+        stats={(
+          <RouteGroupStats group={group} publishedPolicy={publishedPolicy} members={members.length}
+            healthyMembers={healthyMembers} unknownHealth={unknownHealth} missingMembers={missingMembers}
+            promptKey={promptSummary?.templateKey ?? null} />
+        )}
+        tabs={(
           <IconTabs
             id="model-group-tabs"
             label="Model group sections"
+            variant="header"
             active={activeTab}
             onChange={setActiveTab}
             items={TABS.map(({ id, label, icon }) => ({ id, label, icon }))}
           />
-          {TABS.map(({ id }) => <div key={id} role="tabpanel" id={`model-group-tabs-panel-${id}`} aria-labelledby={`model-group-tabs-tab-${id}`} hidden={activeTab !== id}>
-          {activeTab === id && (<>
-          {activeTab === 'models' ? (
-            <RouteGroupMembersCard
-              mode={form.mode}
-              memberForm={memberForm}
-              manualMemberEntry={manualMemberEntry}
-              memberSearchInput={memberSearchInput}
-              candidateDeployments={candidateDeployments}
-              loadingCandidates={deploymentCandidates.loading}
-              hasCandidateError={!!deploymentCandidates.error}
-              addingMember={addingMember}
-              members={members}
-              onMemberFormChange={setMemberForm}
-              onToggleManualEntry={() => setManualMemberEntry((cur) => !cur)}
-              onMemberSearchChange={setMemberSearchInput}
-              onAddMember={handleAddMember}
-              onRequestRemoveMember={setMemberToRemove}
-              canWrite={canWrite}
-            />
-          ) : activeTab === 'advanced' || activeTab === 'policy' ? (
-            <RouteGroupAdvancedTab
-              section={activeTab}
-              defaultStrategy={group.routing_strategy}
-              routeGroupId={group.route_group_id}
-              groupKey={group.group_key}
-              workloadMode={workloadMode}
-              bindings={bindings}
-              templates={promptTemplates.data?.data || []}
-              bindingForm={bindingForm}
-              loadingTemplates={promptTemplates.loading}
-              savingBinding={savingBinding}
-              deletingBinding={deletingBinding}
-              onBindingFormChange={setBindingForm}
-              onSaveBinding={handleSaveBinding}
-              onDeleteBinding={handleDeleteBinding}
-              guidedPolicy={guidedPolicy}
-              members={members}
-              guidedPreview={guidedPreview}
-              simulationPolicy={simulationPolicy}
-              simulationPolicyError={simulationPolicyError}
-              simulationPromptRef={promptSummary ? {
-                template_key: promptSummary.templateKey,
-                ...(promptSummary.label ? { label: promptSummary.label } : {}),
-              } : null}
-              canSimulate={canSimulatePolicy}
-              canWrite={canWrite}
-              canManageBindings={isPlatformAdmin}
-              policyText={policyText}
-              policyMessage={policyMessage}
-              policyError={policyError}
-              isPolicyBusy={isPolicyBusy}
-              policyAction={policyAction}
-              showAdvancedJson={showAdvancedJson}
-              hasMembers={memberIds.length > 0}
-              onToggleAdvancedJson={() => {
-                if (showAdvancedJson) {
-                  const parsed = parsePolicyTextLoose(policyText);
-                  if (!parsed) { setPolicyError('Invalid JSON payload'); return; }
-                  setGuidedPolicy(toGuidedPolicy(parsed, members));
-                } else setPolicyText(guidedPreview);
-                setShowAdvancedJson((cur) => !cur);
-              }}
-              onGuidedPolicyChange={(next) => { setGuidedPolicy(next); setPolicyMessage(null); setPolicyError(null); }}
-              onPolicyTextChange={(next) => { setPolicyText(next); setPolicyMessage(null); setPolicyError(null); }}
-              onValidate={handleValidatePolicy}
-              onSaveDraft={handleSaveDraft}
-              onPublish={handlePublish}
-              policies={policies}
-              canRollbackVersions={canRollbackVersions}
-              selectedRollbackVersion={selectedRollbackVersion}
-              loadingPolicies={policyHistory.loading}
-              hasPoliciesError={!!policyHistory.error}
-              onRollbackVersionChange={setSelectedRollbackVersion}
-              onRollback={handleRollback}
-            />
-          ) : (
-            <PanelCard>
-              {activeTab === 'test' && (
-                <RouteGroupUsageCard
-                  groupKey={group.group_key}
-                  mode={form.mode}
-                  liveTrafficEnabled={group.enabled}
-                  boundPrompt={promptSummary}
-                />
-              )}
-              {activeTab === 'settings' && (
-                <RouteGroupSettingsPanel
-                  routeGroupId={routeGroupId}
-                  group={group}
-                  form={form}
-                  onChange={setForm}
-                  onSaved={detail.refetch}
-                  mutations={mutations}
-                />
-              )}
-            </PanelCard>
-          )}
-          </>)}
-          </div>)}
-        </>
-      )}
-      />
+        )}
+      >
+        {TABS.map(({ id }) => <div key={id} role="tabpanel" id={`model-group-tabs-panel-${id}`} aria-labelledby={`model-group-tabs-tab-${id}`} hidden={activeTab !== id}>
+        {activeTab === id && (<>
+        {activeTab === 'models' ? (
+          <RouteGroupMembersCard
+            mode={form.mode}
+            memberForm={memberForm}
+            manualMemberEntry={manualMemberEntry}
+            memberSearchInput={memberSearchInput}
+            candidateDeployments={candidateDeployments}
+            loadingCandidates={deploymentCandidates.loading}
+            hasCandidateError={!!deploymentCandidates.error}
+            addingMember={addingMember}
+            members={members}
+            onMemberFormChange={setMemberForm}
+            onToggleManualEntry={() => setManualMemberEntry((cur) => !cur)}
+            onMemberSearchChange={setMemberSearchInput}
+            onAddMember={handleAddMember}
+            onRequestRemoveMember={setMemberToRemove}
+            canWrite={canWrite}
+          />
+        ) : activeTab === 'advanced' || activeTab === 'policy' ? (
+          <RouteGroupAdvancedTab
+            section={activeTab}
+            defaultStrategy={group.routing_strategy}
+            routeGroupId={group.route_group_id}
+            groupKey={group.group_key}
+            workloadMode={workloadMode}
+            bindings={bindings}
+            templates={promptTemplates.data?.data || []}
+            bindingForm={bindingForm}
+            loadingTemplates={promptTemplates.loading}
+            savingBinding={savingBinding}
+            deletingBinding={deletingBinding}
+            onBindingFormChange={setBindingForm}
+            onSaveBinding={handleSaveBinding}
+            onDeleteBinding={handleDeleteBinding}
+            guidedPolicy={guidedPolicy}
+            members={members}
+            guidedPreview={guidedPreview}
+            simulationPolicy={simulationPolicy}
+            simulationPolicyError={simulationPolicyError}
+            simulationPromptRef={promptSummary ? {
+              template_key: promptSummary.templateKey,
+              ...(promptSummary.label ? { label: promptSummary.label } : {}),
+            } : null}
+            canSimulate={canSimulatePolicy}
+            canWrite={canWrite}
+            canManageBindings={isPlatformAdmin}
+            policyText={policyText}
+            policyMessage={policyMessage}
+            policyError={policyError}
+            isPolicyBusy={isPolicyBusy}
+            policyAction={policyAction}
+            showAdvancedJson={showAdvancedJson}
+            hasMembers={memberIds.length > 0}
+            onToggleAdvancedJson={() => {
+              if (showAdvancedJson) {
+                const parsed = parsePolicyTextLoose(policyText);
+                if (!parsed) { setPolicyError('Invalid JSON payload'); return; }
+                setGuidedPolicy(toGuidedPolicy(parsed, members));
+              } else setPolicyText(guidedPreview);
+              setShowAdvancedJson((cur) => !cur);
+            }}
+            onGuidedPolicyChange={(next) => { setGuidedPolicy(next); setPolicyMessage(null); setPolicyError(null); }}
+            onPolicyTextChange={(next) => { setPolicyText(next); setPolicyMessage(null); setPolicyError(null); }}
+            onValidate={handleValidatePolicy}
+            onSaveDraft={handleSaveDraft}
+            onPublish={handlePublish}
+            policies={policies}
+            canRollbackVersions={canRollbackVersions}
+            selectedRollbackVersion={selectedRollbackVersion}
+            loadingPolicies={policyHistory.loading}
+            hasPoliciesError={!!policyHistory.error}
+            onRollbackVersionChange={setSelectedRollbackVersion}
+            onRollback={handleRollback}
+          />
+        ) : (
+          <PanelCard>
+            {activeTab === 'test' && (
+              <RouteGroupUsageCard
+                groupKey={group.group_key}
+                mode={form.mode}
+                liveTrafficEnabled={group.enabled}
+                boundPrompt={promptSummary}
+              />
+            )}
+            {activeTab === 'settings' && (
+              <RouteGroupSettingsPanel
+                routeGroupId={routeGroupId}
+                group={group}
+                form={form}
+                onChange={setForm}
+                onSaved={detail.refetch}
+                mutations={mutations}
+              />
+            )}
+          </PanelCard>
+        )}
+        </>)}
+        </div>)}
+      </PageShell>
 
       {/* Remove member confirmation */}
       <ConfirmDialog

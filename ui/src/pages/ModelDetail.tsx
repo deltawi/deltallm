@@ -3,14 +3,17 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
+  Box,
   Brain,
   CheckCircle2,
   ChevronRight,
   DollarSign,
+  Gauge,
   Layers,
   Pencil,
   RefreshCw,
   Route,
+  Scale,
   Shield,
   Tag,
   Terminal,
@@ -26,8 +29,10 @@ import { ApiError, models, type DeploymentHealth, type ModelDeploymentDetail } f
 import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
 import { MODE_OPTIONS } from '../components/modelFormShared';
-import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
+import { DetailMetricCard, EntityAvatar, IconTabs, PageShell, PanelCard } from '../components/admin/shells';
+import { navTrail } from '../lib/navigation';
 import { useBranding } from '../lib/brandingContext';
+import Button from '../components/Button';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
@@ -645,122 +650,121 @@ export default function ModelDetail() {
 
   return (
     <>
-      <HeroTabbedDetailShell
-      backBar={(
-        <button
-          onClick={() => navigate('/models')}
-          className="flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-800"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Models
-        </button>
-      )}
-      hero={(
-        <div className="relative overflow-hidden border-b border-gray-200 bg-white">
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-violet-50 opacity-60" />
-          <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-100/40 blur-3xl" />
-          <div className="absolute bottom-0 left-1/4 h-32 w-64 rounded-full bg-violet-100/30 blur-3xl" />
-
-          <div className="relative px-6 pb-5 pt-6">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                <Brain className="h-3.5 w-3.5" />
-                {modeLabel}
+      <PageShell
+        breadcrumbs={[...navTrail('/models'), { label: model.display_name || model.model_name }]}
+        avatar={<EntityAvatar icon={Box} />}
+        title={model.display_name || model.model_name}
+        badges={(
+          <>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
+              <Brain className="h-3.5 w-3.5" />
+              {modeLabel}
+            </span>
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                model.healthy ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+              }`}
+            >
+              {model.healthy
+                ? <><CheckCircle2 className="h-3.5 w-3.5" /> Healthy</>
+                : <><AlertTriangle className="h-3.5 w-3.5" /> Unhealthy</>}
+            </span>
+            {model.provider && <ProviderPill provider={model.provider} />}
+          </>
+        )}
+        description={lp.model ? (
+          <>
+            Routes to{' '}
+            <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-700">
+              {lp.model}
+            </code>
+            {model.provider && (
+              <> via <span className="font-medium capitalize">{model.provider}</span></>
+            )}
+          </>
+        ) : undefined}
+        meta={(
+          <div className="flex flex-wrap items-center gap-3">
+            <code className="break-all rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-500">{model.api_model_id || model.model_name}</code>
+            {model.access?.governance_source === 'creator' ? (
+              <ManagedAssetAccessSummary
+                access={model.access}
+                teamOptions={teamOptions}
+                organizationOptions={organizationOptions}
+              />
+            ) : model.access?.governance_source === 'platform' ? (
+              <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
+                Tier managed
               </span>
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                  model.healthy ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-                }`}
-              >
-                {model.healthy
-                  ? <><CheckCircle2 className="h-3.5 w-3.5" /> Healthy</>
-                  : <><AlertTriangle className="h-3.5 w-3.5" /> Unhealthy</>}
-              </span>
-              {model.provider && <ProviderPill provider={model.provider} />}
-            </div>
-
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h1 className="break-words text-2xl font-bold text-gray-900">{model.display_name || model.model_name}</h1>
-                <code className="mt-1 block break-all text-xs text-gray-400">{model.api_model_id || model.model_name}</code>
-                {lp.model && (
-                  <p className="mt-0.5 text-sm text-gray-500">
-                    Routes to{' '}
-                    <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-700">
-                      {lp.model}
-                    </code>
-                    {model.provider && (
-                      <> via <span className="font-medium capitalize">{model.provider}</span></>
-                    )}
-                  </p>
-                )}
-                {model.access?.governance_source === 'creator' ? (
-                  <ManagedAssetAccessSummary
-                    access={model.access}
-                    teamOptions={teamOptions}
-                    organizationOptions={organizationOptions}
-                    className="mt-2"
-                  />
-                ) : model.access?.governance_source === 'platform' ? (
-                  <span className="mt-2 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                    Tier managed
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                {canRevokeCredential ? (
-                  <button
-                    type="button"
-                    onClick={() => setRevokeCredentialOpen(true)}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition hover:bg-amber-50"
-                  >
-                    <Unplug className="h-4 w-4" /> Revoke Credential
-                  </button>
-                ) : null}
-                {canEdit && (
-                  <button
-                    type="button"
-                    onClick={handleCheckHealth}
-                    disabled={checkingHealth}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} />
-                    Check Health
-                  </button>
-                )}
-                {canEdit ? (
-                  <button
-                    onClick={() => navigate(modelEditPath(deploymentId!))}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary shadow-sm transition hover:bg-brand-primary-hover"
-                  >
-                    <Pencil className="h-4 w-4" /> Edit
-                  </button>
-                ) : null}
-                {canDelete ? (
-                    <button
-                      aria-label="Delete model deployment"
-                      onClick={() => setDeleteOpen(true)}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-50"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                ) : null}
-              </div>
-            </div>
-
+            ) : null}
+          </div>
+        )}
+        actions={(
+          <>
+            {canRevokeCredential ? (
+              <Button variant="warning-outline" onClick={() => setRevokeCredentialOpen(true)}>
+                <Unplug className="h-4 w-4" /> Revoke Credential
+              </Button>
+            ) : null}
+            {canEdit && (
+              <Button variant="outline" onClick={handleCheckHealth} disabled={checkingHealth}>
+                <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} />
+                Check Health
+              </Button>
+            )}
+            {canEdit ? (
+              <Button onClick={() => navigate(modelEditPath(deploymentId!))}>
+                <Pencil className="h-4 w-4" /> Edit
+              </Button>
+            ) : null}
+            {canDelete ? (
+              <Button variant="danger-outline" size="icon" aria-label="Delete model deployment" onClick={() => setDeleteOpen(true)}>
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            ) : null}
+          </>
+        )}
+        stats={(contextWindow || rpmLimit != null || tpmLimit != null || weight != null || inputCostDisplay) ? (
+          <>
+            {contextWindow && <DetailMetricCard icon={Layers} label="Context window" value={contextWindow} tone="blue" />}
+            {rpmLimit != null && <DetailMetricCard icon={Gauge} label="RPM limit" value={Number(rpmLimit).toLocaleString()} tone="violet" />}
+            {tpmLimit != null && (
+              <DetailMetricCard
+                icon={Gauge}
+                label="TPM limit"
+                value={Number(tpmLimit) >= 1_000_000
+                  ? `${(Number(tpmLimit) / 1_000_000).toFixed(1)}M`
+                  : Number(tpmLimit).toLocaleString()}
+                tone="violet"
+              />
+            )}
+            {weight != null && <DetailMetricCard icon={Scale} label="Weight" value={`${weight} / 10`} tone="gray" />}
+            {inputCostDisplay && <DetailMetricCard icon={DollarSign} label="Input cost" value={`${inputCostDisplay} / tok`} tone="green" />}
+          </>
+        ) : undefined}
+        tabs={(
+          <IconTabs
+            variant="header"
+            label="Model sections"
+            active={activeTab}
+            onChange={setActiveTab}
+            items={TAB_LIST.map(({ id, label, icon }) => ({ id, label, icon }))}
+          />
+        )}
+        notice={healthActionMessage || healthActionError || (!model.healthy && health.last_error) ? (
+          <div className="space-y-3">
             {healthActionMessage && (
-              <div className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+              <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
                 {healthActionMessage}
               </div>
             )}
             {healthActionError && (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                 {healthActionError}
               </div>
             )}
             {!model.healthy && health.last_error && !healthActionError && (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   <div>
@@ -775,45 +779,17 @@ export default function ModelDetail() {
                 </div>
               </div>
             )}
-
-            {(contextWindow || rpmLimit || tpmLimit || weight != null || inputCostDisplay) && (
-              <div className="mt-5 flex flex-wrap items-center gap-6 divide-x divide-gray-100">
-                {contextWindow && <InlineStat label="Context Window" value={contextWindow} />}
-                {rpmLimit != null && <div className="pl-6"><InlineStat label="RPM" value={Number(rpmLimit).toLocaleString()} /></div>}
-                {tpmLimit != null && (
-                  <div className="pl-6">
-                    <InlineStat
-                      label="TPM"
-                      value={Number(tpmLimit) >= 1_000_000
-                        ? `${(Number(tpmLimit) / 1_000_000).toFixed(1)}M`
-                        : Number(tpmLimit).toLocaleString()}
-                    />
-                  </div>
-                )}
-                {weight != null && <div className="pl-6"><InlineStat label="Weight" value={`${weight} / 10`} /></div>}
-                {inputCostDisplay && <div className="pl-6"><InlineStat label="Input Cost" value={`${inputCostDisplay} / tok`} /></div>}
-              </div>
-            )}
           </div>
-        </div>
-      )}
-      body={(
-        <>
-          <IconTabs
-            active={activeTab}
-            onChange={setActiveTab}
-            items={TAB_LIST.map(({ id, label, icon }) => ({ id, label, icon }))}
-          />
-          <PanelCard>
-            {activeTab === 'overview' && <OverviewTab model={model} />}
-            {activeTab === 'runtime' && <RuntimeTab model={model} />}
-            {activeTab === 'routing' && <RoutingTab model={model} />}
-            {activeTab === 'costs' && <CostsTab model={model} />}
-            {activeTab === 'usage' && <UsageTab modelName={model.api_model_id || model.model_name} mode={mode} />}
-          </PanelCard>
-        </>
-      )}
-      />
+        ) : undefined}
+      >
+        <PanelCard>
+          {activeTab === 'overview' && <OverviewTab model={model} />}
+          {activeTab === 'runtime' && <RuntimeTab model={model} />}
+          {activeTab === 'routing' && <RoutingTab model={model} />}
+          {activeTab === 'costs' && <CostsTab model={model} />}
+          {activeTab === 'usage' && <UsageTab modelName={model.api_model_id || model.model_name} mode={mode} />}
+        </PanelCard>
+      </PageShell>
       <ConfirmDialog
         open={revokeCredentialOpen}
         title="Revoke credential from this model"

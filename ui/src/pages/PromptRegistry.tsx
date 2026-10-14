@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, FileText, Trash2 } from 'lucide-react';
+import Button from '../components/Button';
 import type { Column } from '../components/DataTable';
 import AssetList from '../components/admin/lists/AssetList';
 import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
@@ -136,13 +137,12 @@ export default function PromptRegistry() {
       count={result?.pagination?.total ?? null}
       description="Manage prompt templates, versions, and labels."
       action={(
-        <button
+        <Button
           onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" />
           Create Prompt
-        </button>
+        </Button>
       )}
 
     >

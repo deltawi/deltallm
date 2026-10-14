@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRightLeft, KeyRound, Link2, Pencil, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react';
+import Button from '../components/Button';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import NamedCredentialCreateDialog from '../components/NamedCredentialCreateDialog';
@@ -266,14 +267,12 @@ export default function NamedCredentials() {
       count={filteredItems.length}
       description="Store reusable provider connection credentials and attach them to model deployments."
       action={(
-        <button
-          type="button"
+        <Button
           onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" />
           New Credential
-        </button>
+        </Button>
       )}
       summaryItems={[
         { label: 'Configured', value: filteredItems.filter((item) => item.credentials_present).length },

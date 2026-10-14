@@ -10,7 +10,7 @@ import ApiKeyEditorDialog from '../src/components/api-keys/ApiKeyEditorDialog';
 import ApiKeySecretDialog from '../src/components/api-keys/ApiKeySecretDialog';
 import PolicyMemberPicker from '../src/components/route-groups/PolicyMemberPicker';
 import RouteGroupPolicyEditor from '../src/components/route-groups/RouteGroupPolicyEditor';
-import RouteGroupHero from '../src/components/route-groups/RouteGroupHero';
+import { RouteGroupBadges } from '../src/components/route-groups/RouteGroupHeader';
 import { AuthProvider } from '../src/lib/auth';
 import { emptyKeyForm } from '../src/lib/apiKeyForm';
 import { buildPolicyFromGuided, configuredWeightShares, GUIDED_POLICY_DEFAULTS, moveGuidedPolicyMember, orderedGuidedMemberIds, toGuidedPolicy, type PolicyGuidedValues } from '../src/lib/routeGroups';
@@ -181,9 +181,8 @@ test('both live policy displays use the group strategy when the policy inherits 
   ];
   for (const scenario of cases) {
     const published = { route_policy_id: 'p1', version: 2, status: 'published', policy_json: scenario.policy } as RoutePolicy;
-    const hero = renderToStaticMarkup(<RouteGroupHero group={{ ...group, routing_strategy: scenario.strategy }} publishedPolicy={published}
-      members={1} healthyMembers={1} unknownHealth={0} missingMembers={0} promptKey={null} teamOptions={[]}
-      organizationOptions={[]} canWrite canDelete onEdit={() => {}} onDelete={() => {}} />);
+    const hero = renderToStaticMarkup(<RouteGroupBadges group={{ ...group, routing_strategy: scenario.strategy }} publishedPolicy={published}
+      teamOptions={[]} organizationOptions={[]} />);
     const editor = renderToStaticMarkup(<AuthProvider><RouteGroupPolicyEditor {...props} policies={[published]} defaultStrategy={scenario.strategy} /></AuthProvider>);
     assert.ok(hero.includes(`Published v2 · ${scenario.heroLabel || scenario.label}`), hero);
     assert.ok(editor.includes(`${scenario.label} · Published v2`), editor);

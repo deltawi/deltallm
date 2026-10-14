@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom';
 import { invitations, organizations, rbac, teams, users, type Invitation, type Principal, type PrincipalSummary, type ScopedAssetAccess } from '../lib/api';
 import { Plus, UserCog, ShieldCheck, Search, Building2, UsersRound, Trash2, Mail, KeyRound, Gauge, Users } from 'lucide-react';
 import { formatOptionalBudget, formatOptionalLimit, isSelfRegisteredPrincipal } from '../lib/selfRegistration';
+import Button from '../components/Button';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { ContentCard, IndexShell } from '../components/admin/shells';
@@ -587,13 +588,12 @@ export default function RBACAccounts() {
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{principalError}</div>
       ) : undefined}
       action={(
-        <button
+        <Button
           onClick={openCreateAccount}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" />
           Add Person
-        </button>
+        </Button>
       )}
       toolbar={(
         <div className="flex flex-wrap items-center gap-3">

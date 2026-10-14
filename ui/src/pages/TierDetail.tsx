@@ -1,8 +1,10 @@
 import {
-  ArrowLeft,
   BadgeDollarSign,
+  Box,
+  DollarSign,
   Edit3,
   FilePlus2,
+  Gauge,
   Layers,
   RotateCcw,
   Send,
@@ -11,8 +13,10 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import Button from '../components/Button';
 import StatusBadge from '../components/StatusBadge';
-import { DetailMetricCard, EntityDetailShell, TextTabs } from '../components/admin/shells';
+import { DetailMetricCard, EntityAvatar, IconTabs, PageShell } from '../components/admin/shells';
+import { navTrail } from '../lib/navigation';
 import TierActivationDialog from '../components/tiers/TierActivationDialog';
 import TierCapacityPoolEditor from '../components/tiers/TierCapacityPoolEditor';
 import TierFormDrawer from '../components/tiers/TierFormDrawer';
@@ -850,16 +854,9 @@ export default function TierDetail() {
   const versionFetchError = versionsError || archivesError;
 
   return (
-    <EntityDetailShell
-      breadcrumbs={[
-        { label: 'Tiers', onClick: () => navigate('/tiers'), icon: ArrowLeft },
-        { label: tier.name },
-      ]}
-      avatar={(
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-primary shadow-sm">
-          <BadgeDollarSign aria-hidden="true" className="h-6 w-6 text-brand-on-primary" />
-        </div>
-      )}
+    <PageShell
+      breadcrumbs={[...navTrail('/tiers'), { label: tier.name }]}
+      avatar={<EntityAvatar icon={BadgeDollarSign} />}
       title={tier.name}
       badges={(
         <div className="flex flex-wrap items-center gap-1.5">
@@ -875,53 +872,51 @@ export default function TierDetail() {
           <span className="text-xs text-gray-400">Updated {formatDateTime(tier.last_activity_at || tier.updated_at)}</span>
         </div>
       )}
-      action={(
-        <div className="flex flex-wrap justify-end gap-2">
+      actions={(
+        <>
           {requiresDraftChoice ? (
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 document.getElementById('tier-version-rail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 window.setTimeout(() => document.querySelector<HTMLElement>('[data-tier-draft-version="true"]')?.focus(), 250);
               }}
               disabled={isMutating}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
-              <FilePlus2 aria-hidden="true" className="h-3.5 w-3.5" />
+              <FilePlus2 aria-hidden="true" className="h-4 w-4" />
               Choose a draft
-            </button>
+            </Button>
           ) : selectedVersion?.status === 'draft' ? (
-            <button type="button" onClick={openActivation} disabled={isMutating} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50">
-              <Send aria-hidden="true" className="h-3.5 w-3.5" />
+            <Button onClick={openActivation} disabled={isMutating}>
+              <Send aria-hidden="true" className="h-4 w-4" />
               Review & activate
-            </button>
+            </Button>
           ) : selectedVersion?.status === 'archived' ? (
-            <button type="button" onClick={() => handleCloneVersion(selectedVersion)} disabled={isMutating} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50">
-              <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
+            <Button onClick={() => handleCloneVersion(selectedVersion)} disabled={isMutating}>
+              <RotateCcw aria-hidden="true" className="h-4 w-4" />
               Restore as draft
-            </button>
+            </Button>
           ) : selectedVersion?.status === 'active' ? (
-            <button type="button" onClick={() => handleCloneVersion(selectedVersion)} disabled={isMutating} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50">
-              <FilePlus2 aria-hidden="true" className="h-3.5 w-3.5" />
+            <Button onClick={() => handleCloneVersion(selectedVersion)} disabled={isMutating}>
+              <FilePlus2 aria-hidden="true" className="h-4 w-4" />
               Edit live configuration
-            </button>
+            </Button>
           ) : (
-            <button type="button" onClick={handleCreateDraft} disabled={isMutating} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50">
-              <FilePlus2 aria-hidden="true" className="h-3.5 w-3.5" />
+            <Button onClick={handleCreateDraft} disabled={isMutating}>
+              <FilePlus2 aria-hidden="true" className="h-4 w-4" />
               Create draft
-            </button>
+            </Button>
           )}
-          <button type="button" onClick={openEditTier} disabled={isMutating} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
+          <Button variant="outline" onClick={openEditTier} disabled={isMutating}>
+            <Edit3 aria-hidden="true" className="h-4 w-4" />
             Edit tier
-          </button>
-          <button type="button" onClick={handleDeleteTier} disabled={isMutating} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">
-            <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="danger-outline" onClick={handleDeleteTier} disabled={isMutating}>
+            <Trash2 aria-hidden="true" className="h-4 w-4" />
             Delete
-          </button>
-        </div>
+          </Button>
+        </>
       )}
-      metrics={(
+      stats={(
         <>
           <DetailMetricCard icon={Layers} label="Versions" value={String(tier.version_count || allVisibleVersions.length)} sub={`${draftVersions.length} draft${draftVersions.length === 1 ? '' : 's'}`} tone="blue" />
           <DetailMetricCard icon={Shield} label="Model policies" value={String(selectedVersion?.model_policy_count || 0)} sub={versionLabel(selectedVersion)} tone="violet" />
@@ -930,13 +925,15 @@ export default function TierDetail() {
         </>
       )}
       tabs={(
-        <TextTabs
+        <IconTabs
+          variant="header"
+          label="Tier sections"
           active={tab}
           onChange={selectTab}
           items={[
-            { id: 'models', label: 'Models & limits' },
-            { id: 'pricing', label: 'Pricing' },
-            { id: 'pools', label: 'Capacity pools' },
+            { id: 'models', label: 'Models & limits', icon: Box },
+            { id: 'pricing', label: 'Pricing', icon: DollarSign },
+            { id: 'pools', label: 'Capacity pools', icon: Gauge },
           ]}
         />
       )}
@@ -1096,7 +1093,7 @@ export default function TierDetail() {
         onRefresh={() => selectedVersion && void loadActivationPreview(selectedVersion)}
         onActivate={activateSelectedVersion}
       />
-    </EntityDetailShell>
+    </PageShell>
   );
 }
 

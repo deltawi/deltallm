@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, LayoutDashboard } from 'lucide-react';
 import { health, keys as keysApi, models as modelsApi, routeGroups as routeGroupsApi } from '../lib/api';
 import { usageReports } from '../lib/api/usageReports';
 import { useAuth } from '../lib/auth';
@@ -19,6 +19,7 @@ import {
 } from '../lib/liveDashboard';
 import { providerDisplayName } from '../lib/providers';
 import { useReport } from '../lib/useReport';
+import { IndexShell } from '../components/admin/shells';
 import AttentionCard from '../components/dashboard/AttentionCard';
 import { GatewayCard, LiveKpis, ProvidersCard } from '../components/dashboard/DashboardPanels';
 import RefreshControl from '../components/usage/RefreshControl';
@@ -119,35 +120,34 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="p-4 sm:p-6">
-      <div className="mx-auto grid max-w-7xl gap-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h1 className="text-[22px] font-bold tracking-tight text-gray-900">Dashboard</h1>
-            <p className="text-xs text-gray-500">Live view · last 24 hours · UTC</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <RefreshControl
-              updatedAt={updatedAt}
-              refreshing={hourly.refreshing}
-              failed={gatewayHealth !== null && !gatewayHealthy}
-              label={`${gatewayHealth === null ? 'Gateway' : gatewayHealthy ? 'Gateway healthy' : `Gateway ${status}`} · updated ${time}`}
-              onRefresh={() => {
-                setRefreshToken((value) => value + 1);
-                setUpdatedAt(Date.now());
-              }}
-            />
-            {uiAccess.usage && (
-              <Link
-                to="/usage?range=30d"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
-              >
-                Open Usage <ArrowRight className="h-3.5 w-3.5" />
-              </Link>
-            )}
-          </div>
+    <IndexShell
+      title="Dashboard"
+      titleIcon={LayoutDashboard}
+      description="Live view · last 24 hours · UTC"
+      action={(
+        <div className="flex flex-wrap items-center gap-2.5">
+          <RefreshControl
+            updatedAt={updatedAt}
+            refreshing={hourly.refreshing}
+            failed={gatewayHealth !== null && !gatewayHealthy}
+            label={`${gatewayHealth === null ? 'Gateway' : gatewayHealthy ? 'Gateway healthy' : `Gateway ${status}`} · updated ${time}`}
+            onRefresh={() => {
+              setRefreshToken((value) => value + 1);
+              setUpdatedAt(Date.now());
+            }}
+          />
+          {uiAccess.usage && (
+            <Link
+              to="/usage?range=30d"
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
+            >
+              Open Usage <ArrowRight className="h-4 w-4" />
+            </Link>
+          )}
         </div>
-
+      )}
+    >
+      <div className="grid gap-4">
         <AttentionCard
           items={items}
           dismissed={dismissed}
@@ -167,6 +167,6 @@ export default function Dashboard() {
           <GatewayCard counts={counts} top={top} />
         </div>
       </div>
-    </div>
+    </IndexShell>
   );
 }

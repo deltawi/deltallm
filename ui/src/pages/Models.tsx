@@ -5,6 +5,7 @@ import { models, type ModelDeploymentDetail } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
+import Button from '../components/Button';
 import type { Column } from '../components/DataTable';
 import AssetList from '../components/admin/lists/AssetList';
 import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
@@ -115,12 +116,11 @@ export default function Models() {
       count={pagination?.total ?? null}
       description="Manage model deployments and providers"
       action={canCreateModels ? (
-        <button
+        <Button
           onClick={() => navigate('/models/new')}
-          className="flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" /> Add Model
-        </button>
+        </Button>
       ) : undefined}
 
     >
