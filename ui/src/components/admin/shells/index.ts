@@ -1,3 +1,4 @@
+export { default as HeaderTabBar, type HeaderTabLink } from './HeaderTabBar';
 export { default as IndexShell } from './IndexShell';
 export { default as PageShell, type PageShellProps } from './PageShell';
 export {

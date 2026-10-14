@@ -130,7 +130,10 @@ breadcrumb, title and button styles.
 - Use the header slots instead of extra markup: `icon` or `avatar` (`EntityAvatar`), `badges`,
   `description`, `meta`, `actions`, `stats` (`DetailMetricCard` tiles), `toolbar`, `tabs`
   (`IconTabs` with `variant="header"`), and `notice`. Use `width="form"` for long forms.
-- Route-based tabs use `tabClass` so they look like `IconTabs`.
+- Route-based tabs with page controls beside them (scope, period) use `HeaderTabBar` in the `tabs`
+  slot, as on Usage. Other route-based tabs use `tabClass` so they look like `IconTabs`.
+- Filter chips, segmented controls and the refresh control live in `src/components/usage/`
+  (`UsageFilterChips`, `FilterChip`, `Segmented`, `RefreshControl`); reuse them on other report pages.
 - Header buttons use `Button` from `src/components/Button.tsx` at the default size: `primary`
   for the main action, `outline` for the others, `danger-outline` for delete or cancel, and
   `size="icon"` with an `aria-label` for icon-only buttons.

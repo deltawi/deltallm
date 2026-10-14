@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { AlertCircle, BarChart3, List } from 'lucide-react';
 import { spend, type SpendFeatureStatus, type SpendView } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -15,7 +15,7 @@ import {
 import { parseRequestWindow, REQUEST_WINDOWS, resolveUsageView, type RequestWindowKey } from '../lib/usageFilters';
 import { navSectionLabel } from '../lib/navigation';
 import { useUtcReportingDay } from '../lib/useUtcReportingDay';
-import { IndexShell, tabClass } from '../components/admin/shells';
+import { HeaderTabBar, IndexShell } from '../components/admin/shells';
 import ReportingRangeControl from '../components/ReportingRangeControl';
 import RefreshControl from '../components/usage/RefreshControl';
 import { useAutoRefresh, type AutoRefreshMs } from '../lib/useAutoRefresh';
@@ -133,59 +133,47 @@ export default function Usage() {
           onAutoRefreshChange={setAutoRefreshMs}
         />
       )}
-      // Tabs sit on the header's bottom edge; on narrow screens the controls stack above them.
       tabs={(
-        <div className={`flex flex-col-reverse gap-3 xl:flex-row xl:items-end xl:justify-between ${canViewRequests ? '' : 'pb-4'}`}>
-          {canViewRequests ? (
-            <nav aria-label="Usage views" className="flex gap-1">
-              {[
-                { to: '/usage', label: 'Overview', icon: BarChart3, active: !requestsPath },
-                { to: '/usage/requests', label: 'Requests', icon: List, active: requestsPath },
-              ].map((item) => (
-                <Link
-                  key={item.to}
-                  to={tabLink(item.to)}
-                  aria-current={item.active ? 'page' : undefined}
-                  className={tabClass(item.active)}
-                >
-                  <item.icon className="h-4 w-4" aria-hidden="true" />
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          ) : null}
-          <div className={`flex flex-wrap items-center gap-2.5 xl:ml-auto ${canViewRequests ? 'xl:pb-2' : ''}`}>
-            {availableViews.length > 1 && (
-              <Segmented
-                label="Scope"
-                value={view}
-                options={availableViews.map((key) => ({ key, label: VIEW_LABELS[key] }))}
-                onChange={(value) => setParam('view', value)}
-              />
-            )}
-            {requestsPath ? (
-              <Segmented<RequestWindowKey>
-                label="Time window"
-                value={windowKey}
-                options={REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label }))}
-                onChange={(value) => setParam('window', value)}
-              />
-            ) : (
-              <ReportingRangeControl
-                value={range.key}
-                startDate={range.startDate}
-                endDate={range.endDate}
-                ariaLabel="Usage period"
-                desktopBreakpoint="xl"
-                onPresetChange={(key: ReportingRangeKey) => setSearchParams(withReportingRangeQuery(searchParams, resolveReportingRange(key)))}
-                onCustomApply={(startDate, endDate) => {
-                  const custom = resolveCustomReportingRange(startDate, endDate);
-                  if (custom) setSearchParams(withReportingRangeQuery(searchParams, custom));
-                }}
-              />
-            )}
-          </div>
-        </div>
+        <HeaderTabBar
+          label="Usage views"
+          items={canViewRequests ? [
+            { to: tabLink('/usage'), label: 'Overview', icon: BarChart3, active: !requestsPath },
+            { to: tabLink('/usage/requests'), label: 'Requests', icon: List, active: requestsPath },
+          ] : []}
+          controls={(
+            <>
+              {availableViews.length > 1 && (
+                <Segmented
+                  label="Scope"
+                  value={view}
+                  options={availableViews.map((key) => ({ key, label: VIEW_LABELS[key] }))}
+                  onChange={(value) => setParam('view', value)}
+                />
+              )}
+              {requestsPath ? (
+                <Segmented<RequestWindowKey>
+                  label="Time window"
+                  value={windowKey}
+                  options={REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label }))}
+                  onChange={(value) => setParam('window', value)}
+                />
+              ) : (
+                <ReportingRangeControl
+                  value={range.key}
+                  startDate={range.startDate}
+                  endDate={range.endDate}
+                  ariaLabel="Usage period"
+                  desktopBreakpoint="xl"
+                  onPresetChange={(key: ReportingRangeKey) => setSearchParams(withReportingRangeQuery(searchParams, resolveReportingRange(key)))}
+                  onCustomApply={(startDate, endDate) => {
+                    const custom = resolveCustomReportingRange(startDate, endDate);
+                    if (custom) setSearchParams(withReportingRangeQuery(searchParams, custom));
+                  }}
+                />
+              )}
+            </>
+          )}
+        />
       )}
     >
       <div className="grid gap-4">
