@@ -42,7 +42,7 @@ class _OutboxDB:
 
     async def query_raw(self, query: str, *params: object) -> list[dict[str, object]]:
         self.executions.append((query, params))
-        if "AS duplicate" in query:
+        if "deltallm_admit_spend_event(" in query:
             return [{"duplicate": False, "accepted": True, "pending_count": 1}]
         if "SELECT pending_count" in query and "FOR UPDATE" in query:
             return [{"pending_count": 0}]
@@ -137,12 +137,11 @@ async def test_outbox_enqueue_uses_server_owned_event_ids() -> None:
     await service.log_spend(**_spend_payload())
     await service.log_spend(**_spend_payload())
 
-    admission_calls = [call for call in db.executions if "AS duplicate" in call[0]]
-    assert db.tx_calls == 2
+    admission_calls = [call for call in db.executions if "deltallm_admit_spend_event(" in call[0]]
+    # Each admission is one self-committing statement, not a client transaction.
+    assert db.tx_calls == 0
     assert len(admission_calls) == 2
     assert admission_calls[0][1][0] != admission_calls[1][1][0]
-    assert "ON CONFLICT (event_id) DO NOTHING" in admission_calls[0][0]
-    assert all("pg_advisory_xact_lock" not in query for query, _params in admission_calls)
 
 
 @pytest.mark.asyncio
@@ -157,7 +156,7 @@ async def test_internal_enqueue_retry_reuses_explicit_server_event_id() -> None:
     await service._enqueue("spend", _spend_payload(), event_id="server-event-1")
     await service._enqueue("spend", _spend_payload(), event_id="server-event-1")
 
-    admission_calls = [call for call in db.executions if "AS duplicate" in call[0]]
+    admission_calls = [call for call in db.executions if "deltallm_admit_spend_event(" in call[0]]
     assert admission_calls[0][1][0] == "server-event-1"
     assert admission_calls[1][1][0] == "server-event-1"
 
@@ -312,7 +311,7 @@ async def test_invalid_spend_payload_is_retried_before_bulk_transaction() -> Non
 class _FullOutboxDB(_OutboxDB):
     async def query_raw(self, query: str, *params: object) -> list[dict[str, object]]:
         self.executions.append((query, params))
-        if "AS duplicate" in query:
+        if "deltallm_admit_spend_event(" in query:
             return [{"duplicate": False, "accepted": False, "pending_count": 10}]
         return await super().query_raw(query, *params)
 
