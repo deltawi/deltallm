@@ -1,6 +1,7 @@
 """Reuse the arrival generator and retain every rejection in the capacity fixture."""
 
 import asyncio
+from collections import Counter
 import json
 from pathlib import Path
 from time import monotonic
@@ -24,14 +25,34 @@ PAYLOAD = {
 }
 
 
-def assert_valid_arrival(result: RunResult, *, allow_controlled_rejections: bool) -> None:
+def rejection_code(response: httpx.Response) -> str:
+    """Name a rejection by its gateway error code, or by who answered without one."""
+    try:
+        error = response.json()["error"]
+        return str(error.get("code") or error.get("type"))[:64]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return "non_gateway_body"
+
+
+def assert_valid_arrival(
+    result: RunResult,
+    *,
+    allow_controlled_rejections: bool,
+    rejection_codes: Counter[str] | None = None,
+) -> None:
     """Keep candidate traffic strict while allowing measured baseline shedding."""
     expected_statuses = {200, 429, 503} if allow_controlled_rejections else {200}
     if result.generator_dropped_count or any(
         sample.error is not None or sample.status_code not in expected_statuses
         for sample in result.samples
     ):
-        raise AssertionError("Controlled capacity arrival workload lost or rejected requests")
+        outcomes = Counter(sample.error or str(sample.status_code) for sample in result.samples)
+        raise AssertionError(
+            "Controlled capacity arrival workload lost or rejected requests: "
+            f"outcomes={dict(sorted(outcomes.items()))} "
+            f"generator_dropped={result.generator_dropped_count} "
+            f"rejection_codes={dict(sorted((rejection_codes or Counter()).items()))}"
+        )
     if allow_controlled_rejections and not any(
         sample.status_code == 200 for sample in result.samples
     ):
@@ -51,6 +72,7 @@ async def arrival(
         trust_env=False,
         limits=httpx.Limits(max_connections=128, max_keepalive_connections=0),
     ) as client:
+        rejection_codes: Counter[str] = Counter()
 
         async def request(_index: int, request_id: str) -> RequestResult:
             response = await client.post(
@@ -58,6 +80,8 @@ async def arrival(
                 headers={"Authorization": "Bearer " + LOAD_KEY, "x-request-id": request_id},
                 json=PAYLOAD,
             )
+            if response.status_code != 200:
+                rejection_codes[rejection_code(response)] += 1
             return RequestResult(
                 status_code=response.status_code, bytes_received=len(response.content)
             )
@@ -67,7 +91,11 @@ async def arrival(
         )
     summary = summarize(result, target_rate=rate)
     write_results(result, summary, output)
-    assert_valid_arrival(result, allow_controlled_rejections=allow_controlled_rejections)
+    assert_valid_arrival(
+        result,
+        allow_controlled_rejections=allow_controlled_rejections,
+        rejection_codes=rejection_codes,
+    )
     return summary
 
 
