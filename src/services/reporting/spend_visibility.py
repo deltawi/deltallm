@@ -281,3 +281,21 @@ def apply_spend_visibility(
         clauses.append("1 = 0")
         return
     clauses.append(f"({owner_predicate} AND ({' OR '.join(membership_predicates)}))")
+
+
+def user_identity_labels_visible(scope: Any, visibility: SpendVisibility) -> bool:
+    if visibility.is_platform_admin:
+        return True
+
+    checks: list[bool] = []
+    if visibility.view == "organization":
+        checks.extend(
+            Permission.USER_READ in (scope.org_permissions_by_id or {}).get(organization_id, set())
+            for organization_id in visibility.organization_ids
+        )
+    elif visibility.view == "team":
+        checks.extend(
+            Permission.USER_READ in (scope.team_permissions_by_id or {}).get(team_id, set())
+            for team_id in visibility.team_ids
+        )
+    return bool(checks) and all(checks)
