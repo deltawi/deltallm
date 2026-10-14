@@ -16,8 +16,13 @@ DeltaLLM builds a cache key from:
 - the cache format version
 - whether the response is streamed
 
-Two different application keys therefore do not share cached responses by default. A streamed
-response also cannot be returned to a request that expects one complete response, or the reverse.
+Two different application keys therefore do not share cached responses by default. The caller
+scope is the key together with its user, team, and organization, stored as a hash so cache keys,
+response headers, and request logs never contain a raw credential. JWT callers without a user ID
+or email skip the cache, because they have no stable identity to separate their responses.
+
+A streamed response also cannot be returned to a request that expects one complete response, or
+the reverse.
 
 Older streamed cache entries are treated as misses when they do not contain all the information
 required by the current cache format.
@@ -33,6 +38,16 @@ The final `[DONE]` event is sent once.
 
 DeltaLLM does not cache a stream that is incomplete, cancelled, malformed, or larger than the
 configured limits.
+
+Identical requests streamed at the same time are recorded separately, so one stream can never
+mix into another's cached copy. Each complete stream is stored whole, and the last one to finish
+replaces the earlier copy.
+
+## When the cache store fails
+
+A failed or unreadable cache read is treated as a miss, and a failed write is logged and skipped,
+so requests still reach the provider. The `s3` backend is not implemented: choosing it turns
+response caching off instead of failing requests.
 
 ## Access, budgets, and usage
 

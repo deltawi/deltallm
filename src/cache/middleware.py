@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -193,7 +194,17 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 f"schema:{_CACHE_SCHEMA_VERSION}:mode:{response_mode}:"
                 f"endpoint:{endpoint}:{cache_key}"
             )
-            cache_key = self._scoped_cache_key(cache_key, request)
+            scoped_cache_key = self._scoped_cache_key(cache_key, request)
+            if scoped_cache_key is None:
+                # No stable caller identity: sharing would cross tenants.
+                request.state.response_cache_eligibility = ResponseCacheEligibility(
+                    ResponseCacheOutcome.BYPASS
+                )
+                request.state.cache_hit = False
+                response = await call_next(request)
+                response.headers["x-deltallm-cache-hit"] = "false"
+                return response
+            cache_key = scoped_cache_key
             request.state.cache_context = CacheContext(
                 cache_key=cache_key, options=cache_options, model=model
             )
@@ -533,12 +544,11 @@ class CacheMiddleware(BaseHTTPMiddleware):
             ),
         )
 
-    def _scoped_cache_key(self, cache_key: str, request: Request) -> str:
-        auth = getattr(request.state, "user_api_key", None)
-        if auth is None:
-            return f"scope:anonymous:{cache_key}"
-        scope_key = str(getattr(auth, "api_key", "") or "anonymous")
-        return f"scope:key:{scope_key}:{cache_key}"
+    def _scoped_cache_key(self, cache_key: str, request: Request) -> str | None:
+        scope = _cache_scope(getattr(request.state, "user_api_key", None))
+        if scope is None:
+            return None
+        return f"scope:{scope}:{cache_key}"
 
     async def _maybe_store(
         self,
@@ -614,6 +624,24 @@ class CacheMiddleware(BaseHTTPMiddleware):
             return json.loads(body)
         except Exception:
             return None
+
+
+def _cache_scope(auth: Any) -> str | None:
+    """Hash the caller identity so cache keys never carry raw credentials."""
+    if auth is None:
+        return None
+    api_key = _normalized_text(getattr(auth, "api_key", None))
+    user_id = _normalized_text(getattr(auth, "user_id", None))
+    if api_key is None or (api_key == "jwt:unknown" and user_id is None):
+        return None
+    identity = {
+        "api_key": api_key,
+        "user_id": user_id,
+        "team_id": _normalized_text(getattr(auth, "team_id", None)),
+        "organization_id": _normalized_text(getattr(auth, "organization_id", None)),
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"id:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _pricing_for_cache_entry(request: Request) -> dict[str, Any] | None:

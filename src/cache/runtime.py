@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.config import AppConfig
 
-from .backends import InMemoryBackend, RedisBackend, S3Backend
+from .backends import InMemoryBackend, RedisBackend
 from .key_builder import CacheKeyBuilder
 from .metrics import NoopCacheMetrics, PrometheusCacheMetrics
 from .streaming import StreamingCacheHandler
+
+logger = logging.getLogger(__name__)
 
 
 def configure_cache_runtime(
@@ -32,7 +35,9 @@ def configure_cache_runtime(
     elif cache_settings.cache_backend == "redis":
         cache_backend = RedisBackend(redis_client)
     elif cache_settings.cache_backend == "s3":
-        cache_backend = S3Backend()
+        # The S3 backend is a stub that fails every lookup; serving traffic matters more.
+        logger.error("cache_backend 's3' is not implemented; response caching is disabled")
+        return
     else:
         raise ValueError(f"Unsupported cache backend: {cache_settings.cache_backend}")
 

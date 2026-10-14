@@ -29,10 +29,14 @@ class RedisBackend(CacheBackend):
         if raw is None:
             return None
 
-        if isinstance(raw, bytes):
-            payload = json.loads(raw.decode("utf-8"))
-        else:
-            payload = json.loads(raw)
+        try:
+            payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except (UnicodeDecodeError, ValueError):
+            payload = None
+        if not isinstance(payload, dict):
+            # A corrupt entry is a miss; the next successful response overwrites it.
+            logger.warning("cache redis entry unreadable; treating as miss")
+            return None
 
         return CacheEntry(
             response=payload.get("response", {}),

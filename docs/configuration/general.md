@@ -503,7 +503,7 @@ The admin settings API returns `409 restart_required` for a dynamic update to th
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `cache_enabled` | `false` | Enable response caching |
-| `cache_backend` | `memory` | Cache backend: `memory`, `redis`, or `s3` |
+| `cache_backend` | `memory` | Cache backend: `memory` or `redis`. `s3` is accepted but not implemented: it turns response caching off. |
 | `cache_ttl` | `3600` | Cache entry time-to-live in seconds |
 | `cache_max_size` | `10000` | Maximum entries for memory cache |
 | `stream_cache_max_bytes` | `262144` | Max total bytes across retained SSE data frames before streaming cache is disabled for that stream |

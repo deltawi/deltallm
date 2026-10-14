@@ -1115,3 +1115,131 @@ async def test_cache_hit_re_resolves_current_tier_pricing(client, test_app):
     assert recorder.events[-1]["metadata"]["provider_cost_avoided"] == 3.0
     assert recorder.events[-1]["metadata"]["provider_cost_avoided_basis"] == "provider_miss_pricing"
     assert recorder.events[-1]["metadata"]["cache_cost_basis"] == "avoided_provider_cost"
+
+
+def _content_chunk(response_id: str, text: str) -> str:
+    return (
+        f'data: {{"id":"{response_id}","object":"chat.completion.chunk",'
+        f'"choices":[{{"index":0,"delta":{{"content":"{text}"}},"finish_reason":null}}]}}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_streams_do_not_mix_cached_copy(client, test_app):
+    backend = _enable_stream_cache(test_app)
+    started = {"a": asyncio.Event(), "b": asyncio.Event()}
+    release = {"a": asyncio.Event(), "b": asyncio.Event()}
+    calls = 0
+
+    class GatedStreamContext(_StreamContext):
+        def __init__(self, name: str) -> None:
+            super().__init__(lines=[])
+            self.name = name
+
+        async def aiter_lines(self):
+            response_id = f"chatcmpl-{self.name}"
+            yield _content_chunk(response_id, f"{self.name}-1")
+            started[self.name].set()
+            await release[self.name].wait()
+            yield _content_chunk(response_id, f"{self.name}-2")
+            yield (
+                f'data: {{"id":"{response_id}","object":"chat.completion.chunk",'
+                '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'
+            )
+            yield "data: [DONE]"
+
+    def stream(method, url, headers, json, timeout):  # noqa: ANN001, ANN201
+        nonlocal calls
+        del method, url, headers, json, timeout
+        calls += 1
+        return GatedStreamContext("a" if calls == 1 else "b")
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "same prompt"}],
+        "stream": True,
+    }
+
+    first = asyncio.create_task(client.post("/v1/chat/completions", headers=headers, json=body))
+    await started["a"].wait()
+    second = asyncio.create_task(client.post("/v1/chat/completions", headers=headers, json=body))
+    await started["b"].wait()
+    release["a"].set()
+    first_response = await first
+    release["b"].set()
+    second_response = await second
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert len(backend._cache) == 1
+    stored = next(iter(backend._cache.values()))
+    replayed = "".join(stored.stream_lines or [])
+    assert ("chatcmpl-a" in replayed) != ("chatcmpl-b" in replayed)
+    assert stored.response["choices"][0]["message"]["content"] in {"a-1a-2", "b-1b-2"}
+    assert test_app.state.streaming_cache_handler.active_stream_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cache_scope_hashes_identity_and_skips_unidentified_jwt(client, test_app):
+    from src.cache.middleware import _cache_scope
+    from src.models.responses import UserAPIKeyAuth
+
+    key_auth = UserAPIKeyAuth(api_key="token-hash", team_id="team-a", organization_id="org-a")
+    scope = _cache_scope(key_auth)
+    assert scope is not None and "token-hash" not in scope
+
+    same_user_other_team = _cache_scope(
+        UserAPIKeyAuth(api_key="jwt:user-1", user_id="user-1", team_id="team-b")
+    )
+    same_user_team_a = _cache_scope(
+        UserAPIKeyAuth(api_key="jwt:user-1", user_id="user-1", team_id="team-a")
+    )
+    assert same_user_other_team != same_user_team_a
+    assert _cache_scope(UserAPIKeyAuth(api_key="jwt:unknown", organization_id="org-a")) is None
+    assert _cache_scope(UserAPIKeyAuth(api_key="  ")) is None
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_key_header_does_not_expose_key_identity(client, test_app):
+    _enable_cache(test_app)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "scope header"}],
+    }
+    await client.post("/v1/chat/completions", headers=headers, json=body)
+    hit = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert hit.headers["x-deltallm-cache-hit"] == "true"
+    token_hash = hashlib.sha256(
+        f"{test_app.state.key_service.salt}:{test_app.state._test_key}".encode("utf-8")
+    ).hexdigest()
+    assert token_hash not in hit.headers["x-deltallm-cache-key"]
+    assert test_app.state._test_key not in hit.headers["x-deltallm-cache-key"]
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_treats_corrupt_entry_as_miss():
+    from src.cache.backends.redis import RedisBackend
+
+    class _Redis:
+        async def get(self, key):  # noqa: ANN001, ANN202
+            del key
+            return b"{not json"
+
+    assert await RedisBackend(_Redis()).get("k") is None
+
+
+def test_s3_cache_backend_disables_cache_instead_of_failing_requests():
+    from src.cache import configure_cache_runtime
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    app_config = SimpleNamespace(
+        general_settings=SimpleNamespace(cache_enabled=True, cache_backend="s3")
+    )
+    configure_cache_runtime(app, app_config=app_config, redis_client=None, salt_key="salt")
+
+    assert app.state.cache_backend is None
+    assert app.state.streaming_cache_handler is None
