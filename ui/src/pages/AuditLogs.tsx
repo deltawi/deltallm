@@ -5,6 +5,7 @@ import { HeaderTabBar, IndexShell } from '../components/admin/shells';
 import AuditEventPanel from '../components/audit/AuditEventPanel';
 import AuditEventTable from '../components/audit/AuditEventTable';
 import AuditFilterBar from '../components/audit/AuditFilterBar';
+import ColumnsMenu from '../components/audit/ColumnsMenu';
 import RefreshControl from '../components/usage/RefreshControl';
 import { PanelError, Segmented } from '../components/usage/ReportBits';
 import { audit, type AuditEvent } from '../lib/api/audit';
@@ -16,7 +17,9 @@ import {
   parseAuditFilters,
   parseAuditWindow,
   readAuditColumns,
+  readAuditUtc,
   saveAuditColumns,
+  saveAuditUtc,
   utcInputValue,
   windowLabel,
   writeAuditFilters,
@@ -111,7 +114,7 @@ export default function AuditLogs() {
   const selectedId = searchParams.get('event');
 
   const [columns, setColumns] = useState<AuditColumn[]>(() => readAuditColumns());
-  const [showUtc, setShowUtc] = useState(false);
+  const [showUtc, setShowUtc] = useState(() => readAuditUtc());
   const [refreshToken, setRefreshToken] = useState(0);
   const [reloadToken, setReloadToken] = useState(0);
   const [autoRefreshMs, setAutoRefreshMs] = useState<AutoRefreshMs>(0);
@@ -238,6 +241,11 @@ export default function AuditLogs() {
     saveAuditColumns(next);
   };
 
+  const changeUtc = (next: boolean) => {
+    setShowUtc(next);
+    saveAuditUtc(next);
+  };
+
   const anyFilter = hasAuditFilters(filters);
 
   return (
@@ -284,12 +292,13 @@ export default function AuditLogs() {
         <AuditFilterBar
           filters={filters}
           events={events}
-          columns={columns}
           onChange={(next) => commitFilters(next)}
-          onColumns={changeColumns}
         />
         {first.error && <PanelError message={first.error} onRetry={first.retry} stale={first.data !== null} />}
-        <section className="rounded-xl border border-gray-200 bg-white" aria-label="Audit events">
+        <section className="relative rounded-xl border border-gray-200 bg-white px-2 py-1" aria-label="Audit events">
+          <div className="absolute right-2 top-1.5 z-10 hidden min-[880px]:block">
+            <ColumnsMenu columns={columns} onColumns={changeColumns} showUtc={showUtc} onShowUtc={changeUtc} />
+          </div>
           {!first.loading && events.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-gray-500">
               {first.error ? 'Events could not be loaded.' : 'No events match these filters in this period.'}
@@ -307,12 +316,11 @@ export default function AuditLogs() {
               selectedId={selectedId}
               columns={columns}
               showUtc={showUtc}
-              onToggleUtc={() => setShowUtc((value) => !value)}
               onSelect={(event) => selectEvent(event.event_id)}
               onFilter={(patch) => commitFilters({ ...filters, ...patch })}
             />
           )}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-3 py-2.5 text-[12.5px] text-gray-500">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-2.5 py-2 text-[12.5px] text-gray-500">
             <span>
               {first.loading ? 'Loading events' : `${events.length.toLocaleString()} event${events.length === 1 ? '' : 's'} loaded · ${windowLabel(windowKey)}`}
             </span>

@@ -36,7 +36,7 @@ export default function ChipMenu({ label, value, onClear, width = 'w-64', childr
   }, [open]);
 
   return (
-    <span ref={ref} className="relative">
+    <span ref={ref} className="relative" title={value === undefined ? 'You can also click a name in any row to filter by it' : undefined}>
       <FilterChip
         label={label}
         value={value}

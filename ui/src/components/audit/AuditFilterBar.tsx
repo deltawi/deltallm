@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Columns3, Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Search } from 'lucide-react';
 import { audit, type AuditEvent } from '../../lib/api/audit';
 import {
   actionCategory,
@@ -8,11 +8,9 @@ import {
   AUDIT_CATEGORIES,
   categoryInfo,
   hasAuditFilters,
-  OPTIONAL_COLUMNS,
   resourceName,
   resourceTypeLabel,
   type ActorFilter,
-  type AuditColumn,
   type AuditFilters,
 } from '../../lib/auditEvents';
 import { useReport } from '../../lib/useReport';
@@ -24,13 +22,12 @@ interface AuditFilterBarProps {
   filters: AuditFilters;
   /** Rows on screen: they suggest actors, resources and IP addresses without a query. */
   events: readonly AuditEvent[];
-  columns: readonly AuditColumn[];
   onChange: (filters: AuditFilters) => void;
-  onColumns: (columns: AuditColumn[]) => void;
 }
 
+// Same box as the Usage request search; the placeholder must fit inside it.
 const SEARCH_INPUT =
-  'w-[300px] max-w-full rounded-lg border border-gray-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
+  'w-[260px] max-w-full text-ellipsis rounded-lg border border-gray-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
 
 function useDebounced(value: string, delay = 250): string {
   const [debounced, setDebounced] = useState(value);
@@ -199,66 +196,7 @@ function IpMenu({ events, onPick }: { events: readonly AuditEvent[]; onPick: (ip
   );
 }
 
-function ColumnsMenu({ columns, onColumns }: { columns: readonly AuditColumn[]; onColumns: (columns: AuditColumn[]) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onPointer);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('mousedown', onPointer);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open]);
-  return (
-    <div ref={ref} className="relative ml-auto">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
-      >
-        <Columns3 className="h-3.5 w-3.5 text-gray-500" aria-hidden="true" /> Columns
-        <ChevronDown className="h-3 w-3 text-gray-500" aria-hidden="true" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 grid w-60 rounded-lg border border-gray-200 bg-white p-1 shadow-lg">
-          <MenuNote>Always shown: Time, Status, Action, Actor, Resource, Organization, Duration</MenuNote>
-          {OPTIONAL_COLUMNS.map((column) => (
-            <label key={column.key} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50">
-              <input
-                type="checkbox"
-                checked={columns.includes(column.key)}
-                onChange={(event) =>
-                  onColumns(
-                    OPTIONAL_COLUMNS.map((item) => item.key).filter((key) =>
-                      key === column.key ? event.target.checked : columns.includes(key),
-                    ),
-                  )
-                }
-                className="h-3.5 w-3.5 rounded border-gray-300 text-brand-primary focus:ring-brand-primary"
-              />
-              {column.label}
-            </label>
-          ))}
-          <MenuNote>Saved in this browser</MenuNote>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default function AuditFilterBar({ filters, events, columns, onChange, onColumns }: AuditFilterBarProps) {
+export default function AuditFilterBar({ filters, events, onChange }: AuditFilterBarProps) {
   const [draft, setDraft] = useState(filters.search ?? '');
   const [draftFor, setDraftFor] = useState(filters.search ?? '');
   if (draftFor !== (filters.search ?? '')) {
@@ -295,7 +233,8 @@ export default function AuditFilterBar({ filters, events, columns, onChange, onC
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={applySearch}
-          placeholder="Find a request ID, event ID or resource ID"
+          placeholder="Request, event or resource ID"
+          title="Find a request ID, event ID or resource ID"
           className={SEARCH_INPUT}
         />
       </form>
@@ -355,7 +294,7 @@ export default function AuditFilterBar({ filters, events, columns, onChange, onC
       {filters.requestId && (
         <FilterChip label="Request" value={filters.requestId} active onClick={() => set({ requestId: undefined })} />
       )}
-      {hasAuditFilters(filters) ? (
+      {hasAuditFilters(filters) && (
         <button
           type="button"
           onClick={() => {
@@ -366,10 +305,7 @@ export default function AuditFilterBar({ filters, events, columns, onChange, onC
         >
           Clear filters
         </button>
-      ) : (
-        <span className="text-xs text-gray-500">Tip: click a name in any row to filter by it</span>
       )}
-      <ColumnsMenu columns={columns} onColumns={onColumns} />
     </div>
   );
 }

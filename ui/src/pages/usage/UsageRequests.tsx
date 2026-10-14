@@ -124,7 +124,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
   const anyFilter = filters.length > 0 || flags.status !== undefined || flags.cacheHit !== undefined || requestId !== '';
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <div className="flex flex-wrap items-center gap-2.5">
         <form
           role="search"

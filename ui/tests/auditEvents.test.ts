@@ -14,8 +14,10 @@ import {
   parseAuditFilters,
   parseAuditWindow,
   readAuditColumns,
+  readAuditUtc,
   resourceLink,
   saveAuditColumns,
+  saveAuditUtc,
   stateDisplay,
   statusLabel,
   utcClock,
@@ -95,7 +97,9 @@ test('actors show names, and a click filters by ID or by actor type', () => {
   assert.equal(hidden.name, 'Account acc-1234…');
 
   const key = actorDisplay(event({ actor_type: 'api_key', actor_id: 'user-1', api_key: 'hash41ab', labels: { actor: 'search-indexer', key_name: 'search-indexer', team_id: null, team: null, organization: null, resource: null } }));
-  assert.deepEqual([key.name, key.kind], ['search-indexer', 'API key …41ab']);
+  assert.deepEqual([key.name, key.kind, key.tail], ['search-indexer', 'API key …41ab', '…41ab']);
+  const unnamed = actorDisplay(event({ actor_type: 'api_key', api_key: 'hash41ab' }));
+  assert.deepEqual([unnamed.name, unnamed.tail], ['Key …41ab', undefined]);
   assert.deepEqual(key.filter, { value: 'hash41ab', label: 'search-indexer' });
 
   const master = actorDisplay(event({ actor_type: 'master_key' }));
@@ -228,6 +232,19 @@ test('optional columns are saved in the browser and survive broken storage', () 
   const broken = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
   assert.deepEqual(readAuditColumns(broken), []);
   assert.doesNotThrow(() => saveAuditColumns(['ip'], broken));
+});
+
+test('the UTC choice is saved in the browser and survives broken storage', () => {
+  const store = new Map<string, string>();
+  const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value) };
+  assert.equal(readAuditUtc(storage), false);
+  saveAuditUtc(true, storage);
+  assert.equal(readAuditUtc(storage), true);
+  saveAuditUtc(false, storage);
+  assert.equal(readAuditUtc(storage), false);
+  const broken = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
+  assert.equal(readAuditUtc(broken), false);
+  assert.doesNotThrow(() => saveAuditUtc(true, broken));
 });
 
 test('API requests on a resource read as a verb', () => {
