@@ -256,8 +256,10 @@ export function tokensLabel(event: Pick<AuditEvent, 'input_tokens' | 'output_tok
 
 export interface ActorDisplay {
   name: string;
-  /** Second line under the name: "person", "API key …41ab", "master key". */
+  /** What the actor is: "person", "API key …41ab", "master key". */
   kind: string;
+  /** A named key's hash tail, shown in gray after its name like the Usage request list. */
+  tail?: string;
   /** Whether the name is a real person or key (rather than "Master key" or "System"). */
   named: boolean;
   /** The filter a click on the name sets. */
@@ -295,9 +297,11 @@ export function actorDisplay(event: AuditEvent): ActorDisplay {
   }
   if (type === 'api_key') {
     const hash = eventKeyHash(event);
-    const name = labels?.actor || labels?.key_name || (hash ? `Key ${keyTail(hash)}` : 'API key');
+    const label = labels?.actor || labels?.key_name;
+    const name = label || (hash ? `Key ${keyTail(hash)}` : 'API key');
     return {
       name,
+      tail: label && hash ? keyTail(hash) : undefined,
       kind: hash ? `API key ${keyTail(hash)}` : 'API key',
       named: true,
       filter: hash ? { value: hash, label: name } : null,
@@ -804,6 +808,24 @@ export function readAuditColumns(storage?: Pick<Storage, 'getItem'>): AuditColum
 export function saveAuditColumns(columns: readonly AuditColumn[], storage?: Pick<Storage, 'setItem'>): void {
   try {
     (storage ?? globalThis.localStorage)?.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns));
+  } catch {
+    // Private windows and blocked storage: the choice lasts for this visit only.
+  }
+}
+
+const UTC_STORAGE_KEY = 'deltallm.audit.utc';
+
+export function readAuditUtc(storage?: Pick<Storage, 'getItem'>): boolean {
+  try {
+    return (storage ?? globalThis.localStorage)?.getItem(UTC_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveAuditUtc(value: boolean, storage?: Pick<Storage, 'setItem'>): void {
+  try {
+    (storage ?? globalThis.localStorage)?.setItem(UTC_STORAGE_KEY, value ? '1' : '0');
   } catch {
     // Private windows and blocked storage: the choice lasts for this visit only.
   }

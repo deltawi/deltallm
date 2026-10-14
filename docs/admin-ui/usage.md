@@ -36,6 +36,8 @@ It shows only to accounts that can see request logs (platform and organization r
 - Type a full request ID in **Find a request ID** to find one request in the selected window.
 - Click a row to open the request panel. The panel shows the error, the model, the provider, the team,
   the API key, the cost, the token counts, the metadata, and links to the audit log and to the other requests of the key.
+- On a narrow screen, the table hides columns in this order: Team, Cache, and Tokens first, then
+  API key and Duration. Long names end with "…". The request panel shows all values.
 
 ## Loading and refresh
 

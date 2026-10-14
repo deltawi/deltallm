@@ -174,12 +174,12 @@ test('the list loads one page with names and no total count, inside a 24 hour wi
     const first = rows()[0].textContent ?? '';
     assert.ok(first.includes('Model updated'));
     assert.ok(first.includes('mehdi@example.com'));
-    assert.ok(first.includes('Model gpt-4o'));
+    assert.ok(first.includes('gpt-4o'));
     assert.ok(first.includes('Platform'));
     const second = rows()[1].textContent ?? '';
     assert.ok(second.includes('504'));
     assert.ok(second.includes('search-indexer'));
-    assert.ok(second.includes('API key …41ab'));
+    assert.ok(second.includes('search-indexer…41ab'));
     assert.ok(second.includes('Acme Corp'));
     assert.ok(second.includes('30.0 s'));
     assert.ok(rows()[2].textContent?.includes('Master key'));
@@ -266,11 +266,16 @@ test('the side panel loads its lookups on open, steps with the arrow keys, and l
 
 test('optional columns are chosen in the Columns menu and kept in the browser', async () => {
   await withPage('/audit', async () => {
-    await act(async () => button('Columns').click());
-    const team = [...document.querySelectorAll('label')].find((item) => item.textContent?.trim() === 'Team')?.querySelector('input') as HTMLInputElement;
-    await act(async () => team.click());
+    await act(async () => (document.querySelector('button[aria-label="Columns"]') as HTMLButtonElement).click());
+    const option = (name: string) =>
+      [...document.querySelectorAll('label')].find((item) => item.textContent?.trim() === name)?.querySelector('input') as HTMLInputElement;
+    await act(async () => option('Team').click());
     assert.ok([...document.querySelectorAll('th')].some((item) => item.textContent === 'Team'));
     assert.ok(rows()[1].textContent?.includes('Search'));
     assert.equal(localStorage.getItem('deltallm.audit.columns'), '["team"]');
+
+    await act(async () => option('Show times in UTC').click());
+    assert.ok([...document.querySelectorAll('th')].some((item) => item.textContent === 'Time (UTC)'));
+    assert.equal(localStorage.getItem('deltallm.audit.utc'), '1');
   });
 });

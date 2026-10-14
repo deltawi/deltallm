@@ -13,24 +13,28 @@ interface RequestLogTableProps {
 }
 
 const HEAD = 'whitespace-nowrap border-b border-gray-200 px-2.5 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500';
-const CELL = 'whitespace-nowrap border-b border-gray-100 px-2.5 py-[9px]';
+// The table has a fixed layout, so a long value is cut with "…" and never makes the table wider.
+const CELL = 'overflow-hidden text-ellipsis whitespace-nowrap border-b border-gray-100 px-2.5 py-[9px]';
+// Columns hide by priority as the screen gets narrower, so the table never scrolls sideways.
+const LARGE = 'hidden lg:table-cell';
+const WIDE = 'hidden xl:table-cell';
 
 export default function RequestLogTable({ logs, loading, refreshing, selectedId, onSelect }: RequestLogTableProps) {
   if (loading) return <TableSkeleton rows={8} columns={9} />;
   return (
     <div className={`overflow-x-auto transition-opacity ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
-      <table className="w-full border-collapse text-[12.5px] tabular-nums">
+      <table className="w-full table-fixed border-collapse text-[12.5px] tabular-nums">
         <thead>
           <tr>
-            <th className={HEAD}>Time</th>
-            <th className={HEAD}>Status</th>
+            <th className={`${HEAD} w-[88px] sm:w-[96px]`}>Time</th>
+            <th className={`${HEAD} w-[60px] sm:w-[72px]`}>Status</th>
             <th className={HEAD}>Model</th>
-            <th className={HEAD}>Team</th>
-            <th className={HEAD}>API key</th>
-            <th className={`${HEAD} text-right`}>Tokens in → out</th>
-            <th className={`${HEAD} text-right`}>Cost</th>
-            <th className={`${HEAD} text-right`}>Duration</th>
-            <th className={HEAD}>Cache</th>
+            <th className={`${HEAD} ${WIDE}`}>Team</th>
+            <th className={`${HEAD} ${LARGE}`}>API key</th>
+            <th className={`${HEAD} ${WIDE} w-[132px] text-right`}>Tokens in → out</th>
+            <th className={`${HEAD} w-[76px] sm:w-[88px] text-right`}>Cost</th>
+            <th className={`${HEAD} ${LARGE} w-[84px] text-right`}>Duration</th>
+            <th className={`${HEAD} ${WIDE} w-[68px]`}>Cache</th>
           </tr>
         </thead>
         <tbody>
@@ -61,21 +65,28 @@ export default function RequestLogTable({ logs, loading, refreshing, selectedId,
                   </span>
                 </td>
                 <td className={CELL}>
-                  {log.model || '—'} <span className="text-xs text-gray-500">{logProvider(log)}</span>
+                  <span className="flex min-w-0 items-baseline gap-1" title={log.model || undefined}>
+                    <span className="min-w-0 truncate">{log.model || '—'}</span>
+                    <span className="hidden shrink-0 text-xs text-gray-500 sm:inline">{logProvider(log)}</span>
+                  </span>
                 </td>
-                <td className={CELL}>{log.team_alias || log.team_id || <span className="text-gray-400">No team</span>}</td>
-                <td className={CELL}>
-                  {logKeyName(log)}
-                  {log.key_name && <span className="ml-1 font-mono text-[11px] text-gray-500">{keyTail(log.api_key)}</span>}
+                <td className={`${CELL} ${WIDE}`}>
+                  <span className="block truncate">{log.team_alias || log.team_id || <span className="text-gray-400">No team</span>}</span>
                 </td>
-                <td className={`${CELL} text-right`}>
+                <td className={`${CELL} ${LARGE}`}>
+                  <span className="flex min-w-0 items-baseline gap-1">
+                    <span className="min-w-0 truncate">{logKeyName(log)}</span>
+                    {log.key_name && <span className="shrink-0 font-mono text-[11px] text-gray-500">{keyTail(log.api_key)}</span>}
+                  </span>
+                </td>
+                <td className={`${CELL} ${WIDE} text-right`}>
                   {fmtCompact(log.prompt_tokens)} → {fmtCompact(log.completion_tokens)}
                 </td>
                 <td className={`${CELL} text-right`}>{log.spend ? fmtSpendValue(log.spend) : '—'}</td>
-                <td className={`${CELL} text-right ${duration !== null && duration > 5000 ? 'text-rose-700' : ''}`}>
+                <td className={`${CELL} ${LARGE} text-right ${duration !== null && duration > 5000 ? 'text-rose-700' : ''}`}>
                   {duration === null ? '—' : `${(duration / 1000).toFixed(1)} s`}
                 </td>
-                <td className={CELL}>
+                <td className={`${CELL} ${WIDE}`}>
                   <span className={`rounded-full px-[7px] py-px text-[11px] ${log.cache_hit ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
                     {log.cache_hit ? 'Hit' : 'Miss'}
                   </span>
