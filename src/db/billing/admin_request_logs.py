@@ -55,9 +55,9 @@ def request_log_queries(
             f"(start_time, id) < (${len(where.params) - 1}::timestamp, ${len(where.params)})"
         )
     if filters.start is not None:
-        where.add("start_time >= {p}::timestamp", filters.start)
+        where.add("start_time >= {p}::timestamptz", filters.start)
     if filters.end is not None:
-        where.add("start_time <= {p}::timestamp", filters.end)
+        where.add("start_time <= {p}::timestamptz", filters.end)
     if filters.status is not None:
         where.add("s.status = {p}", filters.status)
     if filters.cache_hit is not None:

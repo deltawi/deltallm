@@ -204,3 +204,17 @@ async def test_request_logs_reject_unknown_status(client, test_app, monkeypatch)
     response = await client.get("/ui/api/logs?status=maybe", headers=HEADERS)
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_request_logs_since_narrows_the_start_date(client, test_app, monkeypatch):
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+
+    response = await client.get(
+        "/ui/api/logs?pagination_mode=cursor&start_date=2026-10-01&since=2026-10-13T08:30:00Z",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    _, params = fake_db.calls[0]
+    assert params[0].isoformat() == "2026-10-13T08:30:00+00:00"

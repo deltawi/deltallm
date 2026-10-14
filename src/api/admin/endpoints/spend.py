@@ -80,6 +80,15 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
+def _log_window_start(start_date: date | None, since: datetime | None) -> datetime | None:
+    """Return the later of the start date and ``since`` (a naive ``since`` is UTC)."""
+
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    candidates = [value for value in (_date_start(start_date), since) if value is not None]
+    return max(candidates) if candidates else None
+
+
 def _decode_request_log_cursor(value: str) -> tuple[datetime, str]:
     try:
         return decode_request_log_cursor(value)
@@ -653,6 +662,7 @@ async def request_logs(
     status: RequestLogStatus | None = Query(default=None),
     cache_hit: bool | None = Query(default=None),
     request_id: str | None = Query(default=None, max_length=256),
+    since: datetime | None = Query(default=None),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     view: Literal["organization", "team", "self"] | None = Query(default=None),
@@ -699,7 +709,7 @@ async def request_logs(
     source = get_spend_read_source()
     queries = request_log_queries(
         filters=RequestLogFilters(
-            start=_date_start(start_date),
+            start=_log_window_start(start_date, since),
             end=_date_end(end_date),
             usage=usage_filters,
             status=status,
