@@ -120,9 +120,9 @@ def build_readiness_report(
         "missing": checks,
         "note": (
             "Database compatibility is ready. Confirm every gateway and batch worker runs "
-            "reporting-v2 code before enabling spend_reporting_v2_enabled."
+            "reporting-v2 code before you set spend_reporting_v2_enabled to true."
             if ready
-            else "Database compatibility is incomplete. Keep spend_reporting_v2_enabled false."
+            else "Database compatibility is incomplete. Set spend_reporting_v2_enabled to false."
         ),
     }
 

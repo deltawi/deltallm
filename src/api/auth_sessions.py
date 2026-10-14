@@ -75,7 +75,7 @@ async def auth_me(request: Request, response: Response) -> CurrentSessionRespons
         getattr(request.app.state, "app_config", None), "general_settings", None
     )
     spend_reporting_v2_enabled = bool(
-        getattr(general_settings, "spend_reporting_v2_enabled", False)
+        getattr(general_settings, "spend_reporting_v2_enabled", True)
     )
     return CurrentSessionResponse(
         authenticated=True,

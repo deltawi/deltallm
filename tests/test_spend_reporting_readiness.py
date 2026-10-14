@@ -85,7 +85,7 @@ def test_readiness_report_rejects_failed_migrations_and_invalid_objects() -> Non
 
     assert report["ready"] is False
     assert report["note"] == (
-        "Database compatibility is incomplete. Keep spend_reporting_v2_enabled false."
+        "Database compatibility is incomplete. Set spend_reporting_v2_enabled to false."
     )
     assert report["missing"]["migrations"] == sorted(REQUIRED_MIGRATIONS)
     assert report["missing"]["columns"] == sorted(REQUIRED_COLUMNS)

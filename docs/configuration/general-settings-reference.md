@@ -176,7 +176,7 @@ The generated schema is the field-coverage source of truth. The [General setting
 | `spend_reporting_max_concurrency` | integer | `2` | > 0; ≤ 32 | Ordinary |
 | `spend_reporting_queue_timeout_seconds` | number | `10.0` | > 0 | Ordinary |
 | `spend_reporting_redis_timeout_seconds` | number | `0.5` | > 0 | Ordinary |
-| `spend_reporting_v2_enabled` | boolean | `false` | — | Ordinary |
+| `spend_reporting_v2_enabled` | boolean | `true` | — | Ordinary |
 | `spend_settlement_db_pool_size` | integer | `1` | ≤ 99; ≥ 1 | Ordinary |
 
 ## Organizations and governance

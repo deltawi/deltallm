@@ -285,9 +285,10 @@ general_settings:
   spend_reporting_queue_timeout_seconds: 10
   spend_reporting_execution_timeout_seconds: 60
   spend_reporting_redis_timeout_seconds: 0.5
-  # Enable only after the reporting-v2 database check passes and every gateway
-  # and batch worker runs the reporting-v2 writer.
-  spend_reporting_v2_enabled: false
+  # Team and personal usage views. Set to false during a rolling upgrade from a
+  # release without key-owner snapshots, until the reporting-v2 database check
+  # passes and every gateway and batch worker runs the new writer.
+  spend_reporting_v2_enabled: true
 
   # Upstream provider HTTP pool tuning. These are startup-time settings;
   # restart the process or roll the Kubernetes deployment after changing them.
