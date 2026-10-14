@@ -85,7 +85,7 @@ class TierBootstrapRepositoryMixin:
     ) -> TierBootstrapResult:
         await self.prisma.query_raw(
             """
-            SELECT pg_advisory_xact_lock(hashtextextended($1, 0)) AS locked
+            SELECT pg_advisory_xact_lock(hashtextextended($1, 0))::text AS locked
             """,
             lock_material,
         )
