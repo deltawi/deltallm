@@ -119,12 +119,41 @@ export default function Usage() {
   return (
     <div className="p-4 sm:p-6">
       <div className="mx-auto grid max-w-7xl gap-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-          <div>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
             <h1 className="text-[22px] font-bold tracking-tight text-gray-900">{requestsPath ? 'Requests' : 'Usage & Spend'}</h1>
             <p className="text-xs text-gray-500">{subtitle}</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2.5">
+          <RefreshControl
+            updatedAt={updatedAt}
+            refreshing={false}
+            onRefresh={refresh}
+            autoRefreshMs={autoRefreshMs}
+            onAutoRefreshChange={setAutoRefreshMs}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 border-b border-gray-200">
+          {canViewRequests ? (
+            <nav aria-label="Usage views" className="flex gap-0.5">
+              {[
+                { to: '/usage', label: 'Overview', active: !requestsPath },
+                { to: '/usage/requests', label: 'Requests', active: requestsPath },
+              ].map((item) => (
+                <Link
+                  key={item.to}
+                  to={tabLink(item.to)}
+                  aria-current={item.active ? 'page' : undefined}
+                  className={`-mb-px border-b-2 px-3 py-2 text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
+                    item.active ? 'border-brand-primary font-semibold text-gray-900' : 'border-transparent text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          ) : <span />}
+          <div className="flex flex-wrap items-center gap-2.5 pb-2">
             {availableViews.length > 1 && (
               <Segmented
                 label="Scope"
@@ -154,35 +183,8 @@ export default function Usage() {
                 }}
               />
             )}
-            <RefreshControl
-              updatedAt={updatedAt}
-              refreshing={false}
-              onRefresh={refresh}
-              autoRefreshMs={autoRefreshMs}
-              onAutoRefreshChange={setAutoRefreshMs}
-            />
           </div>
         </div>
-
-        {canViewRequests && (
-          <nav aria-label="Usage views" className="flex gap-0.5 border-b border-gray-200">
-            {[
-              { to: '/usage', label: 'Overview', active: !requestsPath },
-              { to: '/usage/requests', label: 'Requests', active: requestsPath },
-            ].map((item) => (
-              <Link
-                key={item.to}
-                to={tabLink(item.to)}
-                aria-current={item.active ? 'page' : undefined}
-                className={`-mb-px border-b-2 px-3 py-2 text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
-                  item.active ? 'border-brand-primary font-semibold text-gray-900' : 'border-transparent text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        )}
 
         {featureError !== null && featureStatus === null && (
           <div role="alert" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

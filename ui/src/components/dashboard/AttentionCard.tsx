@@ -29,7 +29,7 @@ function AttentionRow({
       <span
         aria-label={critical ? 'Critical' : 'Warning'}
         className={`mt-[3px] grid h-[18px] w-[18px] flex-none place-items-center rounded-full text-[11px] font-bold ${
-          critical ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
+          critical ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'
         }`}
       >
         !

@@ -26,6 +26,7 @@ function errorTitle(log: RequestLog): string {
 
 function errorText(log: RequestLog): string | null {
   const error = log.metadata?.['error'];
+  if (typeof error === 'string' && error.trim()) return error;
   if (error && typeof error === 'object') {
     const message = (error as Record<string, unknown>)['message'];
     if (typeof message === 'string' && message.trim()) return message;

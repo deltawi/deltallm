@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom';
 import type { ProviderHealthSummary } from '../../lib/api';
 import type { LiveProvider, LiveTopResponse } from '../../lib/api/usageReports';
-import { fmtCompact, fmtSpendPrecise, fmtSpendValue } from '../../lib/format';
+import { fmtSpendPrecise, fmtSpendValue } from '../../lib/format';
 import type { LiveTiles, MonthToDate } from '../../lib/liveDashboard';
 import { providerDisplayName } from '../../lib/providers';
+import { tileCount, tileSpend } from '../../lib/usageExplorer';
 import { keyTail } from '../../lib/usageFilters';
 import type { ReportState } from '../../lib/useReport';
 import { KpiTile, PanelError, ShareBar, Skeleton, Sparkline, Swatch, TableSkeleton } from '../usage/ReportBits';
@@ -27,7 +28,10 @@ export function LiveKpis({
   dailyLoading: boolean;
 }) {
   const loading = hourlyState.loading;
-  const monthShare = month && month.forecast > 0 ? Math.min(month.spend / month.forecast, 1) : 0;
+  // Without a platform budget, scale the bar to the larger of the forecast and last month.
+  const monthScale = month ? Math.max(month.forecast, month.lastMonth ?? 0) : 0;
+  const spentShare = month && monthScale > 0 ? Math.min(month.spend / monthScale, 1) : 0;
+  const forecastShare = month && monthScale > 0 ? Math.min(month.forecast / monthScale, 1) : 0;
   return (
     <div className="grid gap-3">
       {hourlyState.error && <PanelError message={hourlyState.error} onRetry={hourlyState.retry} stale={tiles !== null} />}
@@ -35,7 +39,7 @@ export function LiveKpis({
         <KpiTile
           label="Requests, last 24 h"
           loading={loading}
-          value={fmtCompact(tiles?.requests24h)}
+          value={tileCount(tiles?.requests24h)}
           title={tiles?.requests24h.toLocaleString()}
           delta={tiles?.requestsDelta}
           note="vs same hours yesterday"
@@ -54,7 +58,7 @@ export function LiveKpis({
         <KpiTile
           label="Spend, last 24 h"
           loading={loading || (dailyLoading && !tiles)}
-          value={fmtSpendValue(tiles?.spend24h)}
+          value={tileSpend(tiles?.spend24h)}
           title={tiles ? fmtSpendPrecise(tiles.spend24h) : undefined}
           delta={tiles?.spendDelta}
           note={tiles?.sevenDayAverage !== null && tiles?.sevenDayAverage !== undefined ? 'vs 7-day average' : `Today ${fmtSpendValue(tiles?.spendToday)}`}
@@ -64,7 +68,7 @@ export function LiveKpis({
         <KpiTile
           label="Active keys, last 24 h"
           loading={loading}
-          value={fmtCompact(tiles?.activeKeys24h)}
+          value={tileCount(tiles?.activeKeys24h)}
           note="Keys that sent requests"
           spark={<svg className="mt-1 h-7 w-full" aria-hidden="true" />}
           to="/usage?range=7d&tab=api_key"
@@ -72,12 +76,19 @@ export function LiveKpis({
         <KpiTile
           label="Month to date"
           loading={dailyLoading || loading}
-          value={fmtSpendValue(month?.spend)}
+          value={tileSpend(month?.spend)}
           title={month ? fmtSpendPrecise(month.spend) : undefined}
           note={month ? `forecast ${fmtSpendValue(month.forecast)}${month.lastMonth !== null ? ` · last month ${fmtSpendValue(month.lastMonth)}` : ''}` : ''}
           spark={(
             <div className="relative mt-3 h-2.5 overflow-hidden rounded-[5px] bg-gray-100" aria-hidden="true">
-              <span className="absolute inset-y-0 left-0 rounded-[5px] bg-brand-primary" style={{ width: `${monthShare * 100}%` }} />
+              <span
+                className="absolute inset-y-0 left-0 rounded-[5px] opacity-40"
+                style={{
+                  width: `${forecastShare * 100}%`,
+                  backgroundImage: 'repeating-linear-gradient(-45deg, rgb(var(--brand-primary)) 0 4px, transparent 4px 8px)',
+                }}
+              />
+              <span className="absolute inset-y-0 left-0 rounded-[5px] bg-brand-primary" style={{ width: `${spentShare * 100}%` }} />
             </div>
           )}
           to={month ? `/usage?range=custom&start=${new Date().toISOString().slice(0, 8)}01&end=${new Date().toISOString().slice(0, 10)}` : undefined}

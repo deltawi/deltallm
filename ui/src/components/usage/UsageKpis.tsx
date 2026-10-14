@@ -6,6 +6,8 @@ import {
   percentDelta,
   pointDelta,
   sparklineValues,
+  tileCount,
+  tileSpend,
 } from '../../lib/usageExplorer';
 import type { ReportState } from '../../lib/useReport';
 import { KpiTile, PanelError, Sparkline } from './ReportBits';
@@ -50,7 +52,7 @@ export default function UsageKpis({ summary, series }: UsageKpisProps) {
           label="Spend"
           loading={loading}
           dimmed={summary.refreshing}
-          value={fmtSpendValue(current?.total_spend)}
+          value={current ? tileSpend(current.total_spend) : '—'}
           title={current ? fmtSpendPrecise(current.total_spend) : undefined}
           delta={current ? percentDelta(current.total_spend, previous?.total_spend, { higherIsBad: true }) : null}
           note={note}
@@ -60,7 +62,7 @@ export default function UsageKpis({ summary, series }: UsageKpisProps) {
           label="Requests"
           loading={loading}
           dimmed={summary.refreshing}
-          value={fmtCompact(current?.request_count)}
+          value={current ? tileCount(current.request_count) : '—'}
           title={current?.request_count.toLocaleString()}
           delta={current ? percentDelta(current.request_count, previous?.request_count, { neutral: true }) : null}
           note={previous ? 'vs previous period' : note}

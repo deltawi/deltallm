@@ -5,6 +5,7 @@ import type {
   UsageSeriesGroup,
   UsageSeriesResponse,
 } from './api/usageReports';
+import { fmtCompact, fmtSpendValue } from './format';
 import { groupLabel } from './usageFilters';
 
 export type UsageMetric = 'spend' | 'requests' | 'tokens' | 'errors';
@@ -33,6 +34,21 @@ interface MetricValues {
   total_tokens: number;
   request_count: number;
   failed_requests: number;
+}
+
+/** KPI tile count: exact below 10,000, compact above. */
+export function tileCount(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—';
+  return Math.abs(value) < 10_000 ? Math.round(value).toLocaleString('en-US') : fmtCompact(value);
+}
+
+/** KPI tile amount: dollars and cents below $100,000, compact above. */
+export function tileSpend(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—';
+  if (Math.abs(value) >= 1 && Math.abs(value) < 100_000) {
+    return `${value < 0 ? '-' : ''}$${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  return fmtSpendValue(value);
 }
 
 export function metricValue(values: MetricValues, metric: UsageMetric): number {
