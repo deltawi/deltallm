@@ -627,7 +627,7 @@ class GeneralSettings(
     spend_reporting_queue_timeout_seconds: float = Field(default=10.0, gt=0)
     spend_reporting_execution_timeout_seconds: float = Field(default=60.0, gt=0)
     spend_reporting_redis_timeout_seconds: float = Field(default=0.5, gt=0)
-    spend_reporting_v2_enabled: bool = False
+    spend_reporting_v2_enabled: bool = True
     provider_discovery_allow_http: bool = Field(default=False, strict=True)
     provider_discovery_allowed_ports: list[int] = Field(
         default_factory=lambda: [443], min_length=1, max_length=64

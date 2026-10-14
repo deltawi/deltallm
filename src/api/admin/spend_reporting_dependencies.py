@@ -48,7 +48,7 @@ def _reporting_v2_enabled(request: Request) -> bool:
     general_settings = getattr(
         getattr(request.app.state, "app_config", None), "general_settings", None
     )
-    return bool(getattr(general_settings, "spend_reporting_v2_enabled", False))
+    return bool(getattr(general_settings, "spend_reporting_v2_enabled", True))
 
 
 def _reporting_context(request: Request, visibility: SpendVisibility) -> dict[str, object]:

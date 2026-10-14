@@ -8,14 +8,18 @@ applies_to: Releases whose notes explicitly link this runbook.
 
 # Scoped usage reporting rollout
 
-Team and personal usage views depend on immutable API-key owner snapshots. They are disabled by default so schema changes and every ownership writer can be deployed safely before users rely on them.
+Team and personal usage views depend on immutable API-key owner snapshots. The setting `general_settings.spend_reporting_v2_enabled` turns these views on. The default is `true`.
+
+A new installation does not need this runbook. Its gateway writes owner snapshots from the first request.
+
+Use this runbook when you upgrade several replicas from a release that does not record key owners. During a rolling upgrade, old replicas continue to write rows without an owner. If the views are on during this time, members can see incomplete personal usage. The views do not show usage that belongs to other accounts.
 
 !!! warning "Check your release notes"
     Use this runbook only when the release notes for your target version link to it. Do not assume its migration names apply to another release.
 
 ## Rollout
 
-1. Keep `general_settings.spend_reporting_v2_enabled: false`.
+1. Before the upgrade, set `general_settings.spend_reporting_v2_enabled: false` explicitly. The default is now `true`, so an empty setting turns the views on.
 2. On a large or write-heavy spend table, pre-create the two cursor indexes before deploying. Prisma cannot combine several concurrent index operations safely in one retryable migration; pre-creating the exact names makes the transactional migration a no-op for those indexes:
 
    ```sql
@@ -76,10 +80,10 @@ Team and personal usage views depend on immutable API-key owner snapshots. They 
    Existing batch sessions and jobs remain unattributed. They do not receive a later key owner.
    This check does not infer replica versions.
 6. Confirm in the deployment platform that each gateway and batch worker uses this release.
-7. Set `spend_reporting_v2_enabled: true`.
+7. Set `spend_reporting_v2_enabled: true`, or remove the setting to use the default.
 8. Deploy the configuration change.
 9. Sign in as a regular user.
-10. Verify that **Usage** shows only **Your usage**.
+10. Verify that **Usage** shows only **My usage**.
 11. Verify that a team administrator can switch between team and personal views.
 12. Verify that an organization owner can switch between organization and personal views.
 

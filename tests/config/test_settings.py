@@ -503,7 +503,7 @@ def test_general_settings_spend_reporting_safety_defaults() -> None:
     assert settings.spend_reporting_queue_timeout_seconds == 10.0
     assert settings.spend_reporting_execution_timeout_seconds == 60.0
     assert settings.spend_reporting_redis_timeout_seconds == 0.5
-    assert settings.spend_reporting_v2_enabled is False
+    assert settings.spend_reporting_v2_enabled is True
 
 
 @pytest.mark.parametrize(
