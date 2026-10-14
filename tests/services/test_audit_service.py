@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from dataclasses import replace
 import json
 from typing import Any
@@ -669,32 +668,19 @@ async def test_durable_prompt_render_and_audit_share_one_policy_aware_bundle() -
     assert "variables" not in envelopes[1].payload
 
 
-class _BundleTransaction:
+class _BundleQueryDatabase:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def is_transaction(self) -> bool:
-        return True
+        return False
 
     async def query_raw(self, query: str, *params: Any) -> list[dict[str, Any]]:
         self.calls.append((query, params))
-        if "AS queue_locks" in query:
-            return [{"queue_locks": 1, "policy_locks": 1}]
         return [
             {"event_id": "audit-1", "status": "full", "pending_count": 90},
             {"event_id": "render-1", "status": "accepted", "pending_count": 90},
         ]
-
-
-class _BundleQueryDatabase:
-    def __init__(self) -> None:
-        self.transaction = _BundleTransaction()
-        self.tx_calls = 0
-
-    @asynccontextmanager
-    async def tx(self):  # noqa: ANN201
-        self.tx_calls += 1
-        yield self.transaction
 
 
 @pytest.mark.asyncio
@@ -730,20 +716,13 @@ async def test_audit_repository_serializes_bundle_for_one_atomic_capacity_decisi
 
     assert result.statuses == {"audit-1": "full", "render-1": "accepted"}
     assert result.pending_count == 90
-    assert db.tx_calls == 1
-    assert len(db.transaction.calls) == 2
-    lock_query, lock_params = db.transaction.calls[0]
-    assert "pg_advisory_xact_lock" in lock_query
-    assert "deltallm:audit-ingestion-capacity" in lock_query
-    assert "deltallm:audit-content-policy:" in lock_query
-    assert lock_params == ("org-1",)
-    query, params = db.transaction.calls[1]
+    # One self-committing statement takes the locks and decides the whole bundle.
+    assert len(db.calls) == 1
+    query, params = db.calls[0]
+    assert "deltallm_admit_audit_bundle(" in query
     serialized = json.loads(params[0])
     assert [item["event_id"] for item in serialized] == ["render-1", "audit-1"]
     assert params[1:] == ("org-1", 100, 10)
-    assert "pg_advisory_xact_lock" not in query
-    assert "pending_count = pending_count + (SELECT COUNT(*) FROM inserted)" in query
-    assert "CASE WHEN policy.enabled" in query
 
 
 @pytest.mark.asyncio

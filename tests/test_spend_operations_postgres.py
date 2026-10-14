@@ -17,8 +17,10 @@ from src.billing.spend.spend_operations import (
     OperationPrincipal,
     SpendOperationIntent,
 )
+from src.db.billing import spend_operations
 from src.db.billing.spend_ingestion import SpendIngestionRepository
 from src.db.billing.spend_operations import SpendOperationRepository
+from src.db.runtime.allocated_client import DatabaseUnavailableError
 
 pytestmark = pytest.mark.postgres
 
@@ -110,7 +112,9 @@ async def test_reserved_slot_settles_at_full_capacity_without_admission_lock(dbs
     with pytest.raises(BillingOperationUnavailable):
         await begin(admission, handle())
     async with dbs.observer.tx() as lock:
-        await SpendIngestionRepository(lock)._lock_enqueue_admission()
+        await lock.query_raw(
+            "SELECT pg_advisory_xact_lock(hashtextextended('deltallm:spend-ingestion-capacity', 0))::text"
+        )
         await lock.query_raw(
             "SELECT 1 FROM deltallm_telemetry_ingestion_capacity WHERE queue_name='spend' FOR UPDATE"
         )
@@ -205,41 +209,98 @@ async def test_next_attempt_appends_frozen_snapshot_and_cannot_rewrite_attributi
         await begin(repo, bad)
 
 
-async def test_cancelled_admission_rolls_back_and_keeps_capacity(dbs):
+async def wait_for_admission_lock(observer):
+    async with asyncio.timeout(2):
+        while True:
+            (row,) = await observer.query_raw(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' "
+                "AND NOT granted) AS waiting"
+            )
+            if row["waiting"]:
+                return
+            await asyncio.sleep(0.005)
+
+
+async def released(dbs, operation):
+    await asyncio.wait_for(asyncio.gather(*tuple(spend_operations._RELEASES)), 2)
+    rows = await dbs.observer.query_raw(
+        "SELECT 1 FROM deltallm_spend_ingestion_outbox WHERE event_id=$1",
+        str(operation.event_id),
+    )
+    return not rows
+
+
+async def test_cancelled_admission_frees_its_unused_slot(dbs):
+    # The statement may commit after its caller is cancelled. No provider call
+    # started, so the reservation is released instead of left to expire.
     repo = SpendOperationRepository(dbs.acceptance)
     operation = handle()
-    entered = asyncio.Event()
-    original = repo.transactions._transaction
-    from contextlib import asynccontextmanager
-
-    @asynccontextmanager
-    async def held(expires_at, **kwargs):
-        async with original(expires_at, **kwargs) as tx:
-            yield tx
-            entered.set()
-            await asyncio.Event().wait()
-
-    repo.transactions._transaction = held
-    task = asyncio.create_task(begin(repo, operation))
+    task = None
     try:
-        ready = asyncio.create_task(entered.wait())
-        try:
-            done, _ = await asyncio.wait(
-                (task, ready), timeout=1, return_when=asyncio.FIRST_COMPLETED
+        async with dbs.observer.tx() as holder:
+            await holder.query_raw(
+                "SELECT pg_advisory_xact_lock(hashtextextended('deltallm:spend-ingestion-capacity', 0))::text"
             )
-            if task in done:
+            task = asyncio.create_task(begin(repo, operation))
+            await wait_for_admission_lock(holder)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
                 await task
-            assert ready in done
-        finally:
-            ready.cancel()
-            await asyncio.gather(ready, return_exceptions=True)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        assert await released(dbs, operation)
     finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     assert await SpendIngestionRepository(dbs.worker).reconcile_capacity() == 0
+    await begin(repo, handle())
+    assert await SpendIngestionRepository(dbs.worker).reconcile_capacity() == 1
+
+
+async def test_lost_admission_ack_frees_the_committed_slot(dbs, monkeypatch):
+    repo = SpendOperationRepository(dbs.acceptance)
+    operation = handle()
+    query = dbs.acceptance.query_raw
+
+    async def lost_ack(sql, *args):
+        result = await query(sql, *args)
+        if "deltallm_begin_spend_operation" in sql:
+            raise DatabaseUnavailableError()
+        return result
+
+    monkeypatch.setattr(dbs.acceptance, "query_raw", lost_ack)
+    with pytest.raises(BillingOperationUnavailable):
+        await begin(repo, operation)
+    monkeypatch.undo()
+    assert await released(dbs, operation)
+    assert await SpendIngestionRepository(dbs.worker).reconcile_capacity() == 0
+
+
+async def test_later_attempt_failure_keeps_the_dispatched_reservation(dbs, monkeypatch):
+    # An earlier attempt already reached the provider; its slot must stay.
+    repo = SpendOperationRepository(dbs.acceptance)
+    operation = handle()
+    await begin(repo, operation, capacity=2)
+    attempt = operation.intent.attempts[0].model_copy(update={"deployment_id": "dep-two"})
+    second = operation.model_copy(
+        update={
+            "intent": operation.intent.model_copy(
+                update={"attempts": (*operation.intent.attempts, attempt)}
+            )
+        }
+    )
+    query = dbs.acceptance.query_raw
+
+    async def lost_ack(sql, *args):
+        await query(sql, *args)
+        raise DatabaseUnavailableError()
+
+    monkeypatch.setattr(dbs.acceptance, "query_raw", lost_ack)
+    with pytest.raises(BillingOperationUnavailable):
+        await begin(repo, second, capacity=2)
+    monkeypatch.undo()
+    assert not spend_operations._RELEASES
+    assert (await row(dbs.observer, operation))["operation_state"] == "dispatched"
+    assert await SpendIngestionRepository(dbs.worker).reconcile_capacity() == 1
 
 
 async def test_independent_replicas_cannot_over_admit_shared_capacity(dbs):

@@ -20,7 +20,6 @@ from tests.test_telemetry_acceptance_metrics import (
 
 
 @pytest.mark.parametrize("queue", ["audit", "spend"])
-@pytest.mark.parametrize("stage", ["acquire", "lock", "sql", "commit"])
 @pytest.mark.parametrize(
     ("native_error", "reason"),
     [
@@ -34,8 +33,9 @@ from tests.test_telemetry_acceptance_metrics import (
     ],
 )
 async def test_allocated_failure_keeps_outbox_diagnostics_and_public_error(
-    queue, stage, native_error, reason, caplog
+    queue, native_error, reason, caplog
 ):
+    stage = "lock"
     owner = DatabaseOwner(DatabasePolicy("telemetry", 1, 0.2, 1, 0.1, 2))
     try:
         with pytest.raises(DatabaseUnavailableError) as raised:

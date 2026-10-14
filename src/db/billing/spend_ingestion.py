@@ -55,33 +55,20 @@ class SpendIngestionRepository:
                     raise TelemetryDatabaseUnavailable("spend ingestion database is unavailable")
                 payload_json = json.dumps(payload, default=str)
                 observation.retain_serialized(payload_json)
-            async with observation.transaction(self._transaction()) as tx:
-                transactional = self.with_db(tx)
-                with observation.phase(AcceptancePhase.LOCK):
-                    await transactional._lock_enqueue_admission()
-                with observation.phase(AcceptancePhase.SQL):
-                    result = await transactional._enqueue_under_lock(
-                        event_id=event_id,
-                        event_type=event_type,
-                        payload_json=payload_json,
-                        max_attempts=max_attempts,
-                        max_pending_events=max_pending_events,
-                    )
+            # One statement takes the queue lock and commits on its own, so a
+            # stalled caller never holds the lock across a client round trip.
+            with observation.phase(AcceptancePhase.LOCK):
+                result = await self._admit(
+                    event_id=event_id,
+                    event_type=event_type,
+                    payload_json=payload_json,
+                    max_attempts=max_attempts,
+                    max_pending_events=max_pending_events,
+                )
             observation.record_result([result.status])
             return result
 
-    async def _lock_enqueue_admission(self) -> None:
-        if self.prisma is None:
-            raise RuntimeError("spend ingestion database is unavailable")
-        await self.prisma.query_raw(
-            """
-            SELECT pg_advisory_xact_lock(
-                hashtextextended('deltallm:spend-ingestion-capacity', 0)
-            )::text AS locked
-            """
-        )
-
-    async def _enqueue_under_lock(
+    async def _admit(
         self,
         *,
         event_id: str,
@@ -93,45 +80,8 @@ class SpendIngestionRepository:
         if self.prisma is None:
             raise RuntimeError("spend ingestion database is unavailable")
         rows = await self.prisma.query_raw(
-            """
-            WITH existing AS MATERIALIZED (
-                SELECT 1
-                FROM deltallm_spend_ingestion_outbox
-                WHERE event_id = $1
-            ),
-            capacity AS MATERIALIZED (
-                SELECT pending_count
-                FROM deltallm_telemetry_ingestion_capacity
-                WHERE queue_name = 'spend'
-            ),
-            inserted AS (
-                INSERT INTO deltallm_spend_ingestion_outbox (
-                    event_id, event_type, payload_json, max_attempts
-                )
-                SELECT $1, $2, $3::jsonb, $4
-                FROM capacity
-                WHERE pending_count < $5
-                  AND NOT EXISTS (SELECT 1 FROM existing)
-                ON CONFLICT (event_id) DO NOTHING
-                RETURNING event_id
-            ),
-            bumped AS (
-                UPDATE deltallm_telemetry_ingestion_capacity
-                SET pending_count = pending_count + 1,
-                    updated_at = NOW()
-                WHERE queue_name = 'spend'
-                  AND EXISTS (SELECT 1 FROM inserted)
-                RETURNING pending_count
-            )
-            SELECT
-                EXISTS (SELECT 1 FROM existing) AS duplicate,
-                EXISTS (SELECT 1 FROM inserted) AS accepted,
-                COALESCE(
-                    (SELECT pending_count FROM bumped),
-                    (SELECT pending_count FROM capacity),
-                    0
-                )::bigint AS pending_count
-            """,
+            "SELECT duplicate, accepted, pending_count "
+            "FROM deltallm_admit_spend_event($1, $2, $3::jsonb, $4::int, $5::bigint)",
             event_id,
             event_type,
             payload_json,

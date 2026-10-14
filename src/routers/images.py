@@ -303,7 +303,6 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 usage=usage,
                 cost=request_cost,
@@ -416,7 +415,6 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 metadata=attach_route_decision(
                     {
@@ -478,7 +476,6 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 metadata=attach_route_decision(
                     {

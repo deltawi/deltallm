@@ -139,6 +139,20 @@ async def measure(args: argparse.Namespace, *, database_url: str | None = None) 
         alternative = operation()
         changed = (str(alternative.event_id), str(alternative.owner_token), *values[2:])
         admission_plan = await explain(db.observer, query, changed)
+        # The admission SQL runs inside one function, whose plan hides its
+        # lookups. Check the two retained-history lookups it makes directly.
+        admission_lookup_plans = [
+            await explain(
+                db.observer,
+                "SELECT event_id FROM deltallm_spend_ingestion_outbox WHERE event_id=$1",
+                (str(alternative.event_id),),
+            ),
+            await explain(
+                db.observer,
+                "SELECT id FROM deltallm_spendlog_events WHERE id=$1",
+                (str(alternative.event_id),),
+            ),
+        ]
         counted.shared.update(transactions=0, statements=[])
         await repository.accept(
             event_id=str(op.event_id),
@@ -171,8 +185,10 @@ async def measure(args: argparse.Namespace, *, database_url: str | None = None) 
         await repository.recover_expired()
         query, values = counted.shared["statements"][-1]
         recovery_plan = await explain(db.observer, query, values)
-        assert baseline == {"transactions": 1, "statements": 2}
-        assert admission == {"transactions": 1, "statements": 3}
+        # Each admission is one self-committing statement: no interactive
+        # transaction start, timeout setup or commit round trip holds the lock.
+        assert baseline == {"transactions": 0, "statements": 1}
+        assert admission == {"transactions": 0, "statements": 1}
         # One owner-fenced UPDATE commits atomically without interactive
         # transaction start, timeout setup or commit round trips.
         assert receipt == {"transactions": 0, "statements": 1}
@@ -197,6 +213,7 @@ async def measure(args: argparse.Namespace, *, database_url: str | None = None) 
             "after_admission": admission,
             "after_receipt": receipt,
             "admission_plan": admission_plan,
+            "admission_lookup_plans": admission_lookup_plans,
             "receipt_plan": receipt_plan,
             "recovery_plan": recovery_plan,
         }

@@ -366,7 +366,6 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="audio_speech",
                 usage=usage,
                 cost=request_cost,
@@ -469,7 +468,6 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="audio_speech",
                 metadata=attach_route_decision(
                     {
@@ -531,7 +529,6 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="audio_speech",
                 metadata=attach_route_decision(
                     {

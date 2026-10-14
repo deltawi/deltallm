@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 import json
 
 import httpx
@@ -75,23 +73,10 @@ class Database:
         if self.fail == stage:
             raise self.failure
 
-    @asynccontextmanager
-    async def tx(self) -> AsyncIterator[Transaction]:
-        await self.checkpoint("acquire")
-        try:
-            yield Transaction(self)
-        except BaseException:
-            await self.checkpoint("rollback")
-            raise
-        else:
-            await self.checkpoint("commit")
-
     async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
+        # Admission is one self-committing statement: lock wait, insert and commit.
         self.query_count += 1
-        if "pg_advisory_xact_lock" in query:
-            await self.checkpoint("lock")
-            return []
-        await self.checkpoint("sql")
+        await self.checkpoint("lock")
         if self.queue == "audit":
             return [
                 {"event_id": item["event_id"], "status": self.status, "pending_count": 1}
@@ -165,8 +150,8 @@ async def test_missing_database_is_explicit_and_releases_observation(queue: str)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue", ["audit", "spend"])
-async def test_acceptance_waits_for_commit_and_keeps_existing_query_budget(queue: str) -> None:
-    db = Database(queue, block="commit")
+async def test_acceptance_waits_for_the_admission_statement(queue: str) -> None:
+    db = Database(queue, block="lock")
     before = operation(queue, "accepted")
     before_events = sample("deltallm_telemetry_acceptance_events_per_commit_sum", queue=queue)
     task = asyncio.create_task(enqueue(db, queue))
@@ -174,7 +159,7 @@ async def test_acceptance_waits_for_commit_and_keeps_existing_query_budget(queue
         await asyncio.wait_for(db.entered.wait(), 1)
         assert not task.done()
         assert operation(queue, "accepted") == before
-        assert sample("deltallm_telemetry_acceptance_in_flight", queue=queue, phase="commit") == 1
+        assert sample("deltallm_telemetry_acceptance_in_flight", queue=queue, phase="lock") == 1
         assert sample("deltallm_telemetry_acceptance_serialized_bytes", queue=queue) > 0
         db.release.set()
         await task
@@ -186,17 +171,17 @@ async def test_acceptance_waits_for_commit_and_keeps_existing_query_budget(queue
         sample("deltallm_telemetry_acceptance_events_per_commit_sum", queue=queue)
         == before_events + 1
     )
-    assert db.calls == ["acquire", "lock", "sql", "commit"]
-    assert db.query_count == 2  # one lock statement, then a fresh-snapshot enqueue statement
+    assert db.calls == ["lock"]
+    assert db.query_count == 1  # lock, fresh-snapshot enqueue and commit in one statement
     assert_released(queue)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue", ["audit", "spend"])
-@pytest.mark.parametrize("stage", ["acquire", "lock", "sql", "commit"])
 async def test_failure_is_attributed_without_logging_database_error_text(
-    queue: str, stage: str, caplog: pytest.LogCaptureFixture
+    queue: str, caplog: pytest.LogCaptureFixture
 ) -> None:
+    stage = "lock"
     db = Database(queue, fail=stage)
     before = operation(queue, "error")
     accepted = operation(queue, "accepted")
@@ -218,11 +203,8 @@ async def test_failure_is_attributed_without_logging_database_error_text(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue", ["audit", "spend"])
-@pytest.mark.parametrize("stage", ["acquire", "lock", "sql", "commit"])
-async def test_cancellation_releases_metrics_and_preserves_transaction_cleanup(
-    queue: str, stage: str
-) -> None:
-    db = Database(queue, block=stage)
+async def test_cancellation_releases_metrics(queue: str) -> None:
+    db = Database(queue, block="lock")
     before = operation(queue, "cancelled")
     accepted = operation(queue, "accepted")
     task = asyncio.create_task(enqueue(db, queue))
@@ -237,8 +219,6 @@ async def test_cancellation_releases_metrics_and_preserves_transaction_cleanup(
         await asyncio.gather(task, return_exceptions=True)
     assert operation(queue, "cancelled") == before + 1
     assert operation(queue, "accepted") == accepted
-    if stage in {"lock", "sql"}:
-        assert db.calls[-1] == "rollback"
     assert_released(queue)
 
 
@@ -250,7 +230,7 @@ async def test_external_transaction_does_not_report_commit(queue: str) -> None:
     owned = operation(queue, "accepted")
     commits = sample("deltallm_telemetry_acceptance_events_per_commit_count", queue=queue)
     await enqueue(Transaction(db), queue)
-    assert db.calls == ["lock", "sql"]
+    assert db.calls == ["lock"]
     assert operation(queue, "accepted", "external") == before + 1
     assert operation(queue, "accepted") == owned
     assert sample("deltallm_telemetry_acceptance_events_per_commit_count", queue=queue) == commits

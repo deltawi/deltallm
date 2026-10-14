@@ -79,6 +79,8 @@ When requests fail with `spend_persistence_unavailable` or `audit_persistence_un
 log names the failing write. Search for these lines:
 
 - `spend operation failed stage=...`: the usage admission or receipt write failed.
+- `spend admission failed reason=... budget_ms=...`: the database reason (lock, pool, deadline or
+  connection) behind a usage reservation before the provider call.
 - `billing transaction failed reason=... budget_ms=...`: the database reason (lock, pool, deadline or
   connection) behind a spend write.
 - `telemetry acceptance failed queue=... phase=... reason=...`: an audit or spend outbox enqueue failed.
