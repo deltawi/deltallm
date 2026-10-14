@@ -22,10 +22,29 @@ owners, provider contacts, and recovery objectives before production use.
 | `401`/`403` spike | Keys, JWT/SSO, tenancy, lifecycle | Credential expiry/revocation, clock, role/scope changes, lifecycle state |
 | `429` spike | Rate/budget/capacity policy | Rate-limit headers, tier saturation, tenant budget, Redis health |
 | Audit/spend/email backlog | Durable worker/dependency | Queue depth/age, database capacity, leases, worker logs, blocked records |
+| `500` "Internal server error" | Application bug or unexpected dependency response | The matching `unhandled exception` log line (see below), recent releases and migrations |
 | Suspected data exposure | Security | Isolate access, preserve evidence, revoke affected credentials, private reporting path |
 
 Operational endpoints are unauthenticated in the application. Query them only through the trusted
 operator network described in [Health and metrics](../api/health.md).
+
+## Unhandled server errors
+
+A `500` response with `"type": "server_error"` and the message `Internal server error` means a
+request hit an error the gateway has no specific handling for. Each one writes a single log line:
+
+```text
+ERROR:src.middleware.errors:unhandled exception: POST /ui/api/tiers/bootstrap request_id=4f0c... error_type=prisma.errors.RawQueryError raised_at=prisma/engine/utils.py:175 in handle_response_errors app_frame=src/db/tiers/tier_bootstrap_repository.py:86 in _create_tier_with_initial_draft_in_tx
+```
+
+- `request_id` matches the `X-Request-ID` response header, so a user-reported failure can be found
+  from the header in their browser's network tab.
+- The route is the template (`/ui/api/tiers/{tier_id}`), not the raw URL, so IDs and query strings
+  are not logged.
+- `raised_at` is where the error was raised, often inside a library; `app_frame` is the last
+  DeltaLLM frame on the way there, which is usually the place to start reading.
+- The exception message, arguments, and stack locals are deliberately not logged, because they can
+  contain credentials or customer content. Reproduce from the route and code location instead.
 
 ## Dependency outage
 

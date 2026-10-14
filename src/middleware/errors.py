@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -49,6 +50,46 @@ def _serialize_error(exc: ProxyError) -> dict[str, object]:
     if isinstance(exc, ApprovalRequiredError) and exc.approval_request_id:
         payload["error"]["approval_request_id"] = exc.approval_request_id
     return payload
+
+
+def _short_source_path(filename: str) -> str:
+    normalized = filename.replace("\\", "/")
+    for marker in ("/site-packages/", "/dist-packages/"):
+        if marker in normalized:
+            return normalized.rsplit(marker, 1)[1]
+    if "/src/" in normalized:
+        return "src/" + normalized.rsplit("/src/", 1)[1]
+    return normalized.rsplit("/", 1)[-1]
+
+
+def _frame_label(frame: traceback.FrameSummary | None) -> str:
+    if frame is None:
+        return "unknown"
+    return f"{_short_source_path(frame.filename)}:{frame.lineno} in {frame.name}"
+
+
+def _unhandled_exception_context(request: Request, exc: BaseException) -> dict[str, str | None]:
+    """Describe where an unhandled error came from without its message, locals or arguments.
+
+    Exception text can carry credentials or user content, so only the exception type, the
+    request's route template and code locations are logged.
+    """
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    app_frames = [
+        frame for frame in frames if _short_source_path(frame.filename).startswith("src/")
+    ]
+    route = getattr(request.scope.get("route"), "path", None) or request.url.path
+    cause = exc.__cause__ or exc.__context__
+    return {
+        "method": request.method,
+        "route": route,
+        "request_id": request.headers.get("x-request-id"),
+        "error_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "cause_type": type(cause).__qualname__ if cause is not None else None,
+        "raised_at": _frame_label(frames[-1] if frames else None),
+        "app_frame": _frame_label(app_frames[-1] if app_frames else None),
+    }
 
 
 def proxy_error_response(exc: ProxyError) -> JSONResponse:
@@ -161,6 +202,17 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.error("unhandled exception", extra={"error_type": type(exc).__name__})
+        context = _unhandled_exception_context(request, exc)
+        logger.error(
+            "unhandled exception: %s %s request_id=%s error_type=%s%s raised_at=%s app_frame=%s",
+            context["method"],
+            context["route"],
+            context["request_id"],
+            context["error_type"],
+            f" cause_type={context['cause_type']}" if context["cause_type"] else "",
+            context["raised_at"],
+            context["app_frame"],
+            extra=context,
+        )
         proxy_error = ProxyError()
         return _proxy_error_response_for_request(request, proxy_error)

@@ -103,6 +103,37 @@ async def test_unhandled_exception_logging_does_not_include_exception_message(ca
 
 
 @pytest.mark.asyncio
+async def test_unhandled_exception_logging_names_route_type_and_code_location(caplog):
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.post("/items/{item_id}")
+    async def boom(item_id: str):
+        try:
+            raise KeyError(item_id)
+        except KeyError as exc:
+            raise RuntimeError("api_key=super-secret-value") from exc
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        with caplog.at_level("ERROR"):
+            response = await client.post("/items/private-id", headers={"x-request-id": "req-123"})
+
+    assert response.status_code == 500
+    record = next(r for r in caplog.records if r.getMessage().startswith("unhandled exception"))
+    message = record.getMessage()
+    assert "POST /items/{item_id}" in message
+    assert "request_id=req-123" in message
+    assert "error_type=builtins.RuntimeError" in message
+    assert "cause_type=KeyError" in message
+    assert "raised_at=test_error_middleware.py:" in message
+    assert "in boom" in message
+    assert "super-secret-value" not in caplog.text
+    assert "private-id" not in caplog.text
+    assert record.exc_info is None
+
+
+@pytest.mark.asyncio
 async def test_messages_path_renders_proxy_errors_in_anthropic_dialect() -> None:
     app = FastAPI()
     register_exception_handlers(app)
