@@ -325,7 +325,6 @@ async def rerank(request: Request, payload: RerankRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="rerank",
                 usage=usage,
                 cost=request_cost,
@@ -441,7 +440,6 @@ async def rerank(request: Request, payload: RerankRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="rerank",
                 metadata=attach_route_decision(
                     {
@@ -505,7 +503,6 @@ async def rerank(request: Request, payload: RerankRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
-                bounds=validated_provider_request_bounds(payload),
                 call_type="rerank",
                 metadata=attach_route_decision(
                     {

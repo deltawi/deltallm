@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import functools
 import hashlib
+import inspect
 import json
 from datetime import UTC, datetime, timedelta
 import time
@@ -28,6 +29,7 @@ from src.router.runtime_generation import (
 )
 from src.guardrails.middleware import GuardrailMiddleware
 from src.callbacks import CallbackManager
+from src.billing.spend.spend import SpendTrackingService
 from src.blocking_work import BlockingWorkExecutor
 from src.guardrails.registry import GuardrailRegistry
 from src.main import create_app
@@ -65,11 +67,20 @@ class NoopBudgetService:
         return None
 
 
+def _bind_legacy_write(method, kwargs: dict[str, Any]) -> None:
+    # The ingestion service routes event_id and operation itself and passes every
+    # other keyword to the legacy writer, so a stray keyword fails in production.
+    payload = {key: value for key, value in kwargs.items() if key not in {"event_id", "operation"}}
+    inspect.signature(method).bind(None, **payload)
+
+
 class NoopSpendTrackingService:
     async def log_spend(self, **kwargs):
+        _bind_legacy_write(SpendTrackingService.log_spend, kwargs)
         return None
 
     async def log_request_failure(self, **kwargs):
+        _bind_legacy_write(SpendTrackingService.log_request_failure, kwargs)
         return None
 
 
