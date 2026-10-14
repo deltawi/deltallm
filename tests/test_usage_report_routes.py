@@ -230,3 +230,61 @@ async def test_request_logs_filter_unassigned_teams(client, test_app, monkeypatc
 
     assert response.status_code == 200
     assert "s.team_id IS NULL" in fake_db.calls[0][0]
+
+
+SELF = AuthScope(
+    account_id="acct-member",
+    org_ids=["org-1"],
+    team_ids=["team-1"],
+    org_permissions_by_id={"org-1": {Permission.SPEND_READ_SELF}},
+    team_permissions_by_id={"team-1": {Permission.SPEND_READ_SELF}},
+    effective_permissions={Permission.SPEND_READ_SELF},
+)
+
+
+@pytest.mark.asyncio
+async def test_regular_member_sees_only_their_own_usage(client, test_app, monkeypatch):
+    fake_db = _install(test_app, monkeypatch, SELF)
+    setattr(test_app.state.app_config.general_settings, "spend_reporting_v2_enabled", True)
+
+    paths = [
+        "/ui/api/spend/explorer/summary?start_date=2026-10-01&end_date=2026-10-07",
+        "/ui/api/spend/explorer/series?start_date=2026-10-01&split_by=team",
+        "/ui/api/spend/explorer/breakdown?start_date=2026-10-01&group_by=team",
+        "/ui/api/spend/live/hourly",
+        "/ui/api/spend/live/providers",
+        "/ui/api/spend/live/top",
+        "/ui/api/spend/live/budgets",
+    ]
+    for path in paths:
+        fake_db.calls.clear()
+        response = await client.get(path, headers=HEADERS)
+        assert response.status_code == 200, path
+        assert response.json()["reporting_context"]["active_view"] == "self", path
+        assert fake_db.calls, path
+        for query, params in fake_db.calls:
+            assert "owner_account_id" in query, path
+            assert "acct-member" in params, path
+
+    for path in (
+        "/ui/api/spend/explorer/summary?api_key=hash-1",
+        "/ui/api/spend/explorer/breakdown?group_by=user",
+        "/ui/api/logs?pagination_mode=cursor",
+    ):
+        fake_db.calls.clear()
+        response = await client.get(path, headers=HEADERS)
+        assert response.status_code == 403, path
+        assert fake_db.calls == [], path
+
+
+@pytest.mark.asyncio
+async def test_regular_member_has_no_usage_report_while_scoped_reporting_is_off(
+    client, test_app, monkeypatch
+):
+    fake_db = _install(test_app, monkeypatch, SELF)
+    setattr(test_app.state.app_config.general_settings, "spend_reporting_v2_enabled", False)
+
+    response = await client.get("/ui/api/spend/explorer/summary", headers=HEADERS)
+
+    assert response.status_code == 403
+    assert fake_db.calls == []
