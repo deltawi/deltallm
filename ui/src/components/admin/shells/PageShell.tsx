@@ -72,7 +72,7 @@ export default function PageShell({
               {meta ? <div className="mt-1.5 text-xs text-gray-500">{meta}</div> : null}
             </div>
           </div>
-          {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+          {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
         </div>
         {stats ? <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))] gap-3">{stats}</div> : null}
         {toolbar ? <div className="mt-4">{toolbar}</div> : null}

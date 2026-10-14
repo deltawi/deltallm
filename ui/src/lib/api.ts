@@ -663,50 +663,8 @@ export const callableTargets = {
   },
 };
 
-export interface AuditPayload {
-  payload_id: string;
-  event_id: string;
-  kind: string;
-  storage_mode: string;
-  content_json: Record<string, unknown> | string | null;
-  storage_uri: string | null;
-  content_sha256: string | null;
-  size_bytes: number | null;
-  redacted: boolean;
-  created_at: string | null;
-}
-
-export interface AuditEvent {
-  event_id: string;
-  occurred_at: string;
-  organization_id: string | null;
-  actor_type: string | null;
-  actor_id: string | null;
-  api_key: string | null;
-  action: string;
-  resource_type: string | null;
-  resource_id: string | null;
-  request_id: string | null;
-  correlation_id: string | null;
-  ip: string | null;
-  user_agent: string | null;
-  status: string | null;
-  latency_ms: number | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  error_type: string | null;
-  error_code: string | null;
-  metadata: Record<string, unknown> | null;
-  content_stored: boolean;
-  prev_hash?: string | null;
-  event_hash?: string | null;
-  payloads?: AuditPayload[];
-}
-
-export interface AuditListResponse {
-  events: AuditEvent[];
-  pagination: Pagination;
-}
+export { audit } from './api/audit';
+export type { AuditEvent, AuditEventDetail, AuditListResponse, AuditPayload } from './api/audit';
 
 export const health = {
   check: () => apiFetch<HealthResponse>('/health'),
@@ -787,16 +745,6 @@ export const spend = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return apiFetch<SpendLogsResponse>(`/ui/api/logs${suffix}`, opts);
   },
-};
-
-export const audit = {
-  list: (params?: Record<string, unknown>) =>
-    apiFetch<AuditListResponse>(withQuery('/ui/api/audit/events', params)),
-  get: (eventId: string) =>
-    apiFetch<AuditEvent>(`/ui/api/audit/events/${encodeURIComponent(eventId)}`),
-  timeline: (params: { request_id?: string; correlation_id?: string }) =>
-    apiFetch<{ events: AuditEvent[] }>(withQuery('/ui/api/audit/timeline', params as Record<string, unknown>)),
-  exportUrl: (params?: Record<string, unknown>) => withQuery('/ui/api/audit/export', params),
 };
 
 export { models } from './api/models';

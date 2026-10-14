@@ -720,7 +720,31 @@ Webhook inspection requires the existing scoped batch read permission. Replay re
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/ui/api/audit/events` | List audit events |
+| `GET` | `/ui/api/audit/events` | List audit events, newest first |
+| `GET` | `/ui/api/audit/events/{event_id}` | Fetch one audit event |
+| `GET` | `/ui/api/audit/events/{event_id}/payloads` | Fetch the stored request and response bodies of one event |
+| `GET` | `/ui/api/audit/events/{event_id}/related` | Events of the same request, recent events on the same resource, and recent sign-ins of the same actor |
+| `GET` | `/ui/api/audit/actions` | Every known action with its category (no database read) |
+| `GET` | `/ui/api/audit/organizations` | Organizations whose audit log the caller can read, for filters |
+| `GET` | `/ui/api/audit/timeline` | Timeline by request or correlation |
+| `GET` | `/ui/api/audit/export` | Export events as JSONL or CSV |
+
+`GET /ui/api/audit/events` filters:
+
+- `category`: `admin`, `auth`, `api`, `mcp`, `spend`, or `system`, read from the action prefix. An unknown value returns `422`.
+- `action`, `status`, `organization_id`, `request_id`, `correlation_id`, `resource_type`, `resource_id`, and `ip` match exactly.
+- `actor` matches an account ID, an email (case-insensitive), an API key hash, or an API key name. `actor_id` and `actor_type` match those columns.
+- `search` matches an event ID, request ID, or resource ID.
+- `since` and `until` take timestamps; `start_date` and `end_date` take whole days.
+
+Paging: with `count=false` or a `cursor`, the response has `pagination.next_cursor` and `has_more` and runs no count query.
+Pass `next_cursor` back as `cursor` for the next older page. Without them, offset paging with an exact `total` still works.
+`enrich=true` adds a `labels` object to each event with the actor's email or key name, the key's team, and the organization and resource names.
+An email shows only to platform admins, to the account itself, and to callers who can read the audit log of an organization the account belongs to.
+
+`GET /ui/api/audit/events/{event_id}` takes `include_payloads=false` to return `payload_summary` (count, redacted, kinds) instead of the bodies, and `context=true` to add the actor's current role, the API key's team, owner, and state, and the resource's current state.
+
+Audit read access is limited to the roles that hold `audit.read`.
 
 ### Email Operations
 
@@ -731,11 +755,6 @@ Webhook inspection requires the existing scoped batch read permission. Replay re
 | `GET` | `/ui/api/email/suppressions` | List suppressed email recipients |
 | `DELETE` | `/ui/api/email/suppressions/{email_address}` | Remove a suppressed recipient |
 | `POST` | `/webhooks/email/resend` | Ingest Resend delivery feedback and suppression events |
-| `GET` | `/ui/api/audit/events/{event_id}` | Fetch one audit event |
-| `GET` | `/ui/api/audit/timeline` | Timeline by request or correlation |
-| `GET` | `/ui/api/audit/export` | Export events as JSONL or CSV |
-
-Audit read access is limited to the roles that hold `audit.read`.
 
 ## Session and Login Endpoints
 

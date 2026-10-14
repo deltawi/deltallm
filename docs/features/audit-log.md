@@ -82,19 +82,29 @@ All audit endpoints are under `/ui/api/audit/*`.
 | --- | --- |
 | `GET /ui/api/audit/events` | List events with filters and pagination |
 | `GET /ui/api/audit/events/{event_id}` | Get one event, including stored payload records |
+| `GET /ui/api/audit/events/{event_id}/payloads` | Get only the stored payload records of one event |
+| `GET /ui/api/audit/events/{event_id}/related` | Events around one event: same request, same resource, recent sign-ins |
+| `GET /ui/api/audit/actions` | Every known action with its category |
+| `GET /ui/api/audit/organizations` | Organizations whose audit log the caller can read |
 | `GET /ui/api/audit/timeline` | Show all events for a request or correlation id |
 | `GET /ui/api/audit/export?format=jsonl|csv` | Export filtered results |
 
 Useful filters on `GET /ui/api/audit/events` include:
 
+- `category` (`admin`, `auth`, `api`, `mcp`, `spend`, `system`)
 - `action`
 - `status`
-- `actor_id`
+- `actor` (an email, API key name, key hash, or actor ID) and `actor_type`
 - `organization_id`
+- `resource_type` and `resource_id`
+- `ip`
 - `request_id`
 - `correlation_id`
-- `start_date`
-- `end_date`
+- `search` (an event ID, request ID, or resource ID)
+- `since` and `until` (timestamps), or `start_date` and `end_date` (whole days)
+
+Pass `count=false` to skip the total count and page with `cursor`. See the
+[Audit API](../api/admin.md#audit) for paging and the `enrich` and `context` options.
 
 ## Event Shape
 
@@ -149,6 +159,27 @@ Per-organization overrides:
 
 - `metadata.audit_metadata_retention_days`
 - `metadata.audit_payload_retention_days`
+
+## Upgrade Note: Resource History Index
+
+The Audit Logs event panel lists recent events on the same resource. A migration adds the index
+`deltallm_auditevent_resource_occurred_at_idx` on `(resource_type, resource_id, occurred_at)`.
+The migration runs in a transaction and blocks audit writes while it builds. On a large audit table,
+create the index concurrently before you deploy, so the migration finds it and does nothing:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "deltallm_auditevent_resource_occurred_at_idx"
+  ON "deltallm_auditevent"("resource_type", "resource_id", "occurred_at");
+```
+
+If the migration times out because the table is busy, create the index as above, mark only that
+attempt rolled back, and deploy again:
+
+```bash
+uv run prisma migrate resolve --rolled-back 20261014120000_audit_resource_occurred_index \
+  --schema prisma/schema.prisma
+uv run prisma migrate deploy --schema prisma/schema.prisma
+```
 
 ## Related Pages
 

@@ -1,512 +1,350 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ChevronDown, ChevronRight, Clock, Download, ExternalLink, ScrollText, Search, X } from 'lucide-react';
-import Button from '../components/Button';
-import DataTable from '../components/DataTable';
-import StatusBadge from '../components/StatusBadge';
-import { audit, type AuditEvent, type Pagination } from '../lib/api';
-import { useApi } from '../lib/hooks';
-import { ContentCard, IndexShell } from '../components/admin/shells';
+import { ChevronDown, Download, ScrollText } from 'lucide-react';
+import { HeaderTabBar, IndexShell } from '../components/admin/shells';
+import AuditEventPanel from '../components/audit/AuditEventPanel';
+import AuditEventTable from '../components/audit/AuditEventTable';
+import AuditFilterBar from '../components/audit/AuditFilterBar';
+import RefreshControl from '../components/usage/RefreshControl';
+import { PanelError, Segmented } from '../components/usage/ReportBits';
+import { audit, type AuditEvent } from '../lib/api/audit';
+import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
+import {
+  auditQuery,
+  hasAuditFilters,
+  parseAuditFilters,
+  parseAuditWindow,
+  readAuditColumns,
+  saveAuditColumns,
+  utcInputValue,
+  windowLabel,
+  writeAuditFilters,
+  type AuditColumn,
+  type AuditFilters,
+  type AuditWindow,
+} from '../lib/auditEvents';
+import { errorMessage } from '../lib/errorMessage';
 import { navSectionLabel } from '../lib/navigation';
+import { useAutoRefresh, type AutoRefreshMs } from '../lib/useAutoRefresh';
+import { useReport } from '../lib/useReport';
+import { REQUEST_WINDOWS } from '../lib/usageFilters';
 
-type Category = 'all' | 'admin' | 'auth' | 'data_plane' | 'spend';
+const PAGE_SIZE = 50;
 
-const CATEGORY_OPTIONS: Array<{ value: Category; label: string }> = [
-  { value: 'all', label: 'All Categories' },
-  { value: 'admin', label: 'Admin Actions' },
-  { value: 'auth', label: 'Authentication' },
-  { value: 'data_plane', label: 'Data Plane' },
-  { value: 'spend', label: 'Spend & Observability' },
+const WINDOW_OPTIONS: ReadonlyArray<{ key: AuditWindow; label: string }> = [
+  ...REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label })),
+  { key: 'custom', label: 'Custom' },
 ];
 
-function getActionCategory(action: string): Category {
-  if (action.startsWith('ADMIN_')) return 'admin';
-  if (action.startsWith('AUTH_')) return 'auth';
-  if (action.startsWith('GLOBAL_SPEND_') || action.startsWith('SPEND_')) return 'spend';
-  return 'data_plane';
+const DATE_INPUT =
+  'rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
+
+interface MorePages {
+  key: string;
+  events: AuditEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  loading: boolean;
+  error: string | null;
 }
 
-function formatActionLabel(action: string): string {
-  const category = getActionCategory(action);
-  let normalized = action;
-  if (category === 'admin') normalized = action.replace(/^ADMIN_/, '');
-  else if (category === 'auth') normalized = action.replace(/^AUTH_/, '');
-  else if (category === 'spend') normalized = action.replace(/^GLOBAL_SPEND_/, '').replace(/^SPEND_/, '');
-  else normalized = action.replace(/_REQUEST$/, '');
-  return normalized
-    .split('_')
-    .filter(Boolean)
-    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
-    .join(' ');
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
 }
 
-function formatErrorSummary(event: Pick<AuditEvent, 'error_type' | 'error_code'>): string | null {
-  if (!event.error_type && !event.error_code) return null;
-  if (event.error_type && event.error_code) return `${event.error_type} (${event.error_code})`;
-  return event.error_type || event.error_code || null;
-}
-
-function timeAgo(dateStr: string): string {
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diffSec = Math.max(0, Math.floor((now - then) / 1000));
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  return `${Math.floor(diffHr / 24)}d ago`;
-}
-
-function truncateText(value: string | null | undefined, size = 12): string {
-  if (!value) return '—';
-  if (value.length <= size) return value;
-  return `${value.slice(0, size)}...`;
-}
-
-function CollapsibleSection({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
-  const [open, setOpen] = useState(defaultOpen);
+function ExportMenu({ onExport }: { onExport: (format: 'csv' | 'jsonl') => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointer);
+    return () => document.removeEventListener('mousedown', onPointer);
+  }, [open]);
+  const run = (format: 'csv' | 'jsonl') => {
+    setBusy(true);
+    setError(null);
+    onExport(format)
+      .then(() => setOpen(false), (reason: unknown) => setError(errorMessage(reason, 'Export failed.')))
+      .finally(() => setBusy(false));
+  };
   return (
-    <div className="border border-gray-200 rounded-lg">
+    <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        aria-expanded={open}
+        disabled={busy}
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
       >
-        {title}
-        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        <Download className="h-4 w-4 text-gray-500" aria-hidden="true" />
+        {busy ? 'Exporting' : 'Export'}
+        <ChevronDown className="h-3 w-3 text-gray-500" aria-hidden="true" />
       </button>
-      {open ? <div className="px-4 pb-3 border-t border-gray-100">{children}</div> : null}
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 grid w-56 rounded-lg border border-gray-200 bg-white p-1 shadow-lg">
+          <button type="button" onClick={() => run('csv')} className="rounded-md px-2 py-1.5 text-left text-xs text-gray-800 hover:bg-gray-50">Export as CSV</button>
+          <button type="button" onClick={() => run('jsonl')} className="rounded-md px-2 py-1.5 text-left text-xs text-gray-800 hover:bg-gray-50">Export as JSONL</button>
+          <p className="px-2 py-1.5 text-[11.5px] text-gray-500">Uses the filters and time window on screen, up to 10,000 events.</p>
+          {error && <p role="alert" className="px-2 pb-1.5 text-[11.5px] text-rose-700">{error}</p>}
+        </div>
+      )}
     </div>
-  );
-}
-
-function DetailField({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
-  return (
-    <div className="py-1.5">
-      <dt className="text-xs font-medium text-gray-500 uppercase tracking-wider">{label}</dt>
-      <dd className={`mt-0.5 text-sm text-gray-900 ${mono ? 'font-mono text-xs break-all' : ''}`}>{value || '—'}</dd>
-    </div>
-  );
-}
-
-function EventDetailPanel({ eventId, onClose, onViewTimeline }: { eventId: string; onClose: () => void; onViewTimeline: (requestId: string) => void }) {
-  const { data: event, loading, error } = useApi(() => audit.get(eventId), [eventId]);
-  const errorSummary = event ? formatErrorSummary(event) : null;
-  if (loading) {
-    return (
-      <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-xl z-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
-      </div>
-    );
-  }
-  if (error || !event) {
-    return (
-      <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-xl z-50 flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-semibold">Event Detail</h2>
-          <button type="button" onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X className="w-5 h-5" /></button>
-        </div>
-        <div className="flex-1 flex items-center justify-center text-gray-500">Failed to load event</div>
-      </div>
-    );
-  }
-
-  const hasTimelineId = event.request_id || event.correlation_id;
-  return (
-    <>
-      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-xl z-50 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 shrink-0">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">{formatActionLabel(event.action)}</h2>
-            <div className="mt-1">
-              <StatusBadge status={event.status === 'success' ? 'active' : 'unhealthy'} label={event.status || 'unknown'} />
-            </div>
-          </div>
-          <button type="button" onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5 text-gray-500" /></button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <div className="grid grid-cols-2 gap-x-4">
-            <DetailField label="Event ID" value={event.event_id} mono />
-            <DetailField label="Occurred At" value={new Date(event.occurred_at).toLocaleString()} />
-            <DetailField label="Action" value={event.action} mono />
-            <DetailField label="Status" value={event.status || 'unknown'} />
-          </div>
-
-          {errorSummary ? (
-            <CollapsibleSection title="Error" defaultOpen>
-              <div className="grid grid-cols-2 gap-x-4">
-                <DetailField label="Error Type" value={event.error_type} mono />
-                <DetailField label="Error Code" value={event.error_code} mono />
-              </div>
-              <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2">
-                <p className="text-xs font-medium uppercase tracking-wider text-red-700">Summary</p>
-                <p className="mt-1 text-sm text-red-900">{errorSummary}</p>
-              </div>
-            </CollapsibleSection>
-          ) : null}
-
-          <CollapsibleSection title="Actor Information" defaultOpen>
-            <div className="grid grid-cols-2 gap-x-4">
-              <DetailField label="Actor Type" value={event.actor_type} />
-              <DetailField label="Actor ID" value={event.actor_id} mono />
-              <DetailField label="API Key" value={truncateText(event.api_key, 20)} mono />
-              <DetailField label="IP Address" value={event.ip} mono />
-              <DetailField label="User Agent" value={event.user_agent} />
-            </div>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Resource Information" defaultOpen>
-            <div className="grid grid-cols-2 gap-x-4">
-              <DetailField label="Resource Type" value={event.resource_type} />
-              <DetailField label="Resource ID" value={event.resource_id} mono />
-              <DetailField label="Organization ID" value={event.organization_id} mono />
-            </div>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Request Tracking" defaultOpen>
-            <div className="grid grid-cols-2 gap-x-4">
-              <DetailField label="Request ID" value={event.request_id} mono />
-              <DetailField label="Correlation ID" value={event.correlation_id} mono />
-            </div>
-            {hasTimelineId ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onViewTimeline(event.request_id || event.correlation_id || '');
-                }}
-                className="inline-flex items-center gap-1 text-xs text-brand-primary-ink hover:text-brand-primary-ink-hover mt-1"
-              >
-                <ExternalLink className="w-3 h-3" /> View Timeline
-              </button>
-            ) : null}
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Metadata" defaultOpen>
-            <pre className="mt-2 text-xs font-mono bg-gray-50 rounded p-3 overflow-x-auto max-h-56 text-gray-800">
-              {JSON.stringify(event.metadata || {}, null, 2)}
-            </pre>
-          </CollapsibleSection>
-
-          {event.payloads && event.payloads.length > 0 ? (
-            <CollapsibleSection title={`Payloads (${event.payloads.length})`} defaultOpen>
-              <div className="space-y-3 mt-2">
-                {event.payloads.map((payload) => (
-                  <div key={payload.payload_id || `${payload.kind}-${payload.created_at || ''}`}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-medium text-gray-600 uppercase">{payload.kind}</span>
-                      {payload.redacted ? <span className="text-xs text-red-500 font-medium">Redacted</span> : null}
-                      {payload.size_bytes != null ? <span className="text-xs text-gray-400">{payload.size_bytes} bytes</span> : null}
-                    </div>
-                    {payload.content_json ? (
-                      <pre className="text-xs font-mono bg-gray-50 rounded p-3 overflow-x-auto max-h-64 text-gray-800">
-                        {typeof payload.content_json === 'string' ? payload.content_json : JSON.stringify(payload.content_json, null, 2)}
-                      </pre>
-                    ) : payload.storage_uri ? (
-                      <p className="text-xs text-gray-500 italic">Stored at: {payload.storage_uri}</p>
-                    ) : (
-                      <p className="text-xs text-gray-400 italic">No content available</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </CollapsibleSection>
-          ) : null}
-        </div>
-      </div>
-    </>
   );
 }
 
 export default function AuditLogs() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [category, setCategory] = useState<Category>('all');
-  const [action, setAction] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [actorIdFilter, setActorIdFilter] = useState('');
-  const [debouncedActorId, setDebouncedActorId] = useState('');
-  const [requestIdFilter, setRequestIdFilter] = useState('');
-  const [offset, setOffset] = useState(0);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const exportRef = useRef<HTMLDivElement>(null);
-  const limit = 50;
+  const { session, authMode } = useAuth();
+  const access = resolveUiAccess(authMode, session);
+  const filters = useMemo(() => parseAuditFilters(searchParams), [searchParams]);
+  // Usage links here with a request ID from up to 30 days ago; without a chosen window, look that far back.
+  const windowKey = parseAuditWindow(searchParams.get('window') ?? (filters.requestId ? '30d' : null));
+  const customFrom = searchParams.get('from');
+  const customTo = searchParams.get('to');
+  const selectedId = searchParams.get('event');
+
+  const [columns, setColumns] = useState<AuditColumn[]>(() => readAuditColumns());
+  const [showUtc, setShowUtc] = useState(false);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [autoRefreshMs, setAutoRefreshMs] = useState<AutoRefreshMs>(0);
+
+  // The key names the window, not its start time, so a reload keeps the rows on
+  // screen. Each load computes the start time again.
+  const queryKey = JSON.stringify([windowKey, customFrom, customTo, auditQuery(filters, '1h', {}, new Date(0))]);
+  const first = useReport(
+    `audit:events|${queryKey}`,
+    (options) => audit.list(auditQuery(filters, windowKey, { from: customFrom, to: customTo }), { limit: PAGE_SIZE }, options),
+    { refreshToken, reloadToken, maxAgeMs: 30_000 },
+  );
+  useAutoRefresh(autoRefreshMs, () => setReloadToken((value) => value + 1));
+
+  // "Load 50 more" pages belong to one query and one load of the first page.
+  const moreKey = `${queryKey}|${first.updatedAt ?? ''}`;
+  const [more, setMore] = useState<MorePages | null>(null);
+  const extra = more?.key === moreKey ? more : null;
+  const events = useMemo(() => {
+    const seen = new Set<string>();
+    return [...(first.data?.events ?? []), ...(extra?.events ?? [])].filter((event) => {
+      if (seen.has(event.event_id)) return false;
+      seen.add(event.event_id);
+      return true;
+    });
+  }, [extra?.events, first.data?.events]);
+  const nextCursor = extra ? extra.nextCursor : first.data?.pagination.next_cursor ?? null;
+  const hasMore = extra ? extra.hasMore : Boolean(first.data?.pagination.has_more);
+
+  const loadMore = () => {
+    if (!nextCursor) return;
+    const key = moreKey;
+    const loaded = extra?.events ?? [];
+    setMore({ key, events: loaded, nextCursor, hasMore, loading: true, error: null });
+    audit
+      .list(auditQuery(filters, windowKey, { from: customFrom, to: customTo }), { cursor: nextCursor, limit: PAGE_SIZE })
+      .then(
+        (page) => setMore((current) => (current?.key === key
+          ? { key, events: [...loaded, ...page.events], nextCursor: page.pagination.next_cursor, hasMore: page.pagination.has_more, loading: false, error: null }
+          : current)),
+        (reason: unknown) => setMore((current) => (current?.key === key
+          ? { ...current, loading: false, error: errorMessage(reason, 'More events could not be loaded.') }
+          : current)),
+      );
+  };
+
+  const commitFilters = useCallback((next: AuditFilters, keepEvent = false) => {
+    const params = writeAuditFilters(searchParams, next);
+    if (keepEvent && selectedId) params.set('event', selectedId);
+    setSearchParams(params);
+  }, [searchParams, selectedId, setSearchParams]);
+
+  const setWindow = (value: AuditWindow) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('window', value);
+    if (value === 'custom') {
+      const now = new Date();
+      if (!params.get('from')) params.set('from', utcInputValue(new Date(now.getTime() - 24 * 3_600_000)));
+      if (!params.get('to')) params.set('to', utcInputValue(now));
+    } else {
+      params.delete('from');
+      params.delete('to');
+    }
+    setSearchParams(params);
+  };
+
+  const setCustomBound = (key: 'from' | 'to', value: string) => {
+    const params = new URLSearchParams(searchParams);
+    if (value) params.set(key, value);
+    else params.delete(key);
+    setSearchParams(params);
+  };
+
+  const selectEvent = useCallback((eventId: string | null) => {
+    const params = new URLSearchParams(searchParams);
+    if (eventId) params.set('event', eventId);
+    else params.delete('event');
+    // Stepping through events should not fill the browser history.
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const selectedIndex = selectedId ? events.findIndex((event) => event.event_id === selectedId) : -1;
+  const step = useCallback((direction: -1 | 1) => {
+    if (selectedIndex < 0) return;
+    const target = events[selectedIndex + direction];
+    if (target) selectEvent(target.event_id);
+  }, [events, selectEvent, selectedIndex]);
 
   useEffect(() => {
-    const reqId = searchParams.get('request_id');
-    if (reqId) setRequestIdFilter(reqId);
-  }, [searchParams]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedActorId(actorIdFilter.trim()), 300);
-    return () => clearTimeout(timer);
-  }, [actorIdFilter]);
-
-  useEffect(() => {
-    setOffset(0);
-  }, [category, action, statusFilter, startDate, endDate, debouncedActorId, requestIdFilter]);
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
-        setExportOpen(false);
+    if (!selectedId) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isTyping(event.target)) return;
+      if (event.key === 'Escape') selectEvent(null);
+      else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        step(1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        step(-1);
       }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selectEvent, selectedId, step]);
 
-  const filterParams = useMemo(() => {
-    const params: Record<string, unknown> = { limit, offset };
-    if (action) params.action = action;
-    if (statusFilter) params.status = statusFilter;
-    if (startDate) params.start_date = startDate;
-    if (endDate) params.end_date = endDate;
-    if (debouncedActorId) params.actor_id = debouncedActorId;
-    if (requestIdFilter) params.request_id = requestIdFilter;
-    return params;
-  }, [action, statusFilter, startDate, endDate, debouncedActorId, requestIdFilter, limit, offset]);
+  const exportEvents = async (format: 'csv' | 'jsonl') => {
+    const response = await fetch(audit.exportUrl(auditQuery(filters, windowKey, { from: customFrom, to: customTo }), format), {
+      credentials: 'include',
+    });
+    if (!response.ok) throw new Error(`Export failed (${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `audit-events.${format}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
 
-  const { data, loading, error } = useApi(() => audit.list(filterParams), [filterParams]);
-  const events = data?.events || [];
-  const pagination: Pagination | undefined = data?.pagination;
+  const changeColumns = (next: AuditColumn[]) => {
+    setColumns(next);
+    saveAuditColumns(next);
+  };
 
-  const availableActions = useMemo(() => {
-    const allActions = Array.from(new Set(events.map((event) => event.action))).sort();
-    if (category === 'all') return allActions;
-    return allActions.filter((eventAction) => getActionCategory(eventAction) === category);
-  }, [events, category]);
-
-  const exportAudit = useCallback(async (format: 'csv' | 'jsonl') => {
-    setExporting(true);
-    try {
-      const url = audit.exportUrl({ ...filterParams, format, limit: 10000 });
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const res = await fetch(url, { credentials: 'include', headers });
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
-      const blob = await res.blob();
-      const downloadUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = downloadUrl;
-      anchor.download = `audit-events.${format === 'csv' ? 'csv' : 'jsonl'}`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(downloadUrl);
-    } finally {
-      setExporting(false);
-      setExportOpen(false);
-    }
-  }, [filterParams]);
-
-  const handleViewTimeline = useCallback((requestId: string) => {
-    setRequestIdFilter(requestId);
-    setAction('');
-    setCategory('all');
-    setStatusFilter('');
-    setStartDate('');
-    setEndDate('');
-    setActorIdFilter('');
-    setDebouncedActorId('');
-    setOffset(0);
-    setSearchParams({ request_id: requestId });
-  }, [setSearchParams]);
-
-  const clearRequestIdFilter = useCallback(() => {
-    setRequestIdFilter('');
-    setSearchParams({});
-  }, [setSearchParams]);
-
-  const resetFilters = useCallback(() => {
-    setCategory('all');
-    setAction('');
-    setStatusFilter('');
-    setStartDate('');
-    setEndDate('');
-    setActorIdFilter('');
-    setDebouncedActorId('');
-    setRequestIdFilter('');
-    setOffset(0);
-    setSearchParams({});
-  }, [setSearchParams]);
-
-  const columns = [
-    {
-      key: 'occurred_at',
-      header: 'Time',
-      render: (row: AuditEvent) => (
-        <span title={new Date(row.occurred_at).toLocaleString()} className="text-xs text-gray-500 whitespace-nowrap">
-          <Clock className="w-3 h-3 inline mr-1 -mt-0.5" />
-          {timeAgo(row.occurred_at)}
-        </span>
-      ),
-    },
-    {
-      key: 'action',
-      header: 'Action',
-      render: (row: AuditEvent) => <span className="text-sm text-gray-900">{formatActionLabel(row.action)}</span>,
-    },
-    {
-      key: 'actor_id',
-      header: 'Actor',
-      render: (row: AuditEvent) => <span className="text-xs text-gray-700 font-mono">{truncateText(row.actor_id)}</span>,
-    },
-    {
-      key: 'resource_type',
-      header: 'Resource',
-      render: (row: AuditEvent) => (
-        <div className="text-xs">
-          {row.resource_type ? <span className="text-gray-500">{row.resource_type}</span> : null}
-          {row.resource_id ? <span className="text-gray-700 font-mono ml-1">{truncateText(row.resource_id, 10)}</span> : null}
-          {!row.resource_type && !row.resource_id ? <span className="text-gray-400">—</span> : null}
-        </div>
-      ),
-    },
-    {
-      key: 'status',
-      header: 'Status',
-      render: (row: AuditEvent) => <StatusBadge status={row.status === 'success' ? 'active' : 'unhealthy'} label={row.status || 'unknown'} />,
-    },
-    {
-      key: 'latency_ms',
-      header: 'Latency',
-      render: (row: AuditEvent) => <span className="text-xs text-gray-500">{row.latency_ms != null ? `${row.latency_ms} ms` : '—'}</span>,
-    },
-  ];
+  const anyFilter = hasAuditFilters(filters);
 
   return (
     <IndexShell
       eyebrowPrefix={navSectionLabel('/audit')}
-      title="Audit Logs"
+      title="Audit logs"
       titleIcon={ScrollText}
-      count={pagination?.total ?? null}
-      description="Track security and platform activity."
+      description="Who did what, and when · newest first · UTC"
       action={(
-        <div className="relative" ref={exportRef}>
-          <Button variant="outline" onClick={() => setExportOpen((v) => !v)} disabled={exporting}>
-            <Download className="h-4 w-4" />
-            {exporting ? 'Exporting...' : 'Export'}
-            <ChevronDown className="h-3 w-3" />
-          </Button>
-          {exportOpen && !exporting ? (
-            <div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
-              <button type="button" onClick={() => exportAudit('csv')} className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50">
-                Export as CSV
-              </button>
-              <button type="button" onClick={() => exportAudit('jsonl')} className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50">
-                Export as JSONL
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <>
+          <RefreshControl
+            updatedAt={first.updatedAt}
+            refreshing={first.refreshing}
+            failed={first.error !== null}
+            onRefresh={() => setRefreshToken((value) => value + 1)}
+            autoRefreshMs={autoRefreshMs}
+            onAutoRefreshChange={setAutoRefreshMs}
+          />
+          <ExportMenu onExport={exportEvents} />
+        </>
       )}
-      notice={requestIdFilter ? (
-        <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-          <div className="text-sm text-blue-800">
-            Showing timeline for request: <code className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-xs">{requestIdFilter}</code>
-          </div>
-          <button type="button" onClick={clearRequestIdFilter} className="text-sm font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover">
-            Clear filter
-          </button>
-        </div>
-      ) : null}
-      toolbar={(
-        <div className="flex flex-wrap gap-3">
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value as Category)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
-          >
-            {CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-
-          <select
-            value={action}
-            onChange={(e) => setAction(e.target.value)}
-            className="max-w-[260px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
-          >
-            <option value="">All Actions</option>
-            {availableActions.map((item) => <option key={item} value={item}>{formatActionLabel(item)}</option>)}
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
-          >
-            <option value="">All Statuses</option>
-            <option value="success">Success</option>
-            <option value="error">Error</option>
-          </select>
-
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
-          />
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
-          />
-
-          <div className="relative min-w-[220px] flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              value={actorIdFilter}
-              onChange={(e) => setActorIdFilter(e.target.value)}
-              placeholder="Search by actor ID"
-              className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-          >
-            Reset Filters
-          </button>
-        </div>
+      tabs={(
+        <HeaderTabBar
+          label="Audit log views"
+          controls={(
+            <>
+              {windowKey === 'custom' && (
+                <span className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+                  <label className="sr-only" htmlFor="audit-from">From (UTC)</label>
+                  <input id="audit-from" type="datetime-local" value={customFrom ?? ''} onChange={(event) => setCustomBound('from', event.target.value)} className={DATE_INPUT} />
+                  to
+                  <label className="sr-only" htmlFor="audit-to">To (UTC)</label>
+                  <input id="audit-to" type="datetime-local" value={customTo ?? ''} onChange={(event) => setCustomBound('to', event.target.value)} className={DATE_INPUT} />
+                  UTC
+                </span>
+              )}
+              <Segmented<AuditWindow> label="Time window" value={windowKey} options={WINDOW_OPTIONS} onChange={setWindow} />
+            </>
+          )}
+        />
       )}
     >
-      {error ? (
-        <ContentCard>
-          <div className="p-8 text-center">
-            <AlertTriangle className="mx-auto mb-2 h-8 w-8 text-red-400" />
-            <p className="font-medium text-red-600">Failed to load audit events</p>
-            <p className="mt-1 text-sm text-gray-500">Check your permissions or try refreshing</p>
-          </div>
-        </ContentCard>
-      ) : (
-        <ContentCard>
-          <DataTable
-            columns={columns}
-            data={events}
-            loading={loading}
-            emptyMessage="No audit events found"
-            onRowClick={(row) => setSelectedEventId((row as AuditEvent).event_id)}
-            pagination={pagination}
-            onPageChange={setOffset}
-          />
-        </ContentCard>
-      )}
-
-      {selectedEventId ? (
-        <EventDetailPanel
-          eventId={selectedEventId}
-          onClose={() => setSelectedEventId(null)}
-          onViewTimeline={handleViewTimeline}
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3.5">
+        <AuditFilterBar
+          filters={filters}
+          events={events}
+          columns={columns}
+          onChange={(next) => commitFilters(next)}
+          onColumns={changeColumns}
         />
-      ) : null}
+        {first.error && <PanelError message={first.error} onRetry={first.retry} stale={first.data !== null} />}
+        <section className="rounded-xl border border-gray-200 bg-white" aria-label="Audit events">
+          {!first.loading && events.length === 0 ? (
+            <div className="px-4 py-10 text-center text-sm text-gray-500">
+              {first.error ? 'Events could not be loaded.' : 'No events match these filters in this period.'}
+              {anyFilter && (
+                <button type="button" onClick={() => commitFilters({})} className="ml-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50">
+                  Clear filters
+                </button>
+              )}
+            </div>
+          ) : (
+            <AuditEventTable
+              events={events}
+              loading={first.loading}
+              refreshing={first.refreshing}
+              selectedId={selectedId}
+              columns={columns}
+              showUtc={showUtc}
+              onToggleUtc={() => setShowUtc((value) => !value)}
+              onSelect={(event) => selectEvent(event.event_id)}
+              onFilter={(patch) => commitFilters({ ...filters, ...patch })}
+            />
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-3 py-2.5 text-[12.5px] text-gray-500">
+            <span>
+              {first.loading ? 'Loading events' : `${events.length.toLocaleString()} event${events.length === 1 ? '' : 's'} loaded · ${windowLabel(windowKey)}`}
+            </span>
+            {extra?.error && <span role="alert" className="text-rose-700">{extra.error}</span>}
+            {hasMore ? (
+              <button
+                type="button"
+                onClick={loadMore}
+                disabled={extra?.loading}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+              >
+                {extra?.loading ? 'Loading' : `Load ${PAGE_SIZE} more`}
+              </button>
+            ) : (
+              !first.loading && events.length > 0 && <span>That is every event in this period.</span>
+            )}
+          </div>
+        </section>
+      </div>
+      {selectedId && (
+        <AuditEventPanel
+          eventId={selectedId}
+          row={selectedIndex >= 0 ? events[selectedIndex] : null}
+          access={access}
+          hasPrevious={selectedIndex > 0}
+          hasNext={selectedIndex >= 0 && selectedIndex < events.length - 1}
+          onStep={step}
+          onOpen={(eventId) => selectEvent(eventId)}
+          onClose={() => selectEvent(null)}
+          onFilter={(patch, replace) => commitFilters(replace ? patch : { ...filters, ...patch }, true)}
+        />
+      )}
     </IndexShell>
   );
 }
