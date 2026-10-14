@@ -448,7 +448,7 @@ export default function Layout() {
             nameClassName="text-base font-semibold"
           />
         </header>
-        <main className="flex-1 overflow-auto">
+        <main className="relative flex-1 overflow-auto">
           <Outlet />
         </main>
       </div>
