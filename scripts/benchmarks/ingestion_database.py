@@ -16,6 +16,13 @@ SPEND = "deltallm_spend_ingestion_outbox"
 CAPACITY = "deltallm_telemetry_ingestion_capacity"
 ORGANIZATION = "deltallm_organizationtable"
 TABLES = (AUDIT, SPEND, CAPACITY, ORGANIZATION)
+# Admission SQL functions resolve their tables through the caller's search path.
+FUNCTIONS = (
+    "deltallm_admit_audit_bundle",
+    "deltallm_admit_spend_event",
+    "deltallm_begin_spend_operation",
+    "deltallm_release_spend_operation",
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,18 @@ async def ingestion_database(url: str, *, connections: int = 5) -> AsyncIterator
             await admin.execute_raw(
                 f"INSERT INTO \"{schema}\".{CAPACITY} (queue_name) VALUES ('audit'), ('spend')"
             )
+            for function in FUNCTIONS:
+                (row,) = await admin.query_raw(
+                    "SELECT pg_get_functiondef(p.oid) AS definition FROM pg_proc p "
+                    "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = 'public' AND p.proname = $1",
+                    function,
+                )
+                await admin.execute_raw(
+                    row["definition"].replace(
+                        f"FUNCTION public.{function}(", f'FUNCTION "{schema}".{function}(', 1
+                    )
+                )
             async with AsyncExitStack() as stack:
                 clients = []
                 for name in ("telemetry", "telemetry_worker"):

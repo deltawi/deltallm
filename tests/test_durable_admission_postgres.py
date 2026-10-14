@@ -1,7 +1,6 @@
 """Admission invariants through the production allocated Prisma clients."""
 
 import asyncio
-from contextlib import asynccontextmanager
 import os
 
 from prisma.errors import RawQueryError
@@ -220,7 +219,10 @@ async def wait_for_lock(observer):
 
 
 @pytest.mark.parametrize("queue", ["audit", "spend"])
-async def test_cancelled_lock_wait_rolls_back_and_releases_allocation(queues, queue):
+async def test_cancelled_lock_wait_commits_once_and_releases_allocation(queues, queue):
+    # Admission is one self-committing statement. A caller cancelled during the
+    # lock wait cannot roll it back; the event is accepted once, its retry is a
+    # duplicate, and the allocation slot is still returned.
     task = None
     try:
         async with queues.observer.tx() as holder:
@@ -235,12 +237,41 @@ async def test_cancelled_lock_wait_rolls_back_and_releases_allocation(queues, qu
                 await task
         await asyncio.gather(*tuple(queues.acceptance.allocation.tasks), return_exceptions=True)
         assert queues.acceptance.allocation.gate.active == 0
-        assert int((await capacity(queues.observer, queue))["pending_count"]) == 0
-        assert await enqueue(queues.acceptance, queue, "cancelled") == "accepted"
+        assert int((await capacity(queues.observer, queue))["pending_count"]) == 1
+        assert await enqueue(queues.acceptance, queue, "cancelled") == "duplicate"
     finally:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("queue", ["audit", "spend"])
+async def test_stalled_caller_cannot_hold_the_admission_lock(queues, queue):
+    # The lock ends with the statement's own commit. Another replica is not
+    # blocked by a caller that has not yet read its result.
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class StalledResult:
+        def __init__(self, client):
+            self.client = client
+
+        def is_transaction(self):
+            return False
+
+        async def query_raw(self, query, *args):
+            result = await self.client.query_raw(query, *args)
+            entered.set()
+            await release.wait()
+            return result
+
+    stalled = asyncio.create_task(enqueue(StalledResult(queues.acceptance), queue, "stalled"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert await asyncio.wait_for(enqueue(queues.worker, queue, "other"), 1) == "accepted"
+    finally:
+        release.set()
+        assert await stalled == "accepted"
+    assert int((await capacity(queues.observer, queue))["pending_count"]) == 2
 
 
 class LostCommitAcknowledgement:
@@ -252,10 +283,8 @@ class LostCommitAcknowledgement:
     def is_transaction(self):
         return False
 
-    @asynccontextmanager
-    async def tx(self):
-        async with self.client.tx() as tx:
-            yield tx
+    async def query_raw(self, query, *args):
+        await self.client.query_raw(query, *args)
         raise DatabaseUnavailableError()
 
 

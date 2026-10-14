@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 from typing import TYPE_CHECKING
 
@@ -13,18 +14,23 @@ from src.billing.spend.spend_operations import (
     SpendPersistenceUnavailable,
 )
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
-from src.db.billing.billing_operations import BillingOperationRepository
 from src.db.billing.billing_transaction import DB_BUDGET_SECONDS
-from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
 
 if TYPE_CHECKING:
     from prisma import Prisma
+
+logger = logging.getLogger(__name__)
+
+_VERDICT_MARGIN_SECONDS = 0.05
+_RELEASE_RETRY_DELAYS_SECONDS = (0.0, 0.05, 0.25)
+# Strong references keep detached releases alive until they finish.
+_RELEASES: set[asyncio.Task] = set()
 
 
 class SpendOperationRepository:
     def __init__(self, db: Prisma) -> None:
         self.db = db
-        self.transactions = BillingOperationRepository(db)
 
     async def verify_schema(self) -> None:
         await self.db.query_raw(
@@ -35,8 +41,11 @@ class SpendOperationRepository:
     async def begin(
         self, handle: OperationHandle, *, capacity: int, max_attempts: int, expires_at: float
     ) -> int:
-        """Reserve or append one dispatch using a fresh post-admission-lock snapshot.
+        """Reserve or append one dispatch in one self-committing statement.
 
+        The SQL function takes the global admission lock and reads capacity after
+        it, so concurrent replicas cannot over-admit. The lock ends with the
+        statement's own commit; no client round trip runs while it is held.
         An exact repeated dispatch is rejected, including ambiguous prior commits.
         The durable event ID prevents redispatch after transient outbox retention.
         """
@@ -45,13 +54,16 @@ class SpendOperationRepository:
             raise SpendPersistenceUnavailable()
         previous = handle.intent.model_dump(mode="json")
         previous["attempts"] = previous["attempts"][:-1]
-        async with self.transactions._transaction(
-            expires_at, budget=ADMISSION_BUDGET_SECONDS
-        ) as tx:
-            # Keep this lock-only statement separate: the mutation must read a
-            # new PostgreSQL snapshot after an earlier admission waiter commits.
-            await SpendIngestionRepository(tx)._lock_enqueue_admission()
-            rows = await tx.query_raw(
+        attempt_count = len(handle.intent.attempts)
+        now = asyncio.get_running_loop().time()
+        if not math.isfinite(expires_at) or expires_at <= now:
+            raise BillingOperationUnavailable()
+        budget = min(expires_at - now, ADMISSION_BUDGET_SECONDS)
+        # The lock wait ends first so the database's verdict normally arrives
+        # before the caller's deadline.
+        lock_timeout_ms = max(1, int((budget - _VERDICT_MARGIN_SECONDS) * 1000))
+        admission = asyncio.ensure_future(
+            self.db.query_raw(
                 _BEGIN_OPERATION,
                 str(handle.event_id),
                 str(handle.owner_token),
@@ -60,11 +72,65 @@ class SpendOperationRepository:
                 max_attempts,
                 capacity,
                 json.dumps(previous),
-                len(handle.intent.attempts),
+                attempt_count,
+                lock_timeout_ms,
             )
+        )
+        try:
+            async with asyncio.timeout(budget):
+                rows = await asyncio.shield(admission)
+        except BaseException as exc:
+            # The statement may still commit after a timeout or cancellation.
+            # No provider call has started, so a first attempt frees its slot.
+            if attempt_count == 1:
+                self._release_unused(admission, handle, intent)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            reason = classify_acceptance_failure(exc)
+            if reason != AcceptanceFailure.UNKNOWN:
+                logger.warning(
+                    "spend admission failed reason=%s budget_ms=%d",
+                    reason.value,
+                    round(budget * 1000),
+                )
+            raise BillingOperationUnavailable() from None
+        if not rows or not rows[0]["accepted"]:
+            raise BillingOperationUnavailable()
+        return int(rows[0]["pending_count"])
+
+    def _release_unused(
+        self, admission: asyncio.Future, handle: OperationHandle, intent: str
+    ) -> None:
+        task = asyncio.get_running_loop().create_task(
+            self._release_after(admission, handle, intent)
+        )
+        _RELEASES.add(task)
+        task.add_done_callback(_RELEASES.discard)
+
+    async def _release_after(
+        self, admission: asyncio.Future, handle: OperationHandle, intent: str
+    ) -> None:
+        try:
+            rows = await admission
+        except Exception:
+            pass  # Outcome unknown; the release only matches this exact reservation.
+        else:
             if not rows or not rows[0]["accepted"]:
-                raise SpendPersistenceUnavailable()
-            return int(rows[0]["pending_count"])
+                return
+        for delay in _RELEASE_RETRY_DELAYS_SECONDS:
+            await asyncio.sleep(delay)
+            try:
+                await self.db.query_raw(
+                    "SELECT deltallm_release_spend_operation($1, $2, $3::jsonb) AS released",
+                    str(handle.event_id),
+                    str(handle.owner_token),
+                    intent,
+                )
+                return
+            except Exception:
+                continue
+        # Expiry recovery still reclaims the slot as an unknown operation.
+        logger.warning("spend admission release failed; expiry recovery will reclaim the slot")
 
     async def accept(
         self,
@@ -161,34 +227,7 @@ class SpendOperationRepository:
         return int(rows[0]["count"])
 
 
-_BEGIN_OPERATION = """
-WITH existing AS MATERIALIZED (
-    SELECT event_id FROM deltallm_spend_ingestion_outbox WHERE event_id=$1
-), settled AS MATERIALIZED (
-    SELECT id FROM deltallm_spendlog_events WHERE id=$1
-), capacity AS MATERIALIZED (
-    SELECT pending_count FROM deltallm_telemetry_ingestion_capacity WHERE queue_name='spend'
-), inserted AS (
-    INSERT INTO deltallm_spend_ingestion_outbox (
-        event_id,event_type,payload_json,max_attempts,status,blocked_at,last_error,
-        operation_owner,operation_intent,operation_state,operation_expires_at
-    )
-    SELECT $1,'spend',($3::jsonb->'principal') || jsonb_build_object(
-        'model',$3::jsonb->>'model','call_type',$3::jsonb->>'call_type'
-    ),$5,'blocked',NOW(),'operation_receipt_pending',$2,$3::jsonb,'dispatched',$4::timestamptz
-    FROM capacity WHERE pending_count<$6 AND $8::int=1
-        AND NOT EXISTS (SELECT 1 FROM existing) AND NOT EXISTS (SELECT 1 FROM settled)
-    ON CONFLICT (event_id) DO NOTHING RETURNING event_id
-), advanced AS (
-    UPDATE deltallm_spend_ingestion_outbox SET operation_intent=$3::jsonb,updated_at=NOW()
-    WHERE event_id=$1 AND operation_owner=$2 AND operation_state='dispatched'
-        AND operation_intent=$7::jsonb AND $8::int>1
-        AND NOT EXISTS (SELECT 1 FROM settled)
-    RETURNING event_id
-), bumped AS (
-    UPDATE deltallm_telemetry_ingestion_capacity SET pending_count=pending_count+1,updated_at=NOW()
-    WHERE queue_name='spend' AND EXISTS (SELECT 1 FROM inserted) RETURNING pending_count
+_BEGIN_OPERATION = (
+    "SELECT accepted, pending_count FROM deltallm_begin_spend_operation("
+    "$1, $2, $3::jsonb, $4::timestamptz, $5::int, $6::bigint, $7::jsonb, $8::int, $9::int)"
 )
-SELECT (EXISTS (SELECT 1 FROM inserted) OR EXISTS (SELECT 1 FROM advanced)) AS accepted,
-    COALESCE((SELECT pending_count FROM bumped),(SELECT pending_count FROM capacity)) AS pending_count
-"""

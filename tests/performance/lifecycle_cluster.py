@@ -365,7 +365,8 @@ class LifecycleCluster:
 # and spend failures and PostgreSQL's lock-wait and cancellation reports. They
 # hold no keys or payloads, only stage, queue, phase, reason and lock identities.
 REJECTION_EVIDENCE = re.compile(
-    r"telemetry acceptance failed|spend operation failed|billing transaction failed|"
+    r"telemetry acceptance failed|spend operation failed|spend admission failed|"
+    r"billing transaction failed|"
     r"required request telemetry failed|still waiting for|acquired \S+ on|"
     r"canceling statement|deadlock detected|remaining connection slots"
 )

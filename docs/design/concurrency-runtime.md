@@ -35,6 +35,20 @@ and redaction take it exclusively, so a worker batch never blocks request-path
 admission. Native database tests cover cancellation, lost acknowledgements,
 policy changes, full queues and stale workers.
 
+Each required admission is one database function call that commits on its own
+(`deltallm_admit_spend_event`, `deltallm_begin_spend_operation`,
+`deltallm_admit_audit_bundle`). The queue lock is held only while that one
+statement runs, never across a client round trip, so a stalled or cancelled
+gateway process cannot hold up every other replica. Because the statement can
+still commit after its caller gave up, a cancelled audit or spend event is
+accepted at most once and its retry reports a duplicate. A cancelled or failed
+first spend reservation is released in the background by
+`deltallm_release_spend_operation`, which takes the same lock and so runs after
+the admission; operation expiry recovery reclaims the slot if that release
+cannot reach the database. Usage admission gives the database a lock wait just
+under its one-second budget, so the log names the database's reason rather than
+a client timeout.
+
 Do not rewrite a capacity row when no credit changes. Do not add a timed
 same-organization coalescer without arrival traces that show a benefit after
 including its delay, retained bytes and cancellation cost.

@@ -158,44 +158,19 @@ class AuditIngestionRepository:
                     default=str,
                 )
                 observation.retain_serialized(serialized_envelopes)
-            async with observation.transaction(self._transaction()) as tx:
-                transactional = self.with_db(tx)
-                with observation.phase(AcceptancePhase.LOCK):
-                    await transactional._lock_bundle_admission(organization_id)
-                with observation.phase(AcceptancePhase.SQL):
-                    result = await transactional._enqueue_bundle_under_lock(
-                        serialized_envelopes=serialized_envelopes,
-                        organization_id=organization_id,
-                        max_pending_events=max(1, int(max_pending_events)),
-                        required_reserve=max(0, int(required_reserve)),
-                    )
+            # One statement takes the queue and policy locks and commits on its
+            # own, so a stalled caller never holds them across a client round trip.
+            with observation.phase(AcceptancePhase.LOCK):
+                result = await self._admit_bundle(
+                    serialized_envelopes=serialized_envelopes,
+                    organization_id=organization_id,
+                    max_pending_events=max(1, int(max_pending_events)),
+                    required_reserve=max(0, int(required_reserve)),
+                )
             observation.record_result(list(result.statuses.values()))
             return result
 
-    async def _lock_bundle_admission(self, organization_id: str | None) -> None:
-        if self.prisma is None:
-            raise RuntimeError("audit ingestion database is unavailable")
-        await self.prisma.query_raw(
-            """
-            WITH queue_lock AS MATERIALIZED (
-                SELECT pg_advisory_xact_lock(
-                    hashtextextended('deltallm:audit-ingestion-capacity', 0)
-                ) AS locked
-            ), policy_lock AS MATERIALIZED (
-                SELECT pg_advisory_xact_lock_shared(
-                    hashtextextended('deltallm:audit-content-policy:' || $1, 0)
-                ) AS locked
-                FROM queue_lock
-                WHERE $1::text IS NOT NULL
-            )
-            SELECT
-                (SELECT COUNT(*) FROM queue_lock)::int AS queue_locks,
-                (SELECT COUNT(*) FROM policy_lock)::int AS policy_locks
-            """,
-            organization_id,
-        )
-
-    async def _enqueue_bundle_under_lock(
+    async def _admit_bundle(
         self,
         *,
         serialized_envelopes: str,
@@ -206,111 +181,8 @@ class AuditIngestionRepository:
         if self.prisma is None:
             raise RuntimeError("audit ingestion database is unavailable")
         rows = await self.prisma.query_raw(
-            """
-            WITH input AS MATERIALIZED (
-                SELECT
-                    item->>'event_id' AS event_id,
-                    item->>'record_type' AS record_type,
-                    NULLIF(item->>'organization_id', '') AS organization_id,
-                    item->>'delivery_class' AS delivery_class,
-                    item->'payload' AS payload,
-                    item->'redacted_payload' AS redacted_payload,
-                    (item->>'max_attempts')::int AS max_attempts
-                FROM jsonb_array_elements($1::jsonb) AS source(item)
-            ),
-            existing AS MATERIALIZED (
-                SELECT input.event_id
-                FROM input
-                JOIN deltallm_audit_ingestion_outbox existing
-                  ON existing.event_id = input.event_id
-            ),
-            capacity AS MATERIALIZED (
-                SELECT pending_count
-                FROM deltallm_telemetry_ingestion_capacity
-                WHERE queue_name = 'audit'
-            ),
-            policy AS MATERIALIZED (
-                SELECT
-                    COALESCE(o.audit_content_storage_enabled, FALSE) AS enabled,
-                    COALESCE(o.audit_content_policy_version, 0)::bigint AS version
-                FROM (VALUES (1)) AS singleton(value)
-                LEFT JOIN deltallm_organizationtable o ON o.organization_id = $2
-                LIMIT 1
-            ),
-            new_rows AS MATERIALIZED (
-                SELECT input.*
-                FROM input
-                LEFT JOIN existing USING (event_id)
-                WHERE existing.event_id IS NULL
-            ),
-            required_admitted AS MATERIALIZED (
-                SELECT new_rows.*
-                FROM new_rows, capacity
-                WHERE delivery_class = 'required'
-                ORDER BY event_id
-                LIMIT GREATEST(0, $3 - (SELECT pending_count FROM capacity))
-            ),
-            best_effort_admitted AS MATERIALIZED (
-                SELECT new_rows.*
-                FROM new_rows, capacity
-                WHERE delivery_class = 'best_effort'
-                ORDER BY event_id
-                LIMIT GREATEST(
-                    0,
-                    $3 - $4 - (SELECT pending_count FROM capacity)
-                    - (SELECT COUNT(*) FROM required_admitted)
-                )
-            ),
-            admitted AS MATERIALIZED (
-                SELECT * FROM required_admitted
-                UNION ALL
-                SELECT * FROM best_effort_admitted
-            ),
-            inserted AS (
-                INSERT INTO deltallm_audit_ingestion_outbox (
-                    event_id, record_type, organization_id, delivery_class,
-                    payload_json, redacted_payload_json, policy_version, max_attempts
-                )
-                SELECT
-                    admitted.event_id,
-                    admitted.record_type,
-                    admitted.organization_id,
-                    admitted.delivery_class,
-                    CASE WHEN policy.enabled THEN admitted.payload ELSE admitted.redacted_payload END,
-                    admitted.redacted_payload,
-                    policy.version,
-                    admitted.max_attempts
-                FROM admitted
-                CROSS JOIN policy
-                ORDER BY admitted.event_id
-                ON CONFLICT (event_id) DO NOTHING
-                RETURNING event_id
-            ),
-            bumped AS (
-                UPDATE deltallm_telemetry_ingestion_capacity
-                SET pending_count = pending_count + (SELECT COUNT(*) FROM inserted),
-                    updated_at = NOW()
-                WHERE queue_name = 'audit'
-                  AND EXISTS (SELECT 1 FROM inserted)
-                RETURNING pending_count
-            )
-            SELECT
-                input.event_id,
-                CASE
-                    WHEN existing.event_id IS NOT NULL THEN 'duplicate'
-                    WHEN inserted.event_id IS NOT NULL THEN 'accepted'
-                    ELSE 'full'
-                END AS status,
-                COALESCE(
-                    (SELECT pending_count FROM bumped),
-                    (SELECT pending_count FROM capacity),
-                    0
-                )::bigint AS pending_count
-            FROM input
-            LEFT JOIN existing USING (event_id)
-            LEFT JOIN inserted USING (event_id)
-            ORDER BY input.event_id
-            """,
+            "SELECT event_id, status, pending_count "
+            "FROM deltallm_admit_audit_bundle($1::jsonb, $2::text, $3::bigint, $4::bigint)",
             serialized_envelopes,
             organization_id,
             max_pending_events,
