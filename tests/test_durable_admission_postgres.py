@@ -428,3 +428,60 @@ async def test_measurement_probe_preserves_policy_lock_and_atomic_acceptance(que
         )
         == "accepted"
     )
+
+
+def repository_for(queue, db):
+    return AuditIngestionRepository(db) if queue == "audit" else SpendIngestionRepository(db)
+
+
+@pytest.mark.parametrize("queue", ["audit", "spend"])
+@pytest.mark.parametrize("deferred", [True, False], ids=["after_commit", "in_batch"])
+async def test_open_worker_batch_does_not_block_admission(queues, queue, deferred):
+    # Admission updates the shared capacity row under the global admission lock.
+    # A worker batch that is still open must not hold that row, or one stalled
+    # worker blocks admission on every replica.
+    assert await enqueue(queues.acceptance, queue, "done") == "accepted"
+    claimed = await repository_for(queue, queues.worker).claim_batch(
+        limit=1, worker_id="w", claim_token="t", lease_seconds=30
+    )
+    assert [row.event_id for row in claimed] == ["done"]
+    async with queues.worker.tx() as batch:
+        completed = await repository_for(queue, batch).mark_completed(
+            event_ids=["done"], worker_id="w", claim_token="t", release_capacity=not deferred
+        )
+        assert completed == 1
+        if deferred:
+            assert await enqueue(queues.acceptance, queue, "during") == "accepted"
+        else:
+            # The previous shape: the row stays locked until COMMIT, so
+            # admission times out behind the worker.
+            with pytest.raises(DatabaseUnavailableError) as failure:
+                await enqueue(queues.acceptance, queue, "during")
+            assert "lock timeout" in str(failure.value.__cause__)
+    if deferred:
+        assert int((await capacity(queues.observer, queue))["pending_count"]) == 2
+        await repository_for(queue, queues.worker).release_completed_capacity(completed)
+    # Only the event admitted during the batch is still pending.
+    expected = 1 if deferred else 0
+    assert int((await capacity(queues.observer, queue))["pending_count"]) == expected
+
+
+@pytest.mark.parametrize("queue", ["audit", "spend"])
+async def test_capacity_release_never_goes_below_zero(queues, queue):
+    await repository_for(queue, queues.worker).release_completed_capacity(3)
+    assert int((await capacity(queues.observer, queue))["pending_count"]) == 0
+
+
+@pytest.mark.parametrize("queue,table", [("audit", AUDIT), ("spend", SPEND)])
+async def test_reconcile_recounts_pending_events_in_one_statement(queues, queue, table):
+    for event_id in ("a", "b", "c"):
+        assert await enqueue(queues.acceptance, queue, event_id) == "accepted"
+    await queues.observer.execute_raw(f"UPDATE {table} SET status='completed' WHERE event_id='c'")
+    await queues.observer.execute_raw(
+        f"UPDATE {CAPACITY} SET pending_count=7 WHERE queue_name=$1", queue
+    )
+    assert await repository_for(queue, queues.worker).reconcile_capacity() == 2
+    assert int((await capacity(queues.observer, queue))["pending_count"]) == 2
+    # Admission keeps working right after a reconciliation.
+    assert await enqueue(queues.acceptance, queue, "d") == "accepted"
+    assert int((await capacity(queues.observer, queue))["pending_count"]) == 3

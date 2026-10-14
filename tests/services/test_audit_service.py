@@ -840,6 +840,7 @@ class _BatchIngress:
         self.operations: list[str] = []
         self.redacted_event_ids: list[str] = []
         self.completed_event_ids: list[str] = []
+        self.released: list[int] = []
 
     def with_db(self, _db):  # noqa: ANN001, ANN201
         return self
@@ -878,11 +879,19 @@ class _BatchIngress:
         event_ids: list[str],
         worker_id: str,
         claim_token: str,
+        release_capacity: bool = True,
     ) -> int:
         assert worker_id == "worker-1"
         assert claim_token == "unfenced-test-claim"
+        # The batch transaction must not hold the shared capacity row.
+        assert release_capacity is False
         self.completed_event_ids.extend(event_ids)
+        self.operations.append("complete")
         return len(event_ids)
+
+    async def release_completed_capacity(self, count: int) -> None:
+        self.released.append(count)
+        self.operations.append("release")
 
 
 @pytest.mark.asyncio
@@ -903,7 +912,8 @@ async def test_durable_batch_locks_orgs_in_order_and_scrubs_disabled_rows() -> N
     await service._commit_durable_records(records)
 
     assert ingress.locks == ["org-a", "org-b"]
-    assert ingress.operations == ["lock", "read"]
+    assert ingress.operations == ["lock", "read", "complete", "release"]
+    assert ingress.released == [2]
     assert ingress.redacted_event_ids == ["event-a"]
     assert ingress.completed_event_ids == ["event-b", "event-a"]
     assert [payload.content_json for payload in repo.payloads] == [

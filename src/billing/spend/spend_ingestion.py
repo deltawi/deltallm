@@ -30,6 +30,7 @@ from src.billing.spend.spend import PreparedSpendEvent, SpendTrackingService, _f
 from src.db.runtime.client import is_prisma_transaction_client
 from src.db.errors import is_record_specific_database_error
 from src.db.billing.spend_ingestion import SpendIngestionRepository, SpendOutboxRecord
+from src.db.runtime.telemetry_capacity import release_after_commit
 from src.metrics.spend_ingestion import (
     increment_spend_ingestion_cleanup,
     increment_spend_ingestion_enqueue,
@@ -684,16 +685,24 @@ class SpendIngestionService:
                     event_ids=[record.event_id for record, _ in records],
                     worker_id=self.config.worker_id,
                     claim_token=claim_token,
+                    release_capacity=False,
                 )
                 if completed != len(records):
                     raise RuntimeError(
                         f"spend batch lease ownership changed: completed={completed} "
                         f"expected={len(records)}"
                     )
-            return ledger_counts
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
+        # Every replica's admission updates the capacity row. Release it in its
+        # own statement after the commit so no round trip runs while it is locked.
+        await release_after_commit(
+            lambda: self.worker_repository.release_completed_capacity(completed),
+            queue="spend",
+            on_failure=lambda: increment_spend_ingestion_failure("capacity_release"),
+        )
+        return ledger_counts
 
     async def _lease_heartbeat(self, *, event_ids: list[str], claim_token: str) -> None:
         interval = max(0.1, self.config.lease_seconds / 3)
