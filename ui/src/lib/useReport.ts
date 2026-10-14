@@ -6,6 +6,8 @@ import { isAbortError, reportCache, reportCacheFresh, reportQueue } from './repo
 export interface ReportLoadOptions {
   signal: AbortSignal;
   force: boolean;
+  /** Set for an automatic reload, so it does not count as session activity. */
+  background: boolean;
 }
 
 export interface ReportState<T> {
@@ -33,7 +35,8 @@ const DEFAULT_MAX_AGE_MS = 60_000;
  * loads until it becomes visible. A ``refreshToken`` change (the Refresh
  * button) forces a reload that also asks the server to skip its cache. A
  * ``reloadToken`` change (auto refresh) reloads but lets the server answer from
- * its shared cache, so many open pages cost one database read.
+ * its shared cache, so many open pages cost one database read. Auto-refresh
+ * requests are marked as background, so they never keep an idle session alive.
  */
 export function useReport<T>(
   key: string | null,
@@ -61,7 +64,12 @@ export function useReport<T>(
   useEffect(() => {
     if (fullKey === null) return;
     const forced = lastRefreshToken.current !== refreshToken;
-    const retried = lastRetryNonce.current !== retryNonce || lastReloadToken.current !== reloadToken;
+    const userRetry = lastRetryNonce.current !== retryNonce;
+    const reloaded = lastReloadToken.current !== reloadToken;
+    const retried = userRetry || reloaded;
+    // Only a reload that the timer started is background work. A key change in
+    // the same render (a rolling window moving forward) is part of that reload.
+    const background = reloaded && !forced && !userRetry;
     lastRefreshToken.current = refreshToken;
     lastRetryNonce.current = retryNonce;
     lastReloadToken.current = reloadToken;
@@ -73,7 +81,7 @@ export function useReport<T>(
       if (!controller.signal.aborted) setInflightKey(fullKey);
     });
     reportQueue
-      .run(() => loadRef.current({ signal: controller.signal, force: forced }), controller.signal)
+      .run(() => loadRef.current({ signal: controller.signal, force: forced, background }), controller.signal)
       .then((value) => {
         if (controller.signal.aborted) return;
         const storedAt = Date.now();

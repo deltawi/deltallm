@@ -1,5 +1,6 @@
 import { apiFetch } from './transport';
 import type { SpendLog, SpendLogsPagination, SpendReportingContext, SpendView } from '../api';
+import { BACKGROUND_REQUEST_HEADER } from '../sessionActivity';
 
 export type UsageDimension = 'model' | 'provider' | 'organization' | 'team' | 'user' | 'api_key';
 export type UsageSplit = 'model' | 'provider' | 'team';
@@ -23,7 +24,10 @@ export interface UsageReportScope {
 
 export interface UsageReportOptions {
   signal?: AbortSignal;
+  /** Ask the gateway to skip its reporting cache (the Refresh button). */
   force?: boolean;
+  /** An automatic reload: it must not keep an idle session signed in. */
+  background?: boolean;
 }
 
 export interface UsageMetrics {
@@ -199,11 +203,11 @@ const LOG_FILTER_PARAMS: Record<UsageDimension, string> = {
   api_key: 'api_key',
 };
 
-function requestInit(options?: UsageReportOptions): RequestInit {
-  return {
-    signal: options?.signal,
-    ...(options?.force ? { headers: { 'Cache-Control': 'no-cache' } } : {}),
-  };
+export function requestInit(options?: UsageReportOptions): RequestInit {
+  const headers: Record<string, string> = {};
+  if (options?.force) headers['Cache-Control'] = 'no-cache';
+  if (options?.background) headers[BACKGROUND_REQUEST_HEADER] = '1';
+  return Object.keys(headers).length ? { signal: options?.signal, headers } : { signal: options?.signal };
 }
 
 function withView(query: URLSearchParams, view: SpendView): URLSearchParams {

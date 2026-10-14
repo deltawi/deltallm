@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { SpendCapabilities } from '../src/lib/api';
-import { requestLogQuery, usageScopeQuery } from '../src/lib/api/usageReports';
+import { requestInit, requestLogQuery, usageScopeQuery } from '../src/lib/api/usageReports';
+import { BACKGROUND_REQUEST_HEADER } from '../src/lib/sessionActivity';
 import { logDurationMs, logKeyName, logStatusCode, parseLogTime, relativeTime } from '../src/lib/requestLogs';
 import {
   allowedUsageDimensions,
@@ -112,4 +113,14 @@ test('request log helpers read times without a zone as UTC', () => {
   assert.equal(logStatusCode(log), 'Error');
   assert.equal(logStatusCode({ ...log, http_status_code: 429 }), '429');
   assert.equal(logKeyName(log), 'Key …wxyz');
+});
+
+test('auto refresh report requests do not count as session activity', () => {
+  assert.deepEqual(requestInit({}), { signal: undefined });
+  const background = new Headers(requestInit({ background: true }).headers);
+  assert.equal(background.get(BACKGROUND_REQUEST_HEADER), '1');
+  assert.equal(background.get('Cache-Control'), null);
+  const forced = new Headers(requestInit({ force: true }).headers);
+  assert.equal(forced.get('Cache-Control'), 'no-cache');
+  assert.equal(forced.get(BACKGROUND_REQUEST_HEADER), null);
 });
