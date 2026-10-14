@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime
 import logging
 from time import perf_counter
@@ -259,7 +260,9 @@ async def handle_chat_like_request(
                                 3600,
                             )
                         )
-                        stream_id = cache_context.cache_key
+                        # Identical concurrent streams share a cache key, so each
+                        # needs its own accumulator.
+                        stream_id = f"{cache_context.cache_key}:{uuid.uuid4().hex}"
                         stream_write_context = StreamWriteContext(
                             cache_key=cache_context.cache_key,
                             ttl=cache_ttl,

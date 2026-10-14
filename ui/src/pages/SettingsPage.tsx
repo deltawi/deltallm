@@ -461,7 +461,7 @@ export default function SettingsPage() {
                         <select value={form.cache_backend || 'memory'} onChange={(e) => setForm({ ...form, cache_backend: e.target.value })} className={selectClass}>
                           <option value="memory">Memory (in-process LRU)</option>
                           <option value="redis">Redis (distributed)</option>
-                          <option value="s3">S3 (persistent)</option>
+                          {form.cache_backend === 's3' && <option value="s3" disabled>S3 (not available)</option>}
                         </select>
                       </SettingsField>
                       <SettingsField label="TTL" hint="How long cached responses remain valid">
@@ -483,7 +483,7 @@ export default function SettingsPage() {
                     <p className="text-xs text-amber-600 mt-0.5">
                       {form.cache_backend === 'memory' && 'In-memory LRU cache. Fast but not shared across replicas. Best for single-instance deployments.'}
                       {form.cache_backend === 'redis' && 'Distributed cache via Redis. Shared across all replicas. Requires REDIS_URL to be configured.'}
-                      {form.cache_backend === 's3' && 'Persistent cache stored in S3. Survives restarts but adds latency. Requires S3 credentials.'}
+                      {form.cache_backend === 's3' && 'S3 caching is not available, so caching is off. Choose Memory or Redis.'}
                     </p>
                   </div>
                 </div>
