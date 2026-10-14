@@ -73,6 +73,8 @@ const testSources = [
   'tests/mcpPage.test.tsx',
   'tests/promptVersions.test.ts',
   'tests/promptTemplateDetail.test.tsx',
+  'tests/auditEvents.test.ts',
+  'tests/auditLogsPage.test.tsx',
 ];
 
 await rm(outputDir, { recursive: true, force: true });

@@ -494,6 +494,7 @@ model DeltaLLM_AuditEvent {
   @@index([organization_id, occurred_at], map: "deltallm_auditevent_org_occurred_at_idx")
   @@index([action, occurred_at], map: "deltallm_auditevent_action_occurred_at_idx")
   @@index([status, occurred_at], map: "deltallm_auditevent_status_occurred_at_idx")
+  @@index([resource_type, resource_id, occurred_at], map: "deltallm_auditevent_resource_occurred_at_idx")
   @@map("deltallm_auditevent")
 }
 
