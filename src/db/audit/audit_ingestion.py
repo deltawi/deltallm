@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
@@ -310,7 +309,14 @@ class AuditIngestionRepository:
         event_ids: list[str],
         worker_id: str,
         claim_token: str,
+        release_capacity: bool = True,
     ) -> int:
+        """Complete fenced claims and, unless deferred, return their queue capacity.
+
+        Inside a longer worker transaction pass ``release_capacity=False`` and call
+        ``release_completed_capacity`` after the commit: every replica's admission
+        updates the capacity row, so it must not stay locked until a later COMMIT.
+        """
         if self.prisma is None or not event_ids:
             return 0
         rows = await self.prisma.query_raw(
@@ -334,6 +340,7 @@ class AuditIngestionRepository:
                     ),
                     updated_at = NOW()
                 WHERE queue_name = 'audit'
+                  AND $4::boolean
                 RETURNING pending_count
             )
             SELECT event_id FROM completed
@@ -341,8 +348,27 @@ class AuditIngestionRepository:
             event_ids,
             worker_id,
             claim_token,
+            release_capacity,
         )
         return len(rows)
+
+    async def release_completed_capacity(self, count: int) -> None:
+        """Return capacity for events a committed worker batch completed.
+
+        One self-committing relative update: admission re-reads the row after its
+        queue lock, and startup reconciliation corrects a release that never ran.
+        """
+        if self.prisma is None or count <= 0:
+            return
+        await self.prisma.execute_raw(
+            """
+            UPDATE deltallm_telemetry_ingestion_capacity
+            SET pending_count = GREATEST(0, pending_count - $1::bigint),
+                updated_at = NOW()
+            WHERE queue_name = 'audit'
+            """,
+            int(count),
+        )
 
     async def renew_lease(
         self,
@@ -459,59 +485,14 @@ class AuditIngestionRepository:
     async def reconcile_capacity(self) -> int:
         if self.prisma is None:
             return 0
-        async with self._transaction() as tx:
-            await tx.query_raw(
-                """
-                SELECT pg_advisory_xact_lock(
-                    hashtextextended('deltallm:audit-ingestion-capacity', 0)
-                )::text AS locked
-                """
-            )
-            capacity_rows = await tx.query_raw(
-                """
-                SELECT pending_count
-                FROM deltallm_telemetry_ingestion_capacity
-                WHERE queue_name = 'audit'
-                FOR UPDATE
-                """
-            )
-            if not capacity_rows:
-                raise RuntimeError("audit ingestion capacity row is missing")
-            count_rows = await tx.query_raw(
-                """
-                SELECT COUNT(*)::bigint AS count
-                FROM deltallm_audit_ingestion_outbox
-                WHERE status IN ('queued', 'retry', 'processing', 'blocked')
-                   OR (status = 'failed' AND delivery_class = 'required')
-                """
-            )
-            actual = int((count_rows[0] if count_rows else {}).get("count") or 0)
-            rows = await tx.query_raw(
-                """
-                UPDATE deltallm_telemetry_ingestion_capacity
-                SET pending_count = $1, updated_at = NOW()
-                WHERE queue_name = 'audit'
-                RETURNING pending_count
-                """,
-                actual,
-            )
-            if not rows:
-                raise RuntimeError("audit ingestion capacity row disappeared")
-            return int(rows[0].get("pending_count") or 0)
-
-    @asynccontextmanager
-    async def _transaction(self):  # noqa: ANN202
-        if self.prisma is None:
-            raise RuntimeError("audit ingestion database is unavailable")
-        if is_prisma_transaction_client(self.prisma):
-            yield self.prisma
-            return
-        tx_factory = getattr(self.prisma, "tx", None)
-        if callable(tx_factory):
-            async with tx_factory() as tx:
-                yield tx
-            return
-        raise RuntimeError("audit ingestion database does not support transactions")
+        # One self-committing statement takes the queue lock, locks the capacity
+        # row and counts, so the lock never spans a client round trip.
+        rows = await self.prisma.query_raw(
+            "SELECT deltallm_reconcile_audit_capacity()::bigint AS pending_count"
+        )
+        if not rows:
+            raise RuntimeError("audit ingestion capacity reconciliation returned no row")
+        return int(rows[0].get("pending_count") or 0)
 
     async def cleanup_terminal(
         self,

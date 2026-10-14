@@ -52,6 +52,23 @@ phase, so lock wait, pool wait and insert time are no longer split out. These fu
 `20261014160000_telemetry_single_statement_admission`; run migrations before
 starting gateway pods on this release, or every required admission fails.
 
+Admission updates one shared capacity row per queue, so nothing else may keep
+that row locked across a round trip either. Spend and audit workers complete
+their batch with `mark_completed(..., release_capacity=False)` and return the
+slots in a separate autocommit statement after the batch commits. A cancelled
+worker still finishes that release, and three failed attempts leave the count
+too high, which can only reject admission early; the next startup
+reconciliation recounts the queue (`deltallm_spend_ingestion_failures_total`
+or `deltallm_audit_write_failures_total` with `capacity_release` counts these).
+Startup reconciliation is one self-committing function call
+(`deltallm_reconcile_spend_capacity`, `deltallm_reconcile_audit_capacity`), so
+a new pod in a rolling deploy holds the admission lock only for its own count.
+If a reconciliation counts between a batch commit and its release, that
+release is applied twice; the count then reads low by at most one batch, which
+can admit that many extra events, until the queue next drains and the zero
+floor absorbs the difference. These functions come
+from migration `20261014170000_telemetry_capacity_reconcile_function`.
+
 Do not rewrite a capacity row when no credit changes. Do not add a timed
 same-organization coalescer without arrival traces that show a benefit after
 including its delay, retained bytes and cancellation cost.

@@ -25,6 +25,7 @@ from src.db.audit.audit_ingestion import (
 )
 from src.db.runtime.client import is_prisma_transaction_client
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
+from src.db.runtime.telemetry_capacity import release_after_commit
 from src.db.errors import is_record_specific_database_error
 from src.db.audit.repository import AuditEventRecord, AuditPayloadRecord, AuditRepository
 from src.metrics import (
@@ -994,6 +995,7 @@ class AuditService:
                     event_ids=[record.event_id for record in records],
                     worker_id=self.ingestion_config.worker_id,
                     claim_token=claim_token,
+                    release_capacity=False,
                 )
                 if completed != len(records):
                     raise RuntimeError(
@@ -1003,6 +1005,13 @@ class AuditService:
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
+        # Every replica's admission updates the capacity row. Release it in its
+        # own statement after the commit so no round trip runs while it is locked.
+        await release_after_commit(
+            lambda: self.worker_ingestion_repository.release_completed_capacity(completed),
+            queue="audit",
+            on_failure=lambda: increment_audit_write_failure(path="capacity_release"),
+        )
 
     async def _durable_lease_heartbeat(
         self,

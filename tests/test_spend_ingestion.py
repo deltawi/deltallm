@@ -44,12 +44,10 @@ class _OutboxDB:
         self.executions.append((query, params))
         if "deltallm_admit_spend_event(" in query:
             return [{"duplicate": False, "accepted": True, "pending_count": 1}]
-        if "SELECT pending_count" in query and "FOR UPDATE" in query:
+        if "deltallm_reconcile_spend_capacity()" in query:
             return [{"pending_count": 0}]
         if "COUNT(*)::bigint AS count" in query:
             return [{"count": 0, "oldest_age": 0.0}]
-        if "SET pending_count = $1" in query:
-            return [{"pending_count": params[0]}]
         if "SELECT event_id FROM completed" in query:
             event_ids = params[0] if params else []
             return [{"event_id": event_id} for event_id in event_ids]  # type: ignore[union-attr]
@@ -227,7 +225,20 @@ async def test_claimed_records_are_persisted_with_one_batch_writer_call() -> Non
     acknowledgements = [
         params for query, params in db.executions if "SELECT event_id FROM completed" in query
     ]
-    assert acknowledgements == [(["event-1", "event-2"], "worker-1", "unfenced-test-claim")]
+    assert acknowledgements == [(["event-1", "event-2"], "worker-1", "unfenced-test-claim", False)]
+    # The capacity row is released by its own statement after the batch commits.
+    completion = next(
+        index
+        for index, (query, _) in enumerate(db.executions)
+        if "SELECT event_id FROM completed" in query
+    )
+    releases = [
+        (index, params)
+        for index, (query, params) in enumerate(db.executions)
+        if "pending_count - $1::bigint" in query
+    ]
+    assert [params for _, params in releases] == [(2,)]
+    assert releases[0][0] > completion
 
 
 class _RecordSpecificFailure(RuntimeError):
@@ -643,8 +654,10 @@ async def test_spend_start_is_idempotent_after_worker_becomes_ready() -> None:
     await service.start()
 
     assert service._worker is worker
-    reconciliation_locks = [query for query, _ in db.executions if "pg_advisory_xact_lock" in query]
-    assert len(reconciliation_locks) == 1
+    reconciliations = [
+        query for query, _ in db.executions if "deltallm_reconcile_spend_capacity()" in query
+    ]
+    assert len(reconciliations) == 1
     await service.shutdown()
 
 
@@ -755,47 +768,89 @@ async def test_retry_transition_failure_leaves_record_for_lease_recovery() -> No
     )
 
 
-class _CapacityTransaction:
+class _CapacityDB:
     def __init__(self) -> None:
         self.queries: list[str] = []
-
-    def is_transaction(self) -> bool:
-        return True
-
-    async def query_raw(self, query: str, *params: object) -> list[dict[str, object]]:
-        self.queries.append(query)
-        if "FOR UPDATE" in query:
-            return [{"pending_count": 99}]
-        if "COUNT(*)" in query:
-            return [{"count": 3}]
-        if "UPDATE deltallm_telemetry_ingestion_capacity" in query:
-            return [{"pending_count": params[0]}]
-        return [{"locked": ""}]
-
-
-class _CapacityRoot:
-    def __init__(self) -> None:
-        self.tx_client = _CapacityTransaction()
         self.tx_calls = 0
 
     @asynccontextmanager
     async def tx(self):  # noqa: ANN201
         self.tx_calls += 1
-        yield self.tx_client
+        yield self
+
+    async def query_raw(self, query: str, *params: object) -> list[dict[str, object]]:
+        del params
+        self.queries.append(query)
+        return [{"pending_count": 3}]
 
 
 @pytest.mark.asyncio
-async def test_capacity_reconciliation_locks_then_counts_in_fresh_statement() -> None:
-    db = _CapacityRoot()
+async def test_capacity_reconciliation_is_one_self_committing_statement() -> None:
+    db = _CapacityDB()
 
     reconciled = await SpendIngestionRepository(db).reconcile_capacity()
 
+    # The SQL function takes the queue lock and counts after it; no client
+    # transaction keeps that lock across round trips.
     assert reconciled == 3
-    assert db.tx_calls == 1
-    assert "pg_advisory_xact_lock" in db.tx_client.queries[0]
-    assert "FOR UPDATE" in db.tx_client.queries[1]
-    assert "COUNT(*)" in db.tx_client.queries[2]
-    assert "UPDATE deltallm_telemetry_ingestion_capacity" in db.tx_client.queries[3]
+    assert db.tx_calls == 0
+    assert db.queries == ["SELECT deltallm_reconcile_spend_capacity()::bigint AS pending_count"]
+
+
+class _FailingReleaseDB(_OutboxDB):
+    async def execute_raw(self, query: str, *params: object) -> int:
+        if "pending_count - $1::bigint" in query:
+            self.executions.append((query, params))
+            raise RuntimeError("connection reset")
+        return await super().execute_raw(query, *params)
+
+
+@pytest.mark.asyncio
+async def test_failed_capacity_release_keeps_the_committed_batch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.db.runtime.telemetry_capacity._RELEASE_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
+    )
+    db = _FailingReleaseDB()
+    writer = _Writer()
+    service = SpendIngestionService(
+        db_client=db,
+        writer=writer,  # type: ignore[arg-type]
+        config=SpendIngestionConfig(enabled=True, worker_id="worker-1"),
+    )
+
+    await service._process_batch([_OutboxRecord("event-1", "spend", _spend_payload(), 1)])
+
+    releases = [query for query, _ in db.executions if "pending_count - $1::bigint" in query]
+    retried = [query for query, _ in db.executions if "SELECT event_id FROM transitioned" in query]
+    # Three attempts, then startup reconciliation owns the count. The committed
+    # completion is never sent back for retry.
+    assert len(releases) == 3
+    assert retried == []
+    assert [event["event_id"] for event in writer.spend_events] == ["event-1"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_worker_still_releases_committed_capacity() -> None:
+    from src.db.runtime.telemetry_capacity import release_after_commit
+
+    started, finish, released = asyncio.Event(), asyncio.Event(), []
+
+    async def release() -> None:
+        started.set()
+        await finish.wait()
+        released.append(True)
+
+    caller = asyncio.create_task(
+        release_after_commit(release, queue="spend", on_failure=lambda: None)
+    )
+    await started.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    finish.set()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert released == [True]
 
 
 @pytest.mark.asyncio

@@ -16,12 +16,15 @@ SPEND = "deltallm_spend_ingestion_outbox"
 CAPACITY = "deltallm_telemetry_ingestion_capacity"
 ORGANIZATION = "deltallm_organizationtable"
 TABLES = (AUDIT, SPEND, CAPACITY, ORGANIZATION)
-# Admission SQL functions resolve their tables through the caller's search path.
+# Admission and reconciliation SQL functions resolve their tables through the
+# caller's search path.
 FUNCTIONS = (
     "deltallm_admit_audit_bundle",
     "deltallm_admit_spend_event",
     "deltallm_begin_spend_operation",
     "deltallm_release_spend_operation",
+    "deltallm_reconcile_audit_capacity",
+    "deltallm_reconcile_spend_capacity",
 )
 
 
