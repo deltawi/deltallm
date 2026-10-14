@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import Request
@@ -44,8 +45,9 @@ def route_group_repository(request: Request) -> RouteGroupRepository | None:
 
 
 def callable_catalog(request: Request) -> dict[str, CallableTarget]:
+    # Applied runtime generations publish the catalog as a read-only mapping.
     catalog = getattr(request.app.state, "callable_target_catalog", None)
-    if not isinstance(catalog, dict):
+    if not isinstance(catalog, Mapping):
         return {}
     return {str(key): value for key, value in catalog.items() if isinstance(value, CallableTarget)}
 

@@ -1384,3 +1384,24 @@ async def test_v1_models_lists_callable_route_groups(client, test_app) -> None:
         "support-fast",
         "text-embedding-3-small",
     ]
+
+
+def test_callable_catalog_reads_the_read_only_runtime_generation_catalog() -> None:
+    from types import MappingProxyType
+
+    from src.chat.preflight import _route_group_key_for_model
+    from src.services.access.asset_binding_mirror import callable_catalog
+
+    catalog = MappingProxyType(
+        {
+            "model-a": CallableTarget(key="model-a", target_type="model", mode="chat"),
+            "group-a": CallableTarget(key="group-a", target_type="route_group", mode="chat"),
+        }
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(callable_target_catalog=catalog))
+    )
+
+    assert sorted(callable_catalog(request)) == ["group-a", "model-a"]
+    assert _route_group_key_for_model(request, "group-a") == "group-a"
+    assert _route_group_key_for_model(request, "model-a") is None
