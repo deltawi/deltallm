@@ -214,6 +214,8 @@ def test_owner_scope_covers_only_own_batches_in_current_memberships() -> None:
     assert not owner.covers(owner_account_id="acct-2", team_id="team-1", organization_id="org-1")
     assert not owner.covers(owner_account_id=None, team_id="team-1", organization_id="org-1")
     assert not owner.covers(owner_account_id="acct-1", team_id="team-9", organization_id="org-9")
+    # A team the account left still shows through the organization membership.
+    assert owner.covers(owner_account_id="acct-1", team_id="team-9", organization_id="org-1")
 
 
 def test_owner_scope_is_absent_for_admins_customers_and_fully_covered_operators() -> None:

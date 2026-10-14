@@ -151,7 +151,6 @@ export function canAccessPage(uiAccess: UIAccess, key: UIAccessKey): boolean {
 const DEFAULT_UI_ROUTE_ORDER: Array<[UIAccessKey, string]> = [
   ['dashboard', '/'],
   ['keys', '/keys'],
-  ['batches', '/batches'],
   ['teams', '/teams'],
   ['organizations', '/organizations'],
   ['models', '/models'],
@@ -159,6 +158,8 @@ const DEFAULT_UI_ROUTE_ORDER: Array<[UIAccessKey, string]> = [
   ['named_credentials', '/named-credentials'],
   ['mcp_servers', '/mcp-servers'],
   ['usage', '/usage'],
+  // Members without key.read can open Batch Jobs, but it is often empty for them.
+  ['batches', '/batches'],
   ['audit', '/audit'],
   ['settings', '/settings'],
 ];

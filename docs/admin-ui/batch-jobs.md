@@ -32,7 +32,11 @@ have no owner, so they do not show in the member view:
 - batches created before DeltaLLM recorded the key owner
 - batches created with a service account key or a key without an owner
 
-If you leave an organization or team, its batches no longer show in your member view.
+The member view uses your current memberships:
+
+- As an organization member, you see your batches from all teams in that organization.
+- If you leave an organization, your batches from it no longer show.
+- If you leave a team but stay in its organization, you still see your batches from that team.
 
 The archived delivery-only view (see below) is for operators with `key.read` only.
 

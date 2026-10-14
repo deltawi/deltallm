@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isPlatformAdminSession, resolveUiAccess } from '../src/lib/authorization';
+import { defaultRouteForUiAccess, isPlatformAdminSession, resolveUiAccess } from '../src/lib/authorization';
 
 test('organization administrators cannot access tier management actions', () => {
   const session = {
@@ -78,4 +78,21 @@ test('legacy permission fallback shows Batch Jobs to members without key.read', 
   assert.equal(member.batches, true);
   assert.equal(member.keys, false);
   assert.equal(unaffiliated.batches, false);
+});
+
+test('members without key.read still land on Teams, not Batch Jobs', () => {
+  const member = resolveUiAccess('session', {
+    authenticated: true,
+    role: 'org_user',
+    effective_permissions: ['org.read', 'team.read', 'spend.read.self'],
+  });
+  const operator = resolveUiAccess('session', {
+    authenticated: true,
+    role: 'org_user',
+    effective_permissions: ['key.read', 'team.read'],
+  });
+
+  assert.equal(member.batches, true);
+  assert.equal(defaultRouteForUiAccess(member), '/teams');
+  assert.equal(defaultRouteForUiAccess(operator), '/keys');
 });
