@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole
 from src.middleware.external_auth import require_unmixed_external_auth, external_session_unavailable
-from src.middleware.platform_auth import get_master_session_status, get_platform_auth_context
+from src.middleware.platform_auth import (
+    get_master_session_check,
+    get_master_session_status,
+    get_platform_auth_context,
+)
 from src.models.external_auth import ExternalWorkspaceResponse
 from src.models.platform_auth import CurrentSessionResponse
 from src.services.identity.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
     MasterSessionStatus,
 )
+from src.services.identity.session_activity import idle_timeout_seconds
 from src.services.ui.ui_authorization import build_ui_access, effective_permissions_for_context
 
 router = APIRouter(tags=["auth"])
@@ -29,11 +36,17 @@ async def auth_me(request: Request, response: Response) -> CurrentSessionRespons
     master_session_status = get_master_session_status(request)
     if master_session_status == MasterSessionStatus.INVALID:
         response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
+    idle_timeout = idle_timeout_seconds(request) or None
     if master_session_status == MasterSessionStatus.ACTIVE:
         effective_permissions = sorted(PLATFORM_ROLE_PERMISSIONS.get(PlatformRole.ADMIN, set()))
+        master_check = get_master_session_check(request)
         return CurrentSessionResponse(
             authenticated=True,
             auth_mode="master_key",
+            expires_at=master_check.expires_at if master_check else None,
+            idle_expires_at=master_check.idle_expires_at if master_check else None,
+            idle_timeout_seconds=idle_timeout,
+            server_time=datetime.now(UTC),
             role=PlatformRole.ADMIN,
             effective_permissions=effective_permissions,
             ui_access=build_ui_access(
@@ -86,6 +99,9 @@ async def auth_me(request: Request, response: Response) -> CurrentSessionRespons
         force_password_change=context.force_password_change,
         session_source="external_customer" if context.external_workspace else "operator",
         expires_at=context.session_expires_at,
+        idle_expires_at=context.session_idle_expires_at,
+        idle_timeout_seconds=None if context.external_workspace else idle_timeout,
+        server_time=datetime.now(UTC),
         workspace=ExternalWorkspaceResponse.model_validate(
             context.external_workspace.model_dump(
                 include={

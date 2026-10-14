@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from src.db.identity.platform_accounts import PlatformAccountDatabase
+from src.services.identity.session_activity import nonnegative_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +18,8 @@ class PlatformSessionRecord:
     mfa_verified: bool
     force_password_change: bool
     expires_at: datetime
+    idle_seconds: float | None = None
+    remaining_seconds: float | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> PlatformSessionRecord:
@@ -36,6 +39,8 @@ class PlatformSessionRecord:
             mfa_verified=row.get("mfa_verified") is True,
             force_password_change=row.get("force_password_change") is True,
             expires_at=expiry.astimezone(UTC),
+            idle_seconds=nonnegative_seconds(row.get("idle_seconds")),
+            remaining_seconds=nonnegative_seconds(row.get("remaining_seconds")),
         )
 
 
@@ -64,13 +69,18 @@ class PlatformSessionRepository:
     def __init__(self, db: PlatformAccountDatabase) -> None:
         self.db = db
 
-    async def get_active(self, token_hash: str) -> PlatformSessionRecord | None:
+    async def get_active(
+        self, token_hash: str, *, idle_timeout_seconds: int = 0
+    ) -> PlatformSessionRecord | None:
+        """Return a live session; with an idle timeout, one unused for that long is dead."""
         rows = await self.db.query_raw(
             """
             SELECT
                 s.account_id,
                 s.mfa_verified,
                 s.expires_at,
+                EXTRACT(EPOCH FROM (NOW() - s.last_seen_at))::float8 AS idle_seconds,
+                EXTRACT(EPOCH FROM (s.expires_at - NOW()))::float8 AS remaining_seconds,
                 a.email,
                 a.role,
                 a.force_password_change,
@@ -82,17 +92,29 @@ class PlatformSessionRepository:
               AND s.external_parent_id IS NULL
               AND s.revoked_at IS NULL
               AND s.expires_at > NOW()
+              AND (
+                $2::int = 0
+                OR s.last_seen_at > NOW() - ($2::int * INTERVAL '1 second')
+              )
             LIMIT 1
             """,
             token_hash,
+            max(0, int(idle_timeout_seconds)),
         )
         return PlatformSessionRecord.from_row(rows[0]) if rows else None
 
-    async def touch(self, token_hash: str) -> None:
-        await self.db.execute_raw(
-            "UPDATE deltallm_platformsession SET last_seen_at = NOW() WHERE session_token_hash = $1",
+    async def touch(self, token_hash: str, *, min_interval_seconds: int = 0) -> bool:
+        """Record activity; skip the write when last_seen_at is newer than the interval."""
+        updated = await self.db.execute_raw(
+            """
+            UPDATE deltallm_platformsession SET last_seen_at = NOW()
+            WHERE session_token_hash = $1
+              AND last_seen_at <= NOW() - ($2::int * INTERVAL '1 second')
+            """,
             token_hash,
+            max(0, int(min_interval_seconds)),
         )
+        return bool(updated)
 
     async def organization_memberships(
         self, account_id: str

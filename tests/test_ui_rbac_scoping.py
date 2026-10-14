@@ -88,7 +88,7 @@ async def test_spend_feature_status_returns_cache_flag(client, test_app, enabled
 @pytest.mark.asyncio
 async def test_scoped_reporting_routes_stay_closed_until_v2_is_enabled(client, test_app):
     class MemberIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "member-session":
                 return None
             return PlatformAuthContext(
@@ -129,7 +129,7 @@ async def test_scoped_reporting_routes_stay_closed_until_v2_is_enabled(client, t
 @pytest.mark.asyncio
 async def test_regular_member_usage_is_filtered_to_owned_keys(client, test_app):
     class MemberIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "member-session":
                 return None
             return PlatformAuthContext(
@@ -214,7 +214,7 @@ async def test_regular_member_usage_is_filtered_to_owned_keys(client, test_app):
 @pytest.mark.asyncio
 async def test_team_admin_usage_is_filtered_to_authorized_teams(client, test_app):
     class TeamAdminIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "team-admin-session":
                 return None
             return PlatformAuthContext(

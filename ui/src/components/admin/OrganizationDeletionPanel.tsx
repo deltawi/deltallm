@@ -127,6 +127,7 @@ export default function OrganizationDeletionPanel({
           organizationId,
           job.deletion_job_id,
           controller.signal,
+          { background: true },
         );
         if (controller.signal.aborted || generation !== stateGeneration.current) return;
         setJob(nextJob);

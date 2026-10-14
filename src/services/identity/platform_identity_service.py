@@ -336,8 +336,12 @@ class PlatformIdentityService:
             raise RuntimeError("SSO account not found")
         return account
 
-    async def get_context_for_session(self, session_token: str) -> PlatformAuthContext | None:
-        return await self.sessions.get_context(session_token)
+    async def get_context_for_session(
+        self, session_token: str, *, idle_timeout_seconds: int = 0, renew: bool = True
+    ) -> PlatformAuthContext | None:
+        return await self.sessions.get_context(
+            session_token, idle_timeout_seconds=idle_timeout_seconds, renew=renew
+        )
 
     async def revoke_session(self, session_token: str) -> None:
         await self.sessions.revoke(session_token)

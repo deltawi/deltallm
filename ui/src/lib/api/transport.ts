@@ -1,4 +1,10 @@
 import { mountedPath, uiMount } from '../uiMount';
+import {
+  isBackgroundRequest,
+  isSessionNeutralPath,
+  markSessionActivity,
+  notifySessionRejected,
+} from '../sessionActivity';
 
 export class ApiError extends Error {
   status: number;
@@ -86,6 +92,13 @@ export async function apiFetch<T>(
     headers,
     body,
   });
+
+  if (response.status === 401) {
+    if (!isSessionNeutralPath(path)) notifySessionRejected();
+  } else if (response.status < 500 && !isBackgroundRequest(new Headers(headers))) {
+    // A 5xx (such as the session store being unavailable) may not have renewed anything.
+    markSessionActivity();
+  }
 
   if (!response.ok) {
     const detail = await parseErrorDetail(response);

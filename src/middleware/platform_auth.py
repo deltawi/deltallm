@@ -17,8 +17,10 @@ from src.auth.roles import (
 from src.models.platform_auth import PlatformAuthContext
 from src.services.identity.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
+    MasterSessionCheck,
     MasterSessionStatus,
 )
+from src.services.identity.session_activity import idle_timeout_seconds, renews_session
 
 SESSION_COOKIE_NAME = "deltallm_session"
 
@@ -27,6 +29,9 @@ async def attach_platform_auth_context(request: Request) -> None:
     request.state.external_session_unavailable = False
     request.state.platform_auth = None
     request.state.master_session_status = MasterSessionStatus.MISSING
+    request.state.master_session_check = None
+    idle_timeout = idle_timeout_seconds(request)
+    renew = renews_session(request)
 
     master_session_token = request.cookies.get(MASTER_SESSION_COOKIE_NAME)
     if master_session_token:
@@ -34,10 +39,14 @@ async def attach_platform_auth_context(request: Request) -> None:
         if service is None:
             request.state.master_session_status = MasterSessionStatus.UNAVAILABLE
         else:
-            request.state.master_session_status = await service.validate_session(
+            check = await service.check_session(
                 master_session_token,
                 master_key=get_configured_master_key(request),
+                idle_timeout_seconds=idle_timeout,
+                renew=renew,
             )
+            request.state.master_session_check = check
+            request.state.master_session_status = check.status
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
@@ -48,7 +57,9 @@ async def attach_platform_auth_context(request: Request) -> None:
         return
 
     try:
-        context = await service.get_context_for_session(token)
+        context = await service.get_context_for_session(
+            token, idle_timeout_seconds=idle_timeout, renew=renew
+        )
     except ExternalAuthUnavailable:
         request.state.external_session_unavailable = True
         return
@@ -93,6 +104,11 @@ def get_master_session_status(request: Request) -> MasterSessionStatus:
         return MasterSessionStatus(value)
     except (TypeError, ValueError):
         return MasterSessionStatus.INVALID
+
+
+def get_master_session_check(request: Request) -> MasterSessionCheck | None:
+    value = getattr(getattr(request, "state", None), "master_session_check", None)
+    return value if isinstance(value, MasterSessionCheck) else None
 
 
 def master_key_session_unavailable(request: Request) -> bool:

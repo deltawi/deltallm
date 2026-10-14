@@ -699,6 +699,8 @@ class GeneralSettings(
     platform_bootstrap_admin_email: str | None = None
     platform_bootstrap_admin_password: str | None = None
     auth_session_ttl_hours: int = 12
+    auth_session_idle_timeout_minutes: int = Field(default=60, ge=0, le=1440)
+    auth_master_session_ttl_hours: int | None = Field(default=None, ge=1, le=168)
     invitation_token_ttl_hours: int = Field(default=72, ge=1, le=720)
     password_reset_token_ttl_minutes: int = Field(default=60, ge=5, le=1440)
     api_key_auth_cache_ttl_seconds: int = 300
@@ -1063,6 +1065,13 @@ class GeneralSettings(
             cache_worker_enabled=self.cache_invalidation_worker_enabled,
             cache_ttl_seconds=self.api_key_auth_cache_ttl_seconds,
         )
+        return self
+
+    @model_validator(mode="after")
+    def validate_auth_session_lifetimes(self) -> "GeneralSettings":
+        idle = self.auth_session_idle_timeout_minutes
+        if 0 < idle < 5:
+            raise ValueError("auth_session_idle_timeout_minutes must be 0 (off) or at least 5")
         return self
 
     @model_validator(mode="after")

@@ -885,6 +885,29 @@
             "title": "Force Password Change",
             "type": "boolean"
           },
+          "idle_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Expires At"
+          },
+          "idle_timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Timeout Seconds"
+          },
           "mfa_enabled": {
             "default": false,
             "title": "Mfa Enabled",
@@ -918,6 +941,18 @@
               }
             ],
             "title": "Role"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Time"
           },
           "session_source": {
             "anyOf": [

@@ -32,10 +32,10 @@ external_database = fixtures.external_database
 def install_session_diagnostics(service):
     lookup = service.get_context_for_session
 
-    async def observed(token):
+    async def observed(token, **kwargs):
         started = perf_counter()
         try:
-            return await lookup(token)
+            return await lookup(token, **kwargs)
         except ExternalAuthUnavailable as error:
             cause = error.__cause__
             code = getattr(cause, "code", None)

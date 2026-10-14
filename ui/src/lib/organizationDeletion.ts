@@ -1,4 +1,5 @@
 import { apiFetch } from './api/transport';
+import { backgroundRequestHeaders } from './sessionActivity';
 import type { KnownOrganizationLifecycleState } from './organizationLifecycle';
 
 export type { OrganizationLifecycleState } from './organizationLifecycle';
@@ -126,10 +127,15 @@ export const organizationDeletion = {
     headers: { 'Idempotency-Key': idempotencyKey },
     json: payload,
   }),
-  job: (organizationId: string, deletionJobId: string, signal: AbortSignal) =>
+  job: (
+    organizationId: string,
+    deletionJobId: string,
+    signal: AbortSignal,
+    options: { background?: boolean } = {},
+  ) =>
     apiFetch<OrganizationDeletionJob>(
       `${basePath(organizationId)}/${encodeURIComponent(deletionJobId)}`,
-      { signal },
+      options.background ? { signal, headers: backgroundRequestHeaders() } : { signal },
     ),
   restore: (organizationId: string, deletionJobId: string, signal: AbortSignal) =>
     apiFetch<OrganizationDeletionJob>(

@@ -15,6 +15,7 @@ from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.healthcheck import HealthProbeResult
 from src.services.identity.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
+    MasterSessionCheck,
     MasterSessionStatus,
 )
 
@@ -86,7 +87,7 @@ async def test_authorized_operator_actions_preserve_supported_auth(
     elif auth_mode == "master_session":
         cookies = {MASTER_SESSION_COOKIE_NAME: "master-token"}
         test_app.state.master_session_service = SimpleNamespace(
-            validate_session=AsyncMock(return_value=MasterSessionStatus.ACTIVE)
+            check_session=AsyncMock(return_value=MasterSessionCheck(MasterSessionStatus.ACTIVE))
         )
     else:
         cookies = {"deltallm_session": "platform-token"}

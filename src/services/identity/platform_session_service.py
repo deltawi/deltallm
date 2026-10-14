@@ -11,6 +11,10 @@ from src.auth.external_policy import EXTERNAL_SESSION_PREFIX
 from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole
 from src.db.identity.platform_sessions import PlatformSessionRepository
 from src.models.platform_auth import PlatformAuthContext
+from src.services.identity.session_activity import (
+    LAST_SEEN_WRITE_INTERVAL_SECONDS,
+    idle_expiry,
+)
 
 
 class ExternalSessionResolver(Protocol):
@@ -53,7 +57,10 @@ class PlatformSessionService:
         )
         return token
 
-    async def get_context(self, token: str) -> PlatformAuthContext | None:
+    async def get_context(
+        self, token: str, *, idle_timeout_seconds: int = 0, renew: bool = True
+    ) -> PlatformAuthContext | None:
+        """Resolve a session; `renew=False` checks it without counting as activity."""
         if not token:
             return None
         token_hash = self.hash_token(token)
@@ -63,10 +70,29 @@ class PlatformSessionService:
             )
         if self.repository is None:
             return None
-        row = await self.repository.get_active(token_hash)
+        idle_timeout_seconds = max(0, int(idle_timeout_seconds))
+        row = await self.repository.get_active(
+            token_hash, idle_timeout_seconds=idle_timeout_seconds
+        )
         if row is None or not row.is_active:
             return None
-        await self.repository.touch(token_hash)
+        renewed = renew and await self.repository.touch(
+            token_hash, min_interval_seconds=LAST_SEEN_WRITE_INTERVAL_SECONDS
+        )
+        # Durations come from the database clock, so stored timestamp zones cannot skew them.
+        now = datetime.now(UTC)
+        expires_at = (
+            now + timedelta(seconds=row.remaining_seconds)
+            if row.remaining_seconds is not None
+            else row.expires_at
+        )
+        idle_expires_at = idle_expiry(
+            now=now,
+            idle_timeout_seconds=idle_timeout_seconds,
+            idle_seconds=row.idle_seconds,
+            renewed=renewed,
+            expires_at=expires_at,
+        )
         role = PlatformRole.ADMIN if row.role == "platform_co_admin" else row.role
         organizations = await self.repository.organization_memberships(row.account_id)
         teams = await self.repository.team_memberships(row.account_id)
@@ -83,7 +109,8 @@ class PlatformSessionService:
                 for item in organizations
             ],
             team_memberships=[{"team_id": item.team_id, "role": item.role} for item in teams],
-            session_expires_at=row.expires_at,
+            session_expires_at=expires_at,
+            session_idle_expires_at=idle_expires_at,
         )
 
     async def revoke(self, token: str) -> None:

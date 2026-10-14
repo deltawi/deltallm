@@ -62,6 +62,8 @@ interface RangeAutoRefreshState {
 interface ReportingRefreshState {
   nonce: number;
   forcedRangeKey: string | null;
+  // Auto-refresh requests must not keep an idle session signed in.
+  background: boolean;
 }
 
 interface SpendTrendDatum {
@@ -233,6 +235,7 @@ export default function Usage() {
   const [refreshState, setRefreshState] = useState<ReportingRefreshState>({
     nonce: 0,
     forcedRangeKey: null,
+    background: false,
   });
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -245,6 +248,7 @@ export default function Usage() {
   const refreshNonce = refreshState.nonce;
   const reportingGeneration = `${rangeRequestKey}:${tab}:${refreshNonce}`;
   const forceReportingRefresh = refreshState.forcedRangeKey === rangeRequestKey;
+  const backgroundRefresh = refreshState.background;
   const hasLoadedUsageDataRef = useRef(false);
   const hasLoadedUsageData = loadedRange !== null;
   const logsRequestKey = `${rangeRequestKey}:${logsPage}:${logsCursor ?? ''}`;
@@ -264,6 +268,7 @@ export default function Usage() {
   const refreshBusyRef = useRef(true);
   const summaryRefreshNonceRef = useRef(refreshNonce);
   const trendRefreshNonceRef = useRef(refreshNonce);
+  const logsRefreshNonceRef = useRef(refreshNonce);
   const loadedRangeRef = useRef<ResolvedReportingRange | null>(null);
   const trendLoadedRangeRef = useRef<ResolvedReportingRange | null>(null);
   const beginReportingAttempt = useCallback((attempt: ReportingPartAttempt) => {
@@ -348,6 +353,7 @@ export default function Usage() {
       reportingRequestInit(
         controller.signal,
         forceReportingRefresh && summaryRefreshTriggered,
+        backgroundRefresh && summaryRefreshTriggered,
       ),
     ).then((response) => (
       reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
@@ -360,6 +366,7 @@ export default function Usage() {
     }, reportingRequestInit(
       controller.signal,
       forceReportingRefresh && trendRefreshTriggered,
+      backgroundRefresh && trendRefreshTriggered,
     )).then((response) => (
       reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
     ));
@@ -421,6 +428,7 @@ export default function Usage() {
 
     return () => controller.abort();
   }, [
+    backgroundRefresh,
     forceReportingRefresh,
     activeView,
     markReportingOutcome,
@@ -462,7 +470,11 @@ export default function Usage() {
       selectedRange.startDate,
       selectedRange.endDate,
       activeView,
-      reportingRequestInit(controller.signal, forceReportingRefresh && refreshTriggered),
+      reportingRequestInit(
+        controller.signal,
+        forceReportingRefresh && refreshTriggered,
+        backgroundRefresh && refreshTriggered,
+      ),
     ).then((response) => (
       reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
     )).then((nextSummary) => {
@@ -500,9 +512,13 @@ export default function Usage() {
     });
 
     return () => controller.abort();
-  }, [activeView, forceReportingRefresh, markReportingOutcome, pageVisible, rangeRequestKey, refreshNonce, reportingGeneration, reportingV2Enabled, selectedRange, tab, usageScopeReady]);
+  }, [activeView, backgroundRefresh, forceReportingRefresh, markReportingOutcome, pageVisible, rangeRequestKey, refreshNonce, reportingGeneration, reportingV2Enabled, selectedRange, tab, usageScopeReady]);
 
   useEffect(() => {
+    // Track the nonce even when this effect skips, so a later fetch the user causes
+    // (opening the Logs tab) is not mistaken for an auto-refresh.
+    const logsRefreshTriggered = logsRefreshNonceRef.current !== refreshNonce;
+    logsRefreshNonceRef.current = refreshNonce;
     if (
       !pageVisible
       || tab !== 'logs'
@@ -530,7 +546,10 @@ export default function Usage() {
       setLogsError(null);
     });
 
-    void spend.logs(logsParams, { signal: controller.signal }).then((response) => (
+    void spend.logs(
+      logsParams,
+      reportingRequestInit(controller.signal, false, backgroundRefresh && logsRefreshTriggered),
+    ).then((response) => (
       reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
     )).then((nextLogs) => {
       if (controller.signal.aborted) return;
@@ -554,7 +573,7 @@ export default function Usage() {
     });
 
     return () => controller.abort();
-  }, [activeView, pageVisible, tab, logsCursor, logsPage, logsRequestKey, loadedRange, markReportingOutcome, rangeRequestKey, refreshNonce, reportingGeneration, reportingV2Enabled, selectedRange, supportsCursorLogs]);
+  }, [activeView, backgroundRefresh, pageVisible, tab, logsCursor, logsPage, logsRequestKey, loadedRange, markReportingOutcome, rangeRequestKey, refreshNonce, reportingGeneration, reportingV2Enabled, selectedRange, supportsCursorLogs]);
 
   const handlePresetRangeChange = (key: ReportingRangeKey) => {
     setSearchParams(withReportingRangeQuery(searchParams, resolveReportingRange(key)));
@@ -603,10 +622,11 @@ export default function Usage() {
     });
   };
 
-  const triggerRefresh = useCallback((forceRefresh: boolean) => {
+  const triggerRefresh = useCallback((forceRefresh: boolean, background = false) => {
     setRefreshState((current) => ({
       nonce: current.nonce + 1,
       forcedRangeKey: forceRefresh ? rangeRequestKey : null,
+      background,
     }));
   }, [rangeRequestKey]);
 
@@ -630,7 +650,7 @@ export default function Usage() {
     }
     const timer = window.setInterval(() => {
       if (refreshBusyRef.current) return;
-      triggerRefresh(false);
+      triggerRefresh(false, true);
     }, effectiveAutoRefreshMs);
     return () => {
       window.clearInterval(timer);
@@ -942,6 +962,7 @@ export default function Usage() {
                   reportingGeneration={reportingGeneration}
                   reportingV2Enabled={reportingV2Enabled}
                   forceRefresh={forceReportingRefresh}
+                  backgroundRefresh={backgroundRefresh}
                   onReportingAttempt={beginReportingAttempt}
                   onReportingOutcome={markReportingOutcome}
                 />

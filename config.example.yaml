@@ -309,7 +309,9 @@ general_settings:
   # Set these only if you want an initial browser-login admin account created on boot.
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
   platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
+  # Browser sessions end after 60 idle minutes or 12 hours from sign-in.
   auth_session_ttl_hours: 12
+  auth_session_idle_timeout_minutes: 60
 
   # Recommended startup path:
   # - db_only: manage deployments from the Admin UI or API

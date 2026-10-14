@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 import hashlib
 import hmac
 import secrets
 from typing import Any
+
+from src.services.identity.session_activity import (
+    LAST_SEEN_WRITE_INTERVAL_SECONDS,
+    idle_expiry,
+    nonnegative_seconds,
+)
 
 
 MASTER_SESSION_COOKIE_NAME = "deltallm_master_session"
@@ -22,6 +29,13 @@ class MasterSessionStatus(str, Enum):
 
 class MasterSessionStoreUnavailable(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class MasterSessionCheck:
+    status: MasterSessionStatus
+    expires_at: datetime | None = None
+    idle_expires_at: datetime | None = None
 
 
 class MasterSessionService:
@@ -59,36 +73,79 @@ class MasterSessionService:
             raise MasterSessionStoreUnavailable("failed to create master session") from exc
         return token
 
-    async def validate_session(
+    async def check_session(
         self,
         token: str | None,
         *,
         master_key: str | None,
-    ) -> MasterSessionStatus:
+        idle_timeout_seconds: int = 0,
+        renew: bool = True,
+    ) -> MasterSessionCheck:
+        """Validate a session; `renew=False` checks it without counting as activity."""
         if not token:
-            return MasterSessionStatus.MISSING
+            return MasterSessionCheck(MasterSessionStatus.MISSING)
         if not self._valid_token_shape(token) or not master_key:
-            return MasterSessionStatus.INVALID
+            return MasterSessionCheck(MasterSessionStatus.INVALID)
         if self.db is None or not self.salt:
-            return MasterSessionStatus.UNAVAILABLE
+            return MasterSessionCheck(MasterSessionStatus.UNAVAILABLE)
 
+        idle_timeout_seconds = max(0, int(idle_timeout_seconds))
         try:
             rows = await self.db.query_raw(
                 """
-                UPDATE deltallm_mastersession
-                SET last_seen_at = NOW(), updated_at = NOW()
-                WHERE token_hash = $1
-                  AND master_key_fingerprint = $2
-                  AND revoked_at IS NULL
-                  AND expires_at > NOW()
-                RETURNING session_id
+                WITH active AS (
+                    SELECT
+                        session_id,
+                        EXTRACT(EPOCH FROM (expires_at - NOW()))::float8 AS remaining_seconds,
+                        EXTRACT(EPOCH FROM (NOW() - last_seen_at))::float8 AS idle_seconds
+                    FROM deltallm_mastersession
+                    WHERE token_hash = $1
+                      AND master_key_fingerprint = $2
+                      AND revoked_at IS NULL
+                      AND expires_at > NOW()
+                      AND (
+                        $3::int = 0
+                        OR last_seen_at > NOW() - ($3::int * INTERVAL '1 second')
+                      )
+                ),
+                touched AS (
+                    UPDATE deltallm_mastersession m
+                    SET last_seen_at = NOW(), updated_at = NOW()
+                    FROM active
+                    WHERE m.session_id = active.session_id
+                      AND $4::boolean
+                      AND m.last_seen_at <= NOW() - ($5::int * INTERVAL '1 second')
+                    RETURNING m.session_id
+                )
+                SELECT
+                    active.session_id,
+                    active.remaining_seconds,
+                    active.idle_seconds,
+                    EXISTS (SELECT 1 FROM touched) AS renewed
+                FROM active
                 """,
                 self._hash_token(token),
                 self._fingerprint_master_key(master_key),
+                idle_timeout_seconds,
+                bool(renew),
+                LAST_SEEN_WRITE_INTERVAL_SECONDS,
             )
         except Exception:
-            return MasterSessionStatus.UNAVAILABLE
-        return MasterSessionStatus.ACTIVE if rows else MasterSessionStatus.INVALID
+            return MasterSessionCheck(MasterSessionStatus.UNAVAILABLE)
+        if not rows:
+            return MasterSessionCheck(MasterSessionStatus.INVALID)
+        row = rows[0]
+        now = datetime.now(UTC)
+        remaining = nonnegative_seconds(row.get("remaining_seconds"))
+        expires_at = now + timedelta(seconds=remaining) if remaining is not None else None
+        idle_expires_at = idle_expiry(
+            now=now,
+            idle_timeout_seconds=idle_timeout_seconds,
+            idle_seconds=nonnegative_seconds(row.get("idle_seconds")),
+            renewed=bool(row.get("renewed")),
+            expires_at=expires_at,
+        )
+        return MasterSessionCheck(MasterSessionStatus.ACTIVE, expires_at, idle_expires_at)
 
     async def revoke_session(self, token: str | None) -> None:
         if not token or not self._valid_token_shape(token):

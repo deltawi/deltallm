@@ -14,6 +14,7 @@ import {
   type OrganizationTierAssignment,
   type OrganizationTierAssignmentPayload,
 } from './api/organizations';
+import { BACKGROUND_REQUEST_HEADER } from './sessionActivity';
 
 export { ApiError, structuredApiErrorDetail } from './api/transport';
 export type { StructuredApiErrorDetail } from './api/transport';
@@ -37,10 +38,15 @@ export type {
   OrganizationTierAssignmentPayload,
 } from './api/organizations';
 
-export function reportingRequestInit(signal: AbortSignal, forceRefresh = false): RequestInit {
-  return forceRefresh
-    ? { signal, headers: { 'Cache-Control': 'no-cache' } }
-    : { signal };
+export function reportingRequestInit(
+  signal: AbortSignal,
+  forceRefresh = false,
+  background = false,
+): RequestInit {
+  const headers: Record<string, string> = {};
+  if (forceRefresh) headers['Cache-Control'] = 'no-cache';
+  if (background) headers[BACKGROUND_REQUEST_HEADER] = '1';
+  return Object.keys(headers).length ? { signal, headers } : { signal };
 }
 
 export interface SpendLogsPagination {

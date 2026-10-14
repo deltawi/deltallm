@@ -18,6 +18,7 @@ from src.services.organizations.organization_lifecycle import (
     OrganizationLifecycleUnavailable,
 )
 from src.services.identity.master_session_service import (
+    MasterSessionCheck,
     MasterSessionStatus,
     MasterSessionStoreUnavailable,
 )
@@ -319,14 +320,14 @@ class _StubMasterSessionService:
         self.active_tokens.add(token)
         return token
 
-    async def validate_session(
-        self, token: str | None, *, master_key: str | None
-    ) -> MasterSessionStatus:
+    async def check_session(
+        self, token: str | None, *, master_key: str | None, **_kwargs: object
+    ) -> MasterSessionCheck:
         if self.validation_unavailable:
-            return MasterSessionStatus.UNAVAILABLE
+            return MasterSessionCheck(MasterSessionStatus.UNAVAILABLE)
         if master_key != self.master_key or token not in self.active_tokens:
-            return MasterSessionStatus.INVALID
-        return MasterSessionStatus.ACTIVE
+            return MasterSessionCheck(MasterSessionStatus.INVALID)
+        return MasterSessionCheck(MasterSessionStatus.ACTIVE)
 
     async def revoke_session(self, token: str | None) -> None:
         if self.revoke_unavailable:
@@ -656,7 +657,7 @@ async def test_platform_session_remains_available_during_master_session_store_ou
     service.validation_unavailable = True
 
     class _PlatformIdentityService:
-        async def get_context_for_session(self, token: str) -> PlatformAuthContext:
+        async def get_context_for_session(self, token: str, **_kwargs) -> PlatformAuthContext:
             assert token == "platform-session-token"
             return PlatformAuthContext(
                 account_id="acct-platform-admin",
@@ -729,7 +730,7 @@ async def test_auth_login_and_callback_routes(client, test_app):
             }
 
     class StubIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             del token
             return None
 
@@ -1433,7 +1434,7 @@ async def test_unverified_mfa_session_is_blocked_until_mfa_verify(client, test_a
         def __init__(self) -> None:
             self.verified = False
 
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "session-token":
                 return None
             return PlatformAuthContext(
@@ -1497,7 +1498,7 @@ async def test_unverified_mfa_session_is_blocked_until_mfa_verify(client, test_a
 @pytest.mark.asyncio
 async def test_unverified_mfa_session_is_blocked_for_scope_endpoints(client, test_app):
     class StubIdentityService:
-        async def get_context_for_session(self, token: str):
+        async def get_context_for_session(self, token: str, **_kwargs):
             if token != "session-token":
                 return None
             return PlatformAuthContext(

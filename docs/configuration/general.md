@@ -91,6 +91,7 @@ general_settings:
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
   platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
   auth_session_ttl_hours: 12
+  auth_session_idle_timeout_minutes: 60
   invitation_token_ttl_hours: 72
   password_reset_token_ttl_minutes: 60
   api_key_auth_cache_ttl_seconds: 300
@@ -292,7 +293,9 @@ If the request fails or takes more than three seconds, the UI uses the built-in 
 | `salt_key` | `change-me` | Salt used for hashing virtual API keys |
 | `platform_bootstrap_admin_email` | — | Email for the initial platform admin account |
 | `platform_bootstrap_admin_password` | — | Password for the initial platform admin account |
-| `auth_session_ttl_hours` | `12` | Session cookie lifetime in hours |
+| `auth_session_ttl_hours` | `12` | Hard cap on a browser session, in hours from sign-in |
+| `auth_session_idle_timeout_minutes` | `60` | Sign a browser session out after this many minutes without activity; `0` turns it off. See [Session lifetime](../features/authentication.md#session-lifetime-and-idle-timeout) |
+| `auth_master_session_ttl_hours` | — | Hard cap for master-key browser sign-ins; falls back to `auth_session_ttl_hours` |
 | `invitation_token_ttl_hours` | `72` | Invite acceptance link lifetime in hours |
 | `password_reset_token_ttl_minutes` | `60` | Password reset link lifetime in minutes |
 | `api_key_auth_cache_ttl_seconds` | `300` | Redis TTL for API key authentication cache entries |
