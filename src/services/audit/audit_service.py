@@ -4,23 +4,27 @@ from src.shutdown import cleanup_deadline
 
 import asyncio
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 import inspect
 import logging
+import random
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.audit.actions import AuditAction
 from src.audit.delivery import AuditDeliveryClass, parse_audit_delivery_class
 from src.db.audit.audit_ingestion import (
+    AuditEnqueueResult,
     AuditIngestionRepository,
     AuditOutboxEnvelope,
     AuditOutboxRecord,
 )
 from src.db.runtime.client import is_prisma_transaction_client
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
 from src.db.errors import is_record_specific_database_error
 from src.db.audit.repository import AuditEventRecord, AuditPayloadRecord, AuditRepository
 from src.metrics import (
@@ -49,6 +53,7 @@ from src.telemetry.lifecycle import (
 from src.telemetry.worker_idle import IdleWorkerPoll
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 if TYPE_CHECKING:
     from src.db.catalog.prompt_registry import PromptRegistryRepository
@@ -141,6 +146,33 @@ class AuditIngestionOverloadedError(ServiceUnavailableError):
 
     def __init__(self, message: str | None = None) -> None:
         super().__init__(message=message, code="audit_ingestion_capacity")
+
+
+# A required enqueue that rolled back because a lock or pool wait ran past its
+# short bound is retried once. Stable event IDs make the retry idempotent, and an
+# outage (connection loss, closed database) still fails on the first attempt.
+_CONTENTION_FAILURES = frozenset(
+    {
+        AcceptanceFailure.LOCK_TIMEOUT,
+        AcceptanceFailure.POOL_TIMEOUT,
+        AcceptanceFailure.CLIENT_POOL_TIMEOUT,
+    }
+)
+_CONTENTION_RETRY_DELAY_SECONDS = (0.01, 0.05)
+
+
+async def _retry_once_after_contention(enqueue: Callable[[], Awaitable[T]], *, path: str) -> T:
+    try:
+        return await enqueue()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if classify_acceptance_failure(exc) not in _CONTENTION_FAILURES:
+            raise
+        increment_audit_write_failure(path=path + "_contention_retry")
+    # Jitter keeps waiters that timed out together from colliding again.
+    await asyncio.sleep(random.uniform(*_CONTENTION_RETRY_DELAY_SECONDS))
+    return await enqueue()
 
 
 class RequiredAuditPersistenceError(ServiceUnavailableError):
@@ -554,16 +586,24 @@ class AuditService:
             ingestion_repository = (
                 self.ingestion_repository if required else self.worker_ingestion_repository
             )
-            result = await ingestion_repository.enqueue(
-                event_id=item.event_id,
-                record_type="audit_event",
-                organization_id=event.organization_id,
-                delivery_class=normalized_delivery,
-                payload=payload,
-                redacted_payload=redacted_payload,
-                max_attempts=self.ingestion_config.max_attempts,
-                max_pending_events=self.ingestion_config.max_pending_events,
-                required_reserve=self.ingestion_config.required_reserve,
+
+            def enqueue() -> Awaitable[AuditEnqueueResult]:
+                return ingestion_repository.enqueue(
+                    event_id=item.event_id,
+                    record_type="audit_event",
+                    organization_id=event.organization_id,
+                    delivery_class=normalized_delivery,
+                    payload=payload,
+                    redacted_payload=redacted_payload,
+                    max_attempts=self.ingestion_config.max_attempts,
+                    max_pending_events=self.ingestion_config.max_pending_events,
+                    required_reserve=self.ingestion_config.required_reserve,
+                )
+
+            result = (
+                await _retry_once_after_contention(enqueue, path="outbox_enqueue")
+                if required
+                else await enqueue()
             )
         except asyncio.CancelledError:
             raise
@@ -642,10 +682,13 @@ class AuditService:
             max_attempts=self.ingestion_config.max_attempts,
         )
         try:
-            result = await self.ingestion_repository.enqueue_bundle(
-                envelopes=[prompt_envelope, audit_envelope],
-                max_pending_events=self.ingestion_config.max_pending_events,
-                required_reserve=self.ingestion_config.required_reserve,
+            result = await _retry_once_after_contention(
+                lambda: self.ingestion_repository.enqueue_bundle(
+                    envelopes=[prompt_envelope, audit_envelope],
+                    max_pending_events=self.ingestion_config.max_pending_events,
+                    required_reserve=self.ingestion_config.required_reserve,
+                ),
+                path="outbox_enqueue_prompt_render",
             )
         except asyncio.CancelledError:
             raise

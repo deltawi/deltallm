@@ -50,3 +50,17 @@ def test_rejection_code_names_gateway_errors_and_other_responders() -> None:
     edge = httpx.Response(503, text="<html>503 Service Unavailable</html>")
     assert rejection_code(gateway) == "spend_persistence_unavailable"
     assert rejection_code(edge) == "non_gateway_body"
+
+
+def test_rejection_evidence_keeps_cause_lines_only() -> None:
+    from tests.performance.capacity_fixture import REJECTION_EVIDENCE
+
+    kept = [
+        "[pod/gateway-1/api] telemetry acceptance failed queue=audit phase=lock reason=lock_timeout",
+        "LOG:  process 81 still waiting for ExclusiveLock on advisory lock [16384,1,2,2]",
+        "LOG:  process 81 acquired ShareLock on transaction 991 after 140.2 ms",
+        "ERROR:  canceling statement due to lock timeout",
+    ]
+    dropped = ['INFO:     10.0.0.1 - "POST /v1/chat/completions HTTP/1.1" 200 OK']
+    assert all(REJECTION_EVIDENCE.search(line) for line in kept)
+    assert not any(REJECTION_EVIDENCE.search(line) for line in dropped)

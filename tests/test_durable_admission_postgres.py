@@ -17,6 +17,7 @@ from scripts.benchmarks.ingestion_database import (
 from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
 from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
 
 pytestmark = pytest.mark.postgres
 
@@ -351,6 +352,8 @@ async def test_slow_policy_fails_closed_with_bounded_pool_and_recovers(queues):
         with pytest.raises(DatabaseUnavailableError) as failure:
             await enqueue(queues.acceptance, "audit", "timed-out", organization="slow-org")
         assert "lock timeout" in str(failure.value.__cause__)
+        # Required audit enqueues retry only this rolled-back contention class.
+        assert classify_acceptance_failure(failure.value) == AcceptanceFailure.LOCK_TIMEOUT
         assert queues.acceptance.allocation.gate.active == 0
         assert queues.acceptance.allocation.gate.waiters == 0
         assert int((await capacity(holder, "audit"))["pending_count"]) == 0
