@@ -19,6 +19,7 @@ import { Box, Plus, Pencil, Trash2 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
+import { navSectionLabel } from '../lib/navigation';
 
 export default function Models() {
   const navigate = useNavigate();
@@ -108,6 +109,7 @@ export default function Models() {
 
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/models')}
       title="Models"
       titleIcon={Box}
       count={pagination?.total ?? null}

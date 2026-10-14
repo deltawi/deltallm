@@ -21,6 +21,7 @@ import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 import { matchingNamedCredentialDetail } from '../lib/namedCredentialEditing';
+import { navSectionLabel } from '../lib/navigation';
 
 function connectionSummary(credential: NamedCredential): string {
   const config = credential.connection_config || {};
@@ -259,7 +260,8 @@ export default function NamedCredentials() {
 
   return (
     <IndexShell
-      title="Named Credentials"
+      eyebrowPrefix={navSectionLabel('/named-credentials')}
+      title="Provider Credentials"
       titleIcon={KeyRound}
       count={filteredItems.length}
       description="Store reusable provider connection credentials and attach them to model deployments."

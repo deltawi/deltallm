@@ -279,7 +279,7 @@ export default function RouteGroupAdvancedTab({
               <p className="mt-1 text-xs text-brand-secondary-ink/70">
                 Create a prompt in{' '}
                 <Link to="/prompts" className="underline hover:text-violet-900">
-                  Prompt Registry
+                  Prompts
                 </Link>{' '}
                 first, then return here to bind it.
               </p>

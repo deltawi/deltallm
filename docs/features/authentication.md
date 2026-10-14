@@ -135,7 +135,7 @@ Use this when an account is marked to change its password after first login.
 
 DeltaLLM now supports email-first account lifecycle flows:
 
-- invite a user by email from **People & Access**
+- invite a user by email from **People**
 - let new users activate their account from an invite link
 - let existing users reset their password from the login page
 
@@ -288,7 +288,7 @@ linking to an existing account. Use an existing local login while configuring
 the provider's verified-email assertion. Existing provider-subject bindings
 continue to work; DeltaLLM does not provide an authenticated account-linking UI.
 
-Manage subsequent promotions and demotions in **People & Access**. Adding or
+Manage subsequent promotions and demotions in **People**. Adding or
 removing an email from the list does not change an existing account's role.
 SSO login also preserves disabled status and rejects inactive accounts; complete
 invitation acceptance or reactivate the account through the admin workflow first.
@@ -303,7 +303,7 @@ Before rollout, verify the first email link with your provider.
 The corrected version denies unverified links that older versions accepted.
 
 1. Complete the upgrade across all API replicas.
-2. In People & Access, restore lost platform or membership role changes as necessary.
+2. On the **People** page, restore lost platform or membership role changes as necessary.
 3. Sign in through SSO again.
 4. Verify that the role changes remain.
 

@@ -1,6 +1,6 @@
 # Prompt Registry
 
-Prompt Registry manages prompts as versioned runtime assets.
+Prompt Registry manages prompts as versioned runtime assets. To open it, select **Gateway > Prompts**.
 
 Use it when you want prompts to be treated like managed configuration instead of hardcoded strings in applications.
 
@@ -14,7 +14,7 @@ API](../api/admin.md#prompt-registry).
 
 ## List controls
 
-Models, Model Groups, and Prompt Registry use the same list controls.
+Models, Route groups, and Prompts use the same list controls.
 Select a column heading or use **Sort list** to change the order.
 The server sorts all permitted results before it selects a page.
 The initial order is **Updated at**, newest first. Search resets the page.

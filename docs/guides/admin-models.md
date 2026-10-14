@@ -9,7 +9,7 @@ choose instead of the provider's model name.
 
 You need platform administrator access and a provider key or saved provider credential.
 
-1. Open **AI Gateway**, then **Models**.
+1. Open **Gateway**, then **Models**.
 2. Select **Add Model**.
 3. Keep **Model type** set to **Chat** for a normal text model.
 4. Enter the public name that applications will use.

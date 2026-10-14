@@ -1,8 +1,8 @@
-# People & Access
+# People
 
-Use People & Access to manage accounts, invitations, roles, and organization or team membership.
+Use the **People** page (**Access > People**) to manage accounts, invitations, roles, and organization or team membership.
 
-![People & Access](images/people-and-access.png)
+![People](images/people-and-access.png)
 
 **Access:** platform admin. This page changes platform accounts, invitations, and memberships. See
 [Access requirements](access-requirements.md), [Authentication and SSO](../features/authentication.md),
@@ -56,7 +56,7 @@ for the account. Select **Save changes** to apply the update.
 
 ## Invitations
 
-People & Access is the main invite-by-email surface.
+The **People** page is the main place to invite users by email.
 
 Use it to:
 
@@ -68,7 +68,7 @@ Organization and team detail pages deep-link back into this page for invitation 
 
 ## Recommended onboarding flow
 
-1. Invite the user from People & Access
+1. Invite the user from the **People** page
 2. Let the user accept the invite from their email link
 3. If the user has no auth method yet, they set a password during acceptance
 4. If the user is SSO-only, they can accept without creating a local password
@@ -76,7 +76,7 @@ Organization and team detail pages deep-link back into this page for invitation 
 
 ## Self-Registered Sandbox Users
 
-If `general_settings.self_registration` is enabled for SSO, eligible first-time SSO users appear in People & Access after their first successful sign-in. Their account details show the seeded organization membership, team membership, runtime user limits, and the default team's self-service key policy.
+If `general_settings.self_registration` is enabled for SSO, eligible first-time SSO users appear on the **People** page after their first successful sign-in. Their account details show the seeded organization membership, team membership, runtime user limits, and the default team's self-service key policy.
 
 The badge is informational. Admins can still edit the account, add or remove memberships, adjust runtime user asset access, and update the seeded organization/team records from their detail pages.
 
@@ -84,7 +84,7 @@ The badge is informational. Admins can still edit the account, add or remove mem
 
 To move a developer from sandbox access to production access:
 
-1. Open the user in People & Access and confirm the account identity.
+1. Open the user on the **People** page and confirm the account identity.
 2. Add the production organization or team membership with the correct role.
 3. Remove the sandbox team membership if the user should no longer create sandbox keys.
 4. Adjust runtime user limits or asset access if the production team requires different guardrails.

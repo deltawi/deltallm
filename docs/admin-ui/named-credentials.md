@@ -1,6 +1,8 @@
-# Named Credentials
+# Provider credentials
 
-Named credentials let you store provider connection settings once and reuse them across multiple model deployments.
+Open **Gateway > Provider credentials**. The API calls these objects named credentials.
+
+Provider credentials let you store provider connection settings once and reuse them across multiple model deployments.
 
 Use them when you want to:
 
@@ -82,7 +84,7 @@ Do not set `auth_header_name` or `auth_header_format` for ElevenLabs. ElevenLabs
 
 ### Create a named credential
 
-1. Open **AI Gateway > Named Credentials**
+1. Open **Gateway > Provider credentials**
 2. Create a new credential
 3. Choose the provider
 4. Enter the shared connection settings for that provider
@@ -92,7 +94,7 @@ The page shows whether credentials are present and how many deployments currentl
 
 ### Use it from the Models page
 
-1. Open **AI Gateway > Models**
+1. Open **Gateway > Models**
 2. Create a new deployment or edit an existing one
 3. Choose the credential source as **Named credential**
 4. Select the credential that matches the deployment provider
@@ -108,7 +110,7 @@ If both the named credential and the deployment define overlapping connection fi
 
 ### Rotate a credential
 
-1. Open **AI Gateway > Named Credentials**
+1. Open **Gateway > Provider credentials**
 2. Edit the credential
 3. Replace the provider secret or endpoint fields
 4. Save
@@ -119,7 +121,7 @@ If the credential is already linked to deployments, DeltaLLM reloads the runtime
 
 If multiple deployments already share the same inline provider credentials:
 
-1. Open **AI Gateway > Named Credentials**
+1. Open **Gateway > Provider credentials**
 2. Use the inline-credentials report
 3. Create a shared named credential from a repeated inline group
 4. Link the selected deployments automatically

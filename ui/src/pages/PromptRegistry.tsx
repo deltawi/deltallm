@@ -21,6 +21,7 @@ import { IndexShell } from '../components/admin/shells';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
+import { navSectionLabel } from '../lib/navigation';
 
 export default function PromptRegistry() {
   const navigate = useNavigate();
@@ -129,7 +130,8 @@ export default function PromptRegistry() {
 
   return (
     <IndexShell
-      title="Prompt Registry"
+      eyebrowPrefix={navSectionLabel('/prompts')}
+      title="Prompts"
       titleIcon={FileText}
       count={result?.pagination?.total ?? null}
       description="Manage prompt templates, versions, and labels."

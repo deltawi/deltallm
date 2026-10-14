@@ -533,7 +533,7 @@ The admin settings API returns `409 restart_required` for a dynamic update to th
 | `sso_userinfo_url` | — | OAuth user info URL |
 | `sso_redirect_uri` | — | OAuth redirect URI |
 | `sso_scope` | `openid email profile` | OAuth scopes |
-| `sso_admin_email_list` | `[]` | Verified emails assigned platform admin when SSO creates a new account; existing roles are managed in People & Access |
+| `sso_admin_email_list` | `[]` | Verified emails assigned platform admin when SSO creates a new account; existing roles are managed on the People page |
 | `sso_default_team_id` | — | Optional team assigned to ordinary SSO accounts; missing memberships are created and existing organization/team roles are preserved |
 | `sso_state_ttl_seconds` | `600` | TTL for Redis-backed SSO callback state |
 

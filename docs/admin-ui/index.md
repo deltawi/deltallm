@@ -15,26 +15,35 @@ access](access-requirements.md) if a page or action is missing.
 
 ## Find the right area
 
-| Area | What you do there |
-| --- | --- |
-| [Sign-in and access](access-requirements.md) | Resolve missing pages or blocked actions |
-| [Dashboard](dashboard.md) | Check requests, spending, and model activity |
-| [Models](../guides/admin-models.md) | Connect provider-backed models |
-| [Provider credentials](../guides/admin-provider-credentials.md) | Reuse and rotate provider secrets |
-| [Route groups](../guides/admin-route-groups.md) | Control routing and failover across models |
-| [Prompts](prompt-registry.md) | Manage reusable, versioned prompts |
-| [MCP](mcp.md) | Connect external tools and approve protected tool calls |
-| [API keys](api-keys.md) | Give applications controlled access |
-| [Organizations](organizations.md) and [teams](teams.md) | Set ownership, budgets, and limits |
-| [People and permissions](people-and-access.md) | Manage user access |
-| [Plans and tiers](../guides/admin-tiers.md) | Reuse model access, pricing, and limits across organizations |
-| [Usage and spending](usage.md) | Find cost and request trends |
-| [Budgets](../guides/admin-budgets.md) and [rate limits](../guides/admin-rate-limits.md) | Control spending and request volume |
-| [Guardrails](guardrails.md) | Check prompts and responses for risky content |
-| [Audit logs](audit-logs.md) | Review important system changes |
-| [Batch jobs](batch-jobs.md) | Monitor background jobs |
-| [Settings](settings.md) | Change installation-wide defaults |
-| [Playground](playground.md) | Test a model with a real key |
+The side menu has the same sections for all users. You see only the pages that your role can use.
+If your role cannot use any page in a section, the menu does not show that section.
+
+| Menu section | Page | What you do there |
+| --- | --- | --- |
+| Top | [Dashboard](dashboard.md) | Check what needs attention now |
+| Top | [Playground](playground.md) | Test a model with a real key |
+| Gateway | [Models](../guides/admin-models.md) | Connect provider-backed models |
+| Gateway | [Route groups](../guides/admin-route-groups.md) | Control routing and failover across models |
+| Gateway | [Provider credentials](../guides/admin-provider-credentials.md) | Reuse and rotate provider secrets |
+| Gateway | [Prompts](prompt-registry.md) | Manage reusable, versioned prompts |
+| Gateway | [MCP](mcp.md) | Connect external tools and approve protected tool calls |
+| Gateway | [Guardrails](guardrails.md) | Check prompts and responses for risky content |
+| Access | [API keys](api-keys.md) | Give applications controlled access |
+| Access | [Organizations](organizations.md) and [teams](teams.md) | Set ownership, budgets, and limits |
+| Access | [People](people-and-access.md) | Manage user accounts, roles, and membership |
+| Access | [Tiers](../guides/admin-tiers.md) | Reuse model access, pricing, and limits across organizations |
+| Activity | [Usage](usage.md) | Find cost and request trends. Users who can see only their own spend see **My usage**. |
+| Activity | [Batch jobs](batch-jobs.md) | Monitor background jobs |
+| Activity | [Audit logs](audit-logs.md) | Review important system changes |
+| Bottom | [Settings](settings.md) | Change installation-wide defaults |
+
+Select your account at the bottom of the menu to open the documentation or to sign out.
+
+These pages are not in the menu:
+
+- [Sign-in and access](access-requirements.md): resolve missing pages or blocked actions.
+- [Budgets](../guides/admin-budgets.md) and [rate limits](../guides/admin-rate-limits.md): control
+  spending and request volume. You set them on organizations, teams, and keys.
 
 ## Recommended first setup
 

@@ -30,7 +30,7 @@ Use `simple-shuffle` unless you have a specific reason to choose another strateg
 
 ## Create a route group
 
-1. Open **AI Gateway**, then **Route Groups**.
+1. Open **Gateway**, then **Route groups**.
 2. Select **Create Group**.
 3. Enter a stable group key, such as `support-chat`.
 4. Add the healthy deployments that should receive traffic.

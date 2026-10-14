@@ -508,7 +508,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
       <div className="min-h-screen bg-gray-50">
         <div className="border-b border-gray-200 bg-white px-6 py-3">
           <button onClick={() => navigate('/route-groups')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
-            <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+            <ArrowLeft className="h-4 w-4" /> Back to Route Groups
           </button>
         </div>
         <div className="flex min-h-[400px] items-center justify-center" role="status" aria-label="Loading model group">
@@ -523,7 +523,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
       <div className="min-h-screen bg-gray-50">
         <div className="border-b border-gray-200 bg-white px-6 py-3">
           <button onClick={() => navigate('/route-groups')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
-            <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+            <ArrowLeft className="h-4 w-4" /> Back to Route Groups
           </button>
         </div>
         <div className="p-6">
@@ -546,7 +546,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
       <div className="min-h-screen bg-gray-50">
         <div className="border-b border-gray-200 bg-white px-6 py-3">
           <button onClick={() => navigate('/route-groups')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
-            <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+            <ArrowLeft className="h-4 w-4" /> Back to Route Groups
           </button>
         </div>
         <div className="p-6 text-sm text-gray-500">Route group not found.</div>
@@ -564,7 +564,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
           onClick={() => navigate('/route-groups')}
           className="flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-800"
         >
-          <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+          <ArrowLeft className="h-4 w-4" /> Back to Route Groups
         </button>
       )}
       hero={(

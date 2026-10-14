@@ -24,9 +24,10 @@ import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
-  Plus, Users, Trash2, UserPlus, Pencil, Search,
+  Plus, Users, UsersRound, Trash2, UserPlus, Pencil, Search,
   Building2, AlertOctagon, X,
 } from 'lucide-react';
+import { navSectionLabel } from '../lib/navigation';
 
 /* ─────────────── small visual helpers ─────────────── */
 
@@ -398,8 +399,9 @@ export default function Teams() {
   /* ── render ── */
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/teams')}
       title="Teams"
-      titleIcon={Users}
+      titleIcon={UsersRound}
       count={pagination?.total ?? null}
       action={uiAccess.team_create ? (
         <button

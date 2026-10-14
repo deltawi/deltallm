@@ -28,7 +28,7 @@ Start with one deployment. Add routing or shared credentials only when you need 
 ## Add the model
 
 1. Open the Admin UI and sign in as an administrator.
-2. Open **AI Gateway**, then **Models**.
+2. Open **Gateway**, then **Models**.
 3. Select **Add model**.
 4. Keep **Model type** set to **Chat** for a normal text model.
 5. Enter a **Model name**. This is the public name your application will call, such as

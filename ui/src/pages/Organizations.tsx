@@ -34,6 +34,7 @@ import {
   Shield, AlertCircle, Search, MoreHorizontal,
   CalendarDays,
 } from 'lucide-react';
+import { navSectionLabel } from '../lib/navigation';
 
 /* ─────────────── sub-components ─────────────── */
 
@@ -440,6 +441,7 @@ export default function Organizations() {
   /* ─────────────── render ─────────────── */
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/organizations')}
       title="Organizations"
       titleIcon={Building2}
       count={total}

@@ -25,6 +25,7 @@ import ApiKeySecretDialog from '../components/api-keys/ApiKeySecretDialog';
 import type { KeyTeamOption as TeamOption } from '../components/api-keys/ApiKeyDetailsFields';
 import { emptyKeyForm, keyMutationPayload, validateKeyForm, type KeyFormState } from '../lib/apiKeyForm';
 import { keyLastUsedDisplay } from '../lib/apiKeyLastUsed';
+import { navSectionLabel } from '../lib/navigation';
 
 type ViewTab = 'all' | 'my';
 const EMPTY_PAGINATION = { total: 0, limit: 200, offset: 0, has_more: false };
@@ -512,6 +513,7 @@ export default function ApiKeys() {
 
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/keys')}
       title="API Keys"
       count={pagination?.total ?? null}
       description={(

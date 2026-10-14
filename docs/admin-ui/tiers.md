@@ -274,7 +274,7 @@ The dashboard reports `live_data.status` as `healthy`, `partial`, or `unavailabl
 
 ## Recommended User Journey
 
-1. Open **AI Gateway > Tiers**
+1. Open **Access > Tiers**
 2. Create a tier, such as `Starter`, `Growth`, or `Enterprise`
 3. Create or choose a draft version
 4. Add model policies for the models in that package

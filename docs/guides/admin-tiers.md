@@ -14,7 +14,7 @@ You need platform administrator access and at least one model that organizations
 
 ## Create a tier
 
-1. Open **AI Gateway**, then **Tiers**.
+1. Open **Access**, then **Tiers**.
 2. Select **Create Tier** and give the plan a clear name, such as `Starter`.
 3. Create a draft version.
 4. Add the models included in the plan.

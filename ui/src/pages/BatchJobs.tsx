@@ -8,6 +8,7 @@ import clsx from 'clsx';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import BatchJobsMobileList from '../components/batch-jobs/BatchJobsMobileList';
 import { errorMessage } from '../lib/errorMessage';
+import { navSectionLabel } from '../lib/navigation';
 
 const STATUS_COLORS: Record<string, string> = {
   validating: 'bg-purple-100 text-purple-700',
@@ -189,6 +190,7 @@ export default function BatchJobs() {
 
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/batches')}
       title="Batch Jobs"
       titleIcon={Layers}
       count={pagination?.total ?? null}

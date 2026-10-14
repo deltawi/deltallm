@@ -16,7 +16,7 @@ use a named account for normal work.
 
 ## If a page is missing
 
-DeltaLLM hides pages that your account cannot use. Ask a platform administrator to check:
+DeltaLLM hides pages that your account cannot use. It also hides a menu section when you cannot use any page in it. Ask a platform administrator to check:
 
 1. your platform role
 2. your organization membership
