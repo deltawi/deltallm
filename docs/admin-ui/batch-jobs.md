@@ -8,10 +8,35 @@ The public batch API supports embeddings and non-streaming chat completion batch
 
 ![Batch Jobs](images/batch-jobs.png)
 
-**Access:** platform admin or `key.read` for authorized jobs. Cancel, retry, stale requeue, mark-
-failed, and webhook replay are enabled only when the caller has update capability in the batch's
-organization/team scope. See [Access requirements](access-requirements.md), the [Batch admin
-API](../api/admin.md#batches), and [Batch production setup](../features/batching.md).
+**Access:** every account with an organization or team membership can open this page. What the
+page shows depends on the role. See [Who sees which batches](#who-sees-which-batches). Cancel,
+retry, stale requeue, mark-failed, and webhook replay are enabled only when the caller has update
+capability in the batch's organization/team scope. See [Access requirements](access-requirements.md),
+the [Batch admin API](../api/admin.md#batches), and [Batch production setup](../features/batching.md).
+
+## Who sees which batches
+
+| Account | Batches on the page | Actions |
+|---------|---------------------|---------|
+| Platform administrator or master key | All batches | All actions |
+| Role with `key.read` in an organization or team (for example organization owner or admin, billing, auditor, team admin, team developer) | All batches in that organization or team | Actions need `key.update` in the batch's scope |
+| Other members (for example organization member or team viewer) | Only the batches that they created with their own API keys, in their current organizations and teams | None. The view is read-only |
+
+For a member without `key.read`, the page says that it shows only your batches. The server applies
+this filter to the list, the summary counts, the detail view, the items, the costs, and the webhook
+delivery state. It does not use the page to decide.
+
+A batch belongs to the account that owned the API key when the batch was created. These batches
+have no owner, so they do not show in the member view:
+
+- batches created before DeltaLLM recorded the key owner
+- batches created with a service account key or a key without an owner
+
+If you leave an organization or team, its batches no longer show in your member view.
+
+The archived delivery-only view (see below) is for operators with `key.read` only.
+
+Cloud customer sessions cannot open this page.
 
 ## Quick Success Workflow
 

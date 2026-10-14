@@ -118,7 +118,8 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
     people_access: isPlatformAdmin,
     usage: isPlatformAdmin || canReadUsage,
     audit: isPlatformAdmin || permissions.has('audit.read'),
-    batches: isPlatformAdmin || permissions.has('key.read'),
+    // Members without key.read still see the batches they created.
+    batches: isPlatformAdmin || permissions.size > 0,
     guardrails: isPlatformAdmin,
     playground: true,
     settings: isPlatformAdmin,

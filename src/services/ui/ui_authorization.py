@@ -88,9 +88,11 @@ def build_ui_access(
         "people_access": is_platform_admin,
         "usage": authenticated and can_view_usage,
         "audit": authenticated and (is_platform_admin or Permission.AUDIT_READ in permissions),
+        # Every organization or team role grants permissions, so a non-empty set
+        # means the account has memberships whose own batches it may read.
         "batches": authenticated
         and not external_customer
-        and (is_platform_admin or Permission.KEY_READ in permissions),
+        and (is_platform_admin or bool(permissions)),
         "guardrails": is_platform_admin,
         "playground": authenticated,
         "settings": is_platform_admin,

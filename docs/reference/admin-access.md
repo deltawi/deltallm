@@ -24,7 +24,7 @@ organization or bypass an endpoint permission.
 | Usage and spending | Platform administrator or an enabled spending-reader role | Reports are limited to platform, organization, team, or personal scope | [Budgets and spending](../features/budgets.md) |
 | Workspace request logs | External customer session with `spend.read.self` | Rows are limited to the session's organization and selected team | [Administration API](../api/admin.md#workspace-request-logs) |
 | Audit logs | Platform administrator or `audit.read` | Results are limited to authorized scope | [Audit records](../features/audit-log.md) |
-| Batch jobs | Platform administrator or `key.read` | Cancel, retry, and replay require update access in the batch's scope | [Batch processing](../features/batching.md) |
+| Batch jobs | Platform administrator, or any organization or team membership | `key.read` shows all batches in that scope. Other members see only the batches they created, read-only. Cancel, retry, and replay require update access in the batch's scope | [Batch Jobs page](../admin-ui/batch-jobs.md#who-sees-which-batches) |
 | Guardrails | Platform administrator | Definitions and assignments are platform administration actions | [Guardrails](../features/guardrails.md) |
 | Playground | Any signed-in account | Requests require an application key allowed to use the selected model | [Playground](../admin-ui/playground.md) |
 | Settings | Platform administrator | Changes affect the full installation | [General settings](../configuration/general.md) |

@@ -7,6 +7,7 @@ import { Layers, Search, Clock, CheckCircle2, XCircle, Loader2, Info } from 'luc
 import clsx from 'clsx';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import BatchJobsMobileList from '../components/batch-jobs/BatchJobsMobileList';
+import { errorMessage } from '../lib/errorMessage';
 
 const STATUS_COLORS: Record<string, string> = {
   validating: 'bg-purple-100 text-purple-700',
@@ -107,6 +108,9 @@ export default function BatchJobs() {
 
   const items: BatchJobListItem[] = result?.data || [];
   const pagination = result?.pagination;
+  // Members without key.read only see batches they created; the server enforces it.
+  const ownJobsOnly = result?.view === 'own';
+  const emptyMessage = ownJobsOnly ? 'You have not created any batch jobs yet' : 'No batch jobs found';
 
   const handleCancel = async (batchId: string) => {
     if (!confirm('Cancel this batch job? In-flight requests will stop processing.')) return;
@@ -114,8 +118,8 @@ export default function BatchJobs() {
       await batches.cancel(batchId);
       refetch();
       refetchSummary();
-    } catch (err: any) {
-      alert(err?.message || 'Failed to cancel batch job');
+    } catch (err: unknown) {
+      alert(errorMessage(err, 'Failed to cancel batch job'));
     }
   };
 
@@ -188,7 +192,9 @@ export default function BatchJobs() {
       title="Batch Jobs"
       titleIcon={Layers}
       count={pagination?.total ?? null}
-      description="Monitor and manage batch embedding jobs."
+      description={ownJobsOnly
+        ? 'Batch jobs you created with your API keys, in your current organizations and teams.'
+        : 'Monitor and manage batch embedding jobs.'}
       summary={(
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           {summaryCards.map((card) => (
@@ -262,7 +268,7 @@ export default function BatchJobs() {
               columns={columns}
               data={items}
               loading={loading}
-              emptyMessage="No batch jobs found"
+              emptyMessage={emptyMessage}
               onRowClick={(row) => navigate(`/batches/${row.batch_id}`)}
               pagination={pagination}
               onPageChange={setPageOffset}
@@ -281,7 +287,7 @@ export default function BatchJobs() {
             statusFilter={statusFilter}
             onStatusFilterChange={(v) => { setStatusFilter(v); setPageOffset(0); }}
             statusTabs={STATUS_TABS}
-            emptyMessage="No batch jobs found"
+            emptyMessage={emptyMessage}
             onView={(id) => navigate(`/batches/${id}`)}
             onCancel={handleCancel}
           />

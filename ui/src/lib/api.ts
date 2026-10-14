@@ -435,6 +435,13 @@ export interface BatchJobListItem {
   capabilities: BatchCapabilities;
 }
 
+/** `own`: the caller sees only batches it created (members without key.read). */
+export type BatchJobListView = 'operator' | 'own';
+
+export interface BatchJobList extends Paginated<BatchJobListItem> {
+  view?: BatchJobListView;
+}
+
 export interface BatchJobSummary {
   total: number;
   queued: number;
@@ -1137,7 +1144,7 @@ export const users = {
 export const batches = {
   featureStatus: () => apiFetch<BatchFeatureStatus>('/ui/api/batches/feature-status'),
   list: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<BatchJobListItem>>(withQuery('/ui/api/batches', params)),
+    apiFetch<BatchJobList>(withQuery('/ui/api/batches', params)),
   summary: () => apiFetch<BatchJobSummary>('/ui/api/batches/summary'),
   get: (batchId: string, params?: { items_limit?: number; items_offset?: number; after_line_number?: number | null }) =>
     apiFetch<BatchJobDetail>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params)),

@@ -427,7 +427,7 @@ async def test_batch_feature_status_returns_embeddings_batch_flag(client, test_a
 
 
 @pytest.mark.asyncio
-async def test_batch_feature_status_requires_batch_page_permission(client, test_app):
+async def test_batch_feature_status_is_readable_by_team_viewers(client, test_app):
     class StubIdentityService:
         async def get_context_for_session(self, token: str, **_kwargs):
             if token != "session-token":
@@ -446,12 +446,16 @@ async def test_batch_feature_status_requires_batch_page_permission(client, test_
 
     test_app.state.platform_identity_service = StubIdentityService()
 
+    setattr(test_app.state.app_config.general_settings, "embeddings_batch_enabled", True)
+
     response = await client.get(
         "/ui/api/batches/feature-status", cookies={"deltallm_session": "session-token"}
     )
+    anonymous = await client.get("/ui/api/batches/feature-status")
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Insufficient permissions"
+    assert response.status_code == 200
+    assert response.json() == {"embeddings_batch_enabled": True}
+    assert anonymous.status_code == 401
 
 
 @pytest.mark.parametrize(

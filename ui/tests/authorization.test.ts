@@ -62,3 +62,20 @@ test('server-authorized scoped reporting exposes Usage without the admin dashboa
   assert.equal(access.usage, true);
   assert.equal(access.dashboard, false);
 });
+
+test('legacy permission fallback shows Batch Jobs to members without key.read', () => {
+  const member = resolveUiAccess('session', {
+    authenticated: true,
+    role: 'org_user',
+    effective_permissions: ['org.read', 'team.read', 'spend.read.self'],
+  });
+  const unaffiliated = resolveUiAccess('session', {
+    authenticated: true,
+    role: 'org_user',
+    effective_permissions: [],
+  });
+
+  assert.equal(member.batches, true);
+  assert.equal(member.keys, false);
+  assert.equal(unaffiliated.batches, false);
+});
