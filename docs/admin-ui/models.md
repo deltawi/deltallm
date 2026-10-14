@@ -18,7 +18,7 @@ configuration](../configuration/models.md), and [provider capabilities](../provi
 
 ## List controls
 
-Models, Model Groups, and Prompt Registry use the same list controls.
+Models, Route groups, and Prompts use the same list controls.
 Select a column heading or use **Sort list** to change the order.
 The server sorts all permitted results before it selects a page.
 The initial order is **Updated at**, newest first. Search resets the page.
@@ -47,7 +47,7 @@ If health data is unavailable, the list shows **Unknown**.
 
 ## Quick Success Workflow
 
-1. Open **AI Gateway > Models**
+1. Open **Gateway > Models**
 2. Add one deployment for a model you already have provider access to
 3. Confirm the deployment becomes healthy
 4. Verify the model appears in `GET /v1/models`
@@ -83,7 +83,7 @@ For shared credentials and key rotation, create an ElevenLabs [Named Credential]
 
 ### Text-to-Speech
 
-1. Open **AI Gateway > Models**
+1. Open **Gateway > Models**
 2. Choose **Text-to-Speech**
 3. Set the public model name, for example `elevenlabs-tts`
 4. Choose provider **ElevenLabs**
@@ -97,7 +97,7 @@ If the public request includes `voice`, that value is used as the ElevenLabs voi
 
 ### Speech-to-Text
 
-1. Open **AI Gateway > Models**
+1. Open **Gateway > Models**
 2. Choose **Speech-to-Text**
 3. Set the public model name, for example `elevenlabs-stt`
 4. Choose provider **ElevenLabs**
@@ -231,20 +231,20 @@ Example inline deployment payload:
 }
 ```
 
-For shared gateway credentials, [Named Credentials](named-credentials.md) remain the recommended workflow. If a deployment references a named credential and also carries overlapping connection fields locally, the named credential values win.
+For shared gateway credentials, [Provider credentials](named-credentials.md) remain the recommended workflow. If a deployment references a named credential and also carries overlapping connection fields locally, the named credential values win.
 
 ## Operational Notes
 
 - DeltaLLM validates provider and mode compatibility when you create or update a deployment
 - The explicit provider is the source of truth for dashboards, spend reports, callbacks, and metrics
-- Shared provider credentials are best managed through [Named Credentials](named-credentials.md)
+- Shared provider credentials are best managed through [Provider credentials](named-credentials.md)
 - Creating, updating, and deleting deployments requires admin access
 - Readable deployment IDs make later route-group work easier
 - Visibility to organizations, teams, keys, and users is governed through callable-target bindings, access-group bindings, and scope policies
 
 ## Related Pages
 
-- [Named Credentials](named-credentials.md)
+- [Provider credentials](named-credentials.md)
 - [Route Groups](route-groups.md)
 - [Model Deployments config reference](../configuration/models.md)
 - [Send your first request](../getting-started/quickstart.md)

@@ -14,6 +14,7 @@ import {
   type MCPApprovalStatusFilter,
   type MCPPageTab,
 } from '../lib/mcpApprovals';
+import { navSectionLabel } from '../lib/navigation';
 
 const TABS_ID = 'mcp';
 
@@ -73,6 +74,7 @@ export default function MCPServers() {
 
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/mcp-servers')}
       title="MCP"
       description="Connect external tool servers and review the tool calls that need approval."
       toolbar={tabs.length > 1 ? (

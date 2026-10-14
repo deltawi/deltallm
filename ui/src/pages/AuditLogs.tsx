@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import { audit, type AuditEvent, type Pagination } from '../lib/api';
 import { useApi } from '../lib/hooks';
 import { ContentCard, IndexShell } from '../components/admin/shells';
+import { navSectionLabel } from '../lib/navigation';
 
 type Category = 'all' | 'admin' | 'auth' | 'data_plane' | 'spend';
 
@@ -380,6 +381,7 @@ export default function AuditLogs() {
 
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/audit')}
       title="Audit Logs"
       count={pagination?.total ?? null}
       description="Track security and platform activity."

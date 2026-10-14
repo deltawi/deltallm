@@ -9,7 +9,7 @@ traffic splitting, a standby deployment, or a routing policy that can be tested 
 
 You need platform administrator access and at least one healthy deployment of the same request type.
 
-1. Open **AI Gateway**, then **Route Groups**.
+1. Open **Gateway**, then **Route groups**.
 2. Select **Create Group**.
 3. Enter the public group key that applications will call.
 4. Add the deployments that may receive traffic.

@@ -3,7 +3,7 @@ import { reconcileRuntimeOutputTpm } from '../lib/outputTpm';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { invitations, organizations, rbac, teams, users, type Invitation, type Principal, type PrincipalSummary, type ScopedAssetAccess } from '../lib/api';
-import { Plus, UserCog, ShieldCheck, Search, Building2, UsersRound, Trash2, Mail, KeyRound, Gauge } from 'lucide-react';
+import { Plus, UserCog, ShieldCheck, Search, Building2, UsersRound, Trash2, Mail, KeyRound, Gauge, Users } from 'lucide-react';
 import { formatOptionalBudget, formatOptionalLimit, isSelfRegisteredPrincipal } from '../lib/selfRegistration';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
@@ -13,6 +13,7 @@ import ProvisionPersonModal from '../components/admin/ProvisionPersonModal';
 import AccountEditorDialog from '../components/people/AccountEditorDialog';
 import { ORGANIZATION_ROLES as ORG_ROLES, TEAM_ROLES, type OrganizationOption, type TeamOption } from '../lib/peopleForm';
 import { useToast } from '../components/ToastProvider';
+import { navSectionLabel } from '../lib/navigation';
 
 function formatDate(d: string | null) {
   if (!d) return 'Never';
@@ -577,8 +578,9 @@ export default function RBACAccounts() {
 
   return (
     <IndexShell
-      title="People & Access"
-      titleIcon={UserCog}
+      eyebrowPrefix={navSectionLabel('/users')}
+      title="People"
+      titleIcon={Users}
       count={visibleCount}
       description={viewTab === 'users' ? 'Manage people, RBAC roles, and organization/team memberships. Summary cards reflect all platform accounts.' : 'Track and manage invitations across their lifecycle.'}
       notice={showPageNotice ? (

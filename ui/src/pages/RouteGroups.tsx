@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Layers, Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Workflow } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CreateDrawer from '../components/route-groups/CreateRouteGroupDrawer';
 import type { Column } from '../components/DataTable';
@@ -23,6 +23,7 @@ import { useRouteGroupMutationScope } from '../lib/useRouteGroupMutationScope';
 import { useToast } from '../components/ToastProvider';
 import { useBranding } from '../lib/brandingContext';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
+import { navSectionLabel } from '../lib/navigation';
 
 function mutationErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -155,8 +156,9 @@ export default function RouteGroups() {
 
   return (
     <IndexShell
-      title="Model Groups"
-      titleIcon={Layers}
+      eyebrowPrefix={navSectionLabel('/route-groups')}
+      title="Route Groups"
+      titleIcon={Workflow}
       count={pagination?.total ?? null}
       description={`Group deployments behind a single key — clients call the group, ${branding.instance_name} routes traffic.`}
       action={(

@@ -11,7 +11,7 @@ You need platform administrator access and the provider's connection details.
 
 ## Save the credential
 
-1. Open **AI Gateway**, then **Named Credentials**.
+1. Open **Gateway**, then **Provider credentials**.
 2. Select **Create Named Credential**.
 3. Enter a clear name and choose the provider.
 4. Enter the provider key and any required API address, region, or version.
@@ -21,7 +21,7 @@ Secret values are hidden after they are saved.
 
 ## Use it with a model
 
-1. Open **AI Gateway**, then **Models**.
+1. Open **Gateway**, then **Models**.
 2. Add a model or edit an existing model.
 3. Set the credential source to **Named Credential**.
 4. Choose the saved credential.

@@ -26,7 +26,7 @@ Use these steps if the model list is empty or you want to use a different provid
 
 1. Open `http://localhost:4002` in your browser.
 2. Sign in with the administrator email and password from your `.env` file.
-3. Open **AI Gateway**.
+3. Open **Gateway**.
 4. Open **Models**.
 5. Select **Add model**.
 6. Enter a public name. Use `gpt-4o-mini` to use the examples in this guide.

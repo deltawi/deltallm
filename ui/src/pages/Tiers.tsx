@@ -19,6 +19,7 @@ import {
   tierPackageSummary,
   tierToForm,
 } from '../lib/tiers';
+import { navSectionLabel } from '../lib/navigation';
 
 export default function Tiers() {
   const navigate = useNavigate();
@@ -152,6 +153,7 @@ export default function Tiers() {
 
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/tiers')}
       title="Tiers"
       titleIcon={BadgeDollarSign}
       count={pagination?.total ?? null}

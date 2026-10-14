@@ -23,7 +23,7 @@ export default function IndexShell({
   titleIcon: TitleIcon,
   count,
   description,
-  eyebrowPrefix = 'Platform',
+  eyebrowPrefix,
   eyebrowCurrent,
   action,
   intro,

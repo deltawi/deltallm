@@ -3,7 +3,7 @@
 Use the MCP page to register upstream MCP servers, control who can use them, set how each tool
 runs, and decide tool calls that need approval.
 
-To open the page, select **AI Gateway**, then **MCP**. The page has two tabs:
+To open the page, select **Gateway**, then **MCP**. The page has two tabs:
 
 - **Servers**: register, check, and manage MCP servers.
 - **Approvals**: approve or reject tool calls that need manual approval. This tab shows only when
@@ -29,7 +29,7 @@ Use this area when you need to:
 
 ## Quick Success Workflow
 
-1. Open **AI Gateway -> MCP**, then the **Servers** tab
+1. Open **Gateway > MCP**, then the **Servers** tab
 2. Create one server with a real `base_url`
 3. Refresh capabilities and confirm the expected tool list appears
 4. Run a health check and confirm the server is healthy
@@ -143,7 +143,7 @@ organizations and teams that your account can manage.
 
 ### Review a request
 
-1. Open **AI Gateway -> MCP**, then the **Approvals** tab. The tab shows the number of pending
+1. Open **Gateway > MCP**, then the **Approvals** tab. The tab shows the number of pending
    requests.
 2. The **Pending** filter shows by default. Use **Approved**, **Rejected**, **Expired**, or **All**
    to see other requests.

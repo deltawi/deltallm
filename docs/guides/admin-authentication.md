@@ -15,7 +15,7 @@ recovery.
 ## Create the first administrator
 
 Set the bootstrap administrator email and password before the first startup. DeltaLLM creates that
-account when both values are present. Sign in with it, then use **People & Access** for later account
+account when both values are present. Sign in with it, then use **People** for later account
 and membership changes.
 
 The exact settings and environment-variable examples are in the [authentication and SSO
@@ -23,7 +23,7 @@ reference](../features/authentication.md#session-based-login-for-the-admin-ui).
 
 ## Invite another person
 
-1. Open **People & Access**.
+1. Open **People**.
 2. Invite the person's email address.
 3. Choose the required organization or team membership and role.
 4. Ask the person to accept the email invitation.

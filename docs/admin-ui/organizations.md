@@ -24,7 +24,7 @@ organization. See
 2. Set the broad budget and rate limits across all time windows
 3. Choose which models, route groups, and access groups the organization is allowed to use
 4. Add teams inside the organization
-5. Assign platform accounts through People & Access
+5. Assign platform accounts through **Access > People**
 
 ## Delete an organization
 

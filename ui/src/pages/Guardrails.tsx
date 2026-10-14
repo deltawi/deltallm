@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { IndexShell } from '../components/admin/shells';
 import type { GuardrailConfigInput } from '../lib/guardrails';
+import { navSectionLabel } from '../lib/navigation';
 
 type ScopeKind = 'organization' | 'team' | 'key';
 type ScopeTarget = { scope: ScopeKind; id: string; label: string } | null;
@@ -137,8 +138,9 @@ export default function Guardrails() {
 
   return (
     <IndexShell
+      eyebrowPrefix={navSectionLabel('/guardrails')}
       title="Guardrails"
-      titleIcon={Shield}
+      titleIcon={ShieldCheck}
       count={items.length || null}
       description="Configure safety guardrails to filter, block, or audit requests and responses across your gateway."
       action={(

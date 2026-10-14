@@ -19,7 +19,7 @@ and [Routing and Failover](../features/routing.md).
 
 ## List controls
 
-Models, Model Groups, and Prompt Registry use the same list controls.
+Models, Route groups, and Prompts use the same list controls.
 Select a column heading or use **Sort list** to change the order.
 The server sorts all permitted results before it selects a page.
 The initial order is **Updated at**, newest first. Search resets the page.
