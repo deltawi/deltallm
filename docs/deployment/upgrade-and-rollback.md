@@ -29,6 +29,8 @@ For the operator checklist, start with [Upgrade or roll back](../guides/deployme
 4. Deploy a canary or the smallest safe replica set with migration bootstrap disabled.
 5. Verify liveness, readiness, authenticated gateway traffic, streaming, admin access, audit/spend
    ingestion, queues, provider errors, and authorization denials.
+   The [live smoke suite](live-smoke-suite.md) checks every model, streaming, and batch jobs
+   with a customer-style key.
 6. Increase traffic/replicas while watching latency, failure rate, saturation, and background lag.
 7. Before you enable new feature flags, make sure that all previous API and worker replicas have drained.
    Confirm that the release runbook's compatibility checks pass.

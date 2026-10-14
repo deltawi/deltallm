@@ -54,6 +54,7 @@ Before approving traffic, capture:
 1. the rendered deployment and image digest;
 2. migration job name, logs, and successful completion status;
 3. public/private route reachability checks;
-4. authenticated smoke requests and intentional authorization failures;
+4. authenticated smoke requests and intentional authorization failures (the
+   [live smoke suite](live-smoke-suite.md) report with `--json-output` covers the smoke requests);
 5. readiness and alert state for every replica and worker; and
 6. the most recent restore rehearsal and rollback exercise.
