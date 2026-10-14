@@ -138,6 +138,7 @@ nav:
           - Monitor the system: guides/monitoring.md
       - Maintain the system:
           - Upgrade or roll back: guides/deployment-workflow.md
+          - Check a deployment: deployment/live-smoke-suite.md
           - Update the database: deployment/database-migrations.md
           - Recover the v0.1.48 model migration: deployment/model-api-identity-migration-recovery.md
           - Back up and restore data: deployment/backup-and-restore.md

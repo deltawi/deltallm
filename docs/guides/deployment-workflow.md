@@ -8,7 +8,8 @@ Use this checklist with the deployment owner, database owner, and monitoring own
 4. Run one target-version [database migration job](../deployment/database-migrations.md) before
    starting new application replicas.
 5. Deploy a small canary with automatic migration bootstrap disabled.
-6. Test successful requests and expected access denials.
+6. Test successful requests and expected access denials. Run the
+   [live smoke suite](../deployment/live-smoke-suite.md) to call every model and run a batch job.
 7. Increase traffic while watching readiness, errors, latency, queues, and provider health.
 8. Confirm that the previous application version is still compatible with the current database and
    that the [rollback decision](../deployment/upgrade-and-rollback.md#rollback-decision) remains
