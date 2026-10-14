@@ -171,6 +171,9 @@ Preflight limits apply only during the preflight phase. Neither target is an
 SLO. The runner retains bounded raw samples in its output directory.
 The runner prints each phase and any command that takes 5 seconds or more with its
 elapsed time, so the job log shows where the time went.
+If a load check fails, it also prints the gateway's classified telemetry failures and
+PostgreSQL's lock-wait and cancellation lines (the fixture database logs lock waits
+over 100 ms), so the job log names the cause.
 The disposable cluster makes both owned nodes schedulable. This gives Kubernetes
 enough requested CPU for four 1-core API pods, rolling-update surge, monitoring
 and dependency pods on a standard public GitHub runner. The nodes share the

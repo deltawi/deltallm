@@ -27,6 +27,7 @@ from src.db.audit.audit_ingestion import (
     AuditOutboxRecord,
 )
 from src.services.audit.audit_service import AuditIngestionConfig
+from src.services.audit import audit_service as audit_service_module
 from src.telemetry.lifecycle import WorkerState
 from src.telemetry.prompt_render import PromptRenderEvent
 
@@ -267,6 +268,30 @@ class _FailingDurableIngress(_DurableIngress):
         raise ConnectionError("database unavailable")
 
 
+class _LockTimeout(Exception):
+    sqlstate = "55P03"
+
+
+class _ContendedDurableIngress(_DurableIngress):
+    """Fail the first ``contended`` enqueues with a rolled-back lock timeout."""
+
+    def __init__(self, *, contended: int) -> None:
+        super().__init__()
+        self.contended = contended
+
+    async def enqueue(self, **kwargs):  # noqa: ANN003, ANN201
+        self.enqueued.append(kwargs)
+        if len(self.enqueued) <= self.contended:
+            raise _LockTimeout()
+        return AuditEnqueueResult(status="accepted", pending_count=1)
+
+    async def enqueue_bundle(self, **kwargs):  # noqa: ANN003, ANN201
+        if len(self.enqueued) < self.contended:
+            self.enqueued.append(kwargs)
+            raise _LockTimeout()
+        return await super().enqueue_bundle(**kwargs)
+
+
 class _CancelledDurableIngress(_DurableIngress):
     async def enqueue(self, **kwargs):  # noqa: ANN003, ANN201
         self.enqueued.append(kwargs)
@@ -313,6 +338,78 @@ async def test_required_durable_enqueue_failure_remains_fail_closed() -> None:
             AuditEventInput(action="REQUIRED", organization_id="org-1"),
             delivery_class="required",
         )
+
+
+@pytest.mark.asyncio
+async def test_required_durable_enqueue_retries_once_after_lock_contention(monkeypatch) -> None:
+    monkeypatch.setattr(audit_service_module, "_CONTENTION_RETRY_DELAY_SECONDS", (0, 0))
+    service = AuditService(
+        FakeAuditRepository(),
+        db_client=object(),
+        ingestion_config=AuditIngestionConfig(enabled=True, worker_enabled=False),
+    )
+    recovered = _ContendedDurableIngress(contended=1)
+    service.ingestion_repository = recovered  # type: ignore[assignment]
+
+    result = await service.enqueue_event(
+        AuditEventInput(action="REQUIRED", organization_id="org-1"),
+        delivery_class="required",
+    )
+
+    assert result == "accepted"
+    assert len(recovered.enqueued) == 2
+    assert recovered.enqueued[0]["event_id"] == recovered.enqueued[1]["event_id"]
+
+    persistent = _ContendedDurableIngress(contended=2)
+    service.ingestion_repository = persistent  # type: ignore[assignment]
+    with pytest.raises(RequiredAuditPersistenceError):
+        await service.enqueue_event(
+            AuditEventInput(action="REQUIRED", organization_id="org-1"),
+            delivery_class="required",
+        )
+    assert len(persistent.enqueued) == 2
+
+
+@pytest.mark.asyncio
+async def test_durable_enqueue_does_not_retry_outages_or_best_effort(monkeypatch) -> None:
+    monkeypatch.setattr(audit_service_module, "_CONTENTION_RETRY_DELAY_SECONDS", (0, 0))
+    service = AuditService(
+        FakeAuditRepository(),
+        db_client=object(),
+        ingestion_config=AuditIngestionConfig(enabled=True, worker_enabled=False),
+    )
+    outage = _FailingDurableIngress()
+    service.ingestion_repository = outage  # type: ignore[assignment]
+    with pytest.raises(RequiredAuditPersistenceError):
+        await service.enqueue_event(
+            AuditEventInput(action="REQUIRED", organization_id="org-1"),
+            delivery_class="required",
+        )
+    assert len(outage.enqueued) == 1
+
+    contended = _ContendedDurableIngress(contended=1)
+    service.ingestion_repository = contended  # type: ignore[assignment]
+    result = await service.enqueue_event(
+        AuditEventInput(action="OPTIONAL", organization_id="org-1"),
+        delivery_class="best_effort",
+    )
+    assert result == "dropped"
+    assert len(contended.enqueued) == 1
+
+
+@pytest.mark.asyncio
+async def test_required_prompt_render_retries_once_after_lock_contention(monkeypatch) -> None:
+    monkeypatch.setattr(audit_service_module, "_CONTENTION_RETRY_DELAY_SECONDS", (0, 0))
+    service = AuditService(
+        FakeAuditRepository(),
+        db_client=object(),
+        ingestion_config=AuditIngestionConfig(enabled=True, worker_enabled=False),
+    )
+    ingress = _ContendedDurableIngress(contended=1)
+    service.ingestion_repository = ingress  # type: ignore[assignment]
+
+    assert await service.enqueue_prompt_render(_prompt_render_event()) == "accepted"
+    assert len(ingress.enqueued) == 2
 
 
 @pytest.mark.asyncio

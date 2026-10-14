@@ -43,6 +43,9 @@ Best-effort audit records are not authoritative.
 If queue capacity or an audit dependency is unavailable, the system drops and counts the best-effort record.
 This does not change a request, MCP tool, notification, or callback result.
 Required audit still fails closed with a controlled service-unavailable response.
+Before it does, a required enqueue that hit a lock or connection-pool wait past its bound is retried once after a short random delay.
+The event ID stays the same, so the retry cannot create a duplicate. Outages, such as a lost database connection, are not retried.
+Each retry increments `deltallm_audit_write_failures_total` with a `*_contention_retry` path.
 MCP tool attempts require audit events.
 If the audit service is unavailable, the gateway rejects the attempt before it calls the remote tool transport.
 

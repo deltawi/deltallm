@@ -22,6 +22,7 @@ from tests.performance.capacity_fixture import (
     capacity_values,
     install_capacity_dependencies,
     install_edge,
+    print_rejection_evidence,
 )
 from tests.performance.lifecycle_fixtures import CHART
 from tests.performance.capacity_load import arrival
@@ -170,6 +171,9 @@ async def exercise(cluster: LifecycleCluster, values: Path, image: str, baseline
             await exercise_scaling(cluster, candidate_values, url)
             await pod_loss(cluster, url)
             completed = True
+        except AssertionError:
+            await asyncio.to_thread(print_rejection_evidence, cluster)
+            raise
         finally:
             try:
                 await export_records(cluster.output / "accepted-records.json")
