@@ -126,6 +126,8 @@ Audit payloads are handled differently depending on the event type:
 - data-plane payload content is stored only when the organization has `audit_content_storage_enabled = true`
 - One PostgreSQL transaction disables content storage and redacts active or blocked outbox envelopes.
   Legacy and durable writers acquire the same organization policy lock.
+  Writers that only read the policy share that lock, so a worker batch never delays a request's audit event.
+  Changing the policy takes the lock exclusively and waits for those readers to finish.
   After lock acquisition, they read policy in a fresh statement.
   Durable workers also remove prohibited content from claimed envelopes before completion.
 - Redis invalidation removes stale policy-cache entries across replicas, but privacy correctness does not depend on Pub/Sub availability

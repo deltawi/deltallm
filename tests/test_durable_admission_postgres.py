@@ -360,6 +360,21 @@ async def test_slow_policy_fails_closed_with_bounded_pool_and_recovers(queues):
     )
 
 
+async def test_worker_policy_snapshot_does_not_block_request_enqueue(queues):
+    # The worker keeps its policy snapshot for a whole batch write. Request-path
+    # enqueues for the same organization must not wait behind it.
+    async with queues.observer.tx() as worker:
+        await AuditIngestionRepository(worker).lock_content_policies(["busy-org"])
+        assert (
+            await enqueue(queues.acceptance, "audit", "during-batch", organization="busy-org")
+            == "accepted"
+        )
+        with pytest.raises(DatabaseUnavailableError) as failure:
+            async with queues.acceptance.tx() as writer:
+                await AuditIngestionRepository(writer).lock_content_policy("busy-org")
+        assert "lock timeout" in str(failure.value.__cause__)
+
+
 async def test_measurement_probe_preserves_policy_lock_and_atomic_acceptance(queues):
     from scripts.benchmarks.measure_admission import ProbeClient, Sample
 

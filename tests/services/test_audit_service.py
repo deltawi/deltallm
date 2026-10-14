@@ -420,7 +420,7 @@ class _PromptPolicyIngress(_FullDurableIngress):
             pending_count=100 if self.full else 1,
         )
 
-    async def lock_content_policy(self, organization_id: str) -> None:
+    async def share_content_policy(self, organization_id: str) -> None:
         self.locks.append(organization_id)
 
     async def get_content_policy(self, organization_id: str) -> tuple[bool, int]:
