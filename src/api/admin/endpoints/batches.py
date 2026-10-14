@@ -12,7 +12,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, Field
 
 from src.auth.roles import Permission
-from src.api.admin.batch_access import require_operator_batch_access
+from src.api.admin.batch_access import (
+    append_batch_scope_clause,
+    batch_list_view,
+    enforce_batch_read_scope,
+    enforce_batch_update_scope,
+    enforce_webhook_delivery_scope,
+    load_batch_scope_row,
+    require_operator_batch_access,
+)
 from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
@@ -21,6 +29,7 @@ from src.api.admin.endpoints.common import (
 )
 from src.audit.actions import AuditAction
 from src.batch.error_sanitization import sanitize_batch_item_error_fields
+from src.batch.repositories.admin_visibility_repository import find_batch_scope_row
 from src.batch.repository import BatchRepository
 from src.batch.models import BATCH_JOB_STATUS_SET, encode_operator_failed_reason
 from src.batch.scheduling import (
@@ -49,7 +58,7 @@ from src.metrics import (
     increment_batch_webhook_replay,
     publish_batch_runtime_summary,
 )
-from src.middleware.admin import require_admin_permission
+from src.middleware.admin import require_authenticated
 from src.services.ui.ui_authorization import (
     build_archived_batch_webhook_capabilities,
     build_batch_capabilities,
@@ -464,119 +473,6 @@ def _scheduler_flow_response(flow) -> dict[str, Any]:  # noqa: ANN001
     }
 
 
-async def _find_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any] | None:
-    rows = await db.query_raw(
-        """
-        SELECT batch_id, status, created_by_team_id, created_by_organization_id
-        FROM deltallm_batch_job
-        WHERE batch_id = $1
-        LIMIT 1
-        """,
-        batch_id,
-    )
-    return dict(rows[0]) if rows else None
-
-
-async def _load_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any]:
-    job = await _find_batch_scope_row(db, batch_id)
-    if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
-    return job
-
-
-async def _enforce_batch_update_scope(  # noqa: ANN001
-    *,
-    db: Any,
-    scope,
-    job: dict[str, Any],
-) -> dict[str, str | None]:
-    team_id = str(job.get("created_by_team_id") or "").strip() or None
-    organization_id = (
-        str(job.get("organization_id") or job.get("created_by_organization_id") or "").strip()
-        or None
-    )
-    if organization_id is None and team_id:
-        org_rows = await db.query_raw(
-            "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
-            team_id,
-        )
-        organization_id = (
-            str((org_rows[0] if org_rows else {}).get("organization_id") or "").strip() or None
-        )
-
-    ownership = {
-        "created_by_team_id": team_id,
-        "organization_id": organization_id,
-    }
-    if scope.is_platform_admin:
-        return ownership
-    if team_id and scope.team_ids and team_id in scope.team_ids:
-        return ownership
-    if organization_id and scope.org_ids and organization_id in scope.org_ids:
-        return ownership
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
-
-async def _enforce_webhook_delivery_scope(
-    *,
-    db: Any,
-    scope,
-    deliveries,
-) -> dict[str, str | None]:  # noqa: ANN001
-    ownership_scopes = {
-        (
-            str(delivery.created_by_team_id or "").strip() or None,
-            str(delivery.created_by_organization_id or "").strip() or None,
-        )
-        for delivery in deliveries
-    }
-    if len(ownership_scopes) != 1:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    team_id, organization_id = next(iter(ownership_scopes))
-    return await _enforce_batch_update_scope(
-        db=db,
-        scope=scope,
-        job={
-            "created_by_team_id": team_id,
-            "created_by_organization_id": organization_id,
-        },
-    )
-
-
-def _append_batch_scope_clause(
-    *, clauses: list[str], params: list[Any], scope, job_alias: str = ""
-) -> bool:  # noqa: ANN001
-    if scope.is_platform_admin:
-        return True
-
-    team_column = f"{job_alias}created_by_team_id"
-    org_column = f"{job_alias}created_by_organization_id"
-    scope_clauses: list[str] = []
-
-    if scope.team_ids:
-        team_placeholders = ", ".join(
-            f"${len(params) + index + 1}" for index in range(len(scope.team_ids))
-        )
-        params.extend(scope.team_ids)
-        scope_clauses.append(f"{team_column} IN ({team_placeholders})")
-
-    if scope.org_ids:
-        org_placeholders = ", ".join(
-            f"${len(params) + index + 1}" for index in range(len(scope.org_ids))
-        )
-        params.extend(scope.org_ids)
-        scope_clauses.append(
-            f"({org_column} IN ({org_placeholders}) "
-            f"OR {team_column} IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({org_placeholders})))"
-        )
-
-    if not scope_clauses:
-        return False
-
-    clauses.append("(" + " OR ".join(scope_clauses) + ")")
-    return True
-
-
 @router.get("/ui/api/batches")
 async def list_batches(
     request: Request,
@@ -595,10 +491,12 @@ async def list_batches(
     clauses: list[str] = []
     params: list[Any] = []
 
-    if not _append_batch_scope_clause(clauses=clauses, params=params, scope=scope, job_alias="j."):
+    view = batch_list_view(scope)
+    if not append_batch_scope_clause(clauses=clauses, params=params, scope=scope, job_alias="j."):
         return {
             "data": [],
             "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+            "view": view,
         }
 
     if search:
@@ -698,6 +596,7 @@ async def list_batches(
             "offset": offset,
             "has_more": offset + limit < total,
         },
+        "view": view,
     }
 
 
@@ -715,7 +614,7 @@ async def batch_summary(
     clauses: list[str] = []
     params: list[Any] = []
 
-    if not _append_batch_scope_clause(clauses=clauses, params=params, scope=scope):
+    if not append_batch_scope_clause(clauses=clauses, params=params, scope=scope):
         return {
             "total": 0,
             "queued": 0,
@@ -754,7 +653,7 @@ async def batch_summary(
 
 @router.get(
     "/ui/api/batches/feature-status",
-    dependencies=[Depends(require_admin_permission(Permission.KEY_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def batch_feature_status(
     request: Request,
@@ -1096,6 +995,7 @@ async def get_batch(
             j.batch_id, j.endpoint, j.status, j.model, j.execution_mode,
             j.total_items, j.completed_items, j.failed_items, j.cancelled_items, j.in_progress_items,
             j.created_by_api_key, j.created_by_team_id, j.created_by_organization_id,
+            j.created_by_owner_account_id,
             j.created_at, j.started_at, j.completed_at, j.cancel_requested_at, j.expires_at,
             t.team_alias,
             COALESCE(j.created_by_organization_id, t.organization_id) AS organization_id
@@ -1110,7 +1010,7 @@ async def get_batch(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
 
     job = dict(rows[0])
-    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    await enforce_batch_read_scope(db=db, scope=scope, job=job)
 
     items_total = int(job.get("total_items") or 0)
     fetch_limit = items_limit + 1
@@ -1228,8 +1128,8 @@ async def get_batch_costs(
         request, authorization, x_master_key, required_permission=Permission.KEY_READ
     )
     db = db_or_503(request)
-    job = await _load_batch_scope_row(db, batch_id)
-    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    job = await load_batch_scope_row(db, batch_id)
+    await enforce_batch_read_scope(db=db, scope=scope, job=job)
 
     rows = await db.query_raw(
         """
@@ -1260,8 +1160,8 @@ async def get_batch_item(
         request, authorization, x_master_key, required_permission=Permission.KEY_READ
     )
     db = db_or_503(request)
-    job = await _load_batch_scope_row(db, batch_id)
-    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    job = await load_batch_scope_row(db, batch_id)
+    await enforce_batch_read_scope(db=db, scope=scope, job=job)
 
     rows = await db.query_raw(
         """
@@ -1296,8 +1196,8 @@ async def cancel_batch(
         request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
     )
     db = db_or_503(request)
-    job = await _load_batch_scope_row(db, batch_id)
-    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    job = await load_batch_scope_row(db, batch_id)
+    await enforce_batch_update_scope(db=db, scope=scope, job=job)
 
     terminal = {"completed", "failed", "cancelled", "expired"}
     if job.get("status") in terminal:
@@ -1338,16 +1238,16 @@ async def get_batch_webhook_deliveries(
     )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
-    job = await _find_batch_scope_row(db, batch_id)
+    job = await find_batch_scope_row(db, batch_id)
     deliveries = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
     if job is not None:
-        ownership = await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+        ownership = await enforce_batch_read_scope(db=db, scope=scope, job=job)
         capability_batch = {
             **job,
             **ownership,
         }
     elif deliveries:
-        ownership = await _enforce_webhook_delivery_scope(
+        ownership = await enforce_webhook_delivery_scope(
             db=db,
             scope=scope,
             deliveries=deliveries,
@@ -1394,12 +1294,12 @@ async def replay_batch_webhook_delivery(
     )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
-    job = await _find_batch_scope_row(db, batch_id)
+    job = await find_batch_scope_row(db, batch_id)
     deliveries = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
     if job is not None:
-        ownership = await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+        ownership = await enforce_batch_update_scope(db=db, scope=scope, job=job)
     elif deliveries:
-        ownership = await _enforce_webhook_delivery_scope(
+        ownership = await enforce_webhook_delivery_scope(
             db=db,
             scope=scope,
             deliveries=deliveries,
@@ -1494,8 +1394,8 @@ async def retry_batch_finalization(
     )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
-    job = await _load_batch_scope_row(db, batch_id)
-    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    job = await load_batch_scope_row(db, batch_id)
+    await enforce_batch_update_scope(db=db, scope=scope, job=job)
     if job.get("status") != "finalizing":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Batch is not in 'finalizing' status"
@@ -1533,8 +1433,8 @@ async def requeue_stale_batch_items(
     )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
-    job = await _load_batch_scope_row(db, batch_id)
-    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    job = await load_batch_scope_row(db, batch_id)
+    await enforce_batch_update_scope(db=db, scope=scope, job=job)
     with _repair_action_metric("requeue_stale"):
         requeued = await repository.requeue_expired_in_progress_items(batch_id)
         refreshed = await repository.refresh_job_progress(batch_id)
@@ -1577,8 +1477,8 @@ async def mark_batch_failed(
     )
     db = db_or_503(request)
     repository = _batch_repository_or_503(request)
-    job = await _load_batch_scope_row(db, batch_id)
-    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    job = await load_batch_scope_row(db, batch_id)
+    await enforce_batch_update_scope(db=db, scope=scope, job=job)
     terminal = {"completed", "failed", "cancelled", "expired"}
     if job.get("status") in terminal:
         raise HTTPException(

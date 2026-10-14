@@ -118,7 +118,8 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
     people_access: isPlatformAdmin,
     usage: isPlatformAdmin || canReadUsage,
     audit: isPlatformAdmin || permissions.has('audit.read'),
-    batches: isPlatformAdmin || permissions.has('key.read'),
+    // Members without key.read still see the batches they created.
+    batches: isPlatformAdmin || permissions.size > 0,
     guardrails: isPlatformAdmin,
     playground: true,
     settings: isPlatformAdmin,
@@ -150,7 +151,6 @@ export function canAccessPage(uiAccess: UIAccess, key: UIAccessKey): boolean {
 const DEFAULT_UI_ROUTE_ORDER: Array<[UIAccessKey, string]> = [
   ['dashboard', '/'],
   ['keys', '/keys'],
-  ['batches', '/batches'],
   ['teams', '/teams'],
   ['organizations', '/organizations'],
   ['models', '/models'],
@@ -158,6 +158,8 @@ const DEFAULT_UI_ROUTE_ORDER: Array<[UIAccessKey, string]> = [
   ['named_credentials', '/named-credentials'],
   ['mcp_servers', '/mcp-servers'],
   ['usage', '/usage'],
+  // Members without key.read can open Batch Jobs, but it is often empty for them.
+  ['batches', '/batches'],
   ['audit', '/audit'],
   ['settings', '/settings'],
 ];

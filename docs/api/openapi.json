@@ -12449,38 +12449,6 @@
         "operationId": "batch_feature_status_ui_api_batches_feature_status_get",
         "parameters": [
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,

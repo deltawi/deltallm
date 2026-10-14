@@ -700,6 +700,20 @@ The list response also contains `pagination` (`limit`, `count`, `has_more`, `nex
 | `POST` | `/ui/api/batches/{batch_id}/cancel` | Cancel a batch |
 | `POST` | `/ui/api/batches/{batch_id}/webhook-deliveries/{event_id}/replay` | Reschedule a failed webhook delivery while preserving its event ID and body |
 
+The read routes (summary, list, detail, items, costs, and webhook inspection) apply the same scope:
+
+- A platform administrator sees all batches.
+- `key.read` in an organization or team shows all batches in that scope.
+- Every other organization or team membership shows only the batches that the account created, as
+  recorded in `created_by_owner_account_id` when the batch was created. The batch must also be in
+  one of the account's current organizations or teams.
+
+A batch outside this scope returns `403`. The list response also contains `view`. The value is
+`own` when the caller sees only its own batches, and `operator` in all other cases.
+`GET /ui/api/batches/feature-status` is available to every signed-in operator account.
+The write routes (cancel, retry finalization, requeue stale, mark failed, and webhook replay) still
+require `key.update` in the batch's scope.
+
 Webhook inspection requires the existing scoped batch read permission. Replay requires scoped batch update permission and returns `409` unless the delivery is still failed. The standalone delivery endpoint and replay remain scoped through ownership retained on the outbox row after batch metadata cleanup. These responses never include the destination URL, signing secret, encrypted configuration, headers, payload, ownership identifiers, or caller metadata.
 
 ### Audit
