@@ -533,7 +533,7 @@ async def test_spend_logs_use_stable_cursor_pagination(client, test_app, monkeyp
 
     assert second.status_code == 200
     second_query, second_params = fake_db.calls[0]
-    assert "(start_time, id) < ($1::timestamp, $2)" in second_query
+    assert "(start_time, id) < ($1::timestamptz, $2)" in second_query
     assert "LIMIT $3" in second_query
     assert second_params == (rows[1]["start_time"], "log-2", 3)
 

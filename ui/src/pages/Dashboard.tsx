@@ -15,6 +15,7 @@ import {
   readDismissals,
   writeDismissals,
   type DismissalStorage,
+  type Dismissals,
 } from '../lib/liveDashboard';
 import { providerDisplayName } from '../lib/providers';
 import { useReport } from '../lib/useReport';
@@ -99,7 +100,7 @@ export default function Dashboard() {
 
   const storage = browserStorage();
   const [dismissed, setDismissed] = useState(() => readDismissals(storage, principal));
-  const updateDismissed = (next: Record<string, number>) => {
+  const updateDismissed = (next: Dismissals) => {
     setDismissed(next);
     writeDismissals(storage, principal, next);
   };
@@ -151,7 +152,7 @@ export default function Dashboard() {
           items={items}
           dismissed={dismissed}
           loading={attentionLoading}
-          onDismiss={(id) => updateDismissed({ ...dismissed, [id]: Date.now() })}
+          onDismiss={(item) => updateDismissed({ ...dismissed, [item.id]: { at: Date.now(), rank: item.rank } })}
           onRestore={(id) => {
             const next = { ...dismissed };
             delete next[id];

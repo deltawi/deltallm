@@ -239,3 +239,59 @@ async def test_every_dimension_runs_with_labels_and_filters(explorer_db, dimensi
     )
     assert sum(float(row["total_spend"]) for row in series) == pytest.approx(6.75)
     assert breakdown
+
+
+async def test_provider_filter_and_search_accept_braces_and_like_wildcards(explorer_db):
+    db, organization_id = explorer_db
+    await _seed(db, organization_id)
+    await _insert(db, organization_id, model="my{model}_x", at=DAY + timedelta(hours=2), spend=1.5)
+    common: dict[str, Any] = {
+        "window": WINDOW,
+        "visibility": _visibility(organization_id),
+        "source": get_spend_read_source(),
+        # Registry model names are written into the SQL text as literals.
+        "model_provider_overrides": {"my{model}_x": "azure", "mini": "azure"},
+    }
+
+    by_provider = await _rows(
+        db,
+        usage_breakdown_query(
+            group_by="model",
+            sort_by="spend",
+            search=None,
+            limit=10,
+            offset=0,
+            filters=UsageFilters.build(values={"provider": "openai"}),
+            **common,
+        ),
+    )
+    underscore = await _rows(
+        db,
+        usage_breakdown_query(
+            group_by="model",
+            sort_by="spend",
+            search="}_",
+            limit=10,
+            offset=0,
+            filters=UsageFilters.build(values={}),
+            **common,
+        ),
+    )
+    percent = await _rows(
+        db,
+        usage_breakdown_query(
+            group_by="model",
+            sort_by="spend",
+            search="%",
+            limit=10,
+            offset=0,
+            filters=UsageFilters.build(values={}),
+            **common,
+        ),
+    )
+
+    # The stored provider column wins over the registry override; the point is that
+    # an override name with braces no longer breaks the SQL text.
+    assert "my{model}_x" in {row["group_key"] for row in by_provider}
+    assert [row["group_key"] for row in underscore] == ["my{model}_x"]
+    assert [row["request_count"] for row in percent] == [None]

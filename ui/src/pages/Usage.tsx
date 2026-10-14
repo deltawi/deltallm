@@ -105,7 +105,7 @@ export default function Usage() {
 
   const tabLink = (path: string) => {
     const next = new URLSearchParams();
-    const keep = ['view', 'model', 'provider', 'organization', 'team', 'user', 'api_key', 'unassigned'];
+    const keep = ['view', 'range', 'start', 'end', 'window', 'model', 'provider', 'organization', 'team', 'user', 'api_key', 'unassigned'];
     for (const key of keep) for (const value of searchParams.getAll(key)) next.append(key, value);
     for (const [key, value] of searchParams) if (key.endsWith('_label')) next.set(key, value);
     const suffix = next.toString();

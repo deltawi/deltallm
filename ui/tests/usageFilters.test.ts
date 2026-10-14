@@ -7,6 +7,7 @@ import { BACKGROUND_REQUEST_HEADER } from '../src/lib/sessionActivity';
 import { logDurationMs, logKeyName, logStatusCode, parseLogTime, relativeTime } from '../src/lib/requestLogs';
 import {
   allowedUsageDimensions,
+  chipDimensions,
   filterLabel,
   groupLabel,
   parseRequestWindow,
@@ -123,4 +124,10 @@ test('auto refresh report requests do not count as session activity', () => {
   const forced = new Headers(requestInit({ force: true }).headers);
   assert.equal(forced.get('Cache-Control'), 'no-cache');
   assert.equal(forced.get(BACKGROUND_REQUEST_HEADER), null);
+});
+
+test('an active filter always has a chip, even outside the usual set', () => {
+  const allowed = ['model', 'provider', 'organization', 'team', 'user', 'api_key'] as const;
+  assert.deepEqual(chipDimensions(['model', 'team'], [{ dimension: 'user', value: 'u1' }], allowed), ['model', 'team', 'user']);
+  assert.deepEqual(chipDimensions(['model', 'api_key'], [], ['model', 'provider']), ['model']);
 });

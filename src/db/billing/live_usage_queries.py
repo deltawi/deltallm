@@ -258,7 +258,14 @@ def _budget_scope(kind: str, visibility: SpendVisibility, where: WhereBuilder) -
             return None
         return in_list("b.team_id", visibility.team_ids)
     if view == "self" and kind == "api_key" and visibility.owner_account_id:
-        return f"b.owner_account_id = {where.bind(visibility.owner_account_id)}"
+        # Same boundary as self spend: own keys, in current memberships only.
+        owner = f"b.owner_account_id = {where.bind(visibility.owner_account_id)}"
+        teams = in_list("b.team_id", visibility.self_team_ids)
+        orgs = in_list("t.organization_id", visibility.self_organization_ids)
+        return (
+            f"{owner} AND ({teams} OR b.team_id IN "
+            f"(SELECT t.team_id FROM deltallm_teamtable t WHERE {orgs}))"
+        )
     return None
 
 

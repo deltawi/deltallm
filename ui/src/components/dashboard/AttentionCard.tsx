@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, CheckCircle2, X } from 'lucide-react';
-import type { AttentionItem } from '../../lib/liveDashboard';
+import { isDismissed, type AttentionItem, type Dismissals } from '../../lib/liveDashboard';
 import { Skeleton } from '../usage/ReportBits';
 
 interface AttentionCardProps {
   items: readonly AttentionItem[];
-  dismissed: Readonly<Record<string, number>>;
+  dismissed: Readonly<Dismissals>;
   loading: boolean;
-  onDismiss: (id: string) => void;
+  onDismiss: (item: AttentionItem) => void;
   onRestore: (id: string) => void;
 }
 
@@ -20,7 +20,7 @@ function AttentionRow({
 }: {
   item: AttentionItem;
   dismissed: boolean;
-  onDismiss: (id: string) => void;
+  onDismiss: (item: AttentionItem) => void;
   onRestore: (id: string) => void;
 }) {
   const critical = item.level === 'critical';
@@ -56,7 +56,7 @@ function AttentionRow({
         ) : (
           <button
             type="button"
-            onClick={() => onDismiss(item.id)}
+            onClick={() => onDismiss(item)}
             aria-label={`Dismiss: ${item.title}`}
             title="Dismiss. It comes back if this gets worse."
             className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-50 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
@@ -71,8 +71,8 @@ function AttentionRow({
 
 export default function AttentionCard({ items, dismissed, loading, onDismiss, onRestore }: AttentionCardProps) {
   const [showDismissed, setShowDismissed] = useState(false);
-  const open = items.filter((item) => !(item.id in dismissed));
-  const hidden = items.filter((item) => item.id in dismissed);
+  const open = items.filter((item) => !isDismissed(item, dismissed));
+  const hidden = items.filter((item) => isDismissed(item, dismissed));
   const shown = showDismissed ? [...open, ...hidden] : open;
 
   return (
@@ -105,7 +105,7 @@ export default function AttentionCard({ items, dismissed, loading, onDismiss, on
       ) : (
         <ul>
           {shown.map((item) => (
-            <AttentionRow key={item.id} item={item} dismissed={item.id in dismissed} onDismiss={onDismiss} onRestore={onRestore} />
+            <AttentionRow key={item.id} item={item} dismissed={isDismissed(item, dismissed)} onDismiss={onDismiss} onRestore={onRestore} />
           ))}
         </ul>
       )}

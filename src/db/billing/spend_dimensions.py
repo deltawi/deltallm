@@ -25,6 +25,22 @@ class SpendDimensionSql:
     joins: tuple[str, ...] = ()
 
 
+def search_pattern(search: str) -> str:
+    """ILIKE pattern for a plain substring search: ``%`` and ``_`` match only themselves."""
+
+    escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def search_clause_sql(clause: str, index: int) -> str:
+    """Bind a dimension search clause to ``$index`` without ``str.format``.
+
+    The clause can hold model names from the registry, and those can contain braces.
+    """
+
+    return clause.replace("${i}", f"${index}")
+
+
 def provider_from_api_base_expr(api_base_expr: str) -> str:
     lowered_api_base = f"LOWER(COALESCE({api_base_expr}, ''))"
     return f"""

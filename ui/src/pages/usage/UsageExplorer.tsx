@@ -11,6 +11,7 @@ import {
 import type { ResolvedReportingRange } from '../../lib/reportingRange';
 import {
   allowedUsageDimensions,
+  chipDimensions,
   groupLabel,
   parseUsageFilters,
   usageFiltersKey,
@@ -78,7 +79,6 @@ export default function UsageExplorer({ view, range, capabilities, refreshToken,
     ?? 'model';
   const requestedTab = searchParams.get('tab') as UsageDimension | null;
   const tab = requestedTab && allowed.includes(requestedTab) ? requestedTab : 'model';
-  const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), 300);
 
@@ -87,6 +87,11 @@ export default function UsageExplorer({ view, range, capabilities, refreshToken,
     [filters, range.endDate, range.startDate, view],
   );
   const scopeKey = `${view}|${range.startDate ?? ''}|${range.endDate ?? ''}|${usageFiltersKey(filters)}`;
+  // A new period, view, filter or tab starts the table on its first page.
+  const tableKey = `${scopeKey}|${tab}`;
+  const [page, setPage] = useState({ key: tableKey, offset: 0 });
+  const offset = page.key === tableKey ? page.offset : 0;
+  const setOffset = (next: number) => setPage({ key: tableKey, offset: next });
 
   const summary = useReport(`explorer:summary|${scopeKey}`, (options) => usageReports.summary(scope, options), { refreshToken, reloadToken });
   const series = useReport(
@@ -149,7 +154,7 @@ export default function UsageExplorer({ view, range, capabilities, refreshToken,
   return (
     <div className="grid gap-4">
       <UsageFilterChips
-        dimensions={CHIP_DIMENSIONS.filter((dimension) => allowed.includes(dimension))}
+        dimensions={chipDimensions(CHIP_DIMENSIONS, filters, allowed)}
         filters={filters}
         onRemove={(dimension) => replaceFilters(withoutUsageFilter(filters, dimension))}
         onAdd={(dimension) => {

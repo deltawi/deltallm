@@ -50,7 +50,9 @@ function ValueMenu({
 
   useEffect(() => {
     const onPointer = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
+      // The chip and its menu share a wrapper; the chip's own click closes the menu.
+      const anchor = ref.current?.parentElement ?? ref.current;
+      if (anchor && !anchor.contains(event.target as Node)) onClose();
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();

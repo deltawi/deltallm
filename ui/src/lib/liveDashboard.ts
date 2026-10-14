@@ -105,8 +105,10 @@ export function monthToDate(daily: LiveDailyResponse, spendToday: number, now = 
 export type AttentionLevel = 'critical' | 'warning';
 
 export interface AttentionItem {
-  /** Stable while the condition stays the same; changes when it gets worse. */
+  /** The condition (for example one provider's error rate), stable while it lasts. */
   id: string;
+  /** How bad the condition is now. A dismissal hides it until the rank goes up. */
+  rank: number;
   level: AttentionLevel;
   title: string;
   detail: string;
@@ -183,7 +185,8 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     const traffic = live.get(provider.provider.toLowerCase());
     if (provider.status !== 'healthy') {
       items.push({
-        id: `provider:${provider.provider}:${provider.status}`,
+        id: `provider:${provider.provider}`,
+        rank: provider.status === 'down' ? 2 : 1,
         level: provider.status === 'down' ? 'critical' : 'warning',
         title: `${provider.label} is ${provider.status === 'down' ? 'down' : 'degraded'}`,
         detail: traffic
@@ -203,7 +206,8 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     const rate = traffic.failed_requests / traffic.request_count;
     if (rate < 0.1) continue;
     items.push({
-      id: `provider-errors:${traffic.provider}:${band(rate, 0.1)}`,
+      id: `provider-errors:${traffic.provider}`,
+      rank: band(rate, 0.1),
       level: rate >= 0.25 ? 'critical' : 'warning',
       title: `${Math.round(rate * 100)}% of ${traffic.provider} requests failed in the last 24 hours`,
       detail: failureDetail(traffic),
@@ -215,7 +219,8 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   if (tiles && tiles.requests24h >= 50 && tiles.errorRate24h >= 0.05) {
     if (tiles.errorRate24h >= (tiles.previousErrorRate24h ?? 0) * 2) {
       items.push({
-        id: `errors:${band(tiles.errorRate24h, 0.05)}`,
+        id: 'errors',
+        rank: band(tiles.errorRate24h, 0.05),
         level: tiles.errorRate24h >= 0.15 ? 'critical' : 'warning',
         title: `Error rate is ${(tiles.errorRate24h * 100).toFixed(1)}% in the last 24 hours`,
         detail: tiles.peakErrorHour
@@ -229,7 +234,8 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   if (tiles && tiles.sevenDayAverage && tiles.sevenDayAverage >= 1 && tiles.spend24h >= tiles.sevenDayAverage * 1.3) {
     const ratio = tiles.spend24h / tiles.sevenDayAverage;
     items.push({
-      id: `spend:${band(ratio, 0.5)}`,
+      id: 'spend',
+      rank: band(ratio, 0.5),
       level: 'warning',
       title: `Spend in the last 24 hours is ${Math.round((ratio - 1) * 100)}% above the 7-day average`,
       detail: `${input.formatMoney(tiles.spend24h)} against an average of ${input.formatMoney(tiles.sevenDayAverage)} a day.`,
@@ -244,7 +250,8 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     const over = share >= 1;
     const reset = budget.budget_reset_at ? ` It resets on ${budget.budget_reset_at.slice(0, 10)}.` : '';
     items.push({
-      id: `budget:${budget.kind}:${budget.group_key}:${over ? 100 : share >= 0.9 ? 90 : 80}`,
+      id: `budget:${budget.kind}:${budget.group_key}`,
+      rank: over ? 3 : share >= 0.9 ? 2 : 1,
       level: over ? 'critical' : 'warning',
       title: over
         ? `${name} used all of its ${budgetPeriod(budget.budget_duration)}budget`
@@ -266,20 +273,33 @@ export interface DismissalStorage {
 export const DISMISSAL_TTL_MS = 7 * DAY;
 const MAX_DISMISSALS = 50;
 
+/** Dismissed conditions for one account: when, and how bad the condition was then. */
+export type Dismissals = Record<string, { at: number; rank: number }>;
+
 function dismissalKey(principal: string): string {
-  return `deltallm.dashboard.dismissed.v1.${principal}`;
+  return `deltallm.dashboard.dismissed.v2.${principal}`;
 }
 
-/** Dismissed alert ids for this account, without expired ones. Never throws. */
-export function readDismissals(storage: DismissalStorage | null, principal: string, now = Date.now()): Record<string, number> {
+/** Hidden while the condition is no worse than when it was dismissed. */
+export function isDismissed(item: AttentionItem, dismissals: Readonly<Dismissals>): boolean {
+  const entry = dismissals[item.id];
+  return entry !== undefined && item.rank <= entry.rank;
+}
+
+/** Dismissed alerts for this account, without expired ones. Never throws. */
+export function readDismissals(storage: DismissalStorage | null, principal: string, now = Date.now()): Dismissals {
   if (!storage) return {};
   try {
     const raw = storage.getItem(dismissalKey(principal));
     const parsed: unknown = raw ? JSON.parse(raw) : {};
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const result: Record<string, number> = {};
-    for (const [id, at] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof at === 'number' && now - at < DISMISSAL_TTL_MS) result[id] = at;
+    const result: Dismissals = {};
+    for (const [id, entry] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const { at, rank } = entry as { at?: unknown; rank?: unknown };
+      if (typeof at === 'number' && typeof rank === 'number' && now - at < DISMISSAL_TTL_MS) {
+        result[id] = { at, rank };
+      }
     }
     return result;
   } catch {
@@ -287,9 +307,9 @@ export function readDismissals(storage: DismissalStorage | null, principal: stri
   }
 }
 
-export function writeDismissals(storage: DismissalStorage | null, principal: string, dismissals: Record<string, number>): void {
+export function writeDismissals(storage: DismissalStorage | null, principal: string, dismissals: Dismissals): void {
   if (!storage) return;
-  const newest = Object.entries(dismissals).sort(([, a], [, b]) => b - a).slice(0, MAX_DISMISSALS);
+  const newest = Object.entries(dismissals).sort(([, a], [, b]) => b.at - a.at).slice(0, MAX_DISMISSALS);
   try {
     if (newest.length === 0) storage.removeItem(dismissalKey(principal));
     else storage.setItem(dismissalKey(principal), JSON.stringify(Object.fromEntries(newest)));

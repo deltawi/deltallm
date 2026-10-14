@@ -288,3 +288,18 @@ async def test_regular_member_has_no_usage_report_while_scoped_reporting_is_off(
 
     assert response.status_code == 403
     assert fake_db.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explorer_rejects_a_start_date_without_a_previous_window(
+    client, test_app, monkeypatch
+):
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+
+    response = await client.get(
+        "/ui/api/spend/explorer/summary?start_date=0001-01-05&end_date=0001-01-10",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert fake_db.calls == []

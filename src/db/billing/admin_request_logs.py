@@ -52,7 +52,7 @@ def request_log_queries(
         cursor_time, cursor_id = cursor
         where.params.extend((cursor_time, cursor_id))
         where.clauses.append(
-            f"(start_time, id) < (${len(where.params) - 1}::timestamp, ${len(where.params)})"
+            f"(start_time, id) < (${len(where.params) - 1}::timestamptz, ${len(where.params)})"
         )
     if filters.start is not None:
         where.add("start_time >= {p}::timestamptz", filters.start)

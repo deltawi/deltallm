@@ -53,7 +53,11 @@ def report_window(start_date: date | None, end_date: date | None, today: date) -
         raise HTTPException(status_code=422, detail="start_date must not be after end_date")
     start = datetime.combine(start_date, time.min, tzinfo=UTC)
     length = timedelta(days=(effective_end - start_date).days + 1)
-    return ReportWindow(start=start, end=end, previous_start=start - length)
+    try:
+        previous_start = start - length
+    except OverflowError as exc:
+        raise HTTPException(status_code=422, detail="start_date is too early") from exc
+    return ReportWindow(start=start, end=end, previous_start=previous_start)
 
 
 def usage_filters_query(
@@ -168,7 +172,13 @@ async def usage_explorer_summary(
     value = await load_usage_report(
         context,
         payload=_cache_payload(
-            "summary", context, filters, overrides, start_date=start_date, end_date=end_date
+            "summary",
+            context,
+            filters,
+            overrides,
+            start_date=start_date,
+            end_date=end_date,
+            window=_window_payload(window),
         ),
         cache_ttl=reporting_cache_ttl(start_date, end_date),
         query=query,
@@ -249,6 +259,7 @@ async def usage_explorer_series(
             overrides,
             start_date=start_date,
             end_date=end_date,
+            window=_window_payload(window),
             interval=interval,
             split_by=dimension,
             max_groups=max_groups,
@@ -385,6 +396,7 @@ async def usage_explorer_breakdown(
             group_by=dimension,
             start_date=start_date,
             end_date=end_date,
+            window=_window_payload(window),
             sort_by=sort_by,
             search=normalized_search,
             limit=limit,

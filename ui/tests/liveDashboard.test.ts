@@ -5,6 +5,7 @@ import type { LiveHourlyResponse, LiveProvider } from '../src/lib/api/usageRepor
 import {
   attentionItems,
   DISMISSAL_TTL_MS,
+  isDismissed,
   liveTiles,
   monthToDate,
   readDismissals,
@@ -95,11 +96,11 @@ test('attention items list critical problems first and link to filtered views', 
     ],
     formatMoney: money,
   });
-  assert.deepEqual(items.map((item) => [item.level, item.id]), [
-    ['critical', 'budget:api_key:hash-9f2c:100'],
-    ['warning', 'provider-errors:openai:2'],
-    ['warning', 'spend:5'],
-    ['warning', 'budget:team:team-1:90'],
+  assert.deepEqual(items.map((item) => [item.level, item.id, item.rank]), [
+    ['critical', 'budget:api_key:hash-9f2c', 3],
+    ['warning', 'provider-errors:openai', 2],
+    ['warning', 'spend', 5],
+    ['warning', 'budget:team:team-1', 2],
   ]);
   assert.equal(items[0].title, 'Key …9f2c used all of its budget');
   assert.match(items[1].detail, /gpt-4o failed 38 requests \(RateLimitError\) between 09:12 and 09:40 UTC/);
@@ -108,12 +109,15 @@ test('attention items list critical problems first and link to filtered views', 
   assert.equal(items[3].action.to, '/usage?range=30d&team=team-1&team_label=Search');
 });
 
-test('a provider that gets worse gets a new alert id', () => {
+test('a dismissed alert shows again only when it gets worse', () => {
   const at = (failed: number) => attentionItems({
     providers: [], liveProviders: [{ ...failingProvider, failed_requests: failed }], tiles: null, budgets: null, formatMoney: money,
-  })[0]?.id;
-  assert.equal(at(40), at(50));
-  assert.notEqual(at(40), at(70));
+  })[0];
+  const dismissed = { [at(50).id]: { at: 0, rank: at(50).rank } };
+  assert.equal(at(40).id, at(70).id);
+  assert.equal(isDismissed(at(40), dismissed), true);
+  assert.equal(isDismissed(at(50), dismissed), true);
+  assert.equal(isDismissed(at(70), dismissed), false);
   assert.equal(at(10), undefined);
 });
 
@@ -121,7 +125,8 @@ test('an error spike shows only when the rate at least doubles', () => {
   const spike = (previous: number) => attentionItems({
     providers: [], liveProviders: [], tiles: { ...quietTiles, errorRate24h: 0.08, previousErrorRate24h: previous }, budgets: [], formatMoney: money,
   });
-  assert.equal(spike(0.03)[0]?.id, 'errors:1');
+  assert.equal(spike(0.03)[0]?.id, 'errors');
+  assert.equal(spike(0.03)[0]?.rank, 1);
   assert.equal(spike(0.06).length, 0);
 });
 
@@ -138,8 +143,11 @@ function memoryStorage(): DismissalStorage & { data: Map<string, string> } {
 test('dismissed alerts are kept per account and expire after seven days', () => {
   const storage = memoryStorage();
   const now = 10 * DISMISSAL_TTL_MS;
-  writeDismissals(storage, 'acct-1', { old: now - DISMISSAL_TTL_MS, fresh: now - 1000 });
-  assert.deepEqual(readDismissals(storage, 'acct-1', now), { fresh: now - 1000 });
+  writeDismissals(storage, 'acct-1', {
+    old: { at: now - DISMISSAL_TTL_MS, rank: 1 },
+    fresh: { at: now - 1000, rank: 2 },
+  });
+  assert.deepEqual(readDismissals(storage, 'acct-1', now), { fresh: { at: now - 1000, rank: 2 } });
   assert.deepEqual(readDismissals(storage, 'acct-2', now), {});
   writeDismissals(storage, 'acct-1', {});
   assert.equal(storage.data.size, 0);
@@ -147,14 +155,14 @@ test('dismissed alerts are kept per account and expire after seven days', () => 
 
 test('dismissals keep only the newest fifty and ignore bad storage', () => {
   const storage = memoryStorage();
-  const many = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`a${index}`, 1_000 + index]));
+  const many = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`a${index}`, { at: 1_000 + index, rank: 1 }]));
   writeDismissals(storage, 'acct', many);
   const kept = readDismissals(storage, 'acct', 2_000);
   assert.equal(Object.keys(kept).length, 50);
   assert.equal(kept.a0, undefined);
-  assert.equal(kept.a59, 1_059);
+  assert.deepEqual(kept.a59, { at: 1_059, rank: 1 });
 
-  storage.setItem('deltallm.dashboard.dismissed.v1.acct', '{not json');
+  storage.setItem('deltallm.dashboard.dismissed.v2.acct', '{not json');
   assert.deepEqual(readDismissals(storage, 'acct', 2_000), {});
   assert.deepEqual(readDismissals(null, 'acct'), {});
   const throwing: DismissalStorage = {
@@ -163,5 +171,5 @@ test('dismissals keep only the newest fifty and ignore bad storage', () => {
     removeItem: () => undefined,
   };
   assert.deepEqual(readDismissals(throwing, 'acct'), {});
-  assert.doesNotThrow(() => writeDismissals(throwing, 'acct', { a: 1 }));
+  assert.doesNotThrow(() => writeDismissals(throwing, 'acct', { a: { at: 1, rank: 1 } }));
 });

@@ -63,14 +63,22 @@ export default function RequestLogDrawer({ log, canOpenAudit, onClose, onFilterK
     ...(log.request_tags?.length ? { tags: log.request_tags } : {}),
   };
 
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
   useEffect(() => {
     closeRef.current?.focus();
+  }, [log.id]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [log.id, onClose]);
+  }, []);
 
   const copy = () => {
     void navigator.clipboard?.writeText(log.request_id).then(() => setCopied(true), () => setCopied(false));

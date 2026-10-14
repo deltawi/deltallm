@@ -19,6 +19,8 @@ from src.db.billing.spend_components import external_request_sql
 from src.middleware.admin import require_any_admin_permission
 from src.db.billing.spend_dimensions import (
     legacy_cache_model_provider_overrides,
+    search_clause_sql,
+    search_pattern,
     spend_dimension_sql,
 )
 from src.db.billing.admin_request_logs import (
@@ -481,8 +483,8 @@ async def spend_report(
         params.append(_date_end(end_date))
         clauses.append(f"s.start_time <= ${len(params)}::timestamp")
     if normalized_search:
-        params.append(f"%{normalized_search}%")
-        clauses.append(config.search_clause.format(i=len(params)))
+        params.append(search_pattern(normalized_search))
+        clauses.append(search_clause_sql(config.search_clause, len(params)))
     apply_spend_visibility(
         clauses=clauses,
         params=params,

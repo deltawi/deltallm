@@ -5,6 +5,7 @@ import type { SpendCapabilities, SpendView } from '../../lib/api';
 import { usageReports, type RequestLog, type UsageDimension, type UsageFilterValue } from '../../lib/api/usageReports';
 import {
   allowedUsageDimensions,
+  chipDimensions,
   parseRequestWindow,
   parseUsageFilters,
   requestWindowSince,
@@ -50,13 +51,16 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
   const windowKey = parseRequestWindow(searchParams.get('window'));
   const requestId = searchParams.get('request_id')?.trim() ?? '';
   const [draft, setDraft] = useState(requestId);
-  const since = useMemo(
-    () => requestWindowSince(windowKey),
-    // A new refresh moves the window forward to the current minute.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [windowKey, refreshToken, reloadToken],
-  );
-  const queryKey = `${view}|${since}|${usageFiltersKey(filters)}|${flags.status ?? ''}|${flags.cacheHit ?? ''}|${requestId}`;
+  const [draftFor, setDraftFor] = useState(requestId);
+  if (draftFor !== requestId) {
+    // The URL changed (back or forward): show its search, not an old draft.
+    setDraftFor(requestId);
+    setDraft(requestId);
+  }
+  // The key names the window, not its start time, so a reload keeps the page
+  // and the rows on screen. Each load computes the start time again.
+  const queryKey = `${view}|${windowKey}|${usageFiltersKey(filters)}|${flags.status ?? ''}|${flags.cacheHit ?? ''}|${requestId}`;
+  const sinceDate = useMemo(() => requestWindowSince(windowKey).slice(0, 10), [windowKey]);
   const [pages, setPages] = useState<{ key: string; cursors: Array<string | null> }>({ key: queryKey, cursors: [null] });
   const cursors = pages.key === queryKey ? pages.cursors : [null];
   const cursor = cursors[cursors.length - 1];
@@ -67,7 +71,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
     (options) => usageReports.requestLogs(
       {
         view,
-        since,
+        since: requestWindowSince(windowKey),
         filters,
         status: flags.status,
         cacheHit: flags.cacheHit,
@@ -146,8 +150,8 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
         </form>
         <RequestFilterChips
           view={view}
-          sinceDate={since.slice(0, 10)}
-          dimensions={CHIP_DIMENSIONS.filter((dimension) => allowed.includes(dimension))}
+          sinceDate={sinceDate}
+          dimensions={chipDimensions(CHIP_DIMENSIONS, filters, allowed)}
           filters={filters}
           flags={flags}
           onFilter={setFilter}

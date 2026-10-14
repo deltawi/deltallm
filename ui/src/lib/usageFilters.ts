@@ -71,6 +71,16 @@ export function allowedUsageDimensions(
   return USAGE_DIMENSIONS.filter((dimension) => allowed.has(dimension));
 }
 
+/** Chips to show: the usual ones, plus any dimension that has a filter now. */
+export function chipDimensions(
+  defaults: readonly UsageDimension[],
+  filters: readonly UsageFilterValue[],
+  allowed: readonly UsageDimension[],
+): UsageDimension[] {
+  const shown = new Set<UsageDimension>([...defaults, ...filters.map((filter) => filter.dimension)]);
+  return USAGE_DIMENSIONS.filter((dimension) => shown.has(dimension) && allowed.includes(dimension));
+}
+
 function isDimension(value: string): value is UsageDimension {
   return (USAGE_DIMENSIONS as readonly string[]).includes(value);
 }

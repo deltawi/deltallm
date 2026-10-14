@@ -17,6 +17,8 @@ from src.db.billing.spend_components import external_request_sql
 from src.db.billing.spend_dimensions import (
     SpendDimension,
     canonical_provider_expr,
+    search_clause_sql,
+    search_pattern,
     spend_dimension_sql,
 )
 from src.services.reporting.spend_visibility import SpendVisibility, apply_spend_visibility
@@ -67,7 +69,8 @@ class WhereBuilder:
         return f"${len(self.params)}"
 
     def add(self, template: str, value: object) -> None:
-        self.clauses.append(template.format(p=self.bind(value)))
+        # Not str.format: column expressions can hold model names with braces.
+        self.clauses.append(template.replace("{p}", self.bind(value)))
 
     def sql(self) -> str:
         return " AND ".join(self.clauses) if self.clauses else "TRUE"
@@ -103,9 +106,9 @@ def apply_usage_filters(
     for dimension, value in filters.values:
         column = _filter_column(dimension, source, model_provider_overrides)
         if dimension == "provider":
-            where.add(f"{column} = LOWER({{p}})", value)
+            where.add(column + " = LOWER({p})", value)
         else:
-            where.add(f"{column} = {{p}}", value)
+            where.add(column + " = {p}", value)
     for dimension in sorted(filters.unassigned):
         where.clauses.append(
             f"{_filter_column(dimension, source, model_provider_overrides)} IS NULL"
@@ -324,8 +327,8 @@ def usage_breakdown_query(
         user_identity_labels_visible=user_identity_labels_visible,
     )
     if search:
-        where.params.append(f"%{search}%")
-        where.clauses.append(dimension.search_clause.format(i=len(where.params)))
+        where.params.append(search_pattern(search))
+        where.clauses.append(search_clause_sql(dimension.search_clause, len(where.params)))
 
     if window.compares:
         current = f"s.start_time >= {where.bind(window.start)}::timestamptz"

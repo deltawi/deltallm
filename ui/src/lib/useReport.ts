@@ -101,7 +101,11 @@ export function useReport<T>(
       .finally(() => {
         if (!controller.signal.aborted) setInflightKey((current) => (current === fullKey ? null : current));
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      // A cancelled load must not leave the panel marked as refreshing.
+      queueMicrotask(() => setInflightKey((current) => (current === fullKey ? null : current)));
+    };
   }, [fullKey, maxAgeMs, refreshToken, reloadToken, retryNonce]);
 
   const retry = useCallback(() => setRetryNonce((value) => value + 1), []);
