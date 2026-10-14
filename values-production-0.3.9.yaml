@@ -1,0 +1,251 @@
+# Release prerequisites: a pre-existing database Secret and an immutable release image.
+managedLifecycle:
+  enabled: true
+  production: true
+  exitMarginSeconds: 10
+terminationGracePeriodSeconds: 90
+image:
+  tag: "" # Required: pass a tested release tag or, preferably, image.digest.
+securityContext:
+  readOnlyRootFilesystem: true
+runtime:
+  database:
+    existingSecret:
+      name: deltallm-database
+      urlKey: database-url
+migrationJob:
+  enabled: true
+  external: false
+  hook:
+    enabled: true
+
+replicaCount: 3
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+autoscaling:
+  admittedInflight:
+    enabled: true
+    targetAverageValue: 70
+  scaleDownStabilizationSeconds: 300
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 65
+  targetMemoryUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: deltallm
+
+postgresql:
+  enabled: false
+
+redis:
+  enabled: false
+
+prometheus:
+  customMetrics:
+    enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+
+batchWorker:
+  # Enable this when production batch processing is required. Keep API pods
+  # worker-free so UI/gateway traffic can scale independently from batch load.
+  enabled: false
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  autoscaling:
+    scaleDownStabilizationSeconds: 300
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+config:
+  general_settings:
+    migration_mode: external
+    gateway_ingress_enabled: true
+    gateway_ingress_max_active: 100
+    gateway_ingress_max_waiters: 0
+    gateway_ingress_queue_timeout_ms: 10
+    gateway_ingress_max_body_bytes: 33554432
+    gateway_ingress_max_buffered_bytes: 67108864
+    gateway_ingress_body_timeout_seconds: 10
+    gateway_ingress_health_max_active: 4
+    gateway_ingress_control_max_active: 16
+    gateway_ingress_control_max_buffered_bytes: 67108864
+    gateway_preflight_capacity_enabled: true
+    gateway_preflight_global_max_parallel: 300
+    gateway_preflight_org_max_parallel: 100
+    gateway_preflight_lease_ttl_seconds: 30
+    redis_degraded_mode: fail_closed
+    spend_ingestion_worker_enabled: true
+    audit_ingestion_worker_enabled: true
+    audit_enabled: true
+    db_pool_size: 20
+    db_pool_timeout: 2
+    telemetry_db_pool_size: 5
+    telemetry_db_pool_timeout_seconds: 2
+    redis_critical_max_connections: 64
+    redis_critical_max_waiters: 64
+    redis_bulk_max_connections: 16
+    redis_bulk_max_waiters: 0
+    redis_acquisition_timeout_seconds: 0.2
+    redis_socket_timeout_seconds: 1
+    redis_connect_timeout_seconds: 1
+    upstream_http_connect_timeout_seconds: 10
+    upstream_http_read_timeout_seconds: 300
+    upstream_http_write_timeout_seconds: 30
+    upstream_http_pool_timeout_seconds: 10
+    upstream_http_max_connections: 500
+    upstream_http_max_keepalive_connections: 100
+    upstream_http_keepalive_expiry_seconds: 60
+    readiness_probe_timeout_seconds: 1
+    readiness_cache_seconds: 1
+    lifecycle_withdrawal_seconds: 5
+    lifecycle_request_drain_seconds: 45
+    lifecycle_cancellation_seconds: 5
+    lifecycle_worker_drain_seconds: 20
+    lifecycle_close_seconds: 5
+    lifecycle_shutdown_seconds: 80
+    # PR5 qualifies scope/reset parity; this is not an atomic monetary reservation.
+    # Startup-only callback delivery and guardrail execution bounds.
+    callback_max_pending: 128
+    callback_max_concurrency: 4
+    callback_max_payload_bytes: 262144
+    callback_max_bytes: 8388608
+    callback_timeout_seconds: 5
+    callback_shutdown_seconds: 5
+    guardrail_max_concurrency: 2
+    guardrail_max_pending: 8
+    guardrail_max_bytes: 33554432
+    guardrail_timeout_seconds: 5
+    guardrail_shutdown_seconds: 5
+    budget_enforcement_query_mode: combined
+    budget_enforcement_query_timeout_seconds: 2
+    budget_enforcement_shadow_sample_rate: 0.01
+    provider_discovery_allow_http: false
+    provider_discovery_allowed_ports: [443]
+    provider_discovery_allowed_private_cidrs: []
+    cache_backend: redis
+    spend_ingestion_mode: outbox
+    spend_operation_intents_enabled: true
+    spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
+    audit_ingestion_mode: outbox
+    db_foreground_pool_size: 8
+    telemetry_worker_db_pool_size: 5
+    db_acquisition_timeout_seconds: 0.2
+    db_statement_timeout_seconds: 1.0
+    db_lock_timeout_seconds: 0.2
+    db_transaction_timeout_seconds: 2.0
+    db_background_statement_timeout_seconds: 5.0
+    db_background_lock_timeout_seconds: 1.0
+    db_background_transaction_timeout_seconds: 10.0
+    redis_cache_max_connections: 16
+    redis_cache_max_waiters: 0
+    model_deployment_source: db_only
+    model_deployment_bootstrap_from_config: false
+    organization_lifecycle_auth_max_staleness_seconds: 3
+    organization_lifecycle_auth_cache_max_entries: 10000
+    organization_deletion_recovery_window_hours: 168
+    organization_deletion_max_attempts: 20
+    # Stage B only: enable after all replicas report the backend's current
+    # lifecycle protocol version (v2 for this rollout).
+    organization_deletion_requests_enabled: false
+    organization_deletion_worker_enabled: true
+    # Phase 6 scheduler rollout controls. Leave commented to preserve legacy
+    # boolean flag behavior; set explicitly for staged rollout or rollback.
+    # embeddings_batch_scheduler_mode: fifo_v1
+    # embeddings_batch_scheduler_shadow_mode: none
+    embeddings_batch_scheduler_shadow_decision_timeout_seconds: 0.5
+    embeddings_batch_scheduler_shadow_max_pending_decisions: 16
+    embeddings_batch_model_capacity_enabled: false
+    embeddings_batch_default_model_max_in_flight: 16
+    embeddings_batch_default_model_max_claim_work_units: 64
+    embeddings_batch_model_capacity_fraction: 0.25
+    embeddings_batch_model_capacity_refresh_seconds: 5
+    embeddings_batch_model_capacity_fail_open: false
+    embeddings_batch_stale_lease_sweeper_enabled: true
+    embeddings_batch_stale_lease_sweeper_interval_seconds: 60
+    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: 30
+    embeddings_batch_stale_lease_sweeper_page_size: 100
+    embeddings_batch_stale_lease_sweeper_max_rows_per_run: 500
+    embeddings_batch_tenant_fair_share_enabled: false
+    embeddings_batch_scheduler_base_quantum_work_units: 16
+    embeddings_batch_scheduler_max_deficit_multiplier: 8
+    embeddings_batch_tenant_max_in_flight_work_units: 0
+    embeddings_batch_tenant_max_queued_work_units: 0
+    embeddings_batch_advisory_lock_mode: dual
+    embeddings_batch_scheduler_max_active_flows_per_decision: 100
+    embeddings_batch_scheduler_max_candidate_jobs_per_flow: 50
+    embeddings_batch_tenant_scope_preference: organization,team,api_key,user
+    embeddings_batch_tenant_fair_share_disabled_model_groups: []
+    embeddings_batch_size_aware_scheduling_enabled: false
+    embeddings_batch_aging_seconds_per_work_unit: 30
+    embeddings_batch_max_age_credit_work_units: 1000
+    embeddings_batch_min_large_job_claim_interval_seconds: 30
+    embeddings_batch_small_job_fast_lane_enabled: false
+    embeddings_batch_small_job_max_work_units: 100
+    tier_policy_mode: disabled
+    tier_policy_missing_service_mode: fail_open
+    tier_policy_refresh_interval_seconds: 300
+    tier_policy_refresh_jitter_seconds: 1
+    tier_policy_transition_grace_seconds: 0.05
+    tier_policy_refresh_retry_delay_seconds: 5
+    tier_capacity_fair_share_enabled: false
+    tier_capacity_fair_share_active_ttl_seconds: 10
+
+# Example declared ceilings: replace with available server allocations.
+# Includes full maximum-replica retiring overlap plus rollout surge.
+dependencyCapacity:
+  apiProcessesPerPod: 1
+  batchWorkerProcessesPerPod: 1
+  retiringGenerations: 2
+  postgresqlMaxConnections: 2000
+  postgresqlReservedConnections: 100
+  redisMaxClients: 5000
+  redisReservedClients: 128
+  extended:
+    enabled: true
+    postgresqlMigrationConnections: 2
+    postgresqlOtherConnections: 0
+    redisOtherClients: 0
+    proxyPoolsPerClient: 0
+    auxiliaryHttpConnectionsPerProcess: 2048
+    # Supply actual providerDomains in the operator overlay. No invented quotas.
+    providerDomains: {}
