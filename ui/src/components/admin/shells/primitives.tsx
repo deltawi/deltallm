@@ -1,5 +1,7 @@
 import { useRef, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { ChevronRight, type LucideIcon } from 'lucide-react';
+import { tabClass } from './tabClass';
 
 export type SummaryItem = {
   label: string;
@@ -10,6 +12,7 @@ export type SummaryItem = {
 
 export type BreadcrumbItem = {
   label: ReactNode;
+  to?: string;
   onClick?: () => void;
   icon?: LucideIcon;
 };
@@ -18,6 +21,7 @@ export type DetailStatTone = 'blue' | 'green' | 'amber' | 'violet' | 'indigo' | 
 
 type BreadcrumbsProps = {
   items: BreadcrumbItem[];
+  className?: string;
 };
 
 type SummaryStripProps = {
@@ -48,12 +52,13 @@ type IconTabsProps<T extends string> = {
   items: Array<{
     id: T;
     label: ReactNode;
-    icon: LucideIcon;
+    icon?: LucideIcon;
     count?: ReactNode;
   }>;
   active: T;
   onChange: (id: T) => void;
-  variant?: 'line' | 'card';
+  // header: page tabs that sit on the bottom edge of the page header band.
+  variant?: 'line' | 'card' | 'header';
 };
 
 const toneClasses: Record<DetailStatTone, { bg: string; icon: string }> = {
@@ -65,22 +70,32 @@ const toneClasses: Record<DetailStatTone, { bg: string; icon: string }> = {
   gray: { bg: 'bg-gray-100', icon: 'text-gray-500' },
 };
 
-export function Breadcrumbs({ items }: BreadcrumbsProps) {
+export function Breadcrumbs({ items, className = 'mb-3' }: BreadcrumbsProps) {
   return (
-    <div className="mb-3 flex items-center gap-1.5 text-xs text-gray-400">
+    <nav aria-label="Breadcrumb" className={`${className} flex flex-wrap items-center gap-1.5 text-xs text-gray-400`}>
       {items.map((item, index) => {
         const Icon = item.icon;
         const content = (
           <>
             {Icon && <Icon className="h-3 w-3" />}
-            <span className={index === items.length - 1 ? 'font-medium text-gray-600' : undefined}>{item.label}</span>
+            <span
+              aria-current={index === items.length - 1 ? 'page' : undefined}
+              className={index === items.length - 1 ? 'font-medium text-gray-600' : undefined}
+            >
+              {item.label}
+            </span>
           </>
         );
 
         return (
           <div key={index} className="flex items-center gap-1.5">
-            {item.onClick ? (
+            {item.to ? (
+              <Link to={item.to} className="flex items-center gap-1 text-xs text-gray-400 transition-colors hover:text-gray-700">
+                {content}
+              </Link>
+            ) : item.onClick ? (
               <button
+                type="button"
                 onClick={item.onClick}
                 className="flex items-center gap-1 text-xs text-gray-400 transition-colors hover:text-gray-700"
               >
@@ -93,6 +108,15 @@ export function Breadcrumbs({ items }: BreadcrumbsProps) {
           </div>
         );
       })}
+    </nav>
+  );
+}
+
+// Square avatar for the record a detail page shows. Uses the brand colors so it follows theme customization.
+export function EntityAvatar({ icon: Icon, initial }: { icon?: LucideIcon; initial?: string }) {
+  return (
+    <div aria-hidden="true" className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-primary text-brand-on-primary shadow-sm">
+      {Icon ? <Icon className="h-6 w-6" /> : <span className="text-lg font-bold">{initial?.charAt(0).toUpperCase()}</span>}
     </div>
   );
 }
@@ -198,15 +222,6 @@ export function TextTabs<T extends string>({ items, active, onChange, label }: T
   );
 }
 
-export function InlineStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</span>
-      <span className="text-sm font-semibold text-gray-900">{value}</span>
-    </div>
-  );
-}
-
 export function IconTabs<T extends string>({
   items,
   active,
@@ -217,7 +232,7 @@ export function IconTabs<T extends string>({
 }: IconTabsProps<T>) {
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   return (
-    <div role="tablist" aria-label={label} className={`flex overflow-x-auto border-b ${variant === 'card' ? 'border-gray-100' : 'mb-4 gap-1 border-gray-200'}`}>
+    <div role="tablist" aria-label={label} className={`flex overflow-x-auto ${variant === 'card' ? 'border-b border-gray-100' : variant === 'header' ? 'gap-1' : 'mb-4 gap-1 border-b border-gray-200'}`}>
       {items.map((item, index) => {
         const Icon = item.icon;
         const selected = active === item.id;
@@ -243,9 +258,11 @@ export function IconTabs<T extends string>({
               onChange(items[next].id);
               buttons.current[next]?.focus();
             }}
-            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary ${variant === 'card' ? 'px-5 py-4' : 'px-4 py-2.5'} ${selected ? `border-brand-primary text-brand-primary-ink ${variant === 'card' ? 'bg-blue-50/40' : ''}` : `border-transparent text-gray-500 ${variant === 'card' ? 'hover:bg-gray-50 hover:text-gray-800' : 'hover:text-gray-700'}`}`}
+            className={variant === 'card'
+              ? `flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-5 py-4 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary ${selected ? 'border-brand-primary bg-blue-50/40 text-brand-primary-ink' : 'border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-800'}`
+              : tabClass(selected)}
           >
-            <Icon className="h-4 w-4" aria-hidden="true" />
+            {Icon ? <Icon className="h-4 w-4" aria-hidden="true" /> : null}
             {item.label}
             {item.count !== undefined && <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${variant === 'card' && selected ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{item.count}</span>}
           </button>

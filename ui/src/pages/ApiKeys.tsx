@@ -1,5 +1,6 @@
 import { useScopedMutation } from '../lib/useScopedMutation';
 import { modelOutputRows } from '../lib/modelOutputTpm';
+import Button from '../components/Button';
 import KeyRevocationNotice from '../components/KeyRevocationNotice';
 import type { KeyRemovalResult } from '../lib/api/keyRevocations';
 import { useState, useEffect, useMemo } from 'react';
@@ -515,6 +516,7 @@ export default function ApiKeys() {
     <IndexShell
       eyebrowPrefix={navSectionLabel('/keys')}
       title="API Keys"
+      titleIcon={Key}
       count={pagination?.total ?? null}
       description={(
         <>
@@ -527,9 +529,9 @@ export default function ApiKeys() {
         </>
       )}
       action={canCreate ? (
-        <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover">
+        <Button onClick={openCreate}>
           <Plus className="h-4 w-4" /> {myKeysMode && !isAdmin ? 'Create Personal Key' : 'Create Key'}
-        </button>
+        </Button>
       ) : null}
       notice={pageError ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{pageError}</div>

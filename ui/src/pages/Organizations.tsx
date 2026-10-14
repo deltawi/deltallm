@@ -24,6 +24,7 @@ import {
   defaultMonthlyResetUtcInputValue,
   toUtcDateTimeLocalInputValue,
 } from '../lib/format';
+import Button from '../components/Button';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { OrganizationLifecycleBadge } from '../components/admin/OrganizationLifecycleStatus';
@@ -446,12 +447,11 @@ export default function Organizations() {
       titleIcon={Building2}
       count={total}
       action={uiAccess.organization_create ? (
-        <button
+        <Button
           onClick={() => navigate('/organizations/new')}
-          className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" /> Create Organization
-        </button>
+        </Button>
       ) : undefined}
       toolbar={(
         <div className="flex items-center gap-3">

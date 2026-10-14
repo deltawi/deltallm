@@ -6,7 +6,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import JourneyChecklist from '../components/JourneyChecklist';
 import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
 import { useToast } from '../components/ToastProvider';
-import { IconTabs, RecordDetailShell } from '../components/admin/shells';
+import { EntityAvatar, IconTabs, PageShell } from '../components/admin/shells';
 import { CopyIdentifier, CreatedBy } from '../components/admin/lists/AssetListCells';
 import PromptLabelCards from '../components/prompt-registry/PromptLabelCards';
 import PromptLabelDialog, { type PromptLabelDialogStart, type PromptLabelMove } from '../components/prompt-registry/PromptLabelDialog';
@@ -21,6 +21,7 @@ import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
 import { useBranding } from '../lib/brandingContext';
 import { fmtLocalDay } from '../lib/format';
+import { navTrail } from '../lib/navigation';
 import { useApi } from '../lib/hooks';
 import { bindingsForLabel, latestVersion, PRODUCTION_LABEL, resolveReference, sortLabels, type PromptReference } from '../lib/promptVersions';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
@@ -212,35 +213,27 @@ function PromptTemplateDetailView({ templateKey }: { templateKey: string }) {
   const removeUsers = labelToRemove ? bindingsForLabel(bindings, labelToRemove) : [];
 
   return (
-    <RecordDetailShell
-      backAction={(
-        <button onClick={() => navigate('/prompts')} className="flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-700">
-          <ArrowLeft className="h-4 w-4" /> Back to Prompts
-        </button>
-      )}
-      header={(
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0 space-y-2">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <h1 className="break-words text-2xl font-bold text-gray-900">{template.name}</h1>
-              <div className="rounded-md bg-gray-100 px-2"><CopyIdentifier value={template.template_key} display={template.template_key} label="Template key" /></div>
-            </div>
-            {template.description ? <p className="max-w-3xl text-sm text-gray-600">{template.description}</p> : null}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
-              {template.access ? <ManagedAssetAccessSummary access={template.access} teamOptions={audiences.teamOptions} organizationOptions={audiences.organizationOptions} /> : null}
-              <span className="flex items-center gap-1">Created by <CreatedBy row={template} /></span>
-              <span>Updated {fmtLocalDay(template.updated_at)}</span>
-            </div>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            {versions.length ? <Button variant="outline" onClick={() => setTab('test')}><FlaskConical className="h-4 w-4" aria-hidden="true" /> Test</Button> : null}
-            {canWrite ? <Button onClick={() => setEditorBase(latest?.version ?? null)}><FilePlus2 className="h-4 w-4" aria-hidden="true" /> New version</Button> : null}
-          </div>
+    <PageShell
+      breadcrumbs={[...navTrail('/prompts'), { label: template.name }]}
+      avatar={<EntityAvatar icon={FileText} />}
+      title={template.name}
+      badges={<div className="rounded-md bg-gray-100 px-2"><CopyIdentifier value={template.template_key} display={template.template_key} label="Template key" /></div>}
+      description={template.description ? <p className="max-w-3xl text-gray-600">{template.description}</p> : undefined}
+      meta={(
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {template.access ? <ManagedAssetAccessSummary access={template.access} teamOptions={audiences.teamOptions} organizationOptions={audiences.organizationOptions} /> : null}
+          <span className="flex items-center gap-1">Created by <CreatedBy row={template} /></span>
+          <span>Updated {fmtLocalDay(template.updated_at)}</span>
         </div>
       )}
-      intro={(
+      actions={versions.length || canWrite ? (
+        <>
+          {versions.length ? <Button variant="outline" onClick={() => setTab('test')}><FlaskConical className="h-4 w-4" aria-hidden="true" /> Test</Button> : null}
+          {canWrite ? <Button onClick={() => setEditorBase(latest?.version ?? null)}><FilePlus2 className="h-4 w-4" aria-hidden="true" /> New version</Button> : null}
+        </>
+      ) : undefined}
+      toolbar={!production || versions.length ? (
         <div className="space-y-4">
-          {detail.error ? <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Could not refresh this prompt. The page shows the last loaded data. {errorText(detail.error, '')}</p> : null}
           {!production ? (
             <JourneyChecklist
               title="Set up this prompt"
@@ -258,16 +251,15 @@ function PromptTemplateDetailView({ templateKey }: { templateKey: string }) {
               onPromote={promote} onAdd={() => setLabelDialog({ label: null, version: latest?.version ?? 0 })} />
           ) : null}
         </div>
-      )}
+      ) : undefined}
+      tabs={<IconTabs id="prompt-tabs" label="Prompt sections" variant="header" active={tab} onChange={setTab} items={tabs} />}
+      notice={detail.error ? <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Could not refresh this prompt. The page shows the last loaded data. {errorText(detail.error, '')}</p> : undefined}
     >
-      <div>
-        <IconTabs id="prompt-tabs" label="Prompt sections" active={tab} onChange={setTab} items={tabs} />
-        {tabs.map(({ id }) => (
-          <div key={id} role="tabpanel" id={`prompt-tabs-panel-${id}`} aria-labelledby={`prompt-tabs-tab-${id}`} hidden={tab !== id}>
-            {panels[id]}
-          </div>
-        ))}
-      </div>
+      {tabs.map(({ id }) => (
+        <div key={id} role="tabpanel" id={`prompt-tabs-panel-${id}`} aria-labelledby={`prompt-tabs-tab-${id}`} hidden={tab !== id}>
+          {panels[id]}
+        </div>
+      ))}
 
       {editorBase !== undefined ? (
         <PromptVersionEditor base={versions.find((item) => item.version === editorBase) ?? null} nextVersion={(latest?.version ?? 0) + 1}
@@ -300,6 +292,6 @@ function PromptTemplateDetailView({ templateKey }: { templateKey: string }) {
         onConfirm={() => void deleteTemplate()}
         onClose={() => { if (busy !== 'delete') setConfirmDelete(false); }}
       />
-    </RecordDetailShell>
+    </PageShell>
   );
 }

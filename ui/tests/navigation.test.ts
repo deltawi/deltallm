@@ -5,6 +5,7 @@ import {
   NAV_FOOTER_ITEMS,
   NAV_SECTIONS,
   navSectionLabel,
+  navTrail,
   usageNavLabel,
   visibleNavFooterItems,
   visibleNavSections,
@@ -63,4 +64,11 @@ test('breadcrumb prefix follows the menu section', () => {
   assert.equal(navSectionLabel('/audit'), 'Activity');
   assert.equal(navSectionLabel('/playground'), undefined);
   assert.equal(navSectionLabel('/settings'), undefined);
+});
+
+test('detail page breadcrumbs start with the menu section and link back to the list page', () => {
+  assert.deepEqual(navTrail('/models'), [{ label: 'Gateway' }, { label: 'Models', to: '/models' }]);
+  assert.deepEqual(navTrail('/batches'), [{ label: 'Activity' }, { label: 'Batch jobs', to: '/batches' }]);
+  assert.deepEqual(navTrail('/'), [{ label: 'Dashboard', to: '/' }]);
+  assert.deepEqual(navTrail('/unknown'), []);
 });

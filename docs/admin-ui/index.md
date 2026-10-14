@@ -39,6 +39,18 @@ If your role cannot use any page in a section, the menu does not show that secti
 
 Select your account at the bottom of the menu to open the documentation or to sign out.
 
+## Read a page
+
+Every page uses the same layout:
+
+- **Breadcrumb**: the menu section, the list page, and the item you opened, for example
+  **Gateway > Models > gpt-4o**. Select the list page in the breadcrumb to go back to it.
+- **Title**: the page name with its menu icon. A page for one item, such as a model or a team,
+  shows the item's name, its status badges, and its identifiers.
+- **Actions**: the buttons that change the page or the item, at the top right.
+- **Key figures and filters**: on pages that have them, under the title.
+- **Tabs**: on the bottom edge of the header. The content below the header changes with the tab.
+
 These pages are not in the menu:
 
 - [Sign-in and access](access-requirements.md): resolve missing pages or blocked actions.

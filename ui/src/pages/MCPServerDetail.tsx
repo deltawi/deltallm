@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft,
-  Globe,
+  Plug,
   RefreshCw,
   HeartPulse,
   Pencil,
@@ -21,6 +20,7 @@ import {
   Plus,
   X,
 } from 'lucide-react';
+import Button from '../components/Button';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DataTable from '../components/DataTable';
 import ManagedAssetAccessPanel from '../components/ManagedAssetAccessPanel';
@@ -47,7 +47,8 @@ import { useApi } from '../lib/hooks';
 import { DEFAULT_MCP_APPROVAL_STATUS, type MCPApprovalStatusFilter } from '../lib/mcpApprovals';
 import { errorMessage } from '../lib/errorMessage';
 import { useToast } from '../components/ToastProvider';
-import { HeroTabbedDetailShell } from '../components/admin/shells';
+import { DetailMetricCard, EntityAvatar, IconTabs, PageShell } from '../components/admin/shells';
+import { navTrail } from '../lib/navigation';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 function fmtDate(value?: string | null) {
@@ -432,859 +433,782 @@ export default function MCPServerDetail() {
 
   return (
     <>
-      <HeroTabbedDetailShell
-        layout="contained"
-        backBar={(
-          <button
-            type="button"
-            onClick={() => navigate('/mcp-servers')}
-            className="group flex items-center text-sm text-gray-500 transition-colors hover:text-gray-900"
-          >
-            <ArrowLeft className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-600" />
-            <span className="font-medium text-gray-600">MCP</span>
-            <span className="mx-2 text-gray-300">/</span>
-            <span className="font-semibold text-gray-900">{server.name}</span>
-          </button>
-        )}
-        hero={(
-          <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex flex-col items-start justify-between gap-6 p-6 md:p-8 lg:flex-row lg:items-center">
-            <div className="flex flex-col gap-5 sm:flex-row">
-              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-brand-primary-ink shadow-sm">
-                <Globe className="h-7 w-7" />
+      <PageShell
+        breadcrumbs={[...navTrail('/mcp-servers'), { label: server.name }]}
+        avatar={<EntityAvatar icon={Plug} />}
+        title={server.name}
+        badges={(
+          <>
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+              Streamable HTTP
+            </span>
+            {server.access ? (
+              <ManagedAssetAccessSummary
+                access={server.access}
+                teamOptions={teamOptions}
+                organizationOptions={organizationOptions}
+              />
+            ) : (
+              <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                {ownershipLabel}
+              </span>
+            )}
+            {healthStatus === 'healthy' ? (
+              <div className="flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 motion-reduce:animate-none" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                </span>
+                <span className="text-xs font-medium text-emerald-700">
+                  Healthy{latencyMs != null ? ` · ${latencyMs}ms` : ''}
+                </span>
               </div>
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <h1 className="text-xl font-bold text-gray-900">{server.name}</h1>
-                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
-                    Streamable HTTP
-                  </span>
+            ) : healthStatus === 'unhealthy' ? (
+              <div className="flex items-center gap-1.5 rounded-full border border-red-100 bg-red-50 px-2.5 py-0.5">
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+                <span className="text-xs font-medium text-red-700">Unhealthy</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5">
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-gray-300" />
+                <span className="text-xs font-medium text-gray-500">Unchecked</span>
+              </div>
+            )}
+            {!server.enabled ? (
+              <span className="rounded-full border border-gray-200 bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-500">
+                Disabled
+              </span>
+            ) : null}
+          </>
+        )}
+        description={server.description ? <p className="max-w-xl">{server.description}</p> : undefined}
+        meta={(
+          <div className="flex items-center gap-2">
+            <code className="max-w-xs truncate rounded border border-gray-200 bg-gray-100 px-2.5 py-1 text-xs text-gray-600">
+              {server.base_url}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(server.base_url);
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 2000);
+              }}
+              className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
+              title="Copy URL"
+              aria-label="Copy URL"
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+        )}
+        actions={canOperateServer || canMutateServer || canDeleteServer ? (
+          <>
+            {canOperateServer ? (
+              <>
+                <Button variant="outline" disabled={refreshing} onClick={() => void handleRefreshCapabilities()}>
+                  <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                  {refreshing ? 'Refreshing…' : 'Refresh tools'}
+                </Button>
+                <Button variant="outline" disabled={checkingHealth} onClick={() => void handleHealthCheck()}>
+                  <HeartPulse className={`h-4 w-4 ${checkingHealth ? 'animate-pulse' : ''}`} />
+                  {checkingHealth ? 'Checking…' : 'Check health'}
+                </Button>
+              </>
+            ) : null}
+            {canMutateServer ? (
+              <Button variant="outline" onClick={() => setActiveTab('Settings')}>
+                <Pencil className="h-4 w-4" />
+                Edit
+              </Button>
+            ) : null}
+            {canDeleteServer ? (
+              <Button variant="danger-outline" onClick={() => setDeleteOpen(true)}>
+                <Trash2 className="h-4 w-4" />
+                Remove
+              </Button>
+            ) : null}
+          </>
+        ) : undefined}
+        stats={(
+          <>
+            <DetailMetricCard icon={Zap} label="Tools" value={String(server.tool_count)} tone="violet" />
+            <DetailMetricCard icon={Activity} label="Calls 24h" value={operations ? String(operations.summary.total_calls) : '—'} tone="blue" />
+            <DetailMetricCard icon={AlertTriangle} label="Errors" value={operations ? String(operations.summary.failed_calls) : '—'} tone="amber" />
+            <DetailMetricCard
+              icon={BarChart2}
+              label="Avg latency"
+              value={operations ? `${Math.round(operations.summary.avg_latency_ms)}ms` : latencyMs != null ? `${latencyMs}ms` : '—'}
+              tone="blue"
+            />
+          </>
+        )}
+        tabs={(
+          <IconTabs
+            variant="header"
+            label="MCP server sections"
+            active={activeTab}
+            onChange={setActiveTab}
+            items={tabs.map((tab) => ({
+              id: tab.id,
+              label: tab.label,
+              icon: tab.icon,
+              count: tab.id === 'Activity' && pendingApprovals > 0 ? pendingApprovals : tab.count ?? undefined,
+            }))}
+          />
+        )}
+      >
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        {activeTab === 'Tools' ? (
+          <div className="p-6">
+            <div className="mb-5 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+              <div className="flex items-center gap-2">
+                {(['All', 'Read', 'Write'] as const).map((filterValue) => (
+                  <button
+                    key={filterValue}
+                    type="button"
+                    onClick={() => setToolFilter(filterValue)}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                      toolFilter === filterValue
+                        ? 'border-brand-primary bg-brand-primary text-brand-on-primary shadow-sm'
+                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {filterValue}
+                    <span className={`ml-1.5 ${toolFilter === filterValue ? 'text-blue-200' : 'text-gray-400'}`}>
+                      {filterValue === 'All' ? tools.length : filterValue === 'Read' ? readTools.length : writeTools.length}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-3 text-xs text-gray-500">
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500" />
+                  Read-only
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-500" />
+                  Write
+                </span>
+              </div>
+            </div>
+
+            {tools.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-gray-200 py-14 text-center text-gray-400">
+                <Zap className="mx-auto mb-2 h-8 w-8 text-gray-200" />
+                <p className="text-sm font-medium text-gray-500">No tools discovered yet</p>
+                <p className="mt-1 text-sm">Click "Refresh tools" above to pull capabilities from this server.</p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Tool</th>
+                      <th className="w-24 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Type</th>
+                      <th className="w-28 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Params</th>
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredTools.map((tool) => {
+                      const write = isWriteTool(tool.original_name);
+                      const params = paramCount(tool);
+                      return (
+                        <tr key={tool.namespaced_name} className="transition-colors hover:bg-gray-50/60">
+                          <td className="relative px-5 py-3.5">
+                            <div className={`absolute bottom-0 left-0 top-0 w-[3px] ${write ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                            <span className="font-mono text-xs font-medium text-gray-800">{tool.namespaced_name}</span>
+                            {tool.original_name !== tool.namespaced_name ? (
+                              <div className="mt-0.5 font-mono text-[10px] text-gray-400">{tool.original_name}</div>
+                            ) : null}
+                          </td>
+                          <td className="px-5 py-3.5">
+                            <span
+                              className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-semibold ${
+                                write
+                                  ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              }`}
+                            >
+                              {write ? 'WRITE' : 'READ'}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5">
+                            <span className="inline-flex items-center rounded-md border border-gray-200 bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
+                              {params} param{params !== 1 ? 's' : ''}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 text-xs text-gray-600">{tool.description || '—'}</td>
+                        </tr>
+                      );
+                    })}
+                    {filteredTools.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="py-12 text-center text-gray-400">
+                          <Search className="mx-auto mb-2 h-8 w-8 text-gray-200" />
+                          <p className="text-sm">No tools match this filter.</p>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === 'Access' ? (
+          <div className="space-y-5 p-6">
+            {server.access ? (
+              <ManagedAssetAccessPanel
+                access={server.access}
+                assetLabel="MCP server"
+                teamOptions={teamOptions}
+                organizationOptions={organizationOptions}
+                allowPublic={isPlatformAdmin}
+                audiencesLoading={audiencesLoading}
+                audiencesError={audiencesError}
+                onRetryAudiences={refetchAudiences}
+                onSaved={() => refetch()}
+                className="bg-gray-50 shadow-none"
+              />
+            ) : null}
+
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">
+                  {server.access ? 'Advanced platform bindings' : 'Scope Bindings'}
+                </h3>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  {server.access
+                    ? 'Optional platform governance can further narrow tools for a runtime scope.'
+                    : 'Control which organizations, teams, or API keys can access this server.'}
+                </p>
+              </div>
+              {canManageScopeConfig ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (showBindingForm && editingBindingId === null) {
+                      resetBindingForm();
+                      return;
+                    }
+                    setBindingForm(EMPTY_BINDING);
+                    setEditingBindingId(null);
+                    setShowBindingForm(true);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {showBindingForm && editingBindingId === null ? 'Close' : 'Add binding'}
+                </button>
+              ) : null}
+            </div>
+
+            {!canManageScopeConfig ? (
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                {server.access
+                  ? 'Advanced bindings are managed by platform administrators. They can narrow tool access but cannot grant access beyond the visibility above.'
+                  : 'Read-only. Scope bindings are managed by the server owner or delegated administrators.'}
+              </div>
+            ) : null}
+
+            {showBindingForm && canManageScopeConfig ? (
+              <div className="space-y-4 rounded-xl border border-blue-100 bg-blue-50/40 p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-gray-800">{editingBindingId ? 'Edit Binding' : 'New Binding'}</p>
+                  <button type="button" onClick={resetBindingForm} className="text-gray-400 hover:text-gray-600">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Scope Type">
+                    <select
+                      className={selectCls}
+                      value={bindingForm.scope_type}
+                      disabled={editingBindingId !== null}
+                      onChange={(event) => setBindingForm((value) => ({ ...value, scope_type: event.target.value as BindingFormState['scope_type'] }))}
+                    >
+                      <option value="team">Team</option>
+                      <option value="organization">Organization</option>
+                      <option value="api_key">API Key</option>
+                    </select>
+                  </FormField>
+                  <FormField label="Scope ID">
+                    <input
+                      className={inputCls}
+                      placeholder="team-id or org-id…"
+                      disabled={editingBindingId !== null}
+                      value={bindingForm.scope_id}
+                      onChange={(event) => setBindingForm((value) => ({ ...value, scope_id: event.target.value }))}
+                    />
+                  </FormField>
+                  <FormField label="Tool Allowlist (comma-separated, blank = all)">
+                    <input className={inputCls} placeholder="tool_name_1, tool_name_2…" value={bindingForm.tool_allowlist} onChange={(event) => setBindingForm((value) => ({ ...value, tool_allowlist: event.target.value }))} />
+                  </FormField>
+                  <FormField label="Status">
+                    <select className={selectCls} value={bindingForm.enabled ? 'true' : 'false'} onChange={(event) => setBindingForm((value) => ({ ...value, enabled: event.target.value === 'true' }))}>
+                      <option value="true">Enabled</option>
+                      <option value="false">Disabled</option>
+                    </select>
+                  </FormField>
+                </div>
+                {editingBindingId ? (
+                  <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
+                    Scope type and scope ID are locked while editing. Delete and recreate the binding to change its identity.
+                  </div>
+                ) : null}
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={resetBindingForm} className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveBinding()}
+                    disabled={savingBinding || !bindingForm.scope_id.trim()}
+                    className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+                  >
+                    {savingBinding ? 'Saving…' : editingBindingId ? 'Save Changes' : 'Save Binding'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {bindings.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-gray-200 py-12 text-center text-gray-400">
+                <Users className="mx-auto mb-2 h-8 w-8 text-gray-200" />
+                <p className="text-sm font-medium text-gray-500">
+                  {server.access ? 'No advanced bindings' : 'No bindings yet'}
+                </p>
+                <p className="mt-1 text-sm">
+                  {server.access
+                    ? 'The visibility policy above is the current access authority.'
+                    : 'Add a binding to grant scope access to this server.'}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Scope</th>
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Allowed Tools</th>
+                      <th className="w-24 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Status</th>
+                      {canManageScopeConfig ? <th className="w-12 px-5 py-3" /> : null}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {bindings.map((binding) => (
+                      <tr key={binding.mcp_binding_id} className="transition-colors hover:bg-gray-50/60">
+                        <td className="px-5 py-3.5 font-mono text-xs text-gray-800">{binding.scope_type}:{binding.scope_id}</td>
+                        <td className="px-5 py-3.5 text-xs text-gray-600">
+                          {binding.tool_allowlist?.length ? binding.tool_allowlist.join(', ') : <span className="italic text-gray-400">All tools</span>}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                              binding.enabled
+                                ? 'border border-blue-100 bg-blue-50 text-blue-700'
+                                : 'border border-gray-200 bg-gray-100 text-gray-500'
+                            }`}
+                          >
+                            {binding.enabled ? 'Enabled' : 'Disabled'}
+                          </span>
+                        </td>
+                        {canManageScopeConfig ? (
+                          <td className="px-5 py-3.5 text-right">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleEditBinding(binding)}
+                                className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button type="button" onClick={() => void handleDeleteBinding(binding)} className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === 'Policies' ? (
+          <div className="space-y-5 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Tool Policies</h3>
+                <p className="mt-0.5 text-xs text-gray-500">Per-tool rate limits, approval gates, and cache settings.</p>
+              </div>
+              {canManageScopeConfig ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (showPolicyForm && editingPolicyId === null) {
+                      resetPolicyForm();
+                      return;
+                    }
+                    setPolicyForm(EMPTY_POLICY);
+                    setEditingPolicyId(null);
+                    setShowPolicyForm(true);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {showPolicyForm && editingPolicyId === null ? 'Close' : 'Add policy'}
+                </button>
+              ) : null}
+            </div>
+
+            {!canManageScopeConfig ? (
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                Read-only. Tool policies are managed by the server owner or delegated administrators.
+              </div>
+            ) : null}
+
+            {showPolicyForm && canManageScopeConfig ? (
+              <div className="space-y-4 rounded-xl border border-blue-100 bg-blue-50/40 p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-gray-800">{editingPolicyId ? 'Edit Policy' : 'New Policy'}</p>
+                  <button type="button" onClick={resetPolicyForm} className="text-gray-400 hover:text-gray-600">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <FormField label="Tool Name">
+                    {toolOptions.length > 0 ? (
+                      <select
+                        className={selectCls}
+                        value={policyForm.tool_name}
+                        disabled={editingPolicyId !== null}
+                        onChange={(event) => setPolicyForm((value) => ({ ...value, tool_name: event.target.value }))}
+                      >
+                        <option value="">Select tool…</option>
+                        {toolOptions.map((toolName) => (
+                          <option key={toolName} value={toolName}>
+                            {toolName}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className={inputCls}
+                        placeholder="tool_name…"
+                        disabled={editingPolicyId !== null}
+                        value={policyForm.tool_name}
+                        onChange={(event) => setPolicyForm((value) => ({ ...value, tool_name: event.target.value }))}
+                      />
+                    )}
+                  </FormField>
+                  <FormField label="Scope Type">
+                    <select
+                      className={selectCls}
+                      value={policyForm.scope_type}
+                      disabled={editingPolicyId !== null}
+                      onChange={(event) => setPolicyForm((value) => ({ ...value, scope_type: event.target.value as PolicyFormState['scope_type'] }))}
+                    >
+                      <option value="team">Team</option>
+                      <option value="organization">Organization</option>
+                      <option value="api_key">API Key</option>
+                    </select>
+                  </FormField>
+                  <FormField label="Scope ID">
+                    <input
+                      className={inputCls}
+                      placeholder="scope-id…"
+                      disabled={editingPolicyId !== null}
+                      value={policyForm.scope_id}
+                      onChange={(event) => setPolicyForm((value) => ({ ...value, scope_id: event.target.value }))}
+                    />
+                  </FormField>
+                  <FormField label="Approval">
+                    <select className={selectCls} value={policyForm.require_approval} onChange={(event) => setPolicyForm((value) => ({ ...value, require_approval: event.target.value as PolicyFormState['require_approval'] }))}>
+                      <option value="never">Auto-execute</option>
+                      <option value="manual">Manual approval</option>
+                    </select>
+                  </FormField>
+                  <FormField label="Max RPM">
+                    <input className={inputCls} type="number" placeholder="unlimited" value={policyForm.max_rpm} onChange={(event) => setPolicyForm((value) => ({ ...value, max_rpm: event.target.value }))} />
+                  </FormField>
+                  <FormField label="Max Concurrency">
+                    <input className={inputCls} type="number" placeholder="unlimited" value={policyForm.max_concurrency} onChange={(event) => setPolicyForm((value) => ({ ...value, max_concurrency: event.target.value }))} />
+                  </FormField>
+                  <FormField label="Cache TTL (seconds)">
+                    <input className={inputCls} type="number" placeholder="no cache" value={policyForm.result_cache_ttl_seconds} onChange={(event) => setPolicyForm((value) => ({ ...value, result_cache_ttl_seconds: event.target.value }))} />
+                  </FormField>
+                  <FormField label="Max Exec Time (ms)">
+                    <input className={inputCls} type="number" placeholder="unlimited" value={policyForm.max_total_execution_time_ms} onChange={(event) => setPolicyForm((value) => ({ ...value, max_total_execution_time_ms: event.target.value }))} />
+                  </FormField>
+                  <FormField label="Status">
+                    <select className={selectCls} value={policyForm.enabled ? 'true' : 'false'} onChange={(event) => setPolicyForm((value) => ({ ...value, enabled: event.target.value === 'true' }))}>
+                      <option value="true">Enabled</option>
+                      <option value="false">Disabled</option>
+                    </select>
+                  </FormField>
+                </div>
+                {editingPolicyId ? (
+                  <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
+                    Tool name and scope are locked while editing. Delete and recreate the policy to change its identity.
+                  </div>
+                ) : null}
+                {policyForm.require_approval === 'manual' ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    Manual approval currently applies only to direct <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/mcp</code> tool
+                    calls. Chat and responses MCP bridge requests will be rejected until resume-after-approval is implemented.
+                  </div>
+                ) : null}
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={resetPolicyForm} className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSavePolicy()}
+                    disabled={savingPolicy || !policyForm.tool_name.trim() || !policyForm.scope_id.trim()}
+                    className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+                  >
+                    {savingPolicy ? 'Saving…' : editingPolicyId ? 'Save Changes' : 'Save Policy'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {policies.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-gray-200 py-12 text-center text-gray-400">
+                <Lock className="mx-auto mb-2 h-8 w-8 text-gray-200" />
+                <p className="text-sm font-medium text-gray-500">No policies yet</p>
+                <p className="mt-1 text-sm">Add a policy to set rate limits, approval gates, or cache rules.</p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      {['Tool', 'Scope', 'Status', 'Approval', 'RPM', 'Concurrency', 'Cache TTL', 'Exec Timeout', ''].map((header, index) => (
+                        <th key={`${header}-${index}`} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {policies.map((policy) => (
+                      <tr key={policy.mcp_tool_policy_id} className="transition-colors hover:bg-gray-50/60">
+                        <td className="px-4 py-3.5 font-mono text-xs text-gray-800">{policy.tool_name}</td>
+                        <td className="px-4 py-3.5 font-mono text-xs text-gray-600">{policy.scope_type}:{policy.scope_id}</td>
+                        <td className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                              policy.enabled
+                                ? 'border border-blue-100 bg-blue-50 text-blue-700'
+                                : 'border border-gray-200 bg-gray-100 text-gray-500'
+                            }`}
+                          >
+                            {policy.enabled ? 'Enabled' : 'Disabled'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${
+                              policy.require_approval === 'manual'
+                                ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                : 'border-gray-200 bg-gray-100 text-gray-500'
+                            }`}
+                          >
+                            {policyApprovalLabel(policy)}
+                          </span>
+                          {policy.require_approval === 'manual' ? <div className="mt-1 text-[11px] text-amber-700">Direct /mcp only</div> : null}
+                        </td>
+                        <td className="px-4 py-3.5 text-xs text-gray-600">{policy.max_rpm ?? '—'}</td>
+                        <td className="px-4 py-3.5 text-xs text-gray-600">{policy.max_concurrency ?? '—'}</td>
+                        <td className="px-4 py-3.5 text-xs text-gray-600">
+                          {policy.result_cache_ttl_seconds != null ? `${policy.result_cache_ttl_seconds}s` : '—'}
+                        </td>
+                        <td className="px-4 py-3.5 text-xs text-gray-600">{policyTimeoutLabel(policy)}</td>
+                        {canManageScopeConfig ? (
+                          <td className="px-4 py-3.5 text-right">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleEditPolicy(policy)}
+                                className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button type="button" onClick={() => void handleDeletePolicy(policy)} className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        ) : (
+                          <td className="px-4 py-3.5" />
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === 'Activity' ? (
+          <div className="space-y-6 p-6">
+            {canReviewApprovals ? (
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-gray-900">Approval Requests</h3>
+                <MCPApprovalsPanel
+                  serverId={serverId}
+                  serverFixed
+                  status={approvalStatus}
+                  onStatusChange={setApprovalStatus}
+                  onRefresh={refetchOperations}
+                />
+              </div>
+            ) : null}
+
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-gray-900">Operations (24h)</h3>
+              {operationsLoading && !operations ? (
+                <p className="text-sm text-gray-400">Loading operations…</p>
+              ) : operations ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    {[
+                      { label: 'Total Calls', value: operations.summary.total_calls },
+                      { label: 'Failures', value: operations.summary.failed_calls },
+                      { label: 'Failure Rate', value: fmtPct(operations.summary.failure_rate) },
+                      { label: 'Avg Latency', value: `${Math.round(operations.summary.avg_latency_ms)}ms` },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{item.label}</p>
+                        <p className="mt-1 text-xl font-semibold text-gray-900">{item.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid gap-5 lg:grid-cols-2">
+                    <div>
+                      <p className="mb-2 text-sm font-semibold text-gray-700">Top Tools</p>
+                      <DataTable
+                        columns={[
+                          { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsToolRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
+                          { key: 'total_calls', header: 'Calls' },
+                          { key: 'failed_calls', header: 'Failures' },
+                          { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: MCPOperationsToolRow) => `${Math.round(Number(row.avg_latency_ms || 0))}ms` },
+                        ]}
+                        data={operations.top_tools}
+                        emptyMessage="No tool calls in the last 24h"
+                      />
+                    </div>
+                    <div>
+                      <p className="mb-2 text-sm font-semibold text-gray-700">Recent Failures</p>
+                      <DataTable
+                        columns={[
+                          { key: 'occurred_at', header: 'Time', render: (row: MCPOperationsFailureRow) => fmtDate(row.occurred_at) },
+                          { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsFailureRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
+                          {
+                            key: 'error_type',
+                            header: 'Error',
+                            render: (row: MCPOperationsFailureRow) => (row.error_code ? `${row.error_type || 'Error'} (${row.error_code})` : row.error_type || 'Error'),
+                          },
+                        ]}
+                        data={operations.recent_failures}
+                        emptyMessage="No failures in the last 24h"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400">Operations data unavailable.</p>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {activeTab === 'Settings' ? (
+          <div className="space-y-5 p-6">
+            {!canMutateServer ? (
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                Read-only. Your current asset role does not allow definition changes.
+              </div>
+            ) : null}
+            {canMutateServer ? (
+              <>
+                <MCPServerForm
+                  value={form}
+                  onChange={setForm}
+                  disableServerKey
+                  ownerScopeOptions={ownerScopeOptions}
+                  lockOwnerScopeType
+                  disableOwnerScopeId
+                  preserveExistingCredentials
+                  credentialsConfigured={server.auth_credentials_present}
+                  showOwnerScope={isPlatformAdmin || !server.access}
+                />
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleSave()}
+                    disabled={saving}
+                    className="flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition hover:bg-brand-primary-hover disabled:opacity-50"
+                  >
+                    <Save className="h-4 w-4" />
+                    {saving ? 'Saving…' : 'Save changes'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Server Key</p>
+                  <p className="mt-1 font-mono text-sm text-gray-900">{server.server_key}</p>
+                </div>
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Owner</p>
                   {server.access ? (
                     <ManagedAssetAccessSummary
                       access={server.access}
                       teamOptions={teamOptions}
                       organizationOptions={organizationOptions}
+                      className="mt-2"
                     />
-                  ) : (
-                    <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-                      {ownershipLabel}
-                    </span>
-                  )}
-                  {healthStatus === 'healthy' ? (
-                    <div className="flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5">
-                      <span className="relative flex h-2 w-2">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                      </span>
-                      <span className="text-xs font-medium text-emerald-700">
-                        Healthy{latencyMs != null ? ` · ${latencyMs}ms` : ''}
-                      </span>
-                    </div>
-                  ) : healthStatus === 'unhealthy' ? (
-                    <div className="flex items-center gap-1.5 rounded-full border border-red-100 bg-red-50 px-2.5 py-0.5">
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
-                      <span className="text-xs font-medium text-red-700">Unhealthy</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5">
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-gray-300" />
-                      <span className="text-xs font-medium text-gray-500">Unchecked</span>
-                    </div>
-                  )}
-                  {!server.enabled ? (
-                    <span className="rounded-full border border-gray-200 bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-500">
-                      Disabled
-                    </span>
-                  ) : null}
+                  ) : <p className="mt-1 text-sm text-gray-900">{ownershipLabel}</p>}
                 </div>
-                {server.description ? <p className="max-w-xl text-sm text-gray-500">{server.description}</p> : null}
-                <div className="mt-1 flex items-center gap-2">
-                  <code className="max-w-xs truncate rounded border border-gray-200 bg-gray-100 px-2.5 py-1 text-xs text-gray-600">
-                    {server.base_url}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(server.base_url);
-                      setCopied(true);
-                      window.setTimeout(() => setCopied(false), 2000);
-                    }}
-                    className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
-                    title="Copy URL"
-                  >
-                    {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {canOperateServer ? (
-                <>
-                  <button
-                    type="button"
-                    disabled={refreshing}
-                    onClick={() => void handleRefreshCapabilities()}
-                    className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-                    {refreshing ? 'Refreshing…' : 'Refresh tools'}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={checkingHealth}
-                    onClick={() => void handleHealthCheck()}
-                    className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    <HeartPulse className={`h-3.5 w-3.5 ${checkingHealth ? 'animate-pulse' : ''}`} />
-                    {checkingHealth ? 'Checking…' : 'Check health'}
-                  </button>
-                </>
-              ) : null}
-              {canMutateServer ? (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('Settings')}
-                    className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    Edit
-                  </button>
-              ) : null}
-              {canDeleteServer ? (
-                  <button
-                    type="button"
-                    onClick={() => setDeleteOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition hover:bg-red-50"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Remove
-                  </button>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 border-t border-gray-100 md:grid-cols-4">
-            {[
-              { label: 'Tools', value: server.tool_count, icon: Zap, color: 'text-brand-secondary-ink', bg: 'bg-violet-50', border: 'border-violet-100' },
-              {
-                label: 'Calls 24h',
-                value: operations ? operations.summary.total_calls : '—',
-                icon: Activity,
-                color: 'text-brand-primary-ink',
-                bg: 'bg-blue-50',
-                border: 'border-blue-100',
-              },
-              {
-                label: 'Errors',
-                value: operations ? operations.summary.failed_calls : '—',
-                icon: AlertTriangle,
-                color: 'text-orange-600',
-                bg: 'bg-orange-50',
-                border: 'border-orange-100',
-              },
-              {
-                label: 'Avg latency',
-                value: operations ? `${Math.round(operations.summary.avg_latency_ms)}ms` : latencyMs != null ? `${latencyMs}ms` : '—',
-                icon: BarChart2,
-                color: 'text-brand-primary-ink',
-                bg: 'bg-blue-50',
-                border: 'border-blue-100',
-              },
-            ].map((stat, index) => (
-              <div key={stat.label} className={`flex items-center gap-3.5 p-5 ${index < 3 ? 'border-r border-gray-100' : ''}`}>
-                <div className={`rounded-lg border p-2.5 ${stat.bg} ${stat.color} ${stat.border}`}>
-                  <stat.icon className="h-4 w-4" />
-                </div>
-                <div>
-                  <p className="text-2xl font-semibold">{stat.value}</p>
-                  <p className="mt-0.5 text-xs text-gray-400">{stat.label}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          </div>
-        )}
-        body={(
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex overflow-x-auto border-b border-gray-100">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-5 py-4 text-sm font-medium transition-colors ${
-                  activeTab === tab.id
-                    ? 'border-brand-primary bg-blue-50/40 text-brand-primary-ink'
-                    : 'border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-800'
-                }`}
-              >
-                <tab.icon className="h-4 w-4" />
-                {tab.label}
-                {tab.count !== null ? (
-                  <span
-                    className={`ml-0.5 rounded px-1.5 py-0.5 text-xs font-semibold ${
-                      activeTab === tab.id ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'
-                    }`}
-                  >
-                    {tab.id === 'Activity' && pendingApprovals > 0 ? pendingApprovals : tab.count}
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-
-          {activeTab === 'Tools' ? (
-            <div className="p-6">
-              <div className="mb-5 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-                <div className="flex items-center gap-2">
-                  {(['All', 'Read', 'Write'] as const).map((filterValue) => (
-                    <button
-                      key={filterValue}
-                      type="button"
-                      onClick={() => setToolFilter(filterValue)}
-                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                        toolFilter === filterValue
-                          ? 'border-brand-primary bg-brand-primary text-brand-on-primary shadow-sm'
-                          : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                      }`}
-                    >
-                      {filterValue}
-                      <span className={`ml-1.5 ${toolFilter === filterValue ? 'text-blue-200' : 'text-gray-400'}`}>
-                        {filterValue === 'All' ? tools.length : filterValue === 'Read' ? readTools.length : writeTools.length}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
-                  <span className="flex items-center gap-1.5">
-                    <span className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500" />
-                    Read-only
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-500" />
-                    Write
-                  </span>
-                </div>
-              </div>
-
-              {tools.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-200 py-14 text-center text-gray-400">
-                  <Zap className="mx-auto mb-2 h-8 w-8 text-gray-200" />
-                  <p className="text-sm font-medium text-gray-500">No tools discovered yet</p>
-                  <p className="mt-1 text-sm">Click "Refresh tools" above to pull capabilities from this server.</p>
-                </div>
-              ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-200">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-gray-50">
-                        <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Tool</th>
-                        <th className="w-24 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Type</th>
-                        <th className="w-28 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Params</th>
-                        <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Description</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {filteredTools.map((tool) => {
-                        const write = isWriteTool(tool.original_name);
-                        const params = paramCount(tool);
-                        return (
-                          <tr key={tool.namespaced_name} className="transition-colors hover:bg-gray-50/60">
-                            <td className="relative px-5 py-3.5">
-                              <div className={`absolute bottom-0 left-0 top-0 w-[3px] ${write ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                              <span className="font-mono text-xs font-medium text-gray-800">{tool.namespaced_name}</span>
-                              {tool.original_name !== tool.namespaced_name ? (
-                                <div className="mt-0.5 font-mono text-[10px] text-gray-400">{tool.original_name}</div>
-                              ) : null}
-                            </td>
-                            <td className="px-5 py-3.5">
-                              <span
-                                className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-semibold ${
-                                  write
-                                    ? 'border-amber-200 bg-amber-50 text-amber-700'
-                                    : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                }`}
-                              >
-                                {write ? 'WRITE' : 'READ'}
-                              </span>
-                            </td>
-                            <td className="px-5 py-3.5">
-                              <span className="inline-flex items-center rounded-md border border-gray-200 bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
-                                {params} param{params !== 1 ? 's' : ''}
-                              </span>
-                            </td>
-                            <td className="px-5 py-3.5 text-xs text-gray-600">{tool.description || '—'}</td>
-                          </tr>
-                        );
-                      })}
-                      {filteredTools.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="py-12 text-center text-gray-400">
-                            <Search className="mx-auto mb-2 h-8 w-8 text-gray-200" />
-                            <p className="text-sm">No tools match this filter.</p>
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {activeTab === 'Access' ? (
-            <div className="space-y-5 p-6">
-              {server.access ? (
-                <ManagedAssetAccessPanel
-                  access={server.access}
-                  assetLabel="MCP server"
-                  teamOptions={teamOptions}
-                  organizationOptions={organizationOptions}
-                  allowPublic={isPlatformAdmin}
-                  audiencesLoading={audiencesLoading}
-                  audiencesError={audiencesError}
-                  onRetryAudiences={refetchAudiences}
-                  onSaved={() => refetch()}
-                  className="bg-gray-50 shadow-none"
-                />
-              ) : null}
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-900">
-                    {server.access ? 'Advanced platform bindings' : 'Scope Bindings'}
-                  </h3>
-                  <p className="mt-0.5 text-xs text-gray-500">
-                    {server.access
-                      ? 'Optional platform governance can further narrow tools for a runtime scope.'
-                      : 'Control which organizations, teams, or API keys can access this server.'}
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Auth Mode</p>
+                  <p className="mt-1 text-sm text-gray-900">{server.auth_mode}</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {server.auth_credentials_present ? 'Credentials configured' : 'No stored credentials'}
                   </p>
                 </div>
-                {canManageScopeConfig ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (showBindingForm && editingBindingId === null) {
-                        resetBindingForm();
-                        return;
-                      }
-                      setBindingForm(EMPTY_BINDING);
-                      setEditingBindingId(null);
-                      setShowBindingForm(true);
-                    }}
-                    className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    {showBindingForm && editingBindingId === null ? 'Close' : 'Add binding'}
-                  </button>
-                ) : null}
-              </div>
-
-              {!canManageScopeConfig ? (
-                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-                  {server.access
-                    ? 'Advanced bindings are managed by platform administrators. They can narrow tool access but cannot grant access beyond the visibility above.'
-                    : 'Read-only. Scope bindings are managed by the server owner or delegated administrators.'}
-                </div>
-              ) : null}
-
-              {showBindingForm && canManageScopeConfig ? (
-                <div className="space-y-4 rounded-xl border border-blue-100 bg-blue-50/40 p-5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold text-gray-800">{editingBindingId ? 'Edit Binding' : 'New Binding'}</p>
-                    <button type="button" onClick={resetBindingForm} className="text-gray-400 hover:text-gray-600">
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField label="Scope Type">
-                      <select
-                        className={selectCls}
-                        value={bindingForm.scope_type}
-                        disabled={editingBindingId !== null}
-                        onChange={(event) => setBindingForm((value) => ({ ...value, scope_type: event.target.value as BindingFormState['scope_type'] }))}
-                      >
-                        <option value="team">Team</option>
-                        <option value="organization">Organization</option>
-                        <option value="api_key">API Key</option>
-                      </select>
-                    </FormField>
-                    <FormField label="Scope ID">
-                      <input
-                        className={inputCls}
-                        placeholder="team-id or org-id…"
-                        disabled={editingBindingId !== null}
-                        value={bindingForm.scope_id}
-                        onChange={(event) => setBindingForm((value) => ({ ...value, scope_id: event.target.value }))}
-                      />
-                    </FormField>
-                    <FormField label="Tool Allowlist (comma-separated, blank = all)">
-                      <input className={inputCls} placeholder="tool_name_1, tool_name_2…" value={bindingForm.tool_allowlist} onChange={(event) => setBindingForm((value) => ({ ...value, tool_allowlist: event.target.value }))} />
-                    </FormField>
-                    <FormField label="Status">
-                      <select className={selectCls} value={bindingForm.enabled ? 'true' : 'false'} onChange={(event) => setBindingForm((value) => ({ ...value, enabled: event.target.value === 'true' }))}>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </select>
-                    </FormField>
-                  </div>
-                  {editingBindingId ? (
-                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
-                      Scope type and scope ID are locked while editing. Delete and recreate the binding to change its identity.
-                    </div>
-                  ) : null}
-                  <div className="flex justify-end gap-2">
-                    <button type="button" onClick={resetBindingForm} className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveBinding()}
-                      disabled={savingBinding || !bindingForm.scope_id.trim()}
-                      className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
-                    >
-                      {savingBinding ? 'Saving…' : editingBindingId ? 'Save Changes' : 'Save Binding'}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              {bindings.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-200 py-12 text-center text-gray-400">
-                  <Users className="mx-auto mb-2 h-8 w-8 text-gray-200" />
-                  <p className="text-sm font-medium text-gray-500">
-                    {server.access ? 'No advanced bindings' : 'No bindings yet'}
-                  </p>
-                  <p className="mt-1 text-sm">
-                    {server.access
-                      ? 'The visibility policy above is the current access authority.'
-                      : 'Add a binding to grant scope access to this server.'}
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Forwarded Headers</p>
+                  <p className="mt-1 text-sm text-gray-900">
+                    {server.forwarded_headers_allowlist?.length ? server.forwarded_headers_allowlist.join(', ') : 'None'}
                   </p>
                 </div>
-              ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-200">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-gray-50">
-                        <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Scope</th>
-                        <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Allowed Tools</th>
-                        <th className="w-24 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Status</th>
-                        {canManageScopeConfig ? <th className="w-12 px-5 py-3" /> : null}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {bindings.map((binding) => (
-                        <tr key={binding.mcp_binding_id} className="transition-colors hover:bg-gray-50/60">
-                          <td className="px-5 py-3.5 font-mono text-xs text-gray-800">{binding.scope_type}:{binding.scope_id}</td>
-                          <td className="px-5 py-3.5 text-xs text-gray-600">
-                            {binding.tool_allowlist?.length ? binding.tool_allowlist.join(', ') : <span className="italic text-gray-400">All tools</span>}
-                          </td>
-                          <td className="px-5 py-3.5">
-                            <span
-                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                binding.enabled
-                                  ? 'border border-blue-100 bg-blue-50 text-blue-700'
-                                  : 'border border-gray-200 bg-gray-100 text-gray-500'
-                              }`}
-                            >
-                              {binding.enabled ? 'Enabled' : 'Disabled'}
-                            </span>
-                          </td>
-                          {canManageScopeConfig ? (
-                            <td className="px-5 py-3.5 text-right">
-                              <div className="flex justify-end gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleEditBinding(binding)}
-                                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                </button>
-                                <button type="button" onClick={() => void handleDeleteBinding(binding)} className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600">
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                            </td>
-                          ) : null}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Timeout</p>
+                  <p className="mt-1 text-sm text-gray-900">{server.request_timeout_ms} ms</p>
                 </div>
-              )}
-            </div>
-          ) : null}
-
-          {activeTab === 'Policies' ? (
-            <div className="space-y-5 p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-900">Tool Policies</h3>
-                  <p className="mt-0.5 text-xs text-gray-500">Per-tool rate limits, approval gates, and cache settings.</p>
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</p>
+                  <p className="mt-1 text-sm text-gray-900">{server.enabled ? 'Enabled' : 'Disabled'}</p>
                 </div>
-                {canManageScopeConfig ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (showPolicyForm && editingPolicyId === null) {
-                        resetPolicyForm();
-                        return;
-                      }
-                      setPolicyForm(EMPTY_POLICY);
-                      setEditingPolicyId(null);
-                      setShowPolicyForm(true);
-                    }}
-                    className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    {showPolicyForm && editingPolicyId === null ? 'Close' : 'Add policy'}
-                  </button>
-                ) : null}
               </div>
-
-              {!canManageScopeConfig ? (
-                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-                  Read-only. Tool policies are managed by the server owner or delegated administrators.
-                </div>
-              ) : null}
-
-              {showPolicyForm && canManageScopeConfig ? (
-                <div className="space-y-4 rounded-xl border border-blue-100 bg-blue-50/40 p-5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold text-gray-800">{editingPolicyId ? 'Edit Policy' : 'New Policy'}</p>
-                    <button type="button" onClick={resetPolicyForm} className="text-gray-400 hover:text-gray-600">
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    <FormField label="Tool Name">
-                      {toolOptions.length > 0 ? (
-                        <select
-                          className={selectCls}
-                          value={policyForm.tool_name}
-                          disabled={editingPolicyId !== null}
-                          onChange={(event) => setPolicyForm((value) => ({ ...value, tool_name: event.target.value }))}
-                        >
-                          <option value="">Select tool…</option>
-                          {toolOptions.map((toolName) => (
-                            <option key={toolName} value={toolName}>
-                              {toolName}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          className={inputCls}
-                          placeholder="tool_name…"
-                          disabled={editingPolicyId !== null}
-                          value={policyForm.tool_name}
-                          onChange={(event) => setPolicyForm((value) => ({ ...value, tool_name: event.target.value }))}
-                        />
-                      )}
-                    </FormField>
-                    <FormField label="Scope Type">
-                      <select
-                        className={selectCls}
-                        value={policyForm.scope_type}
-                        disabled={editingPolicyId !== null}
-                        onChange={(event) => setPolicyForm((value) => ({ ...value, scope_type: event.target.value as PolicyFormState['scope_type'] }))}
-                      >
-                        <option value="team">Team</option>
-                        <option value="organization">Organization</option>
-                        <option value="api_key">API Key</option>
-                      </select>
-                    </FormField>
-                    <FormField label="Scope ID">
-                      <input
-                        className={inputCls}
-                        placeholder="scope-id…"
-                        disabled={editingPolicyId !== null}
-                        value={policyForm.scope_id}
-                        onChange={(event) => setPolicyForm((value) => ({ ...value, scope_id: event.target.value }))}
-                      />
-                    </FormField>
-                    <FormField label="Approval">
-                      <select className={selectCls} value={policyForm.require_approval} onChange={(event) => setPolicyForm((value) => ({ ...value, require_approval: event.target.value as PolicyFormState['require_approval'] }))}>
-                        <option value="never">Auto-execute</option>
-                        <option value="manual">Manual approval</option>
-                      </select>
-                    </FormField>
-                    <FormField label="Max RPM">
-                      <input className={inputCls} type="number" placeholder="unlimited" value={policyForm.max_rpm} onChange={(event) => setPolicyForm((value) => ({ ...value, max_rpm: event.target.value }))} />
-                    </FormField>
-                    <FormField label="Max Concurrency">
-                      <input className={inputCls} type="number" placeholder="unlimited" value={policyForm.max_concurrency} onChange={(event) => setPolicyForm((value) => ({ ...value, max_concurrency: event.target.value }))} />
-                    </FormField>
-                    <FormField label="Cache TTL (seconds)">
-                      <input className={inputCls} type="number" placeholder="no cache" value={policyForm.result_cache_ttl_seconds} onChange={(event) => setPolicyForm((value) => ({ ...value, result_cache_ttl_seconds: event.target.value }))} />
-                    </FormField>
-                    <FormField label="Max Exec Time (ms)">
-                      <input className={inputCls} type="number" placeholder="unlimited" value={policyForm.max_total_execution_time_ms} onChange={(event) => setPolicyForm((value) => ({ ...value, max_total_execution_time_ms: event.target.value }))} />
-                    </FormField>
-                    <FormField label="Status">
-                      <select className={selectCls} value={policyForm.enabled ? 'true' : 'false'} onChange={(event) => setPolicyForm((value) => ({ ...value, enabled: event.target.value === 'true' }))}>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </select>
-                    </FormField>
-                  </div>
-                  {editingPolicyId ? (
-                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
-                      Tool name and scope are locked while editing. Delete and recreate the policy to change its identity.
-                    </div>
-                  ) : null}
-                  {policyForm.require_approval === 'manual' ? (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                      Manual approval currently applies only to direct <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/mcp</code> tool
-                      calls. Chat and responses MCP bridge requests will be rejected until resume-after-approval is implemented.
-                    </div>
-                  ) : null}
-                  <div className="flex justify-end gap-2">
-                    <button type="button" onClick={resetPolicyForm} className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleSavePolicy()}
-                      disabled={savingPolicy || !policyForm.tool_name.trim() || !policyForm.scope_id.trim()}
-                      className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
-                    >
-                      {savingPolicy ? 'Saving…' : editingPolicyId ? 'Save Changes' : 'Save Policy'}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              {policies.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-200 py-12 text-center text-gray-400">
-                  <Lock className="mx-auto mb-2 h-8 w-8 text-gray-200" />
-                  <p className="text-sm font-medium text-gray-500">No policies yet</p>
-                  <p className="mt-1 text-sm">Add a policy to set rate limits, approval gates, or cache rules.</p>
-                </div>
-              ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-200">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-gray-50">
-                        {['Tool', 'Scope', 'Status', 'Approval', 'RPM', 'Concurrency', 'Cache TTL', 'Exec Timeout', ''].map((header, index) => (
-                          <th key={`${header}-${index}`} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                            {header}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {policies.map((policy) => (
-                        <tr key={policy.mcp_tool_policy_id} className="transition-colors hover:bg-gray-50/60">
-                          <td className="px-4 py-3.5 font-mono text-xs text-gray-800">{policy.tool_name}</td>
-                          <td className="px-4 py-3.5 font-mono text-xs text-gray-600">{policy.scope_type}:{policy.scope_id}</td>
-                          <td className="px-4 py-3.5">
-                            <span
-                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                policy.enabled
-                                  ? 'border border-blue-100 bg-blue-50 text-blue-700'
-                                  : 'border border-gray-200 bg-gray-100 text-gray-500'
-                              }`}
-                            >
-                              {policy.enabled ? 'Enabled' : 'Disabled'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3.5">
-                            <span
-                              className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${
-                                policy.require_approval === 'manual'
-                                  ? 'border-amber-200 bg-amber-50 text-amber-700'
-                                  : 'border-gray-200 bg-gray-100 text-gray-500'
-                              }`}
-                            >
-                              {policyApprovalLabel(policy)}
-                            </span>
-                            {policy.require_approval === 'manual' ? <div className="mt-1 text-[11px] text-amber-700">Direct /mcp only</div> : null}
-                          </td>
-                          <td className="px-4 py-3.5 text-xs text-gray-600">{policy.max_rpm ?? '—'}</td>
-                          <td className="px-4 py-3.5 text-xs text-gray-600">{policy.max_concurrency ?? '—'}</td>
-                          <td className="px-4 py-3.5 text-xs text-gray-600">
-                            {policy.result_cache_ttl_seconds != null ? `${policy.result_cache_ttl_seconds}s` : '—'}
-                          </td>
-                          <td className="px-4 py-3.5 text-xs text-gray-600">{policyTimeoutLabel(policy)}</td>
-                          {canManageScopeConfig ? (
-                            <td className="px-4 py-3.5 text-right">
-                              <div className="flex justify-end gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleEditPolicy(policy)}
-                                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                </button>
-                                <button type="button" onClick={() => void handleDeletePolicy(policy)} className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600">
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                            </td>
-                          ) : (
-                            <td className="px-4 py-3.5" />
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {activeTab === 'Activity' ? (
-            <div className="space-y-6 p-6">
-              {canReviewApprovals ? (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-semibold text-gray-900">Approval Requests</h3>
-                  <MCPApprovalsPanel
-                    serverId={serverId}
-                    serverFixed
-                    status={approvalStatus}
-                    onStatusChange={setApprovalStatus}
-                    onRefresh={refetchOperations}
-                  />
-                </div>
-              ) : null}
-
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-gray-900">Operations (24h)</h3>
-                {operationsLoading && !operations ? (
-                  <p className="text-sm text-gray-400">Loading operations…</p>
-                ) : operations ? (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                      {[
-                        { label: 'Total Calls', value: operations.summary.total_calls },
-                        { label: 'Failures', value: operations.summary.failed_calls },
-                        { label: 'Failure Rate', value: fmtPct(operations.summary.failure_rate) },
-                        { label: 'Avg Latency', value: `${Math.round(operations.summary.avg_latency_ms)}ms` },
-                      ].map((item) => (
-                        <div key={item.label} className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{item.label}</p>
-                          <p className="mt-1 text-xl font-semibold text-gray-900">{item.value}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="grid gap-5 lg:grid-cols-2">
-                      <div>
-                        <p className="mb-2 text-sm font-semibold text-gray-700">Top Tools</p>
-                        <DataTable
-                          columns={[
-                            { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsToolRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
-                            { key: 'total_calls', header: 'Calls' },
-                            { key: 'failed_calls', header: 'Failures' },
-                            { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: MCPOperationsToolRow) => `${Math.round(Number(row.avg_latency_ms || 0))}ms` },
-                          ]}
-                          data={operations.top_tools}
-                          emptyMessage="No tool calls in the last 24h"
-                        />
-                      </div>
-                      <div>
-                        <p className="mb-2 text-sm font-semibold text-gray-700">Recent Failures</p>
-                        <DataTable
-                          columns={[
-                            { key: 'occurred_at', header: 'Time', render: (row: MCPOperationsFailureRow) => fmtDate(row.occurred_at) },
-                            { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsFailureRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
-                            {
-                              key: 'error_type',
-                              header: 'Error',
-                              render: (row: MCPOperationsFailureRow) => (row.error_code ? `${row.error_type || 'Error'} (${row.error_code})` : row.error_type || 'Error'),
-                            },
-                          ]}
-                          data={operations.recent_failures}
-                          emptyMessage="No failures in the last 24h"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-400">Operations data unavailable.</p>
-                )}
-              </div>
-            </div>
-          ) : null}
-
-          {activeTab === 'Settings' ? (
-            <div className="space-y-5 p-6">
-              {!canMutateServer ? (
-                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-                  Read-only. Your current asset role does not allow definition changes.
-                </div>
-              ) : null}
-              {canMutateServer ? (
-                <>
-                  <MCPServerForm
-                    value={form}
-                    onChange={setForm}
-                    disableServerKey
-                    ownerScopeOptions={ownerScopeOptions}
-                    lockOwnerScopeType
-                    disableOwnerScopeId
-                    preserveExistingCredentials
-                    credentialsConfigured={server.auth_credentials_present}
-                    showOwnerScope={isPlatformAdmin || !server.access}
-                  />
-                  <div className="flex justify-end pt-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleSave()}
-                      disabled={saving}
-                      className="flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition hover:bg-brand-primary-hover disabled:opacity-50"
-                    >
-                      <Save className="h-4 w-4" />
-                      {saving ? 'Saving…' : 'Save changes'}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Server Key</p>
-                    <p className="mt-1 font-mono text-sm text-gray-900">{server.server_key}</p>
-                  </div>
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Owner</p>
-                    {server.access ? (
-                      <ManagedAssetAccessSummary
-                        access={server.access}
-                        teamOptions={teamOptions}
-                        organizationOptions={organizationOptions}
-                        className="mt-2"
-                      />
-                    ) : <p className="mt-1 text-sm text-gray-900">{ownershipLabel}</p>}
-                  </div>
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Auth Mode</p>
-                    <p className="mt-1 text-sm text-gray-900">{server.auth_mode}</p>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {server.auth_credentials_present ? 'Credentials configured' : 'No stored credentials'}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Forwarded Headers</p>
-                    <p className="mt-1 text-sm text-gray-900">
-                      {server.forwarded_headers_allowlist?.length ? server.forwarded_headers_allowlist.join(', ') : 'None'}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Timeout</p>
-                    <p className="mt-1 text-sm text-gray-900">{server.request_timeout_ms} ms</p>
-                  </div>
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</p>
-                    <p className="mt-1 text-sm text-gray-900">{server.enabled ? 'Enabled' : 'Disabled'}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : null}
+            )}
           </div>
-        )}
-      />
+        ) : null}
+        </div>
+      </PageShell>
 
       <ConfirmDialog
         open={deleteOpen}

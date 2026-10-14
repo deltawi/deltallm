@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { guardrails, organizations, teams, keys, type GuardrailRecord } from '../lib/api';
 import { useApi } from '../lib/hooks';
+import Button from '../components/Button';
 import ScopedGuardrailEditor from '../components/ScopedGuardrailEditor';
 import GuardrailFormModal from '../components/guardrails/GuardrailFormModal';
 import {
@@ -144,16 +145,15 @@ export default function Guardrails() {
       count={items.length || null}
       description="Configure safety guardrails to filter, block, or audit requests and responses across your gateway."
       action={(
-        <button
+        <Button
           onClick={() => {
             setEditItem(null);
             setShowForm(true);
           }}
           disabled={catalogLoading || !catalog}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-medium text-brand-on-primary shadow-sm transition-colors hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Plus className="h-4 w-4" /> Add Guardrail
-        </button>
+        </Button>
       )}
     >
       {loadError ? (

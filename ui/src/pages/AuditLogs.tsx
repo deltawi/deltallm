@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ChevronDown, ChevronRight, Clock, Download, ExternalLink, Search, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Clock, Download, ExternalLink, ScrollText, Search, X } from 'lucide-react';
+import Button from '../components/Button';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import { audit, type AuditEvent, type Pagination } from '../lib/api';
@@ -383,20 +384,16 @@ export default function AuditLogs() {
     <IndexShell
       eyebrowPrefix={navSectionLabel('/audit')}
       title="Audit Logs"
+      titleIcon={ScrollText}
       count={pagination?.total ?? null}
       description="Track security and platform activity."
       action={(
         <div className="relative" ref={exportRef}>
-          <button
-            type="button"
-            onClick={() => setExportOpen((v) => !v)}
-            disabled={exporting}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50"
-          >
+          <Button variant="outline" onClick={() => setExportOpen((v) => !v)} disabled={exporting}>
             <Download className="h-4 w-4" />
             {exporting ? 'Exporting...' : 'Export'}
             <ChevronDown className="h-3 w-3" />
-          </button>
+          </Button>
           {exportOpen && !exporting ? (
             <div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
               <button type="button" onClick={() => exportAudit('csv')} className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50">

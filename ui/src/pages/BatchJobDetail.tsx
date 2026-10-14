@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   ApiError,
   batches,
@@ -9,10 +9,12 @@ import {
   type BatchJobItemDetail,
   type BatchWebhookDelivery,
 } from '../lib/api';
+import Button from '../components/Button';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
-import { RecordDetailShell } from '../components/admin/shells';
-import { ArrowLeft, XCircle, Clock, DollarSign, Hash, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { EntityAvatar, PageShell } from '../components/admin/shells';
+import { navTrail } from '../lib/navigation';
+import { Layers, XCircle, Clock, DollarSign, Hash, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 import {
   applyBatchDetailCancellation,
@@ -244,7 +246,6 @@ function ResourceReloadNotice({ message }: { message: string | null }) {
 
 export default function BatchJobDetail() {
   const { batchId } = useParams<{ batchId: string }>();
-  const navigate = useNavigate();
   const activeBatchIdRef = useRef(batchId);
   const [itemsPage, setItemsPage] = useState<{ offset: number; afterLineNumber: number | null }>({ offset: 0, afterLineNumber: null });
   const [itemPageCursors, setItemPageCursors] = useState<Array<number | null>>([null]);
@@ -456,69 +457,63 @@ export default function BatchJobDetail() {
   if (loadError || !resource) {
     const notFound = loadError instanceof ApiError && loadError.status === 404;
     return (
-      <RecordDetailShell
-        backAction={(
-          <button onClick={() => navigate('/batches')} className="flex items-center gap-1 text-sm text-gray-500 transition-colors hover:text-gray-900">
-            <ArrowLeft className="w-4 h-4" /> Back to Batch Jobs
-          </button>
-        )}
-        header={<h1 className="text-2xl font-bold text-gray-900">Batch Job</h1>}
+      <PageShell
+        breadcrumbs={[...navTrail('/batches'), { label: batchId ?? 'Batch job' }]}
+        avatar={<EntityAvatar icon={Layers} />}
+        title="Batch Job"
       >
-        <ResourceReloadNotice message={resourceReloadNotice} />
-        <Card>
-          <div className="p-8 text-center">
-            <h2 className="text-base font-semibold text-gray-900">
-              {notFound ? 'Batch job not found' : 'Unable to load batch job'}
-            </h2>
-            <p className="mt-2 text-sm text-gray-500">
-              {notFound
-                ? 'Neither live batch metadata nor retained webhook delivery state is available.'
-                : loadError instanceof Error ? loadError.message : 'The request could not be completed.'}
-            </p>
-            <button
-              onClick={() => { void reloadResource().catch(() => undefined); }}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100"
-            >
-              <RefreshCw className="h-4 w-4" /> Retry
-            </button>
-          </div>
-        </Card>
-      </RecordDetailShell>
+        <div className="space-y-6">
+          <ResourceReloadNotice message={resourceReloadNotice} />
+          <Card>
+            <div className="p-8 text-center">
+              <h2 className="text-base font-semibold text-gray-900">
+                {notFound ? 'Batch job not found' : 'Unable to load batch job'}
+              </h2>
+              <p className="mt-2 text-sm text-gray-500">
+                {notFound
+                  ? 'Neither live batch metadata nor retained webhook delivery state is available.'
+                  : loadError instanceof Error ? loadError.message : 'The request could not be completed.'}
+              </p>
+              <button
+                onClick={() => { void reloadResource().catch(() => undefined); }}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100"
+              >
+                <RefreshCw className="h-4 w-4" /> Retry
+              </button>
+            </div>
+          </Card>
+        </div>
+      </PageShell>
     );
   }
 
   if (resource.kind === 'archived') {
     return (
-      <RecordDetailShell
-        backAction={(
-          <button onClick={() => navigate('/batches')} className="flex items-center gap-1 text-sm text-gray-500 transition-colors hover:text-gray-900">
-            <ArrowLeft className="w-4 h-4" /> Back to Batch Jobs
-          </button>
-        )}
-        header={(
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Archived Webhook Delivery</h1>
-            <p className="mt-1 font-mono text-sm text-gray-500">{resource.delivery.batch_id}</p>
-          </div>
-        )}
+      <PageShell
+        breadcrumbs={[...navTrail('/batches'), { label: resource.delivery.batch_id }]}
+        avatar={<EntityAvatar icon={Layers} />}
+        title="Archived Webhook Delivery"
+        meta={<span className="font-mono">{resource.delivery.batch_id}</span>}
       >
-        <ResourceReloadNotice message={resourceReloadNotice} />
-        <Card>
-          <div className="p-5">
-            <h2 className="text-sm font-semibold text-gray-900">Batch metadata has been cleaned up</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Retained webhook delivery state remains available for inspection and replay until its separate retention period expires.
-            </p>
-          </div>
-        </Card>
-        <WebhookDeliveriesCard
-          deliveries={resource.delivery.data}
-          capabilities={resource.delivery.capabilities}
-          replayingEventId={replayingWebhook}
-          replayNotice={webhookReplayNotice}
-          onReplay={(eventId) => { void handleReplayWebhook(eventId); }}
-        />
-      </RecordDetailShell>
+        <div className="space-y-6">
+          <ResourceReloadNotice message={resourceReloadNotice} />
+          <Card>
+            <div className="p-5">
+              <h2 className="text-sm font-semibold text-gray-900">Batch metadata has been cleaned up</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Retained webhook delivery state remains available for inspection and replay until its separate retention period expires.
+              </p>
+            </div>
+          </Card>
+          <WebhookDeliveriesCard
+            deliveries={resource.delivery.data}
+            capabilities={resource.delivery.capabilities}
+            replayingEventId={replayingWebhook}
+            replayNotice={webhookReplayNotice}
+            onReplay={(eventId) => { void handleReplayWebhook(eventId); }}
+          />
+        </div>
+      </PageShell>
     );
   }
 
@@ -663,169 +658,155 @@ export default function BatchJobDetail() {
   const expandedDetail = expandedDetailKey ? itemDetails[expandedDetailKey] : null;
 
   return (
-    <RecordDetailShell
-      backAction={(
-        <button onClick={() => navigate('/batches')} className="flex items-center gap-1 text-sm text-gray-500 transition-colors hover:text-gray-900">
-          <ArrowLeft className="w-4 h-4" /> Back to Batch Jobs
-        </button>
-      )}
-      header={(
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900">Batch Job</h1>
-              <StatusBadge status={job.status} />
-            </div>
-            <p className="mt-1 font-mono text-sm text-gray-500">{job.batch_id}</p>
-          </div>
-          {canCancel && (
-            <button
-              onClick={handleCancel}
-              disabled={cancelling}
-              className="inline-flex items-center gap-2 rounded-lg bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50"
-            >
-              <XCircle className="w-4 h-4" />
-              {cancelling ? 'Cancelling...' : 'Cancel Batch'}
-            </button>
-          )}
-        </div>
-      )}
+    <PageShell
+      breadcrumbs={[...navTrail('/batches'), { label: job.batch_id }]}
+      avatar={<EntityAvatar icon={Layers} />}
+      title="Batch Job"
+      badges={<StatusBadge status={job.status} />}
+      meta={<span className="font-mono">{job.batch_id}</span>}
+      actions={canCancel ? (
+        <Button variant="danger-outline" onClick={handleCancel} disabled={cancelling}>
+          <XCircle className="w-4 h-4" />
+          {cancelling ? 'Cancelling...' : 'Cancel Batch'}
+        </Button>
+      ) : undefined}
     >
+      <div className="space-y-6">
+        <ResourceReloadNotice message={resourceReloadNotice} />
 
-      <ResourceReloadNotice message={resourceReloadNotice} />
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card>
-          <div className="p-5">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Progress</h3>
-            <ProgressRing
-              total={job.total_items}
-              completed={job.completed_items}
-              failed={job.failed_items}
-              inProgress={job.in_progress_items}
-              cancelled={job.cancelled_items}
-            />
-          </div>
-        </Card>
-
-        <Card>
-          <div className="p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Details</h3>
-            <div className="grid grid-cols-2 gap-y-3 text-sm">
-              <span className="text-gray-500">Endpoint</span>
-              <span className="font-medium text-gray-900">{job.endpoint}</span>
-              <span className="text-gray-500">Model</span>
-              <span className="font-medium text-gray-900">{job.model || '--'}</span>
-              <span className="text-gray-500">Team</span>
-              <span className="font-medium text-gray-900">{job.team_alias || '--'}</span>
-              <span className="text-gray-500">API Key</span>
-              <span className="font-mono text-xs text-gray-700">{job.created_by_api_key || '--'}</span>
-              <span className="text-gray-500">Mode</span>
-              <span className="font-medium text-gray-900 text-xs">{job.execution_mode}</span>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card>
+            <div className="p-5">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Progress</h3>
+              <ProgressRing
+                total={job.total_items}
+                completed={job.completed_items}
+                failed={job.failed_items}
+                inProgress={job.in_progress_items}
+                cancelled={job.cancelled_items}
+              />
             </div>
-          </div>
-        </Card>
+          </Card>
 
-        <Card>
-          <div className="p-5 space-y-4">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-gray-900">Timing & Cost</h3>
-              {!costs && (
-                <button
-                  onClick={handleLoadCosts}
-                  disabled={costsLoading}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50"
-                >
-                  <RefreshCw className={clsx('h-3.5 w-3.5', costsLoading && 'animate-spin')} />
-                  {costsError ? 'Retry' : 'Load costs'}
-                </button>
-              )}
+          <Card>
+            <div className="p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Details</h3>
+              <div className="grid grid-cols-2 gap-y-3 text-sm">
+                <span className="text-gray-500">Endpoint</span>
+                <span className="font-medium text-gray-900">{job.endpoint}</span>
+                <span className="text-gray-500">Model</span>
+                <span className="font-medium text-gray-900">{job.model || '--'}</span>
+                <span className="text-gray-500">Team</span>
+                <span className="font-medium text-gray-900">{job.team_alias || '--'}</span>
+                <span className="text-gray-500">API Key</span>
+                <span className="font-mono text-xs text-gray-700">{job.created_by_api_key || '--'}</span>
+                <span className="text-gray-500">Mode</span>
+                <span className="font-medium text-gray-900 text-xs">{job.execution_mode}</span>
+              </div>
             </div>
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-50 rounded-lg">
-                  <Clock className="w-4 h-4 text-brand-primary-ink" />
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Duration</p>
-                  <p className="text-sm font-semibold text-gray-900">{formatDuration(job.started_at, job.completed_at)}</p>
-                </div>
+          </Card>
+
+          <Card>
+            <div className="p-5 space-y-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-gray-900">Timing & Cost</h3>
+                {!costs && (
+                  <button
+                    onClick={handleLoadCosts}
+                    disabled={costsLoading}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50"
+                  >
+                    <RefreshCw className={clsx('h-3.5 w-3.5', costsLoading && 'animate-spin')} />
+                    {costsError ? 'Retry' : 'Load costs'}
+                  </button>
+                )}
               </div>
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-green-50 rounded-lg">
-                  <DollarSign className="w-4 h-4 text-green-600" />
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-50 rounded-lg">
+                    <Clock className="w-4 h-4 text-brand-primary-ink" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Duration</p>
+                    <p className="text-sm font-semibold text-gray-900">{formatDuration(job.started_at, job.completed_at)}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs text-gray-500">Billed Cost</p>
-                  <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_billed_cost ?? job.total_billed_cost, costsLoading)}</p>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-green-50 rounded-lg">
+                    <DollarSign className="w-4 h-4 text-green-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Billed Cost</p>
+                    <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_billed_cost ?? job.total_billed_cost, costsLoading)}</p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-gray-50 rounded-lg">
-                  <Hash className="w-4 h-4 text-gray-600" />
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-gray-50 rounded-lg">
+                    <Hash className="w-4 h-4 text-gray-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Provider Cost</p>
+                    <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_provider_cost ?? job.total_provider_cost, costsLoading)}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs text-gray-500">Provider Cost</p>
-                  <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_provider_cost ?? job.total_provider_cost, costsLoading)}</p>
-                </div>
+                {costsError && <p className="text-xs text-red-600">{costsError}</p>}
               </div>
-              {costsError && <p className="text-xs text-red-600">{costsError}</p>}
-            </div>
-            <div className="pt-3 border-t border-gray-100 space-y-1.5 text-xs text-gray-500">
-              <div className="flex justify-between">
-                <span>Created</span>
-                <span className="text-gray-700">{formatDateTime(job.created_at)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Started</span>
-                <span className="text-gray-700">{formatDateTime(job.started_at)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Completed</span>
-                <span className="text-gray-700">{formatDateTime(job.completed_at)}</span>
-              </div>
-              {job.expires_at && (
+              <div className="pt-3 border-t border-gray-100 space-y-1.5 text-xs text-gray-500">
                 <div className="flex justify-between">
-                  <span>Expires</span>
-                  <span className="text-gray-700">{formatDateTime(job.expires_at)}</span>
+                  <span>Created</span>
+                  <span className="text-gray-700">{formatDateTime(job.created_at)}</span>
                 </div>
-              )}
+                <div className="flex justify-between">
+                  <span>Started</span>
+                  <span className="text-gray-700">{formatDateTime(job.started_at)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Completed</span>
+                  <span className="text-gray-700">{formatDateTime(job.completed_at)}</span>
+                </div>
+                {job.expires_at && (
+                  <div className="flex justify-between">
+                    <span>Expires</span>
+                    <span className="text-gray-700">{formatDateTime(job.expires_at)}</span>
+                  </div>
+                )}
+              </div>
             </div>
+          </Card>
+        </div>
+
+        <WebhookDeliveriesCard
+          deliveries={job.webhook_deliveries || []}
+          capabilities={job.capabilities}
+          replayingEventId={replayingWebhook}
+          replayNotice={webhookReplayNotice}
+          onReplay={(eventId) => { void handleReplayWebhook(eventId); }}
+        />
+
+        <Card>
+          <div className="p-4 border-b border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-900">Batch Items</h3>
+            <p className="text-xs text-gray-500 mt-0.5">{itemsPagination?.total ?? 0} items total</p>
           </div>
+          <DataTable
+            columns={itemColumns}
+            data={itemsData}
+            loading={loading}
+            emptyMessage="No items found"
+            pagination={itemsPagination}
+            onPreviousPage={handleItemsPreviousPage}
+            onNextPage={handleItemsNextPage}
+          />
+          {expandedItem && expandedRow && (
+            <ExpandedItemView
+              item={expandedDetail || expandedRow}
+              loading={Boolean(expandedDetailKey && itemDetailLoading[expandedDetailKey])}
+              error={expandedDetailKey ? itemDetailErrors[expandedDetailKey] : undefined}
+            />
+          )}
         </Card>
       </div>
-
-      <WebhookDeliveriesCard
-        deliveries={job.webhook_deliveries || []}
-        capabilities={job.capabilities}
-        replayingEventId={replayingWebhook}
-        replayNotice={webhookReplayNotice}
-        onReplay={(eventId) => { void handleReplayWebhook(eventId); }}
-      />
-
-      <Card>
-        <div className="p-4 border-b border-gray-100">
-          <h3 className="text-sm font-semibold text-gray-900">Batch Items</h3>
-          <p className="text-xs text-gray-500 mt-0.5">{itemsPagination?.total ?? 0} items total</p>
-        </div>
-        <DataTable
-          columns={itemColumns}
-          data={itemsData}
-          loading={loading}
-          emptyMessage="No items found"
-          pagination={itemsPagination}
-          onPreviousPage={handleItemsPreviousPage}
-          onNextPage={handleItemsNextPage}
-        />
-        {expandedItem && expandedRow && (
-          <ExpandedItemView
-            item={expandedDetail || expandedRow}
-            loading={Boolean(expandedDetailKey && itemDetailLoading[expandedDetailKey])}
-            error={expandedDetailKey ? itemDetailErrors[expandedDetailKey] : undefined}
-          />
-        )}
-      </Card>
-    </RecordDetailShell>
+    </PageShell>
   );
 }
 

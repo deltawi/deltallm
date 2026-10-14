@@ -116,6 +116,28 @@ ui/
 └── package.json
 ```
 
+## Page Layout
+
+Every signed-in page renders its header through `PageShell` in
+`src/components/admin/shells/`. Do not build a page header by hand. The Playground is the
+only exception: it is a full-height workspace, so it builds its own header with the same
+breadcrumb, title and button styles.
+
+- List and top-level pages use `IndexShell`. It adds the menu section as the breadcrumb.
+- Pages below a list page (a detail page, a create or edit form) use `PageShell` with
+  `breadcrumbs={[...navTrail('/models'), { label: name }]}`. `navTrail` comes from
+  `src/lib/navigation.ts`, so breadcrumbs always match the side menu.
+- Use the header slots instead of extra markup: `icon` or `avatar` (`EntityAvatar`), `badges`,
+  `description`, `meta`, `actions`, `stats` (`DetailMetricCard` tiles), `toolbar`, `tabs`
+  (`IconTabs` with `variant="header"`), and `notice`. Use `width="form"` for long forms.
+- Route-based tabs with page controls beside them (scope, period) use `HeaderTabBar` in the `tabs`
+  slot, as on Usage. Other route-based tabs use `tabClass` so they look like `IconTabs`.
+- Filter chips, segmented controls and the refresh control live in `src/components/usage/`
+  (`UsageFilterChips`, `FilterChip`, `Segmented`, `RefreshControl`); reuse them on other report pages.
+- Header buttons use `Button` from `src/components/Button.tsx` at the default size: `primary`
+  for the main action, `outline` for the others, `danger-outline` for delete or cancel, and
+  `size="icon"` with an `aria-label` for icon-only buttons.
+
 ## Development Notes
 
 - The Vite dev server proxies `/v1`, `/health`, `/auth`, `/ui/api`, and `/metrics` to the backend on port 8000

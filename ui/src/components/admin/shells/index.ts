@@ -1,16 +1,16 @@
-export { default as EntityDetailShell } from './EntityDetailShell';
-export { default as HeroTabbedDetailShell } from './HeroTabbedDetailShell';
+export { default as HeaderTabBar, type HeaderTabLink } from './HeaderTabBar';
 export { default as IndexShell } from './IndexShell';
-export { default as RecordDetailShell } from './RecordDetailShell';
+export { default as PageShell, type PageShellProps } from './PageShell';
 export {
   Breadcrumbs,
   ContentCard,
   DetailMetricCard,
+  EntityAvatar,
   IconTabs,
-  InlineStat,
   PanelCard,
   TextTabs,
   type BreadcrumbItem,
   type DetailStatTone,
   type SummaryItem,
 } from './primitives';
+export { tabClass } from './tabClass';

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
-import { AlertCircle } from 'lucide-react';
+import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
+import { AlertCircle, BarChart3, List } from 'lucide-react';
 import { spend, type SpendFeatureStatus, type SpendView } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
@@ -13,7 +13,9 @@ import {
   type ReportingRangeKey,
 } from '../lib/reportingRange';
 import { parseRequestWindow, REQUEST_WINDOWS, resolveUsageView, type RequestWindowKey } from '../lib/usageFilters';
+import { navSectionLabel } from '../lib/navigation';
 import { useUtcReportingDay } from '../lib/useUtcReportingDay';
+import { HeaderTabBar, IndexShell } from '../components/admin/shells';
 import ReportingRangeControl from '../components/ReportingRangeControl';
 import RefreshControl from '../components/usage/RefreshControl';
 import { useAutoRefresh, type AutoRefreshMs } from '../lib/useAutoRefresh';
@@ -113,79 +115,68 @@ export default function Usage() {
   };
 
   const subtitle = requestsPath
-    ? 'Every call through the gateway · newest first · UTC'
+    ? 'Requests · every call through the gateway · newest first · UTC'
     : `${VIEW_LABELS[view]} · ${rangeSubtitle(range.startDate, range.endDate, range.label)} · UTC`;
 
   return (
-    <div className="p-4 sm:p-6">
-      <div className="mx-auto grid max-w-7xl gap-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-[22px] font-bold tracking-tight text-gray-900">{requestsPath ? 'Requests' : 'Usage & Spend'}</h1>
-            <p className="text-xs text-gray-500">{subtitle}</p>
-          </div>
-          <RefreshControl
-            updatedAt={updatedAt}
-            refreshing={false}
-            onRefresh={refresh}
-            autoRefreshMs={autoRefreshMs}
-            onAutoRefreshChange={setAutoRefreshMs}
-          />
-        </div>
-
-        <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 border-b border-gray-200">
-          {canViewRequests ? (
-            <nav aria-label="Usage views" className="flex gap-0.5">
-              {[
-                { to: '/usage', label: 'Overview', active: !requestsPath },
-                { to: '/usage/requests', label: 'Requests', active: requestsPath },
-              ].map((item) => (
-                <Link
-                  key={item.to}
-                  to={tabLink(item.to)}
-                  aria-current={item.active ? 'page' : undefined}
-                  className={`-mb-px border-b-2 px-3 py-2 text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
-                    item.active ? 'border-brand-primary font-semibold text-gray-900' : 'border-transparent text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          ) : <span />}
-          <div className="flex flex-wrap items-center gap-2.5 pb-2">
-            {availableViews.length > 1 && (
-              <Segmented
-                label="Scope"
-                value={view}
-                options={availableViews.map((key) => ({ key, label: VIEW_LABELS[key] }))}
-                onChange={(value) => setParam('view', value)}
-              />
-            )}
-            {requestsPath ? (
-              <Segmented<RequestWindowKey>
-                label="Time window"
-                value={windowKey}
-                options={REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label }))}
-                onChange={(value) => setParam('window', value)}
-              />
-            ) : (
-              <ReportingRangeControl
-                value={range.key}
-                startDate={range.startDate}
-                endDate={range.endDate}
-                ariaLabel="Usage period"
-                desktopBreakpoint="xl"
-                onPresetChange={(key: ReportingRangeKey) => setSearchParams(withReportingRangeQuery(searchParams, resolveReportingRange(key)))}
-                onCustomApply={(startDate, endDate) => {
-                  const custom = resolveCustomReportingRange(startDate, endDate);
-                  if (custom) setSearchParams(withReportingRangeQuery(searchParams, custom));
-                }}
-              />
-            )}
-          </div>
-        </div>
-
+    <IndexShell
+      eyebrowPrefix={navSectionLabel('/usage')}
+      title="Usage & Spend"
+      titleIcon={BarChart3}
+      description={subtitle}
+      action={(
+        <RefreshControl
+          updatedAt={updatedAt}
+          refreshing={false}
+          onRefresh={refresh}
+          autoRefreshMs={autoRefreshMs}
+          onAutoRefreshChange={setAutoRefreshMs}
+        />
+      )}
+      tabs={(
+        <HeaderTabBar
+          label="Usage views"
+          items={canViewRequests ? [
+            { to: tabLink('/usage'), label: 'Overview', icon: BarChart3, active: !requestsPath },
+            { to: tabLink('/usage/requests'), label: 'Requests', icon: List, active: requestsPath },
+          ] : []}
+          controls={(
+            <>
+              {availableViews.length > 1 && (
+                <Segmented
+                  label="Scope"
+                  value={view}
+                  options={availableViews.map((key) => ({ key, label: VIEW_LABELS[key] }))}
+                  onChange={(value) => setParam('view', value)}
+                />
+              )}
+              {requestsPath ? (
+                <Segmented<RequestWindowKey>
+                  label="Time window"
+                  value={windowKey}
+                  options={REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label }))}
+                  onChange={(value) => setParam('window', value)}
+                />
+              ) : (
+                <ReportingRangeControl
+                  value={range.key}
+                  startDate={range.startDate}
+                  endDate={range.endDate}
+                  ariaLabel="Usage period"
+                  desktopBreakpoint="xl"
+                  onPresetChange={(key: ReportingRangeKey) => setSearchParams(withReportingRangeQuery(searchParams, resolveReportingRange(key)))}
+                  onCustomApply={(startDate, endDate) => {
+                    const custom = resolveCustomReportingRange(startDate, endDate);
+                    if (custom) setSearchParams(withReportingRangeQuery(searchParams, custom));
+                  }}
+                />
+              )}
+            </>
+          )}
+        />
+      )}
+    >
+      <div className="grid gap-4">
         {featureError !== null && featureStatus === null && (
           <div role="alert" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -212,6 +203,6 @@ export default function Usage() {
           />
         )}
       </div>
-    </div>
+    </IndexShell>
   );
 }

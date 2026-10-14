@@ -6,13 +6,13 @@ import {
   Bot,
   Check,
   ChevronDown,
-  ChevronRight,
   Code,
   Copy,
   CornerDownLeft,
   Download,
   Eye,
   EyeOff,
+  FlaskConical,
   FileAudio,
   Key,
   MessageSquare,
@@ -40,6 +40,8 @@ import type { TTSEngine } from './useTTSEngine';
 import type { STTEngine } from './useSTTEngine';
 import { useBranding } from '../../lib/brandingContext';
 import PlaygroundModelStatus from './PlaygroundModelStatus';
+import { Breadcrumbs } from '../admin/shells';
+import Button from '../Button';
 
 interface SharedProps {
   mode: PlaygroundMode;
@@ -665,27 +667,20 @@ export default function PlaygroundDesktop({
       <div className="flex-none border-b border-gray-200 bg-white px-6 py-4 z-10 relative">
         <div className="flex items-center justify-between">
           <div>
-            <div className="mb-1 flex items-center gap-1.5 text-xs text-gray-500">
-              <span>Home</span>
-              <ChevronRight className="h-3 w-3" />
-              <span className="font-medium text-gray-700">Playground</span>
-            </div>
+            <Breadcrumbs items={[{ label: 'Playground' }]} className="mb-1" />
             <div className="flex items-center gap-4">
               <h1 className="flex items-center gap-2 text-xl font-bold text-gray-900">
-                <Sparkles className="h-5 w-5 text-brand-primary-ink" />
+                <FlaskConical className="h-5 w-5 text-brand-primary-ink" aria-hidden="true" />
                 Playground
               </h1>
               <ModeSelector mode={mode} onChange={setMode} />
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={handleReset}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-            >
+            <Button variant="outline" onClick={handleReset}>
               <RotateCcw className="h-4 w-4" />
               Reset
-            </button>
+            </Button>
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
