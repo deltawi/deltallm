@@ -30,7 +30,9 @@ Overload returns a local rejection; it does not mark a provider unhealthy.
 Required spend and audit acceptance is durable only after transaction commit.
 Stable event IDs, fresh reads after locks, redaction before storage and fenced
 completion protect replay and tenant policy. Queue locks precede organization
-policy locks. Native database tests cover cancellation, lost acknowledgements,
+policy locks. Enqueues and workers share the policy lock; only policy changes
+and redaction take it exclusively, so a worker batch never blocks request-path
+admission. Native database tests cover cancellation, lost acknowledgements,
 policy changes, full queues and stale workers.
 
 Do not rewrite a capacity row when no credit changes. Do not add a timed

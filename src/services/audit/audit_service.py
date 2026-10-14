@@ -694,7 +694,7 @@ class AuditService:
             return
         async with self._transaction(target_db) as tx:
             ingestion_repository = self.ingestion_repository.with_db(tx)
-            await ingestion_repository.lock_content_policy(organization_id)
+            await ingestion_repository.share_content_policy(organization_id)
             enabled, _ = await ingestion_repository.get_content_policy(organization_id)
             prompt_repository = self.prompt_repository.with_db(tx)
             selected_event = event if enabled else redacted_event
@@ -1087,7 +1087,7 @@ class AuditService:
         if organization_id and has_content and repository_db is not None:
             async with self._transaction(repository_db) as tx:
                 transactional_repository = target_repository.with_db(tx)
-                await self.ingestion_repository.with_db(tx).lock_content_policy(organization_id)
+                await self.ingestion_repository.with_db(tx).share_content_policy(organization_id)
                 content_enabled = await transactional_repository.is_content_storage_enabled_for_org(
                     organization_id
                 )

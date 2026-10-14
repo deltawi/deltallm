@@ -182,7 +182,7 @@ class AuditIngestionRepository:
                     hashtextextended('deltallm:audit-ingestion-capacity', 0)
                 ) AS locked
             ), policy_lock AS MATERIALIZED (
-                SELECT pg_advisory_xact_lock(
+                SELECT pg_advisory_xact_lock_shared(
                     hashtextextended('deltallm:audit-content-policy:' || $1, 0)
                 ) AS locked
                 FROM queue_lock
@@ -825,7 +825,11 @@ class AuditIngestionRepository:
         self,
         organization_ids: list[str],
     ) -> None:
-        """Lock policy keys in deterministic order without reading durable policy state."""
+        """Share policy keys in deterministic order without reading durable policy state.
+
+        Readers hold the shared lock so the policy cannot change under them while
+        request-path enqueues for the same organizations keep going.
+        """
 
         if self.prisma is None or not organization_ids:
             return
@@ -837,7 +841,7 @@ class AuditIngestionRepository:
                 FROM unnest($1::text[]) AS requested(organization_id)
                 ORDER BY organization_id
             ), policy_locks AS MATERIALIZED (
-                SELECT pg_advisory_xact_lock(
+                SELECT pg_advisory_xact_lock_shared(
                     hashtextextended('deltallm:audit-content-policy:' || organization_id, 0)
                 ) AS locked
                 FROM requested
@@ -884,11 +888,27 @@ class AuditIngestionRepository:
         }
 
     async def lock_content_policy(self, organization_id: str) -> None:
+        """Take the policy lock exclusively, the way policy changes and redaction do."""
+
         if self.prisma is None:
             return
         await self.prisma.query_raw(
             """
             SELECT pg_advisory_xact_lock(
+                hashtextextended('deltallm:audit-content-policy:' || $1, 0)
+            )::text AS locked
+            """,
+            organization_id,
+        )
+
+    async def share_content_policy(self, organization_id: str) -> None:
+        """Keep one organization's policy fixed while this transaction reads it."""
+
+        if self.prisma is None:
+            return
+        await self.prisma.query_raw(
+            """
+            SELECT pg_advisory_xact_lock_shared(
                 hashtextextended('deltallm:audit-content-policy:' || $1, 0)
             )::text AS locked
             """,
