@@ -79,7 +79,7 @@ class SpendOperationRepository:
         try:
             async with asyncio.timeout(budget):
                 rows = await asyncio.shield(admission)
-        except BaseException as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             # The statement may still commit after a timeout or cancellation.
             # No provider call has started, so a first attempt frees its slot.
             if attempt_count == 1:

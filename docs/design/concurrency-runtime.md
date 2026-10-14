@@ -47,7 +47,10 @@ first spend reservation is released in the background by
 the admission; operation expiry recovery reclaims the slot if that release
 cannot reach the database. Usage admission gives the database a lock wait just
 under its one-second budget, so the log names the database's reason rather than
-a client timeout.
+a client timeout. Acceptance metrics record that whole statement as the `lock`
+phase, so lock wait, pool wait and insert time are no longer split out. These functions come from migration
+`20261014160000_telemetry_single_statement_admission`; run migrations before
+starting gateway pods on this release, or every required admission fails.
 
 Do not rewrite a capacity row when no credit changes. Do not add a timed
 same-organization coalescer without arrival traces that show a benefit after
