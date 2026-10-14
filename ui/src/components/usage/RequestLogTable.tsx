@@ -54,7 +54,7 @@ export default function RequestLogTable({ logs, loading, refreshing, selectedId,
               >
                 <td className={CELL} title={utcTimestamp(log.start_time)}>{relativeTime(log.start_time)}</td>
                 <td className={CELL}>
-                  <span className={`inline-flex items-center gap-1.5 font-medium ${failed ? 'text-rose-700' : 'text-gray-900'}`}>
+                  <span className={`relative inline-flex items-center gap-1.5 font-medium ${failed ? 'text-rose-700' : 'text-gray-900'}`}>
                     <span aria-hidden="true" className={`h-[7px] w-[7px] rounded-full ${failed ? 'bg-rose-600' : 'bg-emerald-600'}`} />
                     {logStatusCode(log)}
                     <span className="sr-only">{failed ? 'failed' : 'succeeded'}</span>
