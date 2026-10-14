@@ -17,7 +17,17 @@ from src.auth.roles import Permission
 from src.billing.spend.spend_read import SpendReadSource, get_spend_read_source
 from src.db.billing.spend_components import external_request_sql
 from src.middleware.admin import require_any_admin_permission
-from src.providers.resolution import provider_from_model, resolve_provider
+from src.db.billing.spend_dimensions import (
+    legacy_cache_model_provider_overrides,
+    search_clause_sql,
+    search_pattern,
+    spend_dimension_sql,
+)
+from src.db.billing.admin_request_logs import (
+    RequestLogFilters,
+    RequestLogStatus,
+    request_log_queries,
+)
 from src.services.reporting.request_log_cursor import (
     InvalidRequestLogCursor,
     decode_request_log_cursor,
@@ -42,6 +52,12 @@ from src.services.reporting.spend_visibility import (
     SPEND_VISIBILITY_PERMISSIONS,
     SpendVisibility,
     apply_spend_visibility,
+    user_identity_labels_visible as _user_identity_labels_visible,
+)
+from src.services.reporting.usage_filters import (
+    UsageFilterError,
+    UsageFilterForbidden,
+    UsageFilters,
 )
 
 router = APIRouter(tags=["Spend"])
@@ -66,6 +82,15 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
+def _log_window_start(start_date: date | None, since: datetime | None) -> datetime | None:
+    """Return the later of the start date and ``since`` (a naive ``since`` is UTC)."""
+
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    candidates = [value for value in (_date_start(start_date), since) if value is not None]
+    return max(candidates) if candidates else None
+
+
 def _decode_request_log_cursor(value: str) -> tuple[datetime, str]:
     try:
         return decode_request_log_cursor(value)
@@ -73,233 +98,9 @@ def _decode_request_log_cursor(value: str) -> tuple[datetime, str]:
         raise HTTPException(status_code=422, detail="Invalid request log cursor") from exc
 
 
-def _provider_from_api_base_expr(api_base_expr: str) -> str:
-    lowered_api_base = f"LOWER(COALESCE({api_base_expr}, ''))"
-    return f"""
-        CASE
-            WHEN {lowered_api_base} LIKE '%openai.azure.com%' THEN 'azure_openai'
-            WHEN {lowered_api_base} LIKE '%api.groq.com%' OR {lowered_api_base} LIKE '%groq%' THEN 'groq'
-            WHEN {lowered_api_base} LIKE '%openrouter.ai%' OR {lowered_api_base} LIKE '%openrouter%' THEN 'openrouter'
-            WHEN {lowered_api_base} LIKE '%fireworks%' THEN 'fireworks'
-            WHEN {lowered_api_base} LIKE '%together%' THEN 'together'
-            WHEN {lowered_api_base} LIKE '%deepinfra%' THEN 'deepinfra'
-            WHEN {lowered_api_base} LIKE '%perplexity%' THEN 'perplexity'
-            WHEN {lowered_api_base} LIKE '%anthropic%' THEN 'anthropic'
-            WHEN {lowered_api_base} LIKE '%googleapis.com%' OR {lowered_api_base} LIKE '%generativelanguage.googleapis.com%' THEN 'gemini'
-            WHEN {lowered_api_base} LIKE '%bedrock%' THEN 'bedrock'
-            WHEN {lowered_api_base} LIKE '%api.openai.com%' OR {lowered_api_base} LIKE '%openai.com%' THEN 'openai'
-            WHEN {lowered_api_base} LIKE '%azure%' THEN 'azure_openai'
-            ELSE NULL
-        END
-    """.strip()
-
-
-def _provider_from_model_expr(model_expr: str) -> str:
-    lowered_model = f"LOWER(COALESCE({model_expr}, ''))"
-    return f"""
-        CASE
-            WHEN {lowered_model} LIKE 'azure_openai/%' OR {lowered_model} LIKE 'azure/%' THEN 'azure_openai'
-            WHEN {lowered_model} LIKE 'anthropic/%' THEN 'anthropic'
-            WHEN {lowered_model} LIKE 'openrouter/%' THEN 'openrouter'
-            WHEN {lowered_model} LIKE 'groq/%' THEN 'groq'
-            WHEN {lowered_model} LIKE 'together/%' THEN 'together'
-            WHEN {lowered_model} LIKE 'fireworks/%' THEN 'fireworks'
-            WHEN {lowered_model} LIKE 'deepinfra/%' THEN 'deepinfra'
-            WHEN {lowered_model} LIKE 'perplexity/%' THEN 'perplexity'
-            WHEN {lowered_model} LIKE 'gemini/%' THEN 'gemini'
-            WHEN {lowered_model} LIKE 'bedrock/%' THEN 'bedrock'
-            WHEN {lowered_model} LIKE 'vllm/%' THEN 'vllm'
-            WHEN {lowered_model} LIKE 'lmstudio/%' THEN 'lmstudio'
-            WHEN {lowered_model} LIKE 'ollama/%' THEN 'ollama'
-            WHEN {lowered_model} LIKE 'openai/%' THEN 'openai'
-            ELSE NULL
-        END
-    """.strip()
-
-
-def _sql_string_literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def _legacy_cache_provider_override_expr(
-    *,
-    table_alias: str = "s",
-    model_provider_overrides: dict[str, str] | None = None,
-) -> str:
-    if not model_provider_overrides:
-        return "NULL"
-
-    lowered_api_base = f"LOWER(COALESCE({table_alias}.api_base, ''))"
-    cases = []
-    for model, provider in sorted(model_provider_overrides.items()):
-        model_literal = _sql_string_literal(model)
-        provider_literal = _sql_string_literal(provider)
-        cases.append(
-            f"""WHEN (
-                LOWER(COALESCE({table_alias}.deployment_model, '')) = {model_literal}
-                OR LOWER(COALESCE({table_alias}.model, '')) = {model_literal}
-            ) THEN {provider_literal}"""
-        )
-    case_sql = "\n            ".join(cases)
-    return f"""
-        CASE
-            WHEN {lowered_api_base} <> 'cache' THEN NULL
-            {case_sql}
-            ELSE NULL
-        END
-    """.strip()
-
-
-def _canonical_provider_expr(
-    *,
-    table_alias: str = "s",
-    model_provider_overrides: dict[str, str] | None = None,
-) -> str:
-    provider_column = f"{table_alias}.provider"
-    metadata_provider_column = f"{table_alias}.metadata->>'provider'"
-    api_base_column = f"{table_alias}.api_base"
-    api_base_provider_expr = _provider_from_api_base_expr(api_base_column)
-    legacy_cache_provider_expr = _legacy_cache_provider_override_expr(
-        table_alias=table_alias,
-        model_provider_overrides=model_provider_overrides,
-    )
-    deployment_model_provider_expr = _provider_from_model_expr(f"{table_alias}.deployment_model")
-    model_provider_expr = _provider_from_model_expr(f"{table_alias}.model")
-    return f"""
-        COALESCE(
-            NULLIF(LOWER(TRIM(COALESCE({metadata_provider_column}, ''))), ''),
-            NULLIF(LOWER(TRIM({provider_column})), ''),
-            {legacy_cache_provider_expr},
-            {api_base_provider_expr},
-            {deployment_model_provider_expr},
-            {model_provider_expr},
-            'unknown'
-        )
-    """.strip()
-
-
 def _legacy_cache_model_provider_overrides(request: Request) -> dict[str, str]:
     registry = getattr(request.app.state, "model_registry", {}) or {}
-    provider_candidates: dict[str, set[str]] = {}
-    for deployments in registry.values():
-        if not isinstance(deployments, list):
-            continue
-        for deployment in deployments:
-            params = deployment.get("deltallm_params") if isinstance(deployment, dict) else None
-            if not isinstance(params, dict):
-                continue
-            deployment_model = str(params.get("model") or "").strip()
-            provider = resolve_provider(params)
-            if not deployment_model or provider == "unknown":
-                continue
-            if provider_from_model(deployment_model) == provider:
-                continue
-            provider_candidates.setdefault(deployment_model.lower(), set()).add(provider)
-    return {
-        deployment_model: next(iter(providers))
-        for deployment_model, providers in provider_candidates.items()
-        if len(providers) == 1
-    }
-
-
-def _grouped_spend_config(
-    group_by: str,
-    source: SpendReadSource,
-    *,
-    model_provider_overrides: dict[str, str] | None = None,
-    user_identity_labels_visible: bool = False,
-) -> dict[str, Any]:
-    if group_by == "model":
-        return {
-            "group_expr": "s.model",
-            "display_expr": "NULL",
-            "group_by_exprs": ["s.model"],
-            "search_clause": "(COALESCE(s.model, '') ILIKE ${i} OR (s.model IS NULL AND 'unspecified model' ILIKE ${i}))",
-        }
-    if group_by == "organization":
-        return {
-            "joins": [
-                "LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id"
-            ],
-            "group_expr": "s.organization_id",
-            "display_expr": "NULLIF(TRIM(COALESCE(o.organization_name, '')), '')",
-            "group_by_exprs": [
-                "s.organization_id",
-                "NULLIF(TRIM(COALESCE(o.organization_name, '')), '')",
-            ],
-            "search_clause": "(COALESCE(s.organization_id, '') ILIKE ${i} OR COALESCE(o.organization_name, '') ILIKE ${i} OR (s.organization_id IS NULL AND 'unassigned organization' ILIKE ${i}))",
-        }
-    if group_by == "team":
-        return {
-            "joins": ["LEFT JOIN deltallm_teamtable t ON t.team_id = s.team_id"],
-            "group_expr": "s.team_id",
-            "display_expr": "NULLIF(TRIM(COALESCE(t.team_alias, '')), '')",
-            "group_by_exprs": [
-                "s.team_id",
-                "NULLIF(TRIM(COALESCE(t.team_alias, '')), '')",
-            ],
-            "search_clause": "(COALESCE(s.team_id, '') ILIKE ${i} OR COALESCE(t.team_alias, '') ILIKE ${i} OR (s.team_id IS NULL AND 'unassigned team' ILIKE ${i}))",
-        }
-    if group_by == "user":
-        user_column = source.column("user_column", table_alias="s")
-        if not user_identity_labels_visible:
-            return {
-                "group_expr": user_column,
-                "display_expr": "NULL",
-                "group_by_exprs": [user_column],
-                "search_clause": f"(COALESCE({user_column}, '') ILIKE ${{i}} OR ({user_column} IS NULL AND 'unassigned user' ILIKE ${{i}}))",
-            }
-        return {
-            "joins": [f"LEFT JOIN deltallm_usertable u ON u.user_id = {user_column}"],
-            "group_expr": user_column,
-            "display_expr": "NULLIF(TRIM(COALESCE(u.user_email, '')), '')",
-            "group_by_exprs": [
-                user_column,
-                "NULLIF(TRIM(COALESCE(u.user_email, '')), '')",
-            ],
-            "search_clause": f"(COALESCE({user_column}, '') ILIKE ${{i}} OR COALESCE(u.user_email, '') ILIKE ${{i}} OR ({user_column} IS NULL AND 'unassigned user' ILIKE ${{i}}))",
-        }
-    if group_by == "api_key":
-        return {
-            "joins": ["LEFT JOIN deltallm_verificationtoken vt ON vt.token = s.api_key"],
-            "group_expr": "s.api_key",
-            "display_expr": "NULLIF(TRIM(COALESCE(vt.key_name, '')), '')",
-            "group_by_exprs": [
-                "s.api_key",
-                "NULLIF(TRIM(COALESCE(vt.key_name, '')), '')",
-            ],
-            "search_clause": "(COALESCE(s.api_key, '') ILIKE ${i} OR COALESCE(vt.key_name, '') ILIKE ${i} OR (s.api_key IS NULL AND 'unassigned api key' ILIKE ${i}))",
-        }
-    if group_by == "provider":
-        provider_expr = _canonical_provider_expr(
-            table_alias="s",
-            model_provider_overrides=model_provider_overrides,
-        )
-        return {
-            "group_expr": provider_expr,
-            "display_expr": "NULL",
-            "group_by_exprs": [provider_expr],
-            "search_clause": f"({provider_expr} ILIKE ${{i}} OR COALESCE(s.api_base, '') ILIKE ${{i}})",
-        }
-    raise ValueError(f"Unsupported spend grouping: {group_by}")
-
-
-def _user_identity_labels_visible(scope: Any, visibility: SpendVisibility) -> bool:
-    if visibility.is_platform_admin:
-        return True
-
-    checks: list[bool] = []
-    if visibility.view == "organization":
-        checks.extend(
-            Permission.USER_READ in (scope.org_permissions_by_id or {}).get(organization_id, set())
-            for organization_id in visibility.organization_ids
-        )
-    elif visibility.view == "team":
-        checks.extend(
-            Permission.USER_READ in (scope.team_permissions_by_id or {}).get(team_id, set())
-            for team_id in visibility.team_ids
-        )
-    return bool(checks) and all(checks)
+    return legacy_cache_model_provider_overrides(registry)
 
 
 def _reporting_scope_cache_payload(visibility: SpendVisibility) -> dict[str, Any]:
@@ -662,7 +463,7 @@ async def spend_report(
             "reporting_context": _reporting_context(request, visibility),
         }
 
-    config = _grouped_spend_config(
+    config = spend_dimension_sql(
         group_by,
         source,
         model_provider_overrides=model_provider_overrides,
@@ -670,10 +471,10 @@ async def spend_report(
     )
     clauses: list[str] = []
     params: list[Any] = []
-    joins = list(config.get("joins", []))
-    group_expr = config["group_expr"]
-    display_expr = config["display_expr"]
-    group_by_sql = ", ".join(config.get("group_by_exprs", [group_expr]))
+    joins = list(config.joins)
+    group_expr = config.group_expr
+    display_expr = config.display_expr
+    group_by_sql = ", ".join(config.group_by_exprs)
 
     if start_date is not None:
         params.append(_date_start(start_date))
@@ -682,8 +483,8 @@ async def spend_report(
         params.append(_date_end(end_date))
         clauses.append(f"s.start_time <= ${len(params)}::timestamp")
     if normalized_search:
-        params.append(f"%{normalized_search}%")
-        clauses.append(config["search_clause"].format(i=len(params)))
+        params.append(search_pattern(normalized_search))
+        clauses.append(search_clause_sql(config.search_clause, len(params)))
     apply_spend_visibility(
         clauses=clauses,
         params=params,
@@ -854,9 +655,17 @@ async def spend_feature_status(
 )
 async def request_logs(
     request: Request,
-    model: str | None = Query(default=None),
-    team_id: str | None = Query(default=None),
-    user_id: str | None = Query(default=None),
+    model: str | None = Query(default=None, max_length=512),
+    provider: str | None = Query(default=None, max_length=512),
+    organization_id: str | None = Query(default=None, max_length=512),
+    team_id: str | None = Query(default=None, max_length=512),
+    user_id: str | None = Query(default=None, max_length=512),
+    api_key: str | None = Query(default=None, max_length=512),
+    status: RequestLogStatus | None = Query(default=None),
+    cache_hit: bool | None = Query(default=None),
+    request_id: str | None = Query(default=None, max_length=256),
+    unassigned: list[str] | None = Query(default=None, max_length=6),
+    since: datetime | None = Query(default=None),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     view: Literal["organization", "team", "self"] | None = Query(default=None),
@@ -878,54 +687,49 @@ async def request_logs(
     visibility = _resolve_reporting_visibility(request, scope, view)
     if not visibility.can_view_request_logs:
         raise HTTPException(status_code=403, detail="Request logs are outside your reporting scope")
-    db = db_or_503(request)
-    cache = await _reporting_cache(request)
-    source = get_spend_read_source()
-
-    clauses: list[str] = []
-    params: list[Any] = []
-
-    def add_clause(template: str, value: Any) -> None:
-        params.append(value)
-        clauses.append(template.format(i=len(params)))
-
-    if model:
-        add_clause("model = ${i}", model)
-    if team_id:
-        add_clause("team_id = ${i}", team_id)
-    if user_id:
-        add_clause(f"{source.user_column} = ${{i}}", user_id)
-    if start_date is not None:
-        add_clause("start_time >= ${i}::timestamp", _date_start(start_date))
-    if end_date is not None:
-        add_clause("start_time <= ${i}::timestamp", _date_end(end_date))
+    try:
+        usage_filters = UsageFilters.build(
+            values={
+                "model": model,
+                "provider": provider,
+                "organization": organization_id,
+                "team": team_id,
+                "user": user_id,
+                "api_key": api_key,
+            },
+            unassigned=unassigned,
+        )
+        usage_filters.authorize(visibility)
+    except UsageFilterError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except UsageFilterForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if pagination_mode == "offset" and cursor is not None:
         raise HTTPException(status_code=422, detail="cursor requires pagination_mode=cursor")
     if pagination_mode == "cursor" and "offset" in request.query_params:
         raise HTTPException(status_code=422, detail="offset cannot be used with cursor pagination")
-    if cursor:
-        cursor_time, cursor_id = _decode_request_log_cursor(cursor)
-        params.extend((cursor_time, cursor_id))
-        clauses.append(f"(start_time, id) < (${len(params) - 1}::timestamp, ${len(params)})")
-    apply_spend_visibility(
-        clauses=clauses,
-        params=params,
+    db = db_or_503(request)
+    cache = await _reporting_cache(request)
+    source = get_spend_read_source()
+    queries = request_log_queries(
+        filters=RequestLogFilters(
+            start=_log_window_start(start_date, since),
+            end=_date_end(end_date),
+            usage=usage_filters,
+            status=status,
+            cache_hit=cache_hit,
+            request_id=request_id.strip() if request_id and request_id.strip() else None,
+        ),
         visibility=visibility,
         source=source,
+        limit=limit if offset_pagination else limit + 1,
+        offset=offset,
+        cursor=_decode_request_log_cursor(cursor) if cursor else None,
+        model_provider_overrides=(
+            _legacy_cache_model_provider_overrides(request) if provider else None
+        ),
+        user_identity_labels_visible=_user_identity_labels_visible(scope, visibility),
     )
-
-    where_sql = ""
-    if clauses:
-        where_sql = " WHERE " + " AND ".join(clauses)
-
-    limit_idx = len(params) + 1
-    query_limit = limit if offset_pagination else limit + 1
-    query_params: tuple[Any, ...] = (*params, query_limit)
-    offset_sql = ""
-    if offset:
-        offset_idx = len(params) + 2
-        offset_sql = f"OFFSET ${offset_idx}"
-        query_params = (*query_params, offset)
 
     async def load_logs() -> dict[str, Any]:
         async def query_logs(
@@ -937,21 +741,8 @@ async def request_logs(
                 tx,
                 deadline=deadline,
                 cancellation_grace=cancellation_grace,
-                query=f"""
-                SELECT id, request_id, call_type, model, api_base, api_key, spend, total_tokens,
-                       {source.prompt_tokens_column} AS prompt_tokens,
-                       {source.completion_tokens_column} AS completion_tokens,
-                       {source.cached_prompt_tokens_column} AS prompt_tokens_cached,
-                       {source.cached_completion_tokens_column} AS completion_tokens_cached,
-                       start_time, end_time, {source.user_column} AS "user", team_id, {source.end_user_column} AS end_user,
-                       metadata, cache_hit, cache_key, request_tags, status, http_status_code, error_type
-                FROM {source.table}
-                {where_sql}
-                ORDER BY start_time DESC, id DESC
-                LIMIT ${limit_idx}
-                {offset_sql}
-                """,
-                params=query_params,
+                query=queries.page.sql,
+                params=queries.page.params,
             )
             total: int | None = None
             if offset_pagination:
@@ -959,8 +750,8 @@ async def request_logs(
                     tx,
                     deadline=deadline,
                     cancellation_grace=cancellation_grace,
-                    query=f"SELECT COUNT(*) AS total FROM {source.table} {where_sql}",
-                    params=tuple(params),
+                    query=queries.count.sql,
+                    params=queries.count.params,
                 )
                 total = int((total_rows[0] if total_rows else {}).get("total") or 0)
 
@@ -994,9 +785,10 @@ async def request_logs(
     log_admin_query_timing(
         "request_logs",
         started_at,
-        model=model,
-        team_id=team_id,
-        user_id=user_id,
+        filters=",".join(sorted(usage_filters.dimensions)),
+        status=status,
+        cache_hit=cache_hit,
+        request_id=bool(request_id),
         cursor=bool(cursor),
         pagination_mode=pagination_mode,
         limit=limit,

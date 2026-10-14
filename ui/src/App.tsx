@@ -14,7 +14,7 @@ import Dashboard from './pages/Dashboard';
 const Tiers = lazy(() => import('./pages/Tiers'));
 const TierDetail = lazy(() => import('./pages/TierDetail'));
 const Teams = lazy(() => import('./pages/Teams'));
-import Usage from './pages/Usage';
+const Usage = lazy(() => import('./pages/Usage'));
 import Guardrails from './pages/Guardrails';
 import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
@@ -235,7 +235,8 @@ function AppRoutes() {
           <Route path="/teams/:teamId" element={uiAccess.teams ? <ChunkedRoute><TeamDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/users" element={uiAccess.people_access ? <ChunkedRoute><UsersPage /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/audit" element={uiAccess.audit ? <AuditLogs /> : <Navigate to="/" replace />} />
-          <Route path="/usage" element={uiAccess.usage ? <Usage /> : <Navigate to="/" replace />} />
+          <Route path="/usage" element={uiAccess.usage ? <ChunkedRoute><Usage /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/usage/requests" element={uiAccess.usage ? <ChunkedRoute><Usage /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/batches" element={uiAccess.batches ? <BatchJobs /> : <Navigate to="/" replace />} />
           <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
           <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />

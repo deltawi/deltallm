@@ -41,6 +41,8 @@ from src.api.admin.endpoints.external_auth import (
     diagnostics_router as external_auth_diagnostics_router,
 )
 from src.api.admin.endpoints.key_revocations import router as key_revocations_router
+from src.api.admin.endpoints.live_usage import router as live_usage_router
+from src.api.admin.endpoints.usage_explorer import router as usage_explorer_router
 from src.ui.routes import ui_router as legacy_ui_router
 
 admin_router = APIRouter()
@@ -81,6 +83,8 @@ admin_router.include_router(prompt_registry_router)
 admin_router.include_router(config_router)
 admin_router.include_router(audit_router)
 admin_router.include_router(spend_router)
+admin_router.include_router(usage_explorer_router)
+admin_router.include_router(live_usage_router)
 admin_router.include_router(workspace_logs_router)
 admin_router.include_router(routing_costs_router)
 

@@ -604,6 +604,67 @@ Grouped rows return a nullable `group_key` and an explicit `is_unassigned` boole
 
 For `view=self`, the report accepts only `group_by=organization|team` in addition to the common day, model, and provider groupings. A model drill-down may use only `scope_type=organization|team`. Both the grouping and drill-down retain the authenticated account's owner predicate and active membership boundary, so they partition personal usage without exposing another account's traffic. User/API-key groupings and request logs remain unavailable to self-only accounts.
 
+#### Usage explorer
+
+These routes feed the Overview of the Usage page. They accept the same `view`, `start_date`, and `end_date` parameters as `/ui/api/spend/report`.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/spend/explorer/summary` | Totals for the period and for the period of the same length before it |
+| `GET` | `/ui/api/spend/explorer/series` | Time series split by model, provider, or team |
+| `GET` | `/ui/api/spend/explorer/breakdown` | One page of grouped rows with the previous-period spend |
+
+Filter parameters (all three routes):
+
+- `model`, `provider`, `organization`, `team`, `user`, `api_key`: one exact value for each dimension.
+- `unassigned=<dimension>`: select the rows that have no value for that dimension. You can repeat this parameter.
+  Do not send a value and `unassigned` for the same dimension.
+
+The team and self views accept only the dimensions in `capabilities.allowed_dimensions`, plus `model` and `provider`.
+Another dimension gets HTTP 403. A bad filter gets HTTP 422.
+
+Series parameters: `interval=day|week|month`, `split_by=model|provider|team`, and `max_groups` (1 to 8).
+The response contains `groups` (ranked, `is_other` last) and `buckets`.
+
+Breakdown parameters: `group_by=model|provider|organization|team|user|api_key`, `sort_by=spend|tokens|requests`,
+`search` (part of the name or ID), `limit` (1 to 100), and `offset`. The response contains `data`, `scope_spend`
+(the total spend of the filtered scope), and `pagination`.
+
+#### Live reports
+
+These routes feed the Dashboard. They always use the last 24 hours (UTC) and accept only `view`.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/spend/live/hourly` | 48 hourly buckets and the number of active keys in the last 24 hours |
+| `GET` | `/ui/api/spend/live/daily` | Daily totals from the first day of last month until yesterday |
+| `GET` | `/ui/api/spend/live/providers` | Requests, failures, top failing model, and top error for each provider |
+| `GET` | `/ui/api/spend/live/top` | The API key, the model, and the team with the most requests in the last hour |
+| `GET` | `/ui/api/spend/live/budgets` | Organizations, teams, and keys that used 80% or more of their budget |
+
+The gateway keeps live results in the reporting cache for 60 seconds and daily results for 15 minutes.
+Send `Cache-Control: no-cache` to load new data.
+
+#### Request logs
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/logs` | Request logs for the platform and organization views |
+
+Parameters:
+
+- `since`: ISO 8601 timestamp. The first row to include. A timestamp without an offset is UTC. When you also send `start_date`, the later value applies.
+- `start_date` and `end_date`: dates in UTC.
+- `model`, `provider`, `organization_id`, `team_id`, `user_id`, `api_key`: exact values.
+- `unassigned=<dimension>`: rows without a value for that dimension (`model`, `provider`, `organization`, `team`, `user`, or `api_key`).
+- `status`: `success` or `error`.
+- `cache_hit`: `true` or `false`.
+- `request_id`: one exact request ID. The search reads only the selected window.
+- `pagination_mode=cursor` with `cursor` and `limit` (1 to 500), or `pagination_mode=offset` with `limit` and `offset`.
+
+All these report routes use the spend-reporting capacity gate. When the gate is full or a query takes too long,
+they return HTTP 503 with `Retry-After`.
+
 ### Workspace request logs
 
 | Method | Endpoint | Purpose |

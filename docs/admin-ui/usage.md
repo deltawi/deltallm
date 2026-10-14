@@ -1,6 +1,6 @@
 # Usage & Spend
 
-Usage & Spend is the analytics surface for requests, tokens, and cost.
+Usage & Spend shows requests, tokens, and cost for a period that you select. It has two views: **Overview** and **Requests**.
 
 ![Usage & Spend](images/usage-and-spend.png)
 
@@ -8,13 +8,56 @@ Usage & Spend is the analytics surface for requests, tokens, and cost.
 organization, team, or self scope before returning data. See [Access requirements](access-requirements.md),
 the [Spend API](../api/admin.md#spend), and [Budgets and Spend](../features/budgets.md).
 
-## What this page provides
+## Overview
 
-- Date-range filtering
-- Top-level spend and request totals
-- Daily spend trend
-- Breakdown by model, key, and team
-- Request-log view for operational inspection
+The Overview shows usage for one period. Use the period control at the top right to select the period.
+
+- **Filter bar**: filter by model, provider, organization, team, or API key. Each dimension has one filter.
+  Click a row in the top table to add a filter. Click **x** on a filter chip to remove it.
+- **Tiles**: spend, requests, tokens, error rate, and cost per 1,000 requests.
+  Each tile compares the period with the period of the same length before it.
+- **Usage over time**: a stacked bar chart. Select the metric (spend, requests, tokens, or errors)
+  and split the bars by model, provider, or team. The chart shows the top 4 groups and "Other".
+- **Top table**: the top models, providers, organizations, teams, users, or API keys for the period, with
+  the share of spend, spend, requests, tokens, and error rate. Use the pager and the search box to find a row.
+- **View matching requests**: opens the Requests view with the same filters.
+
+The filters, the period, the metric, the split, and the tab are in the page URL. You can share a link to a filtered view.
+
+## Requests
+
+The Requests view shows each request through the gateway, newest first.
+It shows only to accounts that can see request logs (platform and organization reporting views).
+
+![Requests view with the request panel](images/usage-requests.png)
+
+- Select a time window: 1 hour, 24 hours, 7 days, or 30 days.
+- Filter by status (success or error), cache (hit or miss), model, provider, team, or API key.
+- Type a full request ID in **Find a request ID** to find one request in the selected window.
+- Click a row to open the request panel. The panel shows the error, the model, the provider, the team,
+  the API key, the cost, the token counts, the metadata, and links to the audit log and to the other requests of the key.
+
+## Loading and refresh
+
+Each part of the page loads by itself and shows a skeleton until its data is ready.
+The page loads a part only when it shows. A hidden tab or a closed filter menu does not send a request.
+When you change the chart metric, the page does not load data again.
+
+Click the refresh button to load the latest data. Use the menu next to it to refresh automatically each minute or each 5 minutes.
+Automatic refresh stops while the browser tab is hidden.
+
+## Database load
+
+The gateway serves traffic and reports from the same database. The reports have these limits so that they do not
+make requests through the gateway slower:
+
+- The browser runs at most two report requests at the same time and keeps recent results for up to one minute.
+- The gateway keeps report results in its reporting cache. Users who open the same report share one database read.
+  The Refresh button asks for new data. Automatic refresh uses the cache.
+- Each gateway process runs at most two report queries at the same time, and the cluster runs at most two.
+  Each query has a time limit. When the limit is reached, the gateway returns HTTP 503 with `Retry-After`,
+  and the panel shows a message with a **Retry** button.
+- A search by request ID reads only the selected time window. Use the shortest window that contains the request.
 
 ## Access scope
 
@@ -30,6 +73,7 @@ Organization, team, and personal reports remain separate. Totals and rankings de
 Users with access only to their own records get the **Your usage** view.
 They can divide their own usage by organization or team, then examine the selected row's model mix.
 Detailed request logs, user and API-key dimensions, and tenant-wide rankings require elevated reporting roles.
+In the team and self views, the filter bar shows only the dimensions that the view allows.
 
 Self attribution uses the API key's trusted platform-account owner at request time, not caller-provided `user` or `end_user` values. It is also constrained to the account's current organization or team memberships. Shared-key traffic is therefore attributed to the recorded key owner without allowing former tenant members to retain visibility.
 
@@ -37,14 +81,11 @@ Organization and team breakdowns in **Your usage** retain this same owner-accoun
 
 Scoped team and personal reporting is protected by `general_settings.spend_reporting_v2_enabled`, which defaults to `false`. For a rolling deployment, first deploy the schema, ownership writers, and reporting API to every gateway and batch worker with the flag disabled. Verify the migration and fleet version, then enable the flag in a separate rollout. Organization and platform reporting remain available while the flag is disabled.
 
-## Two main modes
-
-- **Overview**: charts and spend breakdown tables
-- **Request Logs**: recent request-level cost and token entries
-
 ## When to use it
 
-Use this page for cost review, tenant reporting, and identifying which models or keys are driving traffic.
+Use the Overview for cost review, tenant reporting, and to find the models, teams, or keys that cause traffic.
+Use the Requests view to examine failed or slow requests.
+For a live view of the last 24 hours, use the [Dashboard](dashboard.md).
 
 ## Legacy attribution
 
