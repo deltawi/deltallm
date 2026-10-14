@@ -218,3 +218,15 @@ async def test_request_logs_since_narrows_the_start_date(client, test_app, monke
     assert response.status_code == 200
     _, params = fake_db.calls[0]
     assert params[0].isoformat() == "2026-10-13T08:30:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_request_logs_filter_unassigned_teams(client, test_app, monkeypatch):
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+
+    response = await client.get(
+        "/ui/api/logs?pagination_mode=cursor&unassigned=team", headers=HEADERS
+    )
+
+    assert response.status_code == 200
+    assert "s.team_id IS NULL" in fake_db.calls[0][0]

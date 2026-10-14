@@ -662,6 +662,7 @@ async def request_logs(
     status: RequestLogStatus | None = Query(default=None),
     cache_hit: bool | None = Query(default=None),
     request_id: str | None = Query(default=None, max_length=256),
+    unassigned: list[str] | None = Query(default=None, max_length=6),
     since: datetime | None = Query(default=None),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
@@ -693,7 +694,8 @@ async def request_logs(
                 "team": team_id,
                 "user": user_id,
                 "api_key": api_key,
-            }
+            },
+            unassigned=unassigned,
         )
         usage_filters.authorize(visibility)
     except UsageFilterError as exc:
