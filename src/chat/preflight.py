@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -316,7 +317,7 @@ async def run_text_preflight(
 
 def _route_group_key_for_model(request: Request, model: str) -> str | None:
     catalog = getattr(request.app.state, "callable_target_catalog", None)
-    if not isinstance(catalog, dict):
+    if not isinstance(catalog, Mapping):
         return None
     target = catalog.get(model)
     target_type = getattr(target, "target_type", None)
