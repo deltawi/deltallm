@@ -887,3 +887,98 @@ async def test_platform_model_access_is_tier_managed_not_acl_managed(client, tes
     assert stale_update.status_code == 404
     assert stale_health.status_code == 404
     assert stale_delete.status_code == 404
+
+
+class _RollbackDatabase:
+    def __init__(self) -> None:
+        self.rolled_back = 0
+
+    def tx(self):  # noqa: ANN201
+        database = self
+
+        class _Transaction:
+            async def __aenter__(self) -> object:
+                return object()
+
+            async def __aexit__(self, exc_type, exc, traceback) -> bool:  # noqa: ANN001
+                del exc, traceback
+                if exc_type is not None:
+                    database.rolled_back += 1
+                return False
+
+        return _Transaction()
+
+
+class _RouteGroupConflictDeployments:
+    async def delete(self, deployment_id: str) -> bool:
+        from src.db.routing.route_policy_dependencies import RoutePolicyStateConflictError
+
+        raise RoutePolicyStateConflictError(
+            f"Cannot delete this model deployment: route group 'ocr-route' still uses "
+            f"it in a published routing policy. Details: {deployment_id}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_creator_model_delete_maps_route_group_conflict_to_409(client, test_app):  # noqa: ANN001
+    credential = NamedCredentialRecord(
+        credential_id="cred-team",
+        name="Team provider",
+        provider="openai",
+        connection_config={
+            "api_key": "provider-key",
+            "api_base": "https://api.openai.com/v1",
+        },
+        managed_asset_id="asset-credential",
+    )
+    access_repository = _ManagedAssetRepository(credential)
+    logical_repository = _LogicalModelRepository(test_app)
+    deployment_repository = _ModelDeploymentRepository(test_app)
+    access_repository.logical_repository = logical_repository
+    test_app.state.named_credential_repository = _NamedCredentialRepository(credential)
+    test_app.state.managed_asset_access_repository = access_repository
+    test_app.state.logical_model_repository = logical_repository
+    test_app.state.model_deployment_repository = deployment_repository
+    test_app.state.model_hot_reload_manager = _HotReload(test_app)
+    test_app.state.platform_identity_service = _IdentityService(
+        _user_context("model-owner", team_ids=("team-1",))
+    )
+
+    created = await client.post(
+        "/ui/api/models",
+        cookies={"deltallm_session": "asset-session"},
+        json={
+            "deployment_id": "creator-dep",
+            "model_name": "mod-own-k7m4q/support-model",
+            "api_model_id": "mod-own-k7m4q/support-model",
+            "api_namespace": "mod-own-k7m4q",
+            "api_model_slug": "support-model",
+            "named_credential_id": "cred-team",
+            "deltallm_params": {"provider": "openai", "model": "openai/gpt-4o-mini"},
+            "model_info": {"mode": "chat"},
+            "access": {"visibility": "private"},
+        },
+    )
+    assert created.status_code == 200
+    model_asset_id = created.json()["access"]["managed_asset_id"]
+
+    # Same database handle on all three repositories selects the atomic delete path.
+    database = _RollbackDatabase()
+    conflicting = _RouteGroupConflictDeployments()
+    access_repository.prisma = database
+    logical_repository.prisma = database
+    deployment_repository.prisma = database
+    access_repository.with_db = lambda tx: access_repository  # type: ignore[method-assign]
+    logical_repository.with_db = lambda tx: logical_repository  # type: ignore[method-assign]
+    deployment_repository.with_db = lambda tx: conflicting  # type: ignore[method-assign]
+
+    response = await client.delete(
+        "/ui/api/models/creator-dep",
+        cookies={"deltallm_session": "asset-session"},
+    )
+
+    assert response.status_code == 409
+    assert "route group 'ocr-route' still uses it" in response.json()["detail"]
+    assert database.rolled_back == 1
+    assert model_asset_id in access_repository.policies
+    assert await logical_repository.get_by_name("mod-own-k7m4q/support-model") is not None

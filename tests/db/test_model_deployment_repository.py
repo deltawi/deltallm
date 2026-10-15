@@ -130,11 +130,12 @@ class FakePrisma:
 class _RouteAwareTransaction:
     def __init__(self) -> None:
         self.deleted = False
+        self.groups = [{"route_group_id": "group-1", "group_key": "support-route"}]
 
     async def query_raw(self, query: str, *args):  # noqa: ANN201
         del args
         if "FOR UPDATE OF g" in query:
-            return [{"route_group_id": "group-1", "group_key": "support-route"}]
+            return list(self.groups)
         if "DELETE FROM deltallm_modeldeployment" in query:
             self.deleted = True
             return [{"deployment_id": "dep-1"}]
@@ -377,8 +378,31 @@ async def test_model_deployment_credential_owner_can_revoke_exact_live_binding()
 async def test_model_deployment_delete_rolls_back_invalid_policy_cascade():
     prisma = _RouteAwarePrisma()
 
-    with pytest.raises(RoutePolicyStateConflictError, match="would invalidate route group"):
+    with pytest.raises(RoutePolicyStateConflictError) as raised:
         await ModelDeploymentRepository(prisma).delete("dep-1")
 
+    message = str(raised.value)
+    assert message.startswith(
+        "Cannot delete this model deployment: route group 'support-route' still uses it"
+    )
+    assert "Publish a policy version that no longer references this deployment" in message
     assert prisma.rolled_back == 1
     assert prisma.transaction.deleted is False
+
+
+@pytest.mark.asyncio
+async def test_model_deployment_delete_names_every_blocking_route_group():
+    prisma = _RouteAwarePrisma()
+    prisma.transaction.groups = [
+        {"route_group_id": "group-1", "group_key": "support-route"},
+        {"route_group_id": "group-2", "group_key": "ocr-route"},
+    ]
+
+    with pytest.raises(RoutePolicyStateConflictError) as raised:
+        await ModelDeploymentRepository(prisma).delete("dep-1")
+
+    message = str(raised.value)
+    assert "route groups 'support-route', 'ocr-route' still use it" in message
+    assert "support-route: " in message
+    assert "ocr-route: " in message
+    assert prisma.rolled_back == 1

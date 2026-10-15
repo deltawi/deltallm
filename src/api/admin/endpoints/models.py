@@ -2291,18 +2291,21 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, object
         and hasattr(database, "tx")
     )
     if can_delete_atomically:
-        async with database.tx() as tx:
-            transactional_deployments = deployment_repository.with_db(tx)
-            transactional_models = logical_repository.with_db(tx)
-            removed = await transactional_deployments.delete(deployment_id)
-            if not removed:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Deployment not found",
-                )
-            if await transactional_models.count_deployments(logical_model.model_id) == 0:
-                await transactional_models.delete(logical_model.model_id)
-                await access_repository.with_db(tx).delete_policy(policy.asset.asset_id)
+        try:
+            async with database.tx() as tx:
+                transactional_deployments = deployment_repository.with_db(tx)
+                transactional_models = logical_repository.with_db(tx)
+                removed = await transactional_deployments.delete(deployment_id)
+                if not removed:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Deployment not found",
+                    )
+                if await transactional_models.count_deployments(logical_model.model_id) == 0:
+                    await transactional_models.delete(logical_model.model_id)
+                    await access_repository.with_db(tx).delete_policy(policy.asset.asset_id)
+        except RoutePolicyStateConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         response = {
             "deleted": True,
             "warnings": await _reload_model_runtime_after_commit(
