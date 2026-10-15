@@ -331,12 +331,12 @@ Team roles are `team_admin`, `team_developer`, and `team_viewer`. Organization r
 #### How DeltaLLM reads the claim
 
 1. DeltaLLM reads the claim from the ID token, then from the userinfo response. The first source that has the claim is used.
-2. A JSON list gives one value for each item. A string is split on commas. If the string has no comma, it is split on spaces.
+2. A JSON list gives one value for each item. A string is split on commas. Spaces stay in the value, so a group can have a name such as `DeltaLLM Admins`.
 3. If the token does not have the claim, DeltaLLM does not change access. An empty list means that the person has no values.
 
 DeltaLLM reads the ID token from the token endpoint over TLS. It checks the audience and expiry of the ID token.
 
-Group sync runs in the same database transaction as the sign-in. A person with a mapped value does not go to the self-registration sandbox.
+Group sync runs in the same database transaction as the sign-in. A person with a mapped value does not go to the self-registration sandbox, also when the mapped team or organization is skipped. Keep mappings current, or the person signs in with no team access.
 
 #### Removal
 
@@ -345,12 +345,14 @@ When `remove_unlisted` is `false`, group sync only adds access and raises roles.
 When `remove_unlisted` is `true`, the identity provider controls the mapped scopes:
 
 - DeltaLLM removes team memberships in mapped teams that the token no longer gives.
-- DeltaLLM removes organization memberships in mapped organizations that the token no longer gives. Removal also removes the person's team memberships in that organization.
+- DeltaLLM removes organization memberships in mapped organizations that the token no longer gives. Removal also removes the person's memberships in all teams of that organization, mapped or not.
 - In a mapped organization, a role higher than the mapped role goes back to the mapped role.
-- DeltaLLM removes platform admin when the token has no admin value.
-- DeltaLLM deletes the person's API keys in removed teams and organizations, the same as a manual removal.
+- DeltaLLM removes platform admin when the token has no admin value. An email in `sso_admin_email_list` counts as an admin value.
+- DeltaLLM deletes the person's API keys in each removed team, the same as a manual team removal.
 
-Teams and organizations that have no mapping do not change. DeltaLLM never removes the last active platform admin.
+Other teams and organizations that have no mapping do not change. DeltaLLM never removes the last active platform admin.
+
+If a creator-owned model still uses a named credential that is shared through a membership, DeltaLLM keeps that membership and the sign-in continues. The SSO sign-in audit event lists it as skipped with the reason `credential_in_use`.
 
 !!! warning
     Group sync runs only at SSO sign-in. To remove access at once when a person leaves, also disable the account on the **People** page.
@@ -361,11 +363,11 @@ Group sync skips a mapping when the team or organization does not exist, the org
 
 #### Test a sign-in
 
-Use **Test a sign-in** on **Settings > Single sign-on** to see what the next sign-in would change. Enter an email and paste the decoded ID token claims or a list of values. The preview uses the settings on the page, saved or not. It does not change data.
+Use **Test a sign-in** on **Settings > Single sign-on** to see what the next sign-in would change. Enter an email and paste the decoded ID token claims, or values separated by commas. The preview uses the settings on the page, saved or not. It does not change data.
 
 #### Provider examples
 
-**kanidm**: make a claim map for the OAuth2 client. kanidm joins the values of a person in several groups.
+**kanidm**: make a claim map for the OAuth2 client. Use the `array` join, or `csv`. Do not use `ssv`, because DeltaLLM does not split values on spaces.
 
 ```bash
 kanidm system oauth2 update-claim-map deltallm deltallm_role ml_engineers team-ml

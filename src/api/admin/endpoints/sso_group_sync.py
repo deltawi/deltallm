@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from time import perf_counter
 from typing import Any, Literal
 
@@ -84,6 +85,13 @@ class SSOGroupPreviewResponse(BaseModel):
     account_role: str | None
     changes: list[SSOGroupPreviewChange]
     skipped: list[SSOGroupTarget]
+
+
+def _listed_admin(request: Request, email: str | None) -> bool:
+    if not email:
+        return False
+    admins = getattr(_general_settings(request), "sso_admin_email_list", None) or []
+    return email.strip().lower() in {str(item).strip().lower() for item in admins if item}
 
 
 def _general_settings(request: Request) -> Any:
@@ -238,8 +246,11 @@ async def preview_sso_group_sync(
         )
     db = db_or_503(request)
     account_id = await find_account_id_by_email(db, payload.email) if payload.email else None
+    listed_admin = _listed_admin(request, payload.email)
     plan = plan_group_access(settings, values or [])
-    denied = settings.require_mapped_value and not plan.matched_values
+    if listed_admin:
+        plan = replace(plan, grants_platform_admin=True)
+    denied = settings.require_mapped_value and not plan.matched_values and not listed_admin
     view = await SSOGroupSyncService(db).preview(plan, account_id)
     # A missing claim skips sync at sign-in, so the preview shows no changes then.
     diff_changes = view.diff.changes if values is not None and not denied else ()
@@ -266,7 +277,7 @@ async def preview_sso_group_sync(
                 role_before=item.role_before,
                 role_after=item.role_after,
                 reason=item.reason,
-                revokes_keys=item.action == "remove",
+                revokes_keys=item.action == "remove" and item.kind == "team",
             )
             for item in diff_changes
         ],

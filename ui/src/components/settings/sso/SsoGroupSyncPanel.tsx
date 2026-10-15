@@ -187,7 +187,7 @@ export default function SsoGroupSyncPanel() {
             />
             <SwitchRow
               title="Remove access the identity provider no longer grants"
-              description="For mapped teams and organizations, and for platform admin. Removing a membership also deletes the person's API keys there. The last platform admin is never removed."
+              description="For mapped teams and organizations, and for platform admin. Removing an organization also removes the person's teams in it. Their API keys in removed teams are deleted. The last platform admin is never removed."
               checked={draft.remove_unlisted}
               onChange={(value) => (value ? setConfirmRemoval(true) : update({ remove_unlisted: false }))}
               warning
@@ -241,7 +241,7 @@ export default function SsoGroupSyncPanel() {
       <ConfirmDialog
         open={confirmRemoval}
         title="Remove access the identity provider no longer grants?"
-        description="At each SSO sign-in, DeltaLLM removes mapped team and organization memberships and platform admin that the token no longer gives. It also deletes the person's API keys in removed teams and organizations. Manual memberships in unmapped teams stay. The change applies when you save."
+        description="At each SSO sign-in, DeltaLLM removes mapped team and organization memberships and platform admin that the token no longer gives. Removing an organization also removes the person's teams in it, mapped or not. Their API keys in removed teams are deleted. Other unmapped teams stay. If a model's credential still needs a membership, sync keeps it. The change applies when you save."
         confirmLabel="Turn on removal"
         destructive
         onConfirm={() => { update({ remove_unlisted: true }); setConfirmRemoval(false); }}

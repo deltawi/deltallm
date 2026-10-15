@@ -56,8 +56,8 @@ test('payload trims values and keeps only the role for the target type', () => {
 });
 
 test('chip input and preview input parsing', () => {
-  assert.deepEqual(addUniqueValues(['admin'], 'ops, admin  root'), ['admin', 'ops', 'root']);
-  assert.deepEqual(parsePreviewInput('team-ml admin'), { values: ['team-ml', 'admin'] });
+  assert.deepEqual(addUniqueValues(['admin'], 'ops, admin,DeltaLLM Admins'), ['admin', 'ops', 'DeltaLLM Admins']);
+  assert.deepEqual(parsePreviewInput('team-ml, admin\nml-leads'), { values: ['team-ml', 'admin', 'ml-leads'] });
   assert.deepEqual(parsePreviewInput('{"deltallm_role": ["a"]}'), { claims: { deltallm_role: ['a'] } });
   assert.throws(() => parsePreviewInput('{not json'), SyntaxError);
 });

@@ -241,3 +241,57 @@ async def test_preview_writes_nothing(group_db: GroupDb) -> None:
     }
     assert await _team_roles(ctx, existing["account_id"]) == {}
     assert await _role(ctx, existing["account_id"]) == "org_user"
+
+
+@pytest.mark.asyncio
+async def test_removal_refused_by_deferred_trigger_keeps_membership(
+    group_db: GroupDb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = group_db
+    trigger = f"sso_test_block_{ctx.suffix}"
+    # Stand-in for the credential audience triggers: refuse removal from the support team.
+    await ctx.db.execute_raw(
+        f"""
+        CREATE FUNCTION "{trigger}"() RETURNS trigger LANGUAGE plpgsql AS $fn$
+        BEGIN
+          IF OLD.team_id = '{ctx.team_support}' THEN
+            RAISE EXCEPTION 'credential still shared' USING ERRCODE = '23514';
+          END IF;
+          RETURN OLD;
+        END $fn$
+        """
+    )
+    await ctx.db.execute_raw(
+        f'CREATE CONSTRAINT TRIGGER "{trigger}" AFTER DELETE ON deltallm_teammembership '
+        f'DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "{trigger}"()'
+    )
+    monkeypatch.setattr(
+        "src.db.identity.sso_group_sync.MEMBERSHIP_AUDIENCE_CONSTRAINTS",
+        ("deltallm_teammembership_credential_audience_trg", trigger),
+    )
+    try:
+        service = PlatformIdentityService(ctx.db, salt="test-salt")
+        first = await service.upsert_sso_account(
+            identity=_identity(ctx),
+            is_platform_admin=False,
+            group_access=plan_group_access(_settings(ctx, remove=False), ["team-ml", "support"]),
+        )
+        assert first is not None
+        account_id = first.context.account_id
+
+        login = await service.upsert_sso_account(
+            identity=_identity(ctx),
+            is_platform_admin=False,
+            group_access=plan_group_access(_settings(ctx, remove=True), []),
+        )
+        assert login is not None and login.group_sync is not None
+        assert [(c.target_id, c.action) for c in login.group_sync.diff.changes] == [
+            (ctx.team_ml, "remove")
+        ]
+        assert {(s.target_id, s.reason) for s in login.group_sync.diff.skipped} == {
+            (ctx.team_support, "credential_in_use")
+        }
+        assert await _team_roles(ctx, account_id) == {ctx.team_support: "team_viewer"}
+    finally:
+        await ctx.db.execute_raw(f'DROP TRIGGER "{trigger}" ON deltallm_teammembership')
+        await ctx.db.execute_raw(f'DROP FUNCTION "{trigger}"()')

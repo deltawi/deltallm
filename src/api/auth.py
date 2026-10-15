@@ -1455,7 +1455,9 @@ async def auth_callback(
             for item in (getattr(general_settings, "sso_admin_email_list", []) or [])
             if str(item or "").strip()
         }
-        group_access = resolve_sso_group_access(general_settings, response_payload)
+        group_access = resolve_sso_group_access(
+            general_settings, response_payload, listed_admin=normalized_email in admins
+        )
         is_platform_admin = normalized_email in admins or bool(
             group_access and group_access.grants_platform_admin
         )

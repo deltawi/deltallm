@@ -54,8 +54,8 @@ def _resolve_path(source: Mapping[str, Any], path: str) -> object:
 
 def _split_values(raw: object) -> list[str] | None:
     if isinstance(raw, str):
-        separator = "," if "," in raw else None
-        items: Sequence[object] = raw.split(separator)
+        # Commas only: a group name can contain spaces ("DeltaLLM Admins").
+        items: Sequence[object] = raw.split(",")
     elif isinstance(raw, list):
         items = raw
     else:
@@ -76,8 +76,7 @@ def extract_claim_values(sources: Sequence[Mapping[str, Any]], path: str) -> lis
     """Return claim values from the first source that has the claim.
 
     `None` means no source has the claim. An empty list means the claim is
-    present with no values. A string is split on commas, or on whitespace when it
-    has no comma (kanidm `csv` and `ssv` joins).
+    present with no values. A string is split on commas (kanidm `csv` join).
     """
 
     for source in sources:

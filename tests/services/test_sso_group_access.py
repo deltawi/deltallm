@@ -84,14 +84,21 @@ def test_last_active_admin_is_kept() -> None:
     assert diff.demotes_platform_admin is False
 
 
-def test_mapped_org_removal_covers_its_teams_once() -> None:
+def test_mapped_org_removal_lists_every_team_it_removes_once() -> None:
     plan = plan_group_access(_settings(remove=True), [])
     current = AccountAccess(
-        "acct", "org_user", org_roles={"acme": "org_billing"}, team_roles={"support": "team_viewer"}
+        "acct",
+        "org_user",
+        org_roles={"acme": "org_billing"},
+        team_roles={"support": "team_viewer", "manual": "team_admin"},
     )
     diff = diff_group_access(plan, current, TEAMS, ORGS, last_active_admin=False)
-    # Removing the org membership also removes its team memberships in SQL.
-    assert _actions(diff) == {("organization", "remove", "acme", None)}
+    # The unmapped "manual" team is in acme, so the org removal takes it too.
+    assert sorted(_actions(diff)) == [
+        ("organization", "remove", "acme", None),
+        ("team", "remove", "manual", None),
+        ("team", "remove", "support", None),
+    ]
 
 
 def test_unavailable_targets_are_skipped_not_granted_or_removed() -> None:

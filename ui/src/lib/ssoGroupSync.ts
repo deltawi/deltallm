@@ -50,9 +50,9 @@ export const DEFAULT_SSO_GROUP_SYNC: SsoGroupSyncSettings = {
   mappings: [],
 };
 
-/** A value typed into a chip input, split on commas and whitespace. */
+/** Values typed into a chip or preview input, split on commas and new lines. Group names can have spaces. */
 export function splitClaimValues(raw: string): string[] {
-  return raw.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+  return raw.split(/[,\n]+/).map((item) => item.trim()).filter(Boolean);
 }
 
 export function addUniqueValues(current: string[], raw: string): string[] {

@@ -39,7 +39,7 @@ def test_malformed_id_tokens_fall_back(token: object) -> None:
 def test_extract_claim_values_supports_kanidm_joins_and_nested_paths() -> None:
     assert extract_claim_values([{"r": ["a", "b", "a", " "]}], "r") == ["a", "b"]
     assert extract_claim_values([{"r": "a,b, c"}], "r") == ["a", "b", "c"]
-    assert extract_claim_values([{"r": "a b  c"}], "r") == ["a", "b", "c"]
+    assert extract_claim_values([{"r": "DeltaLLM Admins"}], "r") == ["DeltaLLM Admins"]
     assert extract_claim_values([{"realm_access": {"roles": ["x"]}}], "realm_access.roles") == ["x"]
     assert extract_claim_values([{"a.b": ["literal"]}], "a.b") == ["literal"]
 

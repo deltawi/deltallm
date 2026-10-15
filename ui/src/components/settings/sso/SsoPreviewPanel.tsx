@@ -27,7 +27,7 @@ function ChangeRow({ change }: { change: SsoGroupPreviewChange }) {
       <div className="min-w-0 text-sm">
         <p className="font-medium text-gray-900">{describeChange(change)}</p>
         {change.revokes_keys && (
-          <p className="mt-0.5 text-xs text-red-600">Their API keys in this scope will be deleted.</p>
+          <p className="mt-0.5 text-xs text-red-600">Their API keys in this team will be deleted.</p>
         )}
         {change.kind !== 'platform_role' && change.target_id && (
           <p className="mt-0.5 font-mono text-[11px] text-gray-400">{change.target_id}</p>
@@ -129,7 +129,7 @@ export default function SsoPreviewPanel({ settings, onClose }: { settings: SsoGr
           <SettingsField
             label="Token claims or claim values"
             htmlFor="sso-preview-input"
-            hint={`Paste a decoded ID token as JSON, or type values such as "team-ml admin".`}
+            hint="Paste a decoded ID token as JSON, or type values separated by commas, such as team-ml, admin."
           >
             <textarea
               id="sso-preview-input"

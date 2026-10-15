@@ -110,7 +110,7 @@ class SSOGroupAccessChange:
 class SSOGroupSkippedTarget:
     target_id: str
     kind: Literal["organization", "team"]
-    reason: Literal["not_found", "inactive_organization", "external_managed"]
+    reason: Literal["not_found", "inactive_organization", "external_managed", "credential_in_use"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,14 +288,12 @@ def _removals(
         SSOGroupAccessChange("organization", "remove", org_id, current.org_roles[org_id], None)
         for org_id in removed_orgs
     ]
-    for team_id in sorted(plan.managed_team_ids):
+    for team_id in sorted(current.team_roles):
         target = teams.get(team_id)
-        if (
-            team_id in current.team_roles
-            and team_id not in kept_teams
-            and _team_skip(target, team_id) is None
-            and (target is None or target.organization_id not in removed_orgs)
-        ):
+        # Organization removal also removes the account's teams there, mapped or not.
+        cascaded = target is not None and target.organization_id in removed_orgs
+        mapped = team_id in plan.managed_team_ids and _team_skip(target, team_id) is None
+        if team_id not in kept_teams and (cascaded or mapped):
             changes.append(
                 SSOGroupAccessChange("team", "remove", team_id, current.team_roles[team_id], None)
             )

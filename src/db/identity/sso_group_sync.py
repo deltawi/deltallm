@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field
+
+from prisma.errors import RawQueryError
 
 from src.auth.roles import PlatformRole
 from src.db.identity.platform_accounts import PlatformAccountDatabase
@@ -247,6 +249,40 @@ async def remove_organization_memberships(
         account_id,
         sorted(organization_ids),
     )
+    return tokens
+
+
+# Deferred triggers that refuse a membership removal while a creator-owned model
+# still uses a named credential shared through that membership.
+MEMBERSHIP_AUDIENCE_CONSTRAINTS: tuple[str, ...] = (
+    "deltallm_teammembership_credential_audience_trg",
+    "deltallm_orgmembership_credential_audience_trg",
+)
+
+
+async def try_membership_removal(
+    db: PlatformAccountDatabase, remove: Callable[[], Awaitable[list[str]]]
+) -> list[str] | None:
+    """Run one removal in a savepoint and check the audience triggers at once.
+
+    Returns the deleted key hashes, or `None` when a trigger refuses the removal. The
+    savepoint is then rolled back, so the sign-in still commits with the membership kept.
+    """
+
+    names = ", ".join(f'"{name}"' for name in MEMBERSHIP_AUDIENCE_CONSTRAINTS)
+    await db.execute_raw("SAVEPOINT sso_group_removal")
+    try:
+        tokens = await remove()
+        await db.execute_raw(f"SET CONSTRAINTS {names} IMMEDIATE")
+    except RawQueryError as exc:
+        meta = exc.meta if isinstance(exc.meta, Mapping) else {}
+        if meta.get("code") != "23514":
+            raise
+        await db.execute_raw("ROLLBACK TO SAVEPOINT sso_group_removal")
+        await db.execute_raw(f"SET CONSTRAINTS {names} DEFERRED")
+        return None
+    await db.execute_raw(f"SET CONSTRAINTS {names} DEFERRED")
+    await db.execute_raw("RELEASE SAVEPOINT sso_group_removal")
     return tokens
 
 

@@ -96,6 +96,22 @@ async def test_mapped_value_skips_sandbox_and_admin_value_grants_admin(client, t
     assert upsert["group_access"].team_roles == {"team_ml": "team_developer"}
 
 
+async def test_admin_email_list_counts_as_admin_value_for_removal(client, test_app):
+    identity = _GroupIdentityService()
+    test_app.state.platform_identity_service = identity
+    test_app.state.self_registration_provisioning_service = _StubSelfRegistrationProvisioner()
+    config = _app_config(self_registration=False, remove_unlisted=True, require_mapped_value=True)
+    config.general_settings.sso_admin_email_list = ["new@example.com"]
+    test_app.state.app_config = config
+
+    response = await _callback(client, test_app, claims={"deltallm_role": []}, state="listed")
+
+    assert response.status_code == 302
+    upsert = identity.legacy_upserts[0]
+    assert upsert["is_platform_admin"] is True
+    assert upsert["group_access"].grants_platform_admin is True
+
+
 async def test_missing_claim_skips_sync_without_denying(client, test_app):
     identity = _GroupIdentityService()
     test_app.state.platform_identity_service = identity
@@ -274,7 +290,7 @@ async def test_admin_preview_shows_changes_without_writing(client, test_app, mon
         json={
             "settings": SYNC,
             "email": "Priya@Acme.com",
-            "claims": {"deltallm_role": "team-ml admin"},
+            "claims": {"deltallm_role": "team-ml,admin"},
         },
     )
 

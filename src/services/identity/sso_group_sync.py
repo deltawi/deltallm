@@ -18,12 +18,14 @@ from src.db.identity.sso_group_sync import (
     remove_organization_memberships,
     remove_team_memberships,
     set_platform_role,
+    try_membership_removal,
     upsert_organization_membership,
     upsert_team_membership,
 )
 from src.services.identity.sso_group_access import (
     SSOGroupAccessDiff,
     SSOGroupAccessPlan,
+    SSOGroupSkippedTarget,
     diff_group_access,
 )
 
@@ -69,9 +71,11 @@ class SSOGroupSyncService:
     async def _view(
         self, plan: SSOGroupAccessPlan, current: AccountAccess, *, lock: bool
     ) -> SSOGroupAccessView:
-        teams = await load_team_targets(
-            self.db, set(plan.team_roles) | plan.managed_team_ids, lock=lock
-        )
+        # Current teams too, so an organization removal can list the teams it removes.
+        team_ids = set(plan.team_roles) | plan.managed_team_ids
+        if plan.remove_unlisted:
+            team_ids |= set(current.team_roles)
+        teams = await load_team_targets(self.db, team_ids, lock=lock)
         organizations = await load_organization_targets(
             self.db, set(plan.org_roles) | plan.managed_org_ids, lock=lock
         )
@@ -98,14 +102,12 @@ class SSOGroupSyncService:
         if current is None:
             raise RuntimeError("SSO account not found")
         view = await self._view(plan, current, lock=True)
-        revoked: list[str] = []
-        removed_orgs: list[str] = []
-        removed_teams: list[str] = []
+        removals: list[tuple[str, str]] = []
         for change in view.diff.changes:
+            if change.action == "remove" and change.target_id and change.kind != "platform_role":
+                removals.append((change.kind, change.target_id))
+                continue
             if change.action not in ("add", "update"):
-                if change.action == "remove" and change.target_id:
-                    target = removed_orgs if change.kind == "organization" else removed_teams
-                    target.append(change.target_id)
                 continue
             role = str(change.role_after)
             if change.kind == "platform_role":
@@ -118,10 +120,47 @@ class SSOGroupSyncService:
                 await upsert_team_membership(
                     self.db, account_id=account_id, team_id=change.target_id, role=role
                 )
-        revoked += await remove_organization_memberships(
-            self.db, account_id=account_id, organization_ids=removed_orgs
+        revoked, blocked = await self._remove(account_id, removals)
+        diff = view.diff
+        if blocked:
+            diff = SSOGroupAccessDiff(
+                changes=tuple(
+                    item
+                    for item in diff.changes
+                    if not (item.action == "remove" and (item.kind, item.target_id) in blocked)
+                ),
+                skipped=diff.skipped
+                + tuple(
+                    SSOGroupSkippedTarget(target_id, kind, "credential_in_use")  # type: ignore[arg-type]
+                    for kind, target_id in sorted(blocked)
+                ),
+            )
+        return SSOGroupSyncResult(diff=diff, revoked_key_hashes=tuple(revoked))
+
+    async def _remove(
+        self, account_id: str, removals: list[tuple[str, str]]
+    ) -> tuple[list[str], set[tuple[str, str]]]:
+        """Teams first, then organizations. A refused removal keeps the membership."""
+        revoked: list[str] = []
+        blocked: set[tuple[str, str]] = set()
+        for kind, target_id in sorted(removals, key=lambda item: item[0] == "organization"):
+            tokens = await try_membership_removal(
+                self.db,
+                lambda kind=kind, target_id=target_id: self._remove_one(
+                    account_id, kind, target_id
+                ),
+            )
+            if tokens is None:
+                blocked.add((kind, target_id))
+            else:
+                revoked += tokens
+        return revoked, blocked
+
+    async def _remove_one(self, account_id: str, kind: str, target_id: str) -> list[str]:
+        if kind == "team":
+            return await remove_team_memberships(
+                self.db, account_id=account_id, team_ids=[target_id]
+            )
+        return await remove_organization_memberships(
+            self.db, account_id=account_id, organization_ids=[target_id]
         )
-        revoked += await remove_team_memberships(
-            self.db, account_id=account_id, team_ids=removed_teams
-        )
-        return SSOGroupSyncResult(diff=view.diff, revoked_key_hashes=tuple(revoked))

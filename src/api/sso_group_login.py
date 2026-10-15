@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from fastapi import HTTPException, Request, status
@@ -21,13 +22,14 @@ SSO_GROUP_ACCESS_DENIED_DETAIL = (
 
 
 def resolve_sso_group_access(
-    general_settings: Any, callback_payload: Mapping[str, Any]
+    general_settings: Any, callback_payload: Mapping[str, Any], *, listed_admin: bool = False
 ) -> SSOGroupAccessPlan | None:
     """Return the access plan for this sign-in, or `None` when group sync does not apply.
 
     A missing claim gives `None` so that an IdP scope or claim-map mistake never
     removes access. `require_mapped_value` turns a missing claim, or a claim with no
-    mapped value, into a denied sign-in.
+    mapped value, into a denied sign-in. `listed_admin` (the email is in
+    `sso_admin_email_list`) counts as an admin value, so removal never demotes it.
     """
 
     settings = getattr(general_settings, "sso_group_sync", None)
@@ -37,7 +39,7 @@ def resolve_sso_group_access(
     sources = [item for item in raw_sources or () if isinstance(item, Mapping)]
     values = extract_claim_values(sources, settings.claim)
     if values is None:
-        if settings.require_mapped_value:
+        if settings.require_mapped_value and not listed_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail=SSO_GROUP_ACCESS_DENIED_DETAIL
             )
@@ -46,7 +48,9 @@ def resolve_sso_group_access(
         )
         return None
     plan = plan_group_access(settings, values)
-    if settings.require_mapped_value and not plan.matched_values:
+    if listed_admin:
+        plan = replace(plan, grants_platform_admin=True)
+    if settings.require_mapped_value and not plan.matched_values and not listed_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=SSO_GROUP_ACCESS_DENIED_DETAIL
         )
