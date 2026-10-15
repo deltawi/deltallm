@@ -8,6 +8,7 @@ from src.billing.charges.selector_native import NativeSelectorBilling
 from src.db.billing.billing_operation_recovery import BillingOperationRecovery
 from src.db.billing.billing_operations import BillingOperationRepository
 from src.router.runtime_generation import require_routing_runtime_generation
+from src.router.selection.policy import SELECTOR_SPEND_OUTBOX_REQUIRED_MESSAGE
 from src.router.selection.runtime import SelectorExecutionFactory
 
 
@@ -17,7 +18,7 @@ def configure_selector_execution(state: State, spend: SpendIngestionService) -> 
     state.routing_runtime_generation_store.set_selector_activation_check(_unavailable)
     if spend.accounting is None and (not spend.config.enabled or not spend.config.worker_enabled):
         if require_routing_runtime_generation(state).selectors:
-            raise RuntimeError("selector activation requires durable spend outbox and its worker")
+            raise RuntimeError(SELECTOR_SPEND_OUTBOX_REQUIRED_MESSAGE)
         return
     operations = _billing_owner(spend)
     state.selector_execution_factory = SelectorExecutionFactory(

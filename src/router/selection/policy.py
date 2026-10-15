@@ -16,6 +16,13 @@ from src.route_policy_contract import (
 from src.router.context_policy import ContextRoutingPolicy, parse_context_routing_policy
 
 
+SELECTOR_SPEND_OUTBOX_REQUIRED_MESSAGE = (
+    "selector activation requires durable spend outbox and its worker: set "
+    "general_settings.spend_ingestion_mode to outbox and spend_ingestion_worker_enabled "
+    "to true, then restart the gateway"
+)
+
+
 class RouteSelectorActivationUnsupportedError(ValueError):
     """A selector policy reached an activation path before execution is available."""
 
@@ -134,6 +141,7 @@ __all__ = [
     "RouteSelectorActivationState",
     "RouteSelectorActivationUnsupportedError",
     "SELECTOR_POLICY_SEMANTICS_VERSION",
+    "SELECTOR_SPEND_OUTBOX_REQUIRED_MESSAGE",
     "SelectorLane",
     "build_routing_fingerprint",
     "ensure_selector_activation_supported",

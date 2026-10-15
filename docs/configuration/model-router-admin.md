@@ -40,6 +40,30 @@ Publication still uses the standard server qualification checks:
 A selector report does not replace these checks.
 See [router configuration](router.md#model-router-policy-contract) for runtime details.
 
+### "selector activation requires durable spend outbox and its worker"
+
+**Validate** or **Publish** returns this when the gateway still records spend in the
+default `legacy` mode. A selector bills its own provider call separately from the answer,
+so DeltaLLM only activates it when that charge is written durably and settled by the
+spend worker. Enable the spend outbox on every gateway pod and restart them:
+
+```yaml
+general_settings:
+  spend_ingestion_mode: outbox
+  spend_ingestion_worker_enabled: true
+```
+
+With Helm, set the same keys under `config.general_settings`. With environment
+variables, set `DELTALLM_SPEND_INGESTION_MODE=outbox` and
+`DELTALLM_SPEND_INGESTION_WORKER_ENABLED=true`. Both settings are read at startup only.
+The outbox table ships with the standard migrations, and the worker runs inside the
+gateway process, so no extra deployment is needed. Outbox mode opens the telemetry
+pools (`telemetry_db_pool_size` plus `telemetry_worker_db_pool_size`, 5 + 5 by default)
+on each pod, so check PostgreSQL connection headroom first. Gateways that run the
+accounting protocol (`accounting_protocol_enabled: true`) already meet this requirement.
+Once the settings are in place, a `billing_operation_unavailable` error means the spend
+worker is not healthy yet; retry after it reports ready.
+
 If no selector is offered, check the search and configured chat deployments.
 The picker distinguishes missing targets, unavailable inventory and permission denial.
 Incomplete metadata stays visible with a repair warning; publication remains blocked.

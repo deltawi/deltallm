@@ -24,6 +24,7 @@ from src.router.policy_validation import (
 from src.router.route_group_validation import validate_route_group_member_modes
 from src.router.selection.policy import (
     SELECTOR_POLICY_SEMANTICS_VERSION,
+    SELECTOR_SPEND_OUTBOX_REQUIRED_MESSAGE,
     RouteSelectorActivationUnsupportedError,
     ensure_selector_activation_supported,
 )
@@ -133,9 +134,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         from src.router.selection.activation import validate_selector_activation_inventory
 
         if self.selector_activation_check is None:
-            raise RouteSelectorActivationUnsupportedError(
-                "selector activation requires durable spend outbox and its worker"
-            )
+            raise RouteSelectorActivationUnsupportedError(SELECTOR_SPEND_OUTBOX_REQUIRED_MESSAGE)
         self.selector_activation_check()
         try:
             validate_selector_activation_inventory(document, context.inventory, context.deployments)
