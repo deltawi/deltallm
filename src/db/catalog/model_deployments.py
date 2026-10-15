@@ -105,6 +105,28 @@ class _ModelDeploymentChangedWhileLocking(RuntimeError):
     """Retry an update whose callable ownership changed before locks were held."""
 
 
+def _route_group_conflict_message(
+    action: str,
+    blocked: list[tuple[str, ValueError]],
+) -> str:
+    """Explain which route groups block a deployment change and how to unblock it."""
+
+    names = ", ".join(f"'{group_key}'" for group_key, _ in blocked)
+    noun, verb = ("route group", "uses") if len(blocked) == 1 else ("route groups", "use")
+    details = "; ".join(f"{group_key}: {exc}" for group_key, exc in blocked)
+    if action == "delete":
+        return (
+            f"Cannot delete this model deployment: {noun} {names} still {verb} it in "
+            "a published routing policy. Publish a policy version that no longer "
+            "references this deployment (or delete the route group), then delete "
+            f"the model again. Details: {details}"
+        )
+    return (
+        f"Cannot save this model deployment: the change would break {noun} {names}. "
+        f"Update the route group or its published policy first. Details: {details}"
+    )
+
+
 class ModelDeploymentRepository:
     def __init__(self, prisma_client: Any | None = None, *, use_transactions: bool = True) -> None:
         self.prisma = prisma_client
@@ -423,7 +445,7 @@ class ModelDeploymentRepository:
         )
         if not rows:
             return None
-        await self._validate_locked_route_groups(locked_groups)
+        await self._validate_locked_route_groups(locked_groups, action="update")
         if not self._use_transactions:
             await self._bump_runtime_revision()
         return _model_deployment_record(rows[0])
@@ -450,7 +472,7 @@ class ModelDeploymentRepository:
             deployment_id,
         )
         if rows:
-            await self._validate_locked_route_groups(locked_groups)
+            await self._validate_locked_route_groups(locked_groups, action="delete")
             if not self._use_transactions:
                 await self._bump_runtime_revision()
         return bool(rows)
@@ -517,6 +539,8 @@ class ModelDeploymentRepository:
     async def _validate_locked_route_groups(
         self,
         groups: list[tuple[str, str]],
+        *,
+        action: str,
     ) -> None:
         if not groups:
             return
@@ -524,16 +548,19 @@ class ModelDeploymentRepository:
         from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 
         route_groups = RouteGroupRepository(self.prisma, use_transactions=False)
-        try:
-            for group_id, group_key in groups:
+        blocked: list[tuple[str, ValueError]] = []
+        for group_id, group_key in groups:
+            try:
                 await route_groups._validate_runtime_invariants_after_group_change(
                     group_id,
                     group_key=group_key,
                 )
-        except ValueError as exc:
+            except ValueError as exc:
+                blocked.append((group_key, exc))
+        if blocked:
             raise RoutePolicyStateConflictError(
-                f"model deployment change would invalidate route group '{group_key}': {exc}"
-            ) from exc
+                _route_group_conflict_message(action, blocked)
+            ) from blocked[0][1]
 
     async def _bump_runtime_revision(self) -> int:
         return await RoutingRuntimeRevisionRepository(self.prisma).bump_revision()

@@ -256,7 +256,10 @@ async def test_deployment_delete_cannot_cascade_into_an_invalid_published_policy
             published_by="test-initial",
         )
 
-        with pytest.raises(RoutePolicyStateConflictError, match="would invalidate route group"):
+        with pytest.raises(
+            RoutePolicyStateConflictError,
+            match=f"Cannot delete this model deployment: route group '{group_key}' still uses it",
+        ):
             await ModelDeploymentRepository(db).delete(deployment_id)
 
         deployments = await db.query_raw(

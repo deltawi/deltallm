@@ -322,6 +322,14 @@ A PostgreSQL runtime revision poll recovers missed notifications within 30 secon
 Read the durable state again before you retry a mutation.
 The Admin UI shows these warnings for create, update, delete, member, publish, and rollback results.
 
+### Model changes that would break a published policy
+
+Deleting a model, editing it, or removing it from a group can leave the published policy
+pointing at a deployment that no longer exists or no longer fits the group.
+DeltaLLM rejects such a change with `409` and keeps the model, the members, and the policy as they were.
+The message names every blocking route group and the policy validation error.
+To proceed, publish a policy version that no longer uses the deployment, then retry the change.
+
 ## Good Operating Pattern
 
 Use this workflow:

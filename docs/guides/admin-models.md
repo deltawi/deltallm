@@ -30,6 +30,11 @@ the model returns an answer and the request appears under **Usage**.
 Before editing a public name or deleting a model, check application usage and route-group
 membership. A public-name change requires applications and access rules to use the new name.
 
+DeltaLLM refuses to delete a model that a route group's published routing policy still uses.
+The delete returns `409` and names each blocking route group. Open each group's **Policy** tab,
+publish a version that no longer references the model (or delete the group), then delete the
+model again. DeltaLLM never edits a published policy for you.
+
 ## Learn more
 
 - [Choose and connect a model](models-and-providers.md)
