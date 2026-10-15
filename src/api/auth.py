@@ -339,6 +339,7 @@ async def _create_sso_login_for_existing_account(
     identity_service: Any,
     account: dict[str, Any],
     identity: SSOIdentityAssertion,
+    trust_idp_mfa: bool,
 ) -> Any:
     account_id = str(account.get("account_id") or "").strip()
     if not account_id:
@@ -359,6 +360,7 @@ async def _create_sso_login_for_existing_account(
         login = await create_sso_login(
             account_id=account_id,
             identity=identity,
+            trust_idp_mfa=trust_idp_mfa,
         )
         if login is None:
             raise HTTPException(
@@ -387,6 +389,7 @@ async def _create_self_registered_sso_login(
     request_start: float,
     identity: SSOIdentityAssertion,
     settings: Any,
+    trust_idp_mfa: bool,
 ) -> Any:
     email, provider = identity.email, identity.provider
     email_verified = identity.email_verified
@@ -454,6 +457,7 @@ async def _create_self_registered_sso_login(
         sso_login = await provisioner.provision_sso_from_defaults(
             identity=identity,
             settings=settings,
+            trust_idp_mfa=trust_idp_mfa,
         )
         result = sso_login.provisioning
         login = sso_login.login
@@ -1448,6 +1452,7 @@ async def auth_callback(
         identity = SSOIdentityAssertion.from_callback(response_payload, provider=provider)
         subject = identity.subject
         self_registration_settings = getattr(general_settings, "self_registration", None)
+        trust_idp_mfa = getattr(general_settings, "sso_local_mfa", "optional") == "trust_idp"
 
         if _is_self_registration_enabled(self_registration_settings) and not is_platform_admin:
             existing_account = await _existing_sso_account(
@@ -1462,6 +1467,7 @@ async def auth_callback(
                     request_start=request_start,
                     identity=identity,
                     settings=self_registration_settings,
+                    trust_idp_mfa=trust_idp_mfa,
                 )
             else:
                 try:
@@ -1469,6 +1475,7 @@ async def auth_callback(
                         identity_service=identity_service,
                         account=existing_account.account,
                         identity=identity,
+                        trust_idp_mfa=trust_idp_mfa,
                     )
                 except SSOIdentityOwnershipError as exc:
                     await _emit_self_registration_blocked(
@@ -1487,6 +1494,7 @@ async def auth_callback(
                     is_platform_admin=is_platform_admin,
                     team_id=response_payload.get("team_id"),
                     default_team_role=TeamRole.VIEWER,
+                    trust_idp_mfa=trust_idp_mfa,
                 )
             except AccountInactiveError as exc:
                 raise HTTPException(

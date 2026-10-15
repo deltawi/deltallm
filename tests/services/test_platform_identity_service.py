@@ -72,6 +72,7 @@ class FakePlatformIdentityDB:
                 {
                     "account_id": account["account_id"],
                     "mfa_verified": session["mfa_verified"],
+                    "auth_method": session.get("auth_method", "password"),
                     "expires_at": session["expires_at"],
                     "email": account["email"],
                     "role": account["role"],
@@ -147,6 +148,7 @@ class FakePlatformIdentityDB:
                 "account_id": account_id,
                 "mfa_verified": bool(params[2]),
                 "expires_at": params[3],
+                "auth_method": params[4] if len(params) > 4 else "password",
                 "last_seen_at": None,
             }
             return 1
@@ -306,14 +308,17 @@ class LoginRecordingIdentityService(PlatformIdentityService):
     def __init__(self, *, db_client, salt: str = "salt-key") -> None:  # noqa: ANN001
         super().__init__(db_client=db_client, salt=salt)
         self.login_account_ids: list[str] = []
+        self.login_options: list[dict[str, object]] = []
 
     def with_db(self, db_client):
         service = LoginRecordingIdentityService(db_client=db_client, salt=self.salt)
         service.login_account_ids = self.login_account_ids
+        service.login_options = self.login_options
         return service
 
-    async def create_login_result_for_account(self, account_id: str):  # noqa: ANN201
+    async def create_login_result_for_account(self, account_id: str, **options):  # noqa: ANN003, ANN201
         self.login_account_ids.append(account_id)
+        self.login_options.append(options)
         return SimpleNamespace(
             session_token=f"session-{account_id}",
             context=SimpleNamespace(account_id=account_id, mfa_enabled=False),
@@ -784,3 +789,56 @@ async def test_upsert_sso_account_rolls_back_if_account_reload_fails() -> None:
     assert db.accounts == accounts_before
     assert db.identities == {}
     assert db.sessions == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mfa_enabled", "trust_idp_mfa", "expected_verified"),
+    [(False, False, False), (True, False, False), (True, True, True), (False, True, True)],
+)
+async def test_sso_login_records_sso_session_without_enrollment_prompt(
+    mfa_enabled: bool, trust_idp_mfa: bool, expected_verified: bool
+) -> None:
+    db = TransactionalFakePlatformIdentityDB()
+    db.add_account(account_id="acct-1", email="user@example.com")
+    db.accounts["acct-1"]["mfa_enabled"] = mfa_enabled
+    service = PlatformIdentityService(db_client=db, salt="salt-key")
+    await service.link_sso_identity(
+        account_id="acct-1", email="user@example.com", provider="oidc", subject="subject-1"
+    )
+
+    login = await service.create_sso_login_for_existing_account(
+        identity=SSOIdentityAssertion(
+            email="user@example.com",
+            provider="oidc",
+            subject="subject-1",
+            email_verified=True,
+            subject_source=SSOSubjectSource.PROVIDER,
+        ),
+        account_id="acct-1",
+        trust_idp_mfa=trust_idp_mfa,
+    )
+
+    assert login is not None
+    assert login.mfa_prompt is False
+    assert login.context.auth_method == "sso"
+    assert login.context.mfa_verified is expected_verified
+    [session] = db.sessions.values()
+    assert session["auth_method"] == "sso"
+    assert session["mfa_verified"] is expected_verified
+
+
+@pytest.mark.asyncio
+async def test_account_login_result_defaults_to_password_session_with_prompt() -> None:
+    db = FakePlatformIdentityDB()
+    db.add_account(account_id="acct-1", email="user@example.com")
+    service = PlatformIdentityService(db_client=db, salt="salt-key")
+
+    login = await service.create_login_result_for_account("acct-1")
+
+    assert login is not None
+    assert login.mfa_prompt is True
+    assert login.context.auth_method == "password"
+    [session] = db.sessions.values()
+    assert session["auth_method"] == "password"
+    assert session["mfa_verified"] is False

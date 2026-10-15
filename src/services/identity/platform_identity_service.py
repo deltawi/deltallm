@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 import base64
 import hashlib
 import hmac
 import secrets
-import struct
 from typing import Any
-import urllib.parse
 
 from src.auth.roles import (
     Permission,
@@ -32,7 +30,8 @@ from src.services.organizations.organization_mutation_policy import Organization
 from src.services.identity.sso_account_service import SSOAccountService
 from src.services.identity.platform_session_service import PlatformSessionService
 from src.services.identity.platform_password_change import PlatformPasswordChangeService
-from src.models.platform_auth import PlatformAuthContext
+from src.models.platform_auth import PlatformAuthContext, SessionAuthMethod
+from src.services.identity.totp import generate_totp_secret, totp_code, totp_uri, verify_totp
 
 
 @dataclass
@@ -163,7 +162,7 @@ class PlatformIdentityService:
             context=context,
             session_token=token,
             mfa_required=mfa_enabled,
-            mfa_prompt=not mfa_enabled,
+            mfa_prompt=context.mfa_enrollment_suggested,
         )
 
     async def upsert_sso_account(
@@ -173,6 +172,7 @@ class PlatformIdentityService:
         is_platform_admin: bool,
         team_id: str | None = None,
         default_team_role: str = TeamRole.VIEWER,
+        trust_idp_mfa: bool = False,
     ) -> LoginResult | None:
         if self.db is None:
             return None
@@ -182,6 +182,7 @@ class PlatformIdentityService:
                 is_platform_admin=is_platform_admin,
                 team_id=team_id,
                 default_team_role=default_team_role,
+                trust_idp_mfa=trust_idp_mfa,
             )
 
     async def _upsert_sso_account(
@@ -191,6 +192,7 @@ class PlatformIdentityService:
         is_platform_admin: bool,
         team_id: str | None,
         default_team_role: str,
+        trust_idp_mfa: bool,
     ) -> LoginResult:
         resolved = await SSOAccountService(self.db, self).resolve(
             identity,
@@ -209,19 +211,20 @@ class PlatformIdentityService:
             await seed_team_membership(
                 self.db, account_id=account.account_id, team_id=team_id, role=default_team_role
             )
-        return await self.finish_sso_login(account.account_id)
+        return await self.finish_sso_login(account.account_id, trust_idp_mfa=trust_idp_mfa)
 
     async def create_sso_login_for_existing_account(
         self,
         *,
         account_id: str,
         identity: SSOIdentityAssertion,
+        trust_idp_mfa: bool = False,
     ) -> LoginResult | None:
         if self.db is None:
             return None
         async with self.db.tx() as tx:
             return await self.with_db(tx)._create_sso_login_for_existing_account(
-                account_id=account_id, identity=identity
+                account_id=account_id, identity=identity, trust_idp_mfa=trust_idp_mfa
             )
 
     async def _create_sso_login_for_existing_account(
@@ -229,6 +232,7 @@ class PlatformIdentityService:
         *,
         account_id: str,
         identity: SSOIdentityAssertion,
+        trust_idp_mfa: bool,
     ) -> LoginResult:
         normalized_account_id = account_id.strip()
         if not normalized_account_id:
@@ -236,11 +240,13 @@ class PlatformIdentityService:
         resolved = await SSOAccountService(self.db, self).resolve(
             identity, expected_account_id=normalized_account_id
         )
-        return await self.finish_sso_login(resolved.account.account_id)
+        return await self.finish_sso_login(resolved.account.account_id, trust_idp_mfa=trust_idp_mfa)
 
-    async def finish_sso_login(self, account_id: str) -> LoginResult:
-        """Finish a validated SSO login inside its account-resolution transaction."""
-        login = await self.create_login_result_for_account(account_id)
+    async def finish_sso_login(self, account_id: str, *, trust_idp_mfa: bool) -> LoginResult:
+        """Finish a validated SSO login; `trust_idp_mfa` starts the session MFA-verified."""
+        login = await self.create_login_result_for_account(
+            account_id, auth_method="sso", mfa_verified=trust_idp_mfa
+        )
         if login is None:
             raise LoginSessionCreationError("Failed to establish session")
         await self.mark_last_login(account_id)
@@ -709,11 +715,23 @@ class PlatformIdentityService:
             account_id,
         )
 
-    async def create_session_for_account(self, *, account_id: str, mfa_verified: bool) -> str:
-        return await self._create_session(account_id=account_id, mfa_verified=mfa_verified)
+    async def create_session_for_account(
+        self, *, account_id: str, mfa_verified: bool, auth_method: SessionAuthMethod = "password"
+    ) -> str:
+        return await self.sessions.create(
+            account_id=account_id, mfa_verified=mfa_verified, auth_method=auth_method
+        )
 
-    async def create_login_result_for_account(self, account_id: str) -> LoginResult | None:
-        token = await self.create_session_for_account(account_id=account_id, mfa_verified=False)
+    async def create_login_result_for_account(
+        self,
+        account_id: str,
+        *,
+        auth_method: SessionAuthMethod = "password",
+        mfa_verified: bool = False,
+    ) -> LoginResult | None:
+        token = await self.create_session_for_account(
+            account_id=account_id, mfa_verified=mfa_verified, auth_method=auth_method
+        )
         context = await self.get_context_for_session(token)
         if context is None:
             return None
@@ -721,7 +739,7 @@ class PlatformIdentityService:
             context=context,
             session_token=token,
             mfa_required=False,
-            mfa_prompt=not context.mfa_enabled,
+            mfa_prompt=context.mfa_enrollment_suggested,
         )
 
     async def _create_session(self, account_id: str, mfa_verified: bool) -> str:
@@ -755,37 +773,16 @@ class PlatformIdentityService:
         return hmac.compare_digest(actual, expected)
 
     def _generate_totp_secret(self) -> str:
-        return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+        return generate_totp_secret()
 
     def _totp_uri(self, secret: str, account_name: str) -> str:
-        issuer = self.totp_issuer
-        label = urllib.parse.quote(f"{issuer}:{account_name}", safe="")
-        encoded_issuer = urllib.parse.quote(issuer, safe="")
-        return f"otpauth://totp/{label}?secret={secret}&issuer={encoded_issuer}&algorithm=SHA1&digits=6&period=30"
+        return totp_uri(issuer=self.totp_issuer, secret=secret, account_name=account_name)
 
     def _verify_totp(self, secret: str, code: str) -> bool:
-        if not code.isdigit() or len(code) != 6:
-            return False
-        for offset in (-1, 0, 1):
-            if self._totp_code(secret, step_offset=offset) == code:
-                return True
-        return False
+        return verify_totp(secret, code)
 
     def _totp_code(self, secret: str, step_offset: int = 0) -> str:
-        normalized = secret.upper() + "=" * ((8 - len(secret) % 8) % 8)
-        key = base64.b32decode(normalized.encode("ascii"), casefold=True)
-        counter = int(datetime.now(UTC).timestamp() // 30) + step_offset
-        msg = struct.pack(">Q", counter)
-        digest = hmac.new(key, msg, hashlib.sha1).digest()
-        offset = digest[-1] & 0x0F
-        binary = (
-            ((digest[offset] & 0x7F) << 24)
-            | ((digest[offset + 1] & 0xFF) << 16)
-            | ((digest[offset + 2] & 0xFF) << 8)
-            | (digest[offset + 3] & 0xFF)
-        )
-        otp = binary % 1_000_000
-        return f"{otp:06d}"
+        return totp_code(secret, step_offset=step_offset)
 
 
 def is_platform_admin(context: PlatformAuthContext | None) -> bool:

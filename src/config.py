@@ -689,6 +689,7 @@ class GeneralSettings(
     sso_admin_email_list: list[str] = Field(default_factory=list)
     sso_default_team_id: str | None = None
     sso_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    sso_local_mfa: Literal["optional", "trust_idp"] = "optional"
     self_registration: SelfRegistrationSettings = Field(default_factory=SelfRegistrationSettings)
     enable_jwt_auth: bool = False
     jwt_public_key_url: str | None = None

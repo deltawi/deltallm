@@ -414,7 +414,7 @@ class SuccessfulSSOIdentityService(PlatformIdentityService):
             }
         )
 
-    async def create_login_result_for_account(self, account_id: str):  # noqa: ANN201
+    async def create_login_result_for_account(self, account_id: str, **_kwargs):  # noqa: ANN003, ANN201
         return SimpleNamespace(
             session_token=f"session-{account_id}",
             context=SimpleNamespace(account_id=account_id),
@@ -452,7 +452,7 @@ class SessionFailingSSOIdentityService(SuccessfulSSOIdentityService):
             session_ttl_hours=self.session_ttl_hours,
         )
 
-    async def create_login_result_for_account(self, account_id: str):  # noqa: ANN201
+    async def create_login_result_for_account(self, account_id: str, **_kwargs):  # noqa: ANN003, ANN201
         del account_id
         return None
 

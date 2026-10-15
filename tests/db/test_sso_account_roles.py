@@ -318,6 +318,7 @@ async def test_failed_login_rolls_back_identity_changes(
         *,
         account_id: str,
         mfa_verified: bool,
+        auth_method: str = "password",
     ) -> str:
         raise error_type("session interrupted")
 

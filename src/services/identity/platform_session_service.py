@@ -10,7 +10,7 @@ from src.auth.external_policy import EXTERNAL_SESSION_PREFIX
 
 from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole
 from src.db.identity.platform_sessions import PlatformSessionRepository
-from src.models.platform_auth import PlatformAuthContext
+from src.models.platform_auth import PlatformAuthContext, SessionAuthMethod
 from src.services.identity.session_activity import (
     LAST_SEEN_WRITE_INTERVAL_SECONDS,
     idle_expiry,
@@ -45,7 +45,13 @@ class PlatformSessionService:
     def hash_token(self, token: str) -> str:
         return hashlib.sha256(f"{self.salt}:session:{token}".encode("utf-8")).hexdigest()
 
-    async def create(self, *, account_id: str, mfa_verified: bool) -> str:
+    async def create(
+        self,
+        *,
+        account_id: str,
+        mfa_verified: bool,
+        auth_method: SessionAuthMethod = "password",
+    ) -> str:
         if self.repository is None:
             raise RuntimeError("Session database is unavailable")
         token = f"psk_{secrets.token_urlsafe(32)}"
@@ -54,6 +60,7 @@ class PlatformSessionService:
             token_hash=self.hash_token(token),
             mfa_verified=mfa_verified,
             expires_at=datetime.now(UTC) + self.lifetime,
+            auth_method=auth_method,
         )
         return token
 
@@ -102,6 +109,7 @@ class PlatformSessionService:
             role=role,
             mfa_enabled=row.mfa_enabled,
             mfa_verified=row.mfa_verified,
+            auth_method=row.auth_method,
             force_password_change=row.force_password_change,
             permissions=sorted(PLATFORM_ROLE_PERMISSIONS.get(role, set())),
             organization_memberships=[

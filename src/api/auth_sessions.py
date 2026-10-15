@@ -95,7 +95,7 @@ async def auth_me(request: Request, response: Response) -> CurrentSessionRespons
         team_memberships=team_memberships,
         mfa_enabled=context.mfa_enabled,
         mfa_verified=context.mfa_verified,
-        mfa_prompt=not context.mfa_enabled and context.external_workspace is None,
+        mfa_prompt=context.mfa_enrollment_suggested,
         force_password_change=context.force_password_change,
         session_source="external_customer" if context.external_workspace else "operator",
         expires_at=context.session_expires_at,

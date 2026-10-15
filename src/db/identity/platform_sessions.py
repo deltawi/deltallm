@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from src.db.identity.platform_accounts import PlatformAccountDatabase
+from src.models.platform_auth import SessionAuthMethod
 from src.services.identity.session_activity import nonnegative_seconds
 
 
@@ -18,6 +19,7 @@ class PlatformSessionRecord:
     mfa_verified: bool
     force_password_change: bool
     expires_at: datetime
+    auth_method: SessionAuthMethod = "password"
     idle_seconds: float | None = None
     remaining_seconds: float | None = None
 
@@ -39,6 +41,7 @@ class PlatformSessionRecord:
             mfa_verified=row.get("mfa_verified") is True,
             force_password_change=row.get("force_password_change") is True,
             expires_at=expiry.astimezone(UTC),
+            auth_method="sso" if row.get("auth_method") == "sso" else "password",
             idle_seconds=nonnegative_seconds(row.get("idle_seconds")),
             remaining_seconds=nonnegative_seconds(row.get("remaining_seconds")),
         )
@@ -78,6 +81,7 @@ class PlatformSessionRepository:
             SELECT
                 s.account_id,
                 s.mfa_verified,
+                s.auth_method,
                 s.expires_at,
                 EXTRACT(EPOCH FROM (NOW() - s.last_seen_at))::float8 AS idle_seconds,
                 EXTRACT(EPOCH FROM (s.expires_at - NOW()))::float8 AS remaining_seconds,
@@ -151,20 +155,27 @@ class PlatformSessionRepository:
         return [TeamSessionMembership(str(row["team_id"]), str(row["role"])) for row in rows]
 
     async def create(
-        self, *, account_id: str, token_hash: str, mfa_verified: bool, expires_at: datetime
+        self,
+        *,
+        account_id: str,
+        token_hash: str,
+        mfa_verified: bool,
+        expires_at: datetime,
+        auth_method: SessionAuthMethod = "password",
     ) -> None:
         await self.db.execute_raw(
             """
             INSERT INTO deltallm_platformsession (
                 session_id, account_id, session_token_hash, mfa_verified,
-                expires_at, created_at, updated_at, last_seen_at
+                expires_at, auth_method, created_at, updated_at, last_seen_at
             )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4::timestamptz, NOW(), NOW(), NOW())
+            VALUES (gen_random_uuid(), $1, $2, $3, $4::timestamptz, $5, NOW(), NOW(), NOW())
             """,
             account_id,
             token_hash,
             mfa_verified,
             expires_at,
+            auth_method,
         )
 
     async def revoke(self, token_hash: str) -> None:

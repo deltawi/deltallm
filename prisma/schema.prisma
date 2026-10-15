@@ -560,6 +560,7 @@ model DeltaLLM_PlatformSession {
   account_id          String
   session_token_hash  String   @unique
   mfa_verified        Boolean  @default(false)
+  auth_method         String   @default("password")
   expires_at          DateTime
   revoked_at          DateTime?
   created_at          DateTime @default(now())
