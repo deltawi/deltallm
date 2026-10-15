@@ -34,6 +34,11 @@ export interface TTSEngine {
   resetOutput: () => void;
 }
 
+function playbackErrorMessage(detail?: string): string {
+  const reason = detail?.trim() ? ` (${detail.trim()})` : '';
+  return `The browser could not play this audio${reason}. Use Download to save the file.`;
+}
+
 export function useTTSEngine(opts: { apiKey: string; selectedModel: ModelOption | null }): TTSEngine {
   const { apiKey, selectedModel } = opts;
   const initial = selectedModel ? getTtsConfig(selectedModel) : { voices: [], defaultVoice: 'alloy', defaultFormat: 'mp3' };
@@ -80,13 +85,19 @@ export function useTTSEngine(opts: { apiKey: string; selectedModel: ModelOption 
       setProgress(0);
     };
     const onLoadedMetadata = () => setDuration(audio.duration);
+    const onError = () => {
+      setIsPlaying(false);
+      setError(playbackErrorMessage(audio.error?.message));
+    };
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('loadedmetadata', onLoadedMetadata);
+    audio.addEventListener('error', onError);
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate);
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+      audio.removeEventListener('error', onError);
     };
   }, [audioUrl]);
 
@@ -136,10 +147,16 @@ export function useTTSEngine(opts: { apiKey: string; selectedModel: ModelOption 
     if (!audio) return;
     if (isPlaying) {
       audio.pause();
-    } else {
-      void audio.play();
+      setIsPlaying(false);
+      return;
     }
-    setIsPlaying(!isPlaying);
+    setIsPlaying(true);
+    audio.play().catch((err: unknown) => {
+      setIsPlaying(false);
+      // Pausing before playback starts rejects play(); that is not a failure.
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      setError(playbackErrorMessage(err instanceof Error ? err.message : undefined));
+    });
   }, [isPlaying]);
 
   const seekTo = useCallback((pct: number) => {

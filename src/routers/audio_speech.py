@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import struct
 import wave
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -83,6 +84,39 @@ AUDIO_CONTENT_TYPES = {
     "wav": "audio/wav",
     "pcm": "audio/pcm",
 }
+
+_WAV_STREAMING_SIZE = 0xFFFFFFFF
+
+
+def finalize_wav_header(audio: bytes) -> bytes:
+    """Replace streamed WAV size placeholders with the real sizes of a complete file.
+
+    Providers that stream WAV (Groq Orpheus, for example) write 0xFFFFFFFF or 0 into
+    the RIFF and data sizes. Desktop players ignore them; stricter browser players do
+    not. Only a trailing data chunk is rewritten, and anything unexpected is returned
+    unchanged.
+    """
+
+    if len(audio) < 12 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+        return audio
+    offset = 12
+    while offset + 8 <= len(audio):
+        chunk_id = audio[offset : offset + 4]
+        chunk_size = struct.unpack_from("<I", audio, offset + 4)[0]
+        body_start = offset + 8
+        if chunk_id == b"data":
+            actual_size = len(audio) - body_start
+            if chunk_size in (_WAV_STREAMING_SIZE, 0) or chunk_size > actual_size:
+                fixed = bytearray(audio)
+                struct.pack_into("<I", fixed, 4, len(audio) - 8)
+                struct.pack_into("<I", fixed, offset + 4, actual_size)
+                return bytes(fixed)
+            return audio
+        if chunk_size == _WAV_STREAMING_SIZE:
+            return audio
+        offset = body_start + chunk_size + (chunk_size & 1)
+    return audio
+
 
 SSE_USAGE_PROVIDERS = {"openai", "azure", "azure_openai"}
 GEMINI_SUPPORTED_RESPONSE_FORMATS = {"wav", "pcm"}
@@ -428,6 +462,8 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             ),
         )
         content_type = AUDIO_CONTENT_TYPES.get(effective_format, "audio/mpeg")
+        if effective_format == "wav":
+            audio_bytes = finalize_wav_header(audio_bytes)
         return Response(
             content=audio_bytes, media_type=content_type, headers=route_decision_headers(request)
         )

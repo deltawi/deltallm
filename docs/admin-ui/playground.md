@@ -41,6 +41,8 @@ request appears under [Usage & Spend](usage.md) for the key's authorized scope.
 
 Success means the browser receives playable audio from `/v1/audio/speech` and reports request
 latency/file size. An empty model selector means no compatible deployment is configured.
+If the browser cannot play the returned audio, the Playground shows the browser's reason; use
+**Download** to keep the file.
 
 ## Speech to text
 
