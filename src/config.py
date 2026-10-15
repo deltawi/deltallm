@@ -29,6 +29,7 @@ from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
 from src.lifecycle_settings import LifecycleSettings
 from src.deployment_capacity_settings import DeploymentCapacitySettings
 from src.auth.external_config import ExternalAuthSettings
+from src.auth.sso_group_settings import SSOGroupSyncSettings
 from src.ui.config import UIMountSettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
@@ -690,6 +691,7 @@ class GeneralSettings(
     sso_default_team_id: str | None = None
     sso_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     sso_local_mfa: Literal["optional", "trust_idp"] = "optional"
+    sso_group_sync: SSOGroupSyncSettings = Field(default_factory=SSOGroupSyncSettings)
     self_registration: SelfRegistrationSettings = Field(default_factory=SelfRegistrationSettings)
     enable_jwt_auth: bool = False
     jwt_public_key_url: str | None = None
