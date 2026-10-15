@@ -30,10 +30,7 @@ from src.services.identity.sso_account_service import SSOAccountService
 from src.services.identity.platform_session_service import PlatformSessionService
 from src.services.identity.platform_password_change import PlatformPasswordChangeService
 from src.models.platform_auth import PlatformAuthContext, SessionAuthMethod
-from src.services.identity.login_results import (
-    AccountAuthState as AccountAuthState,
-    LoginResult as LoginResult,
-)
+from src.services.identity.login_results import AccountAuthState, LoginResult
 from src.services.identity.sso_group_access import SSOGroupAccessPlan
 from src.services.identity.sso_group_sync import SSOGroupSyncService
 from src.services.identity.totp import generate_totp_secret, totp_code, totp_uri, verify_totp

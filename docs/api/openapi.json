@@ -7069,6 +7069,442 @@
         "title": "RoutingCostPage",
         "type": "object"
       },
+      "SSOGroupMapping": {
+        "additionalProperties": false,
+        "description": "Grant one team or organization role to accounts whose claim has `value`.",
+        "properties": {
+          "org_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Org Role"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "team_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "team_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Role"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "SSOGroupMapping",
+        "type": "object"
+      },
+      "SSOGroupPreviewChange": {
+        "properties": {
+          "action": {
+            "enum": [
+              "add",
+              "update",
+              "remove",
+              "kept"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "platform_role",
+              "organization",
+              "team"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "revokes_keys": {
+            "title": "Revokes Keys",
+            "type": "boolean"
+          },
+          "role_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role After"
+          },
+          "role_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Before"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "target_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Name"
+          }
+        },
+        "required": [
+          "kind",
+          "action",
+          "target_id",
+          "target_name",
+          "role_before",
+          "role_after",
+          "reason",
+          "revokes_keys"
+        ],
+        "title": "SSOGroupPreviewChange",
+        "type": "object"
+      },
+      "SSOGroupPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claims"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SSOGroupSyncSettings"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "title": "SSOGroupPreviewRequest",
+        "type": "object"
+      },
+      "SSOGroupPreviewResponse": {
+        "properties": {
+          "account_found": {
+            "title": "Account Found",
+            "type": "boolean"
+          },
+          "account_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Role"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/SSOGroupPreviewChange"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "claim_found": {
+            "title": "Claim Found",
+            "type": "boolean"
+          },
+          "matched_values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Matched Values",
+            "type": "array"
+          },
+          "sign_in_denied": {
+            "title": "Sign In Denied",
+            "type": "boolean"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/SSOGroupTarget"
+            },
+            "title": "Skipped",
+            "type": "array"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "claim_found",
+          "values",
+          "matched_values",
+          "sign_in_denied",
+          "account_found",
+          "account_role",
+          "changes",
+          "skipped"
+        ],
+        "title": "SSOGroupPreviewResponse",
+        "type": "object"
+      },
+      "SSOGroupSyncResponse": {
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/SSOProviderSummary"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SSOGroupSyncSettings"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SSOGroupTarget"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "settings",
+          "provider",
+          "targets"
+        ],
+        "title": "SSOGroupSyncResponse",
+        "type": "object"
+      },
+      "SSOGroupSyncSettings": {
+        "additionalProperties": false,
+        "description": "Map values of one SSO token claim to platform admin, organizations, and teams.",
+        "properties": {
+          "admin_values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Admin Values",
+            "type": "array"
+          },
+          "claim": {
+            "default": "groups",
+            "title": "Claim",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "mappings": {
+            "items": {
+              "$ref": "#/components/schemas/SSOGroupMapping"
+            },
+            "maxItems": 200,
+            "title": "Mappings",
+            "type": "array"
+          },
+          "remove_unlisted": {
+            "default": false,
+            "title": "Remove Unlisted",
+            "type": "boolean"
+          },
+          "require_mapped_value": {
+            "default": false,
+            "title": "Require Mapped Value",
+            "type": "boolean"
+          }
+        },
+        "title": "SSOGroupSyncSettings",
+        "type": "object"
+      },
+      "SSOGroupTarget": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "team",
+              "organization"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "organization_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Name"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "not_found",
+              "external_managed",
+              "inactive_organization"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "status"
+        ],
+        "title": "SSOGroupTarget",
+        "type": "object"
+      },
+      "SSOProviderSummary": {
+        "properties": {
+          "authorize_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorize Url"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "provider",
+          "authorize_url"
+        ],
+        "title": "SSOProviderSummary",
+        "type": "object"
+      },
       "SchedulerBackfillRequest": {
         "properties": {
           "limit": {
@@ -35388,6 +35824,316 @@
         "summary": "Update Settings",
         "tags": [
           "Admin Config"
+        ]
+      }
+    },
+    "/ui/api/settings/sso-group-sync": {
+      "get": {
+        "operationId": "get_sso_group_sync_ui_api_settings_sso_group_sync_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SSOGroupSyncResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Sso Group Sync",
+        "tags": [
+          "Admin SSO"
+        ]
+      },
+      "put": {
+        "operationId": "update_sso_group_sync_ui_api_settings_sso_group_sync_put",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SSOGroupSyncSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SSOGroupSyncResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Sso Group Sync",
+        "tags": [
+          "Admin SSO"
+        ]
+      }
+    },
+    "/ui/api/settings/sso-group-sync/preview": {
+      "post": {
+        "description": "Show what the next SSO sign-in would change for one account. Nothing is written.",
+        "operationId": "preview_sso_group_sync_ui_api_settings_sso_group_sync_preview_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SSOGroupPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SSOGroupPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Sso Group Sync",
+        "tags": [
+          "Admin SSO"
         ]
       }
     },

@@ -152,6 +152,13 @@ general_settings:
   sso_default_team_id: null
   sso_state_ttl_seconds: 600
   sso_local_mfa: optional
+  sso_group_sync:
+    enabled: false
+    claim: groups
+    admin_values: []
+    require_mapped_value: false
+    remove_unlisted: false
+    mappings: []
   self_registration:
     enabled: false
     mode: sso_allowed_domain
@@ -538,6 +545,7 @@ The admin settings API returns `409 restart_required` for a dynamic update to th
 | `sso_default_team_id` | — | Optional team assigned to ordinary SSO accounts; missing memberships are created and existing organization/team roles are preserved |
 | `sso_state_ttl_seconds` | `600` | TTL for Redis-backed SSO callback state |
 | `sso_local_mfa` | `optional` | DeltaLLM TOTP step for SSO logins of accounts with MFA enabled: `optional` asks for the code, `trust_idp` trusts the identity provider. SSO logins never show the MFA enrollment prompt. See [MFA and SSO](../features/authentication.md#mfa-and-sso) |
+| `sso_group_sync` | off | Maps values of an SSO token claim to platform admin, organization roles, and team roles at each SSO sign-in. Platform admins can edit it in **Settings > Single sign-on**. See [Map SSO groups to roles and teams](../features/authentication.md#map-sso-groups-to-roles-and-teams) |
 
 SSO callback state is stored in Redis. If SSO is enabled but Redis is unavailable, DeltaLLM keeps SSO disabled instead of exposing a broken login flow.
 

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useApi } from '../lib/hooks';
 import { settings } from '../lib/api';
 import {
   Settings, Route, Database, Shield, HeartPulse,
   Save, Check, ChevronRight, Plus, X, AlertTriangle,
-  RefreshCw, Info, Clock, RotateCcw, Paintbrush,
+  RefreshCw, Info, Clock, RotateCcw, Paintbrush, KeyRound,
 } from 'lucide-react';
 import Button from '../components/Button';
 import { IndexShell } from '../components/admin/shells';
@@ -20,6 +20,9 @@ import {
   parseFallbackEvents,
   type FallbackEvent,
 } from '../lib/fallbackEvents';
+
+// Loaded only when the Single sign-on tab opens.
+const SsoGroupSyncPanel = lazy(() => import('../components/settings/sso/SsoGroupSyncPanel'));
 
 interface FallbackEntry {
   from: string;
@@ -95,6 +98,7 @@ const TABS = [
   { id: 'caching', label: 'Caching', icon: Database },
   { id: 'fallbacks', label: 'Fallbacks', icon: Shield },
   { id: 'health', label: 'Health & Events', icon: HeartPulse },
+  { id: 'sso', label: 'Single sign-on', icon: KeyRound },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -288,8 +292,8 @@ export default function SettingsPage() {
     <IndexShell
       title="Settings"
       titleIcon={Settings}
-      description="Configure appearance, proxy behavior, routing, caching, and reliability"
-      action={(
+      description="Configure appearance, proxy behavior, routing, caching, reliability, and sign-in"
+      action={activeTab === 'sso' ? undefined : (
         <Button
           variant={saved ? 'success' : 'primary'}
           onClick={activeTab === 'theme' ? () => { void theme.save(); } : handleSave}
@@ -514,6 +518,12 @@ export default function SettingsPage() {
                 onChange={setContentFallbacks}
               />
             </SettingsSection>
+          )}
+
+          {activeTab === 'sso' && (
+            <Suspense fallback={<div className="h-64 animate-pulse rounded-xl border border-gray-200 bg-white" aria-label="Loading" />}>
+              <SsoGroupSyncPanel />
+            </Suspense>
           )}
 
           {activeTab === 'health' && (
