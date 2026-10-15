@@ -20,6 +20,7 @@ This runbook covers the embeddings batch scheduler rollout modes and the checks 
 - Batch-worker pods have enough DB pool capacity for short scheduler queries.
 - Prometheus is scraping batch-worker metrics.
 - The admin API is reachable by a platform admin.
+- Only a platform admin or the master key can use the `/ui/api/batches/scheduler/*` and `/ui/api/batches/scheduler-dimensions/backfill` endpoints. Other users get 403.
 - The Phase 6 in-progress capacity index exists before high-traffic canaries:
 
   ```sql
