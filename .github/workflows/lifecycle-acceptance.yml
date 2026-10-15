@@ -101,11 +101,14 @@ jobs:
           --output /tmp/lifecycle-evidence/kubernetes
       - name: Build committed PR7 comparison baseline
         if: matrix.presidio == 'false'
-        run: >-
-          uv run python scripts/build_lifecycle_baseline.py
-          --ref 4d856670e54e689ea4fc1ceead787730e5edcf5c
-          --image deltallm-lifecycle:baseline
-          --manifest /tmp/lifecycle-evidence/baseline.json
+        # The PR7 baseline is the head of #330 (same tree as its merge commit). Only
+        # refs/pull/330/head keeps it, and a full clone does not fetch that ref.
+        run: |
+          git fetch --no-tags origin 6943683c9f4ef7442bfbfaa2e3bc98674acc7197
+          uv run python scripts/build_lifecycle_baseline.py \
+            --ref 6943683c9f4ef7442bfbfaa2e3bc98674acc7197 \
+            --image deltallm-lifecycle:baseline \
+            --manifest /tmp/lifecycle-evidence/baseline.json
       - name: Compare the same offered workload before and after PR8
         if: matrix.presidio == 'false'
         run: >-
