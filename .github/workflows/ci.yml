@@ -285,6 +285,10 @@ jobs:
       - name: Generate Prisma client
         run: uv run prisma generate --schema=./prisma/schema.prisma
 
+      - name: Fetch pinned shared-feature migration commit
+        # The commit is kept only by refs/pull/286/head, which a full clone does not fetch.
+        run: git fetch --no-tags origin 3372602bf7bff6107ee9595217b7f2fd75da61cd
+
       - name: Verify fresh and last-release migration paths
         env:
           MIGRATION_TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
