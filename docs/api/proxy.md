@@ -201,6 +201,9 @@ POST /v1/audio/speech
 
 This endpoint returns audio bytes, not JSON.
 
+Some providers stream WAV output with placeholder sizes in the file header (for example Groq Orpheus).
+When `response_format` is `wav`, DeltaLLM rewrites those placeholders with the real sizes so strict players accept the file.
+
 Public speech requests remain OpenAI-compatible even when the selected deployment is ElevenLabs. For ElevenLabs, DeltaLLM maps `input` to native `text`, resolves the ElevenLabs voice ID from request `voice` or deployment `model_info.default_params.voice_id`, and calls `POST /v1/text-to-speech/{voice_id}` upstream with `xi-api-key`.
 
 ```bash
