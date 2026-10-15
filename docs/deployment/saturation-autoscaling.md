@@ -187,9 +187,10 @@ A migration or seed failure stops the check before the comparison API starts.
 ```bash
 uv sync --frozen --extra dev
 uv run prisma generate --schema=./prisma/schema.prisma
+git fetch --no-tags origin b878285e7fd98880371e4056826ddd80309ffe35
 docker build --build-arg INSTALL_PRESIDIO=false -t deltallm-capacity:candidate .
 uv run python scripts/build_lifecycle_baseline.py \
-  --ref 9a3f2cfc9c13f4eba332b3e331e7003acba20b03 \
+  --ref b878285e7fd98880371e4056826ddd80309ffe35 \
   --image deltallm-capacity:baseline \
   --manifest /tmp/capacity-baseline.json
 uv run python -m tests.performance.run_capacity_acceptance \
