@@ -69,6 +69,7 @@ class _StubIdentityService:
         self.login_results: list[str] = []
         self.last_logins: list[str] = []
         self.sso_login_calls: list[dict[str, str]] = []
+        self.trust_idp_mfa_calls: list[bool] = []
 
     def add_account(
         self, *, account_id: str, email: str, role: str = "org_user", is_active: bool = True
@@ -148,7 +149,9 @@ class _StubIdentityService:
         *,
         account_id: str,
         identity: SSOIdentityAssertion,
+        trust_idp_mfa: bool = False,
     ):
+        self.trust_idp_mfa_calls.append(trust_idp_mfa)
         email, provider, subject = identity.email, identity.provider, identity.subject
         account = self.accounts[account_id]
         if not account["is_active"]:
@@ -241,15 +244,18 @@ class _StubSelfRegistrationProvisioner:
         self.identity_service = identity_service
         self.error = error
         self.calls: list[dict[str, object]] = []
+        self.trust_idp_mfa_calls: list[bool] = []
 
     async def provision_sso_from_defaults(
         self,
         *,
         identity: SSOIdentityAssertion,
         settings,
+        trust_idp_mfa: bool = False,
     ):  # noqa: ANN001
         email, provider, subject = identity.email, identity.provider, identity.subject
         is_active = True
+        self.trust_idp_mfa_calls.append(trust_idp_mfa)
         self.calls.append({"email": email, "settings": settings, "is_active": is_active})
         if self.error is not None:
             raise self.error

@@ -6,6 +6,8 @@ from typing import Literal, Any
 from pydantic import BaseModel, Field
 from src.models.external_auth import ExternalWorkspaceContext, ExternalWorkspaceResponse
 
+SessionAuthMethod = Literal["password", "sso"]
+
 
 class PlatformAuthContext(BaseModel):
     account_id: str
@@ -13,6 +15,7 @@ class PlatformAuthContext(BaseModel):
     role: str
     mfa_enabled: bool = False
     mfa_verified: bool = False
+    auth_method: SessionAuthMethod = "password"
     force_password_change: bool = False
     permissions: list[str] = Field(default_factory=list)
     organization_memberships: list[dict[str, Any]] = Field(default_factory=list)
@@ -20,6 +23,18 @@ class PlatformAuthContext(BaseModel):
     session_expires_at: datetime | None = None
     session_idle_expires_at: datetime | None = None
     external_workspace: ExternalWorkspaceContext | None = None
+
+    @property
+    def mfa_enrollment_suggested(self) -> bool:
+        """Suggest DeltaLLM MFA only for operator sessions that signed in with a password.
+
+        An SSO session gets its sign-in strength from the identity provider.
+        """
+        return (
+            not self.mfa_enabled
+            and self.external_workspace is None
+            and self.auth_method == "password"
+        )
 
 
 class InternalLoginRequest(BaseModel):

@@ -96,6 +96,7 @@ class SelfRegistrationProvisioningService:
         *,
         identity: SSOIdentityAssertion,
         settings: SelfRegistrationSettings,
+        trust_idp_mfa: bool = False,
     ) -> SelfRegistrationSSOLoginResult:
         if not settings.enabled:
             raise ValueError("self-registration is disabled")
@@ -120,7 +121,9 @@ class SelfRegistrationProvisioningService:
                     is_active=True,
                     account=resolved.account,
                 )
-            login = await identity_service.finish_sso_login(resolved.account.account_id)
+            login = await identity_service.finish_sso_login(
+                resolved.account.account_id, trust_idp_mfa=trust_idp_mfa
+            )
             return SelfRegistrationSSOLoginResult(provisioning=provisioning, login=login)
 
     async def _provision_with_dependencies(

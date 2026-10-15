@@ -188,7 +188,28 @@ If an account has MFA enabled, admin UI access is blocked until the session comp
 POST /auth/mfa/verify
 ```
 
-This also applies to SSO-created sessions when the account already has MFA enabled.
+By default, this also applies to SSO-created sessions when the account already has MFA enabled. See [MFA and SSO](#mfa-and-sso) to change this.
+
+### MFA and SSO
+
+The identity provider controls the sign-in strength of an SSO login, for example with passkeys or TOTP. DeltaLLM records how each browser session signed in and uses this value for MFA:
+
+- **Password sessions.** If the account has no MFA, the admin UI shows the MFA enrollment prompt after login. The user can skip it.
+- **SSO sessions.** The admin UI does not show the MFA enrollment prompt.
+
+`general_settings.sso_local_mfa` controls the DeltaLLM TOTP step for SSO sessions of accounts that already have MFA enabled:
+
+| Value | SSO login with DeltaLLM MFA enabled |
+| --- | --- |
+| `optional` (default) | The user must also enter the DeltaLLM TOTP code. |
+| `trust_idp` | DeltaLLM trusts the identity provider. The session starts MFA-verified, and DeltaLLM does not ask for its TOTP code. |
+
+```yaml
+general_settings:
+  sso_local_mfa: trust_idp
+```
+
+Set `trust_idp` only when your identity provider enforces the second factor that you require. The setting applies to new SSO logins. Password logins always require the DeltaLLM TOTP code when the account has MFA enabled.
 
 ## Single Sign-On
 
