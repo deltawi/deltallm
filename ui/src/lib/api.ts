@@ -4,7 +4,6 @@ export type * from './api/tierContracts';
 import type { OrganizationTierPolicyPreview, TierPolicySimulation, TierPolicySimulationPayload } from './api/tierContracts';
 import type { KeyRemovalResult } from './api/keyRevocations';
 import type { Paginated, Pagination } from './api/pagination';
-import type { BatchItemError } from './api/batchContracts';
 import type { ManagedAssetAccess, ManagedAssetAccessInput } from './api/managedAssets';
 export type { Paginated, Pagination } from './api/pagination';
 import { apiFetch, withQuery } from './api/transport';
@@ -378,138 +377,6 @@ export interface ApiKey {
   model_output_tpm_limit?: Record<string, number> | null;
 }
 
-export interface BatchCapabilities {
-  view: boolean;
-  cancel: boolean;
-  replay_webhook?: boolean;
-}
-
-export interface BatchWebhookDelivery {
-  event_id: string;
-  event_type: string;
-  status: string;
-  attempt_count: number;
-  max_attempts: number;
-  next_attempt_at?: string | null;
-  last_status_class?: string | null;
-  last_error?: string | null;
-  lease_expires_at?: string | null;
-  created_at: string;
-  updated_at: string;
-  delivered_at?: string | null;
-}
-
-export interface BatchWebhookDeliveryList {
-  batch_id: string;
-  capabilities: BatchCapabilities;
-  data: BatchWebhookDelivery[];
-}
-
-export interface BatchWebhookReplayResponse {
-  batch_id: string;
-  replayed: boolean;
-  delivery: BatchWebhookDelivery;
-}
-
-export interface BatchFeatureStatus {
-  embeddings_batch_enabled: boolean;
-}
-
-export interface BatchJobListItem {
-  batch_id: string;
-  endpoint: string;
-  status: string;
-  model: string;
-  total_items: number;
-  completed_items: number;
-  failed_items: number;
-  cancelled_items: number;
-  in_progress_items: number;
-  total_cost: number;
-  created_by_api_key?: string | null;
-  created_by_team_id?: string | null;
-  team_alias?: string | null;
-  created_at?: string | null;
-  started_at?: string | null;
-  completed_at?: string | null;
-  capabilities: BatchCapabilities;
-}
-
-/** `own`: the caller sees only batches it created (members without key.read). */
-export type BatchJobListView = 'operator' | 'own';
-
-export interface BatchJobList extends Paginated<BatchJobListItem> {
-  view?: BatchJobListView;
-}
-
-export interface BatchJobSummary {
-  total: number;
-  queued: number;
-  in_progress: number;
-  completed: number;
-  failed: number;
-  cancelled: number;
-}
-
-export interface BatchJobCosts {
-  batch_id: string;
-  total_provider_cost: number;
-  total_billed_cost: number;
-}
-
-export interface BatchJobItem {
-  item_id: string;
-  line_number: number;
-  custom_id?: string | null;
-  status: string;
-  attempts: number;
-  provider_cost?: number | null;
-  billed_cost?: number | null;
-  last_error?: string | null;
-  has_request_body?: boolean;
-  has_response_body?: boolean;
-  has_error_body?: boolean;
-  has_usage?: boolean;
-  request_body?: Record<string, unknown> | null;
-  response_body?: Record<string, unknown> | null;
-  error_body?: BatchItemError | null;
-  usage?: Record<string, unknown> | null;
-}
-
-export interface BatchJobItemDetail extends BatchJobItem {
-  batch_id: string;
-  created_at?: string | null;
-  started_at?: string | null;
-  completed_at?: string | null;
-}
-
-export interface BatchJobDetail {
-  batch_id: string;
-  endpoint: string;
-  status: string;
-  model: string;
-  execution_mode?: string | null;
-  metadata?: Record<string, unknown> | null;
-  total_items: number;
-  completed_items: number;
-  failed_items: number;
-  cancelled_items: number;
-  in_progress_items: number;
-  total_provider_cost?: number | null;
-  total_billed_cost?: number | null;
-  created_by_api_key?: string | null;
-  created_by_team_id?: string | null;
-  team_alias?: string | null;
-  created_at?: string | null;
-  started_at?: string | null;
-  completed_at?: string | null;
-  cancel_requested_at?: string | null;
-  expires_at?: string | null;
-  capabilities: BatchCapabilities;
-  webhook_deliveries?: BatchWebhookDelivery[];
-  items: Paginated<BatchJobItem>;
-}
-
 export interface CallableTargetListItem {
   callable_key: string;
   target_type: 'model' | 'route_group';
@@ -663,6 +530,8 @@ export const callableTargets = {
   },
 };
 
+export { batches } from './api/batches';
+export type * from './api/batches';
 export { audit } from './api/audit';
 export type { AuditEvent, AuditEventDetail, AuditListResponse, AuditPayload } from './api/audit';
 
@@ -1087,29 +956,6 @@ export const users = {
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, params)),
   updateAssetAccess: (userId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, { method: 'PUT', json: payload }),
-};
-
-export const batches = {
-  featureStatus: () => apiFetch<BatchFeatureStatus>('/ui/api/batches/feature-status'),
-  list: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
-    apiFetch<BatchJobList>(withQuery('/ui/api/batches', params)),
-  summary: () => apiFetch<BatchJobSummary>('/ui/api/batches/summary'),
-  get: (batchId: string, params?: { items_limit?: number; items_offset?: number; after_line_number?: number | null }) =>
-    apiFetch<BatchJobDetail>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params)),
-  webhookDeliveries: (batchId: string) =>
-    apiFetch<BatchWebhookDeliveryList>(
-      `/ui/api/batches/${encodeURIComponent(batchId)}/webhook-deliveries`,
-    ),
-  costs: (batchId: string) =>
-    apiFetch<BatchJobCosts>(`/ui/api/batches/${encodeURIComponent(batchId)}/costs`),
-  getItem: (batchId: string, itemId: string) =>
-    apiFetch<BatchJobItemDetail>(`/ui/api/batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}`),
-  cancel: (batchId: string) => apiFetch<{ batch_id: string; status: string }>(`/ui/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }),
-  replayWebhook: (batchId: string, eventId: string) =>
-    apiFetch<BatchWebhookReplayResponse>(
-      `/ui/api/batches/${encodeURIComponent(batchId)}/webhook-deliveries/${encodeURIComponent(eventId)}/replay`,
-      { method: 'POST' },
-    ),
 };
 
 export type GuardrailMode = 'pre_call' | 'post_call';

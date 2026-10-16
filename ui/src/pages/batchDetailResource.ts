@@ -1,9 +1,18 @@
 import {
   ApiError,
+  type BatchItemStatus,
   type BatchJobDetail,
   type BatchWebhookDelivery,
   type BatchWebhookDeliveryList,
 } from '../lib/api';
+
+export interface BatchDetailItemsParams {
+  items_limit: number;
+  items_offset: number;
+  after_line_number: number | null;
+  item_status?: BatchItemStatus;
+  custom_id?: string;
+}
 
 export type BatchDetailResource =
   | { kind: 'live'; job: BatchJobDetail }
@@ -12,11 +21,7 @@ export type BatchDetailResource =
 export interface BatchDetailResourceApi {
   get: (
     batchId: string,
-    params: {
-      items_limit: number;
-      items_offset: number;
-      after_line_number: number | null;
-    },
+    params: BatchDetailItemsParams,
   ) => Promise<BatchJobDetail>;
   webhookDeliveries: (batchId: string) => Promise<BatchWebhookDeliveryList>;
 }
@@ -174,11 +179,7 @@ export function isCurrentBatchDetailRoute(
 export async function loadBatchDetailResource(
   api: BatchDetailResourceApi,
   batchId: string,
-  params: {
-    items_limit: number;
-    items_offset: number;
-    after_line_number: number | null;
-  },
+  params: BatchDetailItemsParams,
 ): Promise<BatchDetailResource> {
   try {
     return { kind: 'live', job: await api.get(batchId, params) };

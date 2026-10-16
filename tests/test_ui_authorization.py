@@ -1177,9 +1177,11 @@ async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_
         "total": 2,
         "queued": 0,
         "in_progress": 1,
+        "finalizing": 0,
         "completed": 1,
         "failed": 0,
         "cancelled": 0,
+        "expired": 0,
     }
 
 

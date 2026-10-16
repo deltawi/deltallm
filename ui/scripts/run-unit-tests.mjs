@@ -38,6 +38,7 @@ const testSources = [
   'tests/namedCredentialsApi.test.ts',
   'tests/namedCredentialEditing.test.tsx',
   'tests/batchDetailResource.test.ts',
+  'tests/batchJobs.test.ts',
   'tests/organizationPolicy.test.ts',
   'tests/organizationDeletion.test.ts',
   'tests/organizationDeletionPanel.test.tsx',

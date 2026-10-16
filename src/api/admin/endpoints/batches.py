@@ -28,7 +28,25 @@ from src.api.admin.endpoints.common import (
     get_auth_scope,
 )
 from src.audit.actions import AuditAction
-from src.batch.error_sanitization import sanitize_batch_item_error_fields
+from src.batch.error_sanitization import (
+    sanitize_batch_artifact_error,
+    sanitize_batch_item_error_fields,
+)
+from src.batch.endpoints import SUPPORTED_BATCH_ENDPOINT_SET
+from src.batch.repositories.admin_items_repository import (
+    BATCH_ITEM_STATUS_SET,
+    ERROR_GROUP_LIMIT,
+    BatchItemPageQuery,
+    fetch_batch_item_rows,
+    group_batch_item_errors,
+)
+from src.batch.repositories.admin_listing_repository import (
+    BatchListFilters,
+    BatchStatusCounts,
+    append_batch_list_filters,
+    count_batch_statuses,
+    list_batch_facets,
+)
 from src.batch.repositories.admin_visibility_repository import find_batch_scope_row
 from src.batch.repository import BatchRepository
 from src.batch.models import BATCH_JOB_STATUS_SET, encode_operator_failed_reason
@@ -475,11 +493,50 @@ def _scheduler_flow_response(flow) -> dict[str, Any]:  # noqa: ANN001
     }
 
 
+def _batch_list_filters(
+    *,
+    search: str | None = None,
+    status_filter: str | None = None,
+    model: str | None = None,
+    endpoint: str | None = None,
+    team_id: str | None = None,
+    created_after: datetime | None = None,
+) -> BatchListFilters:
+    # ``status`` takes one status or a comma-separated list. Unknown values are
+    # ignored, as before, so an old link never fails.
+    statuses = tuple(
+        dict.fromkeys(
+            value
+            for value in (part.strip() for part in (status_filter or "").split(","))
+            if value in BATCH_JOB_STATUS_SET
+        )
+    )
+    if endpoint and endpoint not in SUPPORTED_BATCH_ENDPOINT_SET:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported batch endpoint"
+        )
+    if created_after is not None and created_after.tzinfo is None:
+        # A time without a zone is UTC, like every other admin time filter.
+        created_after = created_after.replace(tzinfo=UTC)
+    return BatchListFilters(
+        search=(search or "").strip() or None,
+        statuses=statuses,
+        model=(model or "").strip() or None,
+        endpoint=endpoint or None,
+        team_id=(team_id or "").strip() or None,
+        created_after=created_after,
+    )
+
+
 @router.get("/ui/api/batches")
 async def list_batches(
     request: Request,
-    search: str | None = Query(default=None),
-    status_filter: str | None = Query(default=None, alias="status"),
+    search: str | None = Query(default=None, max_length=200),
+    status_filter: str | None = Query(default=None, alias="status", max_length=200),
+    model: str | None = Query(default=None, max_length=256),
+    endpoint: str | None = Query(default=None, max_length=64),
+    team_id: str | None = Query(default=None, max_length=128),
+    created_after: datetime | None = Query(default=None),
     limit: int = Query(default=10, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -489,6 +546,14 @@ async def list_batches(
         request, authorization, x_master_key, required_permission=Permission.KEY_READ
     )
     db = db_or_503(request)
+    filters = _batch_list_filters(
+        search=search,
+        status_filter=status_filter,
+        model=model,
+        endpoint=endpoint,
+        team_id=team_id,
+        created_after=created_after,
+    )
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -500,14 +565,7 @@ async def list_batches(
             "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
             "view": view,
         }
-
-    if search:
-        params.append(f"%{search}%")
-        clauses.append(f"(j.batch_id ILIKE ${len(params)} OR j.model ILIKE ${len(params)})")
-
-    if status_filter and status_filter in BATCH_JOB_STATUS_SET:
-        params.append(status_filter)
-        clauses.append(f'j.status = ${len(params)}::"DeltaLLM_BatchJobStatus"')
+    append_batch_list_filters(clauses=clauses, params=params, filters=filters, job_alias="j.")
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -605,51 +663,58 @@ async def list_batches(
 @router.get("/ui/api/batches/summary")
 async def batch_summary(
     request: Request,
+    search: str | None = Query(default=None, max_length=200),
+    model: str | None = Query(default=None, max_length=256),
+    endpoint: str | None = Query(default=None, max_length=64),
+    team_id: str | None = Query(default=None, max_length=128),
+    created_after: datetime | None = Query(default=None),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    """Status counts for the list filters, so each status tab shows its own count."""
+
     scope = get_auth_scope(
         request, authorization, x_master_key, required_permission=Permission.KEY_READ
     )
     db = db_or_503(request)
+    filters = _batch_list_filters(
+        search=search, model=model, endpoint=endpoint, team_id=team_id, created_after=created_after
+    )
 
     clauses: list[str] = []
     params: list[Any] = []
 
     if not append_batch_scope_clause(clauses=clauses, params=params, scope=scope):
-        return {
-            "total": 0,
-            "queued": 0,
-            "in_progress": 0,
-            "completed": 0,
-            "failed": 0,
-            "cancelled": 0,
-        }
+        return BatchStatusCounts().to_response()
+    append_batch_list_filters(clauses=clauses, params=params, filters=filters, include_status=False)
+    counts = await count_batch_statuses(db, clauses=clauses, params=params)
+    return counts.to_response()
 
-    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-    rows = await db.query_raw(
-        f"""
-        SELECT
-            COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE status = 'queued') AS queued,
-            COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress,
-            COUNT(*) FILTER (WHERE status = 'completed') AS completed,
-            COUNT(*) FILTER (WHERE status = 'failed') AS failed,
-            COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
-        FROM deltallm_batch_job
-        {where_sql}
-        """,
-        *params,
+@router.get("/ui/api/batches/facets")
+async def batch_facets(
+    request: Request,
+    created_after: datetime | None = Query(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    """Models and teams for the list filter menus, most used first, within the caller's scope."""
+
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
     )
-    row = dict(rows[0]) if rows else {}
+    db = db_or_503(request)
+    filters = _batch_list_filters(created_after=created_after)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if not append_batch_scope_clause(clauses=clauses, params=params, scope=scope, job_alias="j."):
+        return {"models": [], "teams": []}
+    append_batch_list_filters(clauses=clauses, params=params, filters=filters, job_alias="j.")
+    facets = await list_batch_facets(db, clauses=clauses, params=params)
     return {
-        "total": int(row.get("total") or 0),
-        "queued": int(row.get("queued") or 0),
-        "in_progress": int(row.get("in_progress") or 0),
-        "completed": int(row.get("completed") or 0),
-        "failed": int(row.get("failed") or 0),
-        "cancelled": int(row.get("cancelled") or 0),
+        "models": [{"value": f.value, "label": f.label, "count": f.count} for f in facets.models],
+        "teams": [{"value": f.value, "label": f.label, "count": f.count} for f in facets.teams],
     }
 
 
@@ -1001,6 +1066,8 @@ async def get_batch(
     items_limit: int = Query(default=50, ge=1, le=500),
     items_offset: int = Query(default=0, ge=0),
     after_line_number: int | None = Query(default=None, ge=0),
+    item_status: str | None = Query(default=None, max_length=32),
+    custom_id: str | None = Query(default=None, max_length=512),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
@@ -1008,11 +1075,14 @@ async def get_batch(
         request, authorization, x_master_key, required_permission=Permission.KEY_READ
     )
     db = db_or_503(request)
+    if item_status is not None and item_status not in BATCH_ITEM_STATUS_SET:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown item status")
 
     rows = await db.query_raw(
         """
         SELECT
             j.batch_id, j.endpoint, j.status, j.model, j.execution_mode,
+            j.input_file_id, j.output_file_id, j.error_file_id,
             j.total_items, j.completed_items, j.failed_items, j.cancelled_items, j.in_progress_items,
             j.created_by_api_key, j.created_by_team_id, j.created_by_organization_id,
             j.created_by_owner_account_id,
@@ -1032,51 +1102,19 @@ async def get_batch(
     job = dict(rows[0])
     await enforce_batch_read_scope(db=db, scope=scope, job=job)
 
-    items_total = int(job.get("total_items") or 0)
-    fetch_limit = items_limit + 1
-    if after_line_number is None:
-        item_rows = await db.query_raw(
-            """
-            SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
-                   last_error,
-                   LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
-                   CASE WHEN LENGTH(error_body ->> 'code') <= 64
-                        THEN error_body ->> 'code' END AS _error_code,
-                   request_body IS NOT NULL AS has_request_body,
-                   response_body IS NOT NULL AS has_response_body,
-                   error_body IS NOT NULL AS has_error_body,
-                   usage IS NOT NULL AS has_usage
-            FROM deltallm_batch_item
-            WHERE batch_id = $1
-            ORDER BY line_number ASC
-            LIMIT $2 OFFSET $3
-            """,
-            batch_id,
-            fetch_limit,
-            items_offset,
-        )
-    else:
-        item_rows = await db.query_raw(
-            """
-            SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
-                   last_error,
-                   LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
-                   CASE WHEN LENGTH(error_body ->> 'code') <= 64
-                        THEN error_body ->> 'code' END AS _error_code,
-                   request_body IS NOT NULL AS has_request_body,
-                   response_body IS NOT NULL AS has_response_body,
-                   error_body IS NOT NULL AS has_error_body,
-                   usage IS NOT NULL AS has_usage
-            FROM deltallm_batch_item
-            WHERE batch_id = $1
-              AND line_number > $2
-            ORDER BY line_number ASC
-            LIMIT $3
-            """,
-            batch_id,
-            after_line_number,
-            fetch_limit,
-        )
+    custom_id = (custom_id or "").strip() or None
+    items_total = _batch_item_total(job, item_status=item_status, custom_id=custom_id)
+    item_rows = await fetch_batch_item_rows(
+        db,
+        BatchItemPageQuery(
+            batch_id=batch_id,
+            limit=items_limit,
+            offset=items_offset,
+            after_line_number=after_line_number,
+            status=item_status,
+            custom_id=custom_id,
+        ),
+    )
     item_rows_page = [sanitize_batch_item_error_fields(dict(r)) for r in item_rows[:items_limit]]
     has_more_items = len(item_rows) > items_limit
     next_after_line_number = (
@@ -1102,6 +1140,9 @@ async def get_batch(
         "status": job.get("status"),
         "model": job.get("model"),
         "execution_mode": job.get("execution_mode"),
+        "input_file_id": job.get("input_file_id"),
+        "output_file_id": job.get("output_file_id"),
+        "error_file_id": job.get("error_file_id"),
         "total_items": int(job.get("total_items") or 0),
         "completed_items": int(job.get("completed_items") or 0),
         "failed_items": int(job.get("failed_items") or 0),
@@ -1126,7 +1167,7 @@ async def get_batch(
         "items": {
             "data": [to_json_value(r) for r in item_rows_page],
             "pagination": {
-                "total": items_total,
+                "total": items_total if items_total is not None else len(item_rows_page),
                 "limit": items_limit,
                 "offset": items_offset,
                 "has_more": has_more_items,
@@ -1135,6 +1176,67 @@ async def get_batch(
             },
         },
     }
+
+
+def _batch_item_total(
+    job: dict[str, Any], *, item_status: str | None, custom_id: str | None
+) -> int | None:
+    """Item count from the job counters, so the page needs no COUNT query.
+
+    ``None`` for a custom ID lookup: the ID is unique in a batch, so the page itself is the total.
+    """
+
+    if custom_id:
+        return None
+    total = int(job.get("total_items") or 0)
+    counters = {
+        "completed": int(job.get("completed_items") or 0),
+        "failed": int(job.get("failed_items") or 0),
+        "cancelled": int(job.get("cancelled_items") or 0),
+        "in_progress": int(job.get("in_progress_items") or 0),
+    }
+    if item_status is None:
+        return total
+    if item_status == "pending":
+        return max(0, total - sum(counters.values()))
+    return counters.get(item_status, 0)
+
+
+@router.get("/ui/api/batches/{batch_id}/errors")
+async def get_batch_error_groups(
+    request: Request,
+    batch_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    """Failed items grouped by public error. Provider text is never returned."""
+
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
+    db = db_or_503(request)
+    job = await load_batch_scope_row(db, batch_id)
+    await enforce_batch_read_scope(db=db, scope=scope, job=job)
+    groups = await group_batch_item_errors(db, batch_id)
+    # Unknown stored categories all become one public error, so merge equal rows.
+    merged: dict[tuple[str, str | None, str | None], int] = {}
+    for group in groups:
+        public_error = sanitize_batch_artifact_error(
+            {"retry_category": group.retry_category, "code": group.code}, cancelled=False
+        )
+        key = (
+            public_error["message"],
+            public_error.get("retry_category"),
+            public_error.get("code"),
+        )
+        merged[key] = merged.get(key, 0) + group.count
+    data = [
+        {"message": message, "retry_category": category, "code": code, "count": count}
+        for (message, category, code), count in sorted(
+            merged.items(), key=lambda entry: entry[1], reverse=True
+        )[:ERROR_GROUP_LIMIT]
+    ]
+    return {"batch_id": batch_id, "data": data}
 
 
 @router.get("/ui/api/batches/{batch_id}/costs")
