@@ -101,6 +101,84 @@ def test_model_sort_is_global_before_pagination(
     assert rows == expected
 
 
+def cost_rows() -> list[dict[str, object]]:
+    def row(deployment_id: str, mode: str, **prices: object) -> dict[str, object]:
+        return {
+            "deployment_id": deployment_id,
+            "model_name": deployment_id,
+            "mode": mode,
+            "model_info": prices,
+        }
+
+    return [
+        row("tts-chars", "audio_speech", input_cost_per_character=2.2e-5),
+        row("gpt-4o", "chat", input_cost_per_token=2.5e-6, output_cost_per_token=1e-5),
+        row("unpriced", "chat"),
+        row("whisper", "audio_transcription", input_cost_per_second="0.0001"),
+        row("embed", "embedding", input_cost_per_token=2e-8),
+        row("glm", "chat", input_cost_per_token=6e-7, output_cost_per_token=2.2e-6),
+        row("image", "image_generation", input_cost_per_image=0.04),
+        row("cached-only", "chat", input_cost_per_token_cache_hit=1e-7),
+        row("tts-seconds", "audio_speech", input_cost_per_second=0.001),
+        row("tts-chars-cheap", "audio_speech", input_cost_per_character=1.5e-5),
+        row("bad", "chat", input_cost_per_token="n/a"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        (
+            "asc",
+            [
+                "embed",
+                "glm",
+                "gpt-4o",
+                "tts-chars-cheap",
+                "tts-chars",
+                "tts-seconds",
+                "whisper",
+                "image",
+                "bad",
+                "cached-only",
+                "unpriced",
+            ],
+        ),
+        (
+            "desc",
+            [
+                "gpt-4o",
+                "glm",
+                "embed",
+                "tts-chars",
+                "tts-chars-cheap",
+                "tts-seconds",
+                "whisper",
+                "image",
+                "bad",
+                "cached-only",
+                "unpriced",
+            ],
+        ),
+    ],
+)
+def test_model_cost_sort_groups_units_and_keeps_unpriced_last(
+    direction: SortDirection, expected: list[str]
+) -> None:
+    result = model_list_page(
+        cost_rows(),
+        health=ListHealthSnapshot([], []),
+        search=None,
+        provider=None,
+        mode=None,
+        sort_by="cost",
+        sort_direction=direction,
+        limit=50,
+        offset=0,
+    )
+    assert [row["deployment_id"] for row in result["data"]] == expected  # type: ignore[index]
+
+
 def test_model_filters_preserve_sorted_total_and_input() -> None:
     rows = model_rows()
     result = model_list_page(

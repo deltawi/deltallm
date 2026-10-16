@@ -28,6 +28,7 @@ const testSources = [
   'tests/modelFormShared.test.ts',
   'tests/modelNamedCredentialCreate.test.tsx',
   'tests/modelsApi.test.ts',
+  'tests/modelCost.test.ts',
   'tests/assetLists.test.tsx',
   'tests/assetCreator.test.ts',
   'tests/apiKeyLastUsed.test.ts',

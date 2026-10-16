@@ -11,6 +11,7 @@ import AssetList from '../components/admin/lists/AssetList';
 import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
 import { CopyIdentifier, ListIdentity, RowAction } from '../components/admin/lists/AssetListCells';
 import ModelTypePill from '../components/models/ModelTypePill';
+import ModelCostCell from '../components/models/ModelCostCell';
 import { useAssetListSort } from '../lib/useAssetListSort';
 import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
@@ -35,7 +36,7 @@ export default function Models() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const pageSize = 10;
-  const listSort = useAssetListSort(['name', 'mode', 'provider', 'health', 'created_by', 'updated_at', 'visibility'] as const, () => setPageOffset(0));
+  const listSort = useAssetListSort(['name', 'mode', 'provider', 'cost', 'health', 'created_by', 'updated_at', 'visibility'] as const, () => setPageOffset(0));
   const { data: result, loading, error, refetch } = useApi(
     (signal) => models.list(
       {
@@ -99,6 +100,7 @@ export default function Models() {
     { key: 'deployment_id', header: 'Deployment ID', render: (row) => <CopyIdentifier value={row.deployment_id} label="Deployment ID" /> },
     { key: 'mode', header: 'Type', sortKey: 'mode', render: (row) => <ModelTypePill mode={rowMode(row)} /> },
     { key: 'provider', header: 'Provider', sortKey: 'provider', render: (row) => <ProviderBadge provider={row.provider} model={row.deltallm_params.model} /> },
+    { key: 'cost', header: 'Cost', sortKey: 'cost', render: (row) => <ModelCostCell mode={rowMode(row)} modelInfo={row.model_info} /> },
     { key: 'health', header: 'Health', sortKey: 'health', render: (row) => <StatusBadge status={row.health_status || (row.healthy == null ? 'unknown' : row.healthy ? 'healthy' : 'unhealthy')} /> },
     ...assetMetadataColumns<ModelDeploymentDetail>(),
   ];
