@@ -34,6 +34,9 @@ It shows only to accounts that can see request logs (platform and organization r
 - Select a time window: 1 hour, 24 hours, 7 days, or 30 days.
 - Filter by status (success or error), cache (hit or miss), model, provider, team, or API key.
 - Type a full request ID in **Find a request ID** to find one request in the selected window.
+- **Duration** shows milliseconds below 1 second (`412 ms`). Above 1 second it shows seconds
+  (`1.26 s`, `15.3 s`), then minutes (`2m 5s`) and hours (`1h 4m`). Durations over 5 seconds are red.
+  The Audit logs, Playground, and MCP pages use the same format.
 - Click a row to open the request panel. The panel shows the error, the model, the provider, the team,
   the API key, the cost, the token counts, the metadata, and links to the audit log and to the other requests of the key.
 - On a narrow screen, the table hides columns in this order: Team, Cache, and Tokens first, then

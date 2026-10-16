@@ -215,12 +215,6 @@ export function statusLabel(event: Pick<AuditEvent, 'status' | 'error_code'>): s
 
 export const SLOW_MS = 10_000;
 
-export function durationLabel(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return '—';
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(1)} s`;
-}
-
 /** Exact UTC time: "10:21:44" today, "Oct 13 17:40:02" on other days. */
 export function utcClock(value: string | null | undefined, now = new Date()): string {
   const date = parseLogTime(value);

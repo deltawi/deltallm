@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { X } from 'lucide-react';
 import type { RequestLog } from '../../lib/api/usageReports';
-import { fmtSpendPrecise } from '../../lib/format';
+import { fmtDuration, fmtSpendPrecise } from '../../lib/format';
 import {
   logDurationMs,
   logKeyName,
@@ -111,7 +111,7 @@ export default function RequestLogDrawer({ log, canOpenAudit, onClose, onFilterK
           {logStatusCode(log)} {failed ? 'Failed' : 'Succeeded'}
         </span>
         <span className="text-xs text-gray-500" title={utcTimestamp(log.start_time)}>
-          · {relativeTime(log.start_time)}{duration !== null ? ` · ${(duration / 1000).toFixed(1)} s` : ''}
+          · {relativeTime(log.start_time)}{duration !== null ? ` · ${fmtDuration(duration)}` : ''}
         </span>
       </div>
       {failed && (

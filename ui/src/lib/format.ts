@@ -166,3 +166,25 @@ export function fmtLocalDay(value: string | null | undefined): string {
   if (!date || Number.isNaN(date.getTime())) return 'Not recorded';
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
+
+/**
+ * Format a duration for tables and panels: "850 ms" under a second, "1.25 s" under 10 seconds,
+ * "12.3 s" under a minute, then "2m 5s" and "1h 4m". Returns "—" for a missing or bad value.
+ */
+export function fmtDuration(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return '—';
+  const wholeMs = Math.round(ms);
+  if (wholeMs < 1000) return `${wholeMs} ms`;
+  // Compare rounded values, so 9,999 ms reads "10.0 s", not "10.00 s".
+  const seconds = ms / 1000;
+  if (Math.round(seconds * 100) < 1000) return `${seconds.toFixed(2)} s`;
+  if (Math.round(seconds * 10) < 600) return `${seconds.toFixed(1)} s`;
+  const totalSeconds = Math.round(seconds);
+  if (totalSeconds < 3600) {
+    const rest = totalSeconds % 60;
+    return rest ? `${Math.floor(totalSeconds / 60)}m ${rest}s` : `${totalSeconds / 60}m`;
+  }
+  const totalMinutes = Math.round(totalSeconds / 60);
+  const rest = totalMinutes % 60;
+  return rest ? `${Math.floor(totalMinutes / 60)}h ${rest}m` : `${totalMinutes / 60}h`;
+}

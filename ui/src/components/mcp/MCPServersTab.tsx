@@ -7,6 +7,7 @@ import MCPServerTable from './MCPServerTable';
 import { mcpServers, type MCPServer } from '../../lib/api';
 import { useApi } from '../../lib/hooks';
 import { errorMessage } from '../../lib/errorMessage';
+import { fmtDuration } from '../../lib/format';
 
 type MCPServersTabProps = {
   canRegister: boolean;
@@ -95,7 +96,7 @@ export default function MCPServersTab({ canRegister }: MCPServersTabProps) {
       pushToast({
         tone: status === 'healthy' ? 'success' : 'error',
         title: status === 'healthy' ? 'Server is healthy' : 'Server unhealthy',
-        message: status === 'healthy' ? `Responded in ${latency_ms}ms.` : response.health.error || 'Health check failed.',
+        message: status === 'healthy' ? `Responded in ${fmtDuration(latency_ms)}.` : response.health.error || 'Health check failed.',
       });
       refetch();
     } catch (error) {

@@ -1,11 +1,12 @@
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Globe, HeartPulse, RefreshCw, Trash2 } from 'lucide-react';
 import type { MCPServer, Pagination } from '../../lib/api';
+import { fmtDuration } from '../../lib/format';
 
 function HealthBadge({ server }: { server: MCPServer }) {
   const status = server.last_health_status;
   const latencyMs = server.last_health_latency_ms;
-  const latencyLabel = latencyMs != null ? `${latencyMs}ms` : null;
+  const latencyLabel = latencyMs != null ? fmtDuration(latencyMs) : null;
 
   if (status === 'healthy') {
     return (
