@@ -289,7 +289,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                   <div className="text-sm font-medium text-gray-900">Generated Audio</div>
                   <div className="text-xs text-gray-500">
                     Voice: {voice} · Format: {format.toUpperCase()}
-                    {duration > 0 && ` · Duration: ${duration.toFixed(1)}s`}
+                    {duration > 0 && ` · Duration: ${fmtDuration(duration * 1000)}`}
                   </div>
                 </div>
               </div>
@@ -336,7 +336,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                 <div className="flex-1 flex items-center gap-6">
                   {[
                     { label: 'Characters', value: stats.characters.toString() },
-                    { label: 'Duration', value: duration > 0 ? `${duration.toFixed(1)}s` : '—' },
+                    { label: 'Duration', value: duration > 0 ? fmtDuration(duration * 1000) : '—' },
                     { label: 'File Size', value: formatBytes(stats.fileSize) },
                     { label: 'Latency', value: fmtDuration(stats.latencyMs) },
                   ].map((stat) => (

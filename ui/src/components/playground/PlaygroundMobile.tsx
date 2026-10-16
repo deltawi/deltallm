@@ -529,7 +529,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                 <div className="text-sm font-medium text-gray-900 truncate">Generated Audio</div>
                 <div className="text-[10px] text-gray-500 truncate">
                   {voice} · {format.toUpperCase()}
-                  {duration > 0 && ` · ${duration.toFixed(1)}s`}
+                  {duration > 0 && ` · ${fmtDuration(duration * 1000)}`}
                 </div>
               </div>
             </div>
@@ -574,7 +574,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             <div className="grid grid-cols-4 gap-2 pt-2 border-t border-gray-100">
               {[
                 { label: 'Chars', value: stats.characters.toString() },
-                { label: 'Dur', value: duration > 0 ? `${duration.toFixed(1)}s` : '—' },
+                { label: 'Dur', value: duration > 0 ? fmtDuration(duration * 1000) : '—' },
                 { label: 'Size', value: formatBytes(stats.fileSize) },
                 { label: 'Latency', value: fmtDuration(stats.latencyMs) },
               ].map((s) => (

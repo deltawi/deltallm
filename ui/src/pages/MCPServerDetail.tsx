@@ -267,7 +267,7 @@ export default function MCPServerDetail() {
         title: 'Health check completed',
         message:
           result.health.status === 'healthy'
-            ? `Server responded in ${result.health.latency_ms} ms.`
+            ? `Server responded in ${fmtDuration(result.health.latency_ms)}.`
             : result.health.error || 'The MCP server is unhealthy.',
       });
       refetch();
@@ -539,7 +539,7 @@ export default function MCPServerDetail() {
             <DetailMetricCard
               icon={BarChart2}
               label="Avg latency"
-              value={operations ? fmtDuration(operations.summary.avg_latency_ms) : fmtDuration(latencyMs)}
+              value={operations?.summary.total_calls ? fmtDuration(operations.summary.avg_latency_ms) : fmtDuration(latencyMs)}
               tone="blue"
             />
           </>
@@ -1103,7 +1103,7 @@ export default function MCPServerDetail() {
                           { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsToolRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
                           { key: 'total_calls', header: 'Calls' },
                           { key: 'failed_calls', header: 'Failures' },
-                          { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: MCPOperationsToolRow) => fmtDuration(Number(row.avg_latency_ms || 0)) },
+                          { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: MCPOperationsToolRow) => fmtDuration(row.avg_latency_ms) },
                         ]}
                         data={operations.top_tools}
                         emptyMessage="No tool calls in the last 24h"
