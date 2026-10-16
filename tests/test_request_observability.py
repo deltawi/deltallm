@@ -409,7 +409,8 @@ async def test_prometheus_snapshot_timeout_cannot_queue_more_encoder_work() -> N
     try:
         with pytest.raises(MetricsSnapshotGenerationTimedOut, match="deadline exceeded"):
             await service.refresh()
-        assert second_started.is_set()
+        # The 10 ms deadline can expire before the worker thread starts the encoder.
+        assert await asyncio.to_thread(second_started.wait, 5)
         assert service.snapshot.content == b"initial"
 
         # A timed-out thread retains the only encoder slot. Further refreshes
@@ -418,12 +419,11 @@ async def test_prometheus_snapshot_timeout_cannot_queue_more_encoder_work() -> N
         assert calls == 2
 
         release_second.set()
-        for _ in range(100):
-            if second_finished.is_set() and service._generation.done():
-                break
-            await asyncio.sleep(0)
-        assert second_finished.is_set()
-        assert service._generation.done()
+        # Wait in real time: yielding the event loop does not schedule the worker thread.
+        assert await asyncio.to_thread(second_finished.wait, 5)
+        generation = service._generation
+        assert generation is not None
+        await asyncio.wait_for(asyncio.wrap_future(generation), timeout=5)
         assert (await service.refresh()).content == b"fresh"
         assert calls == 3
     finally:
