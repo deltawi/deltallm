@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { useEffect, useId, useRef } from 'react';
 import type { TierFormValues } from '../../lib/tiers';
+import { lockBodyScroll } from '../../lib/bodyScrollLock';
 
 type TierFormDrawerProps = {
   open: boolean;
@@ -43,8 +44,7 @@ export default function TierFormDrawer({
     const previouslyFocused = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockScroll = lockBodyScroll();
 
     const focusableElements = () => {
       const selector = 'button, input, textarea, select, [href], [tabindex]:not([tabindex="-1"])';
@@ -76,7 +76,7 @@ export default function TierFormDrawer({
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
+      unlockScroll();
       previouslyFocused?.focus();
     };
   }, [open]);

@@ -48,13 +48,20 @@ If health data is unavailable, the list shows **Unknown**.
 
 ## Quick Success Workflow
 
-1. Create the route group shell
-2. Add one or more member deployments
-3. Keep the default routing behavior at first
-4. Mark the group live
-5. Use the generated call example to test traffic
+1. Select **Create Group**.
+2. Enter the group key and the workload type.
+3. Optional: in **Models**, select one or more models.
+4. Select **Create group**.
+5. On the group page, select **Use this group**. Copy a sample request, or open the group in the Playground.
 
-For most teams, this is the right first path. You do not need an advanced policy on day one.
+When you select models in the create dialog, DeltaLLM adds them to the group.
+It then publishes the default routing: traffic is spread evenly,
+and a call that times out or is rate limited is retried on another model.
+The group can answer requests immediately.
+
+![Create a route group with models](images/route-group-create.png)
+
+For most teams, this is the correct first path. You do not need advanced routing on day one.
 
 ## What the Group Owns
 
@@ -92,42 +99,150 @@ capacity state is read.
 - member count
 - health, with how many active members are available; a group with traffic off shows **Traffic off**
 
-## What the Detail Page Lets You Do
+## Detail page
 
 Group names may include slashes, spaces, Unicode, and other reserved URL characters.
 Opening a group uses its stable ID in the page address. The displayed name, call examples,
 and prompt bindings keep the original group key. Saved name-based links redirect to the
 current group address when that name can be recovered from the URL.
 
-- edit the basic group metadata
-- add and remove member deployments
-- see the current usage example for calling the group
-- bind a prompt
-- inspect and publish routing policy changes
+### Header
 
-## When You Need an Advanced Policy
+The header shows the name, the workload type, and one line of facts:
 
-Start with the default behavior unless you need one of these:
+- **Live** or **Off**: the group accepts requests, or it rejects them.
+- The group key, with a copy control.
+- The number of models and their health, for example **3 models, all healthy**.
+  The text is amber when a model is unhealthy or **not found** (it has no health record), or when all models are paused.
+- The routing, for example **Custom split**.
+- **Prompt:** and the prompt name, when a prompt is attached. Only platform administrators see this item.
+- The sharing, for example **Private** or **Shared with Support team**.
 
-- ordered failover
-- weighted traffic splits
-- a specific routing strategy
-- a draft, publish, rollback, or simulation workflow for routing changes
+Select a fact to open the tab that controls it.
 
-## Policy tab
+Select **Use this group** to open sample requests in cURL, Python, and JavaScript.
+The samples use the group key as the model name.
+When a prompt is attached, the samples include its required variables.
+Use **Copy**, **Open in Playground**, or **Create API key**.
 
-The **Policy** tab shows the published routing strategy separately from draft changes.
-Select **Simple shuffle**, **Weighted split**, or **Primary & fallback** in the guided editor.
-Other supported strategies are available in **Other strategies**.
-For Primary & fallback, use the up and down arrows to change the deployment order.
-The first deployment is primary. The others are fallbacks in list order.
-An order change creates an explicit member list. New group members are not added to this list automatically.
-Select **Inherit enabled** to use group membership and its priorities again.
-Open **Advanced settings** for the optional selector, timeouts, retries, and context capacity.
+![Use this group](images/route-group-use.png)
 
-Use **Validate**, **Save draft**, and **Publish** for the current editor policy.
-The tab also contains selector tools, simulation, policy history, and rollback controls.
-Prompt bindings remain in **Advanced**.
+### Tabs
+
+The page has four tabs. A tab loads its data when you open it for the first time.
+
+| Tab | Use it to |
+|-----|-----------|
+| **Models** | See each model, its health, and its share of traffic. Add or remove models. |
+| **Routing** | Select how requests are shared among the models. |
+| **Prompt** | Attach a saved prompt to every request. Only platform administrators see this tab. |
+| **Settings** | Change the name, stop or start requests, manage sharing, and delete the group. |
+
+The **Traffic** column on the **Models** tab shows the planned share of each model.
+A paused model shows **Paused**. A model that the routing does not use shows **Not used**.
+An unhealthy model shows **0% while unhealthy**: it gets no traffic until it recovers.
+To change the shares, open the **Routing** tab.
+
+When the routing lists its models, a model that you add gets no traffic.
+Open **Routing** and add the model there.
+
+## Routing tab
+
+The **Routing** tab starts with simple routing. Select one of three choices:
+
+| Choice | What happens | Policy that DeltaLLM publishes |
+|--------|--------------|-------------------------------|
+| **Spread evenly** (default) | Each healthy model gets an equal share. | `simple-shuffle` with no member list |
+| **Primary & backup** | The first healthy model answers. The next model in the list answers when it fails. | `priority-based-routing` with a member list in order |
+| **Custom split** | Each model gets the percentage that you set. The total must be 100%. | `weighted` with the percentage as the weight |
+
+A sentence and a bar under the choices tell you what happens to traffic.
+In **Custom split**, use **Split evenly** to share 100% equally.
+A model at 0% is not in the published member list.
+A paused model keeps its place and its share when you save. When you start it again, it gets traffic as before.
+
+The retry switch controls what happens when a call fails:
+
+- On: a call that times out or is rate limited is retried on another model, up to 2 retries.
+- Off: the error goes back to the caller.
+
+When you change a setting, a bar at the bottom shows the changes.
+Select **Save changes** to publish them as a new version.
+New requests use the new version within a few seconds.
+After a save, select **Undo** to publish the previous version again.
+Select **Discard** to remove changes that you did not save.
+
+![Simple routing](images/route-group-routing.png)
+
+A group with one model shows **Every request goes to** and the model name.
+Add a second model to share traffic or to keep a backup.
+
+### When simple routing cannot show a policy
+
+Simple routing cannot show some settings, for example a model selector,
+context-aware routing, a request timeout, a strategy that is not in the list above,
+or custom retry settings.
+When the live version or a draft has such a setting, the tab opens advanced routing.
+**Back to simple routing** is then not available.
+
+## Advanced routing
+
+Select **Advanced routing** at the bottom of the **Routing** tab to open it.
+Unsaved simple changes go with you into the draft.
+
+The status bar compares the live version with the draft, for example
+**Live v3 · Custom split** and **Draft v4 · 3 changes vs live**.
+Use **Save draft** to keep a draft without a change to live traffic.
+Use **Discard draft** to delete the draft. Live traffic does not change.
+Use **Review & publish** to publish the draft.
+
+The page has three sections: **Configure**, **Simulate**, and **History**.
+Select **View JSON** to see the draft, the live version, or the difference.
+You can also edit or paste a policy and select **Apply** to load it into the form.
+
+### Configure
+
+**Configure** has five numbered cards. A card that differs from the live version shows **Changed**.
+
+1. **How to pick a deployment**: Custom split, Primary & backup, Spread evenly,
+   or one of the other strategies in **More strategies**.
+2. **Deployments**: include or exclude each model.
+   Set a weight for Custom split, or the order for Primary & backup.
+   The traffic share shows the draft share and the live share.
+   **Include new group members automatically** keeps the policy without a member list.
+   When it is off, a model added to the group later gets no traffic until you include it.
+3. **Timeouts and retries**: the request timeout in seconds,
+   the number of extra attempts, and the error types that cause a retry.
+4. **Context-aware routing**: see [Route by context size](#route-by-context-size).
+5. **Model selector**: see [Model-router Policies](#model-router-policies). Chat groups only.
+
+The **Draft check** panel updates as you edit.
+It shows the live and draft traffic shares, unhealthy or missing models, and errors that stop a publish.
+Select **Run dry run** to send 100 simulated requests against the current health.
+
+![Advanced routing](images/route-group-advanced-routing.png)
+
+### Review and publish
+
+**Review & publish** opens a summary of the changes in plain words, for example
+**gpt-4o: weight 60 → weight 50**. It also shows warnings, the last dry run result,
+and the JSON difference. Select **Publish** to make the draft live.
+When the draft has unsaved edits, DeltaLLM saves them into the draft first.
+
+![Review a draft before you publish it](images/route-group-review.png)
+
+### History
+
+**History** lists every version with a summary of the change, the person who published it, and the time.
+**By** shows the email address to platform administrators and to the person who published the version.
+Other users see **another user**. A version published with the master key shows **the master key**.
+
+Select a version to see its JSON difference with the version before it.
+Select **Restore as draft** to copy an old version into the draft.
+If a draft exists, DeltaLLM deletes it first, so no setting of the old draft stays.
+Review the draft and publish it like any other change.
+
+![Routing history](images/route-group-history.png)
 
 ## Routing Policy Basics
 
@@ -166,12 +281,14 @@ Context-capacity routing is available only for `chat` and `embedding` route grou
 rejects a context policy on image, audio, or rerank groups, including during validation,
 simulation, draft publication, rollback, and an incompatible route-group mode change.
 
-To enable this constraint, open **Context capacity** in the guided policy editor.
-Select **Eligible instances only** to use the normal strategy among deployments with sufficient capacity.
-Alternatively, select **Prefer smallest sufficient**.
+To enable this constraint, open advanced routing and turn on **Context-aware routing**.
+In **Which deployments**, select **Any deployment the request fits** to use the normal strategy
+among deployments with sufficient capacity.
+Alternatively, select **The smallest deployment the request fits**.
 This option uses the smallest sufficient context tier first and keeps larger tiers as fallbacks.
+In **Context size not known**, select **Use the deployment** or **Skip the deployment**.
 
-The **Disabled** option sends an explicit deletion marker.
+When you turn the switch off, the draft sends an explicit deletion marker.
 An omitted block keeps the stored policy for compatibility with older clients.
 
 Capacity comes from each deployment's **Context Window**, **Max Input Tokens**, and **Max Output Tokens** metadata.
@@ -211,7 +328,7 @@ How compatibility behaves:
 - an explicit `strategy` remains authoritative when both fields are present
 - validation returns a deprecation warning and normalized writes contain only `strategy`
 
-The guided UI selects the concrete strategy directly and does not expose a separate policy-mode
+The Admin UI selects the concrete strategy directly and does not expose a separate policy-mode
 control. Existing stored versions are not rewritten.
 
 Do not plan around these as live runtime modes yet:
@@ -304,6 +421,9 @@ document, including historical versions restored through rollback.
 
 ## Publication and Reload
 
+Each route group has at most one draft. A new draft save replaces the draft in place.
+Discarding a draft deletes it and does not change the published version.
+
 Draft publication and rollback run serially for each route group.
 One PostgreSQL transaction allocates a version, archives the previous publication, and activates its replacement.
 The database permits at most one published version per group.
@@ -334,11 +454,11 @@ To proceed, publish a policy version that no longer uses the deployment, then re
 
 Use this workflow:
 
-1. Create the route group and add members
-2. Start with `simple-shuffle` or `weighted`
-3. Simulate before publishing policy changes
-4. Publish only after the selection summary looks right
-5. Check `/health/deployments` and `/health/fallback-events` after rollout
+1. Create the route group and select its models.
+2. Start with **Spread evenly**, **Primary & backup**, or **Custom split**.
+3. For a larger change, use advanced routing. Save a draft and run a dry run.
+4. Publish only after the review and the dry run look correct.
+5. After the rollout, check `/health/deployments` and `/health/fallback-events`.
 
 The simulation view is especially useful for:
 
@@ -349,15 +469,14 @@ The simulation view is especially useful for:
 
 ## Policy Simulation
 
-Open **Policy → Policy Simulation** to dry-run the policy currently shown in the guided or JSON
-editor. The simulation can use estimated input/output tokens, request tags, and a per-deployment assumed outcome. A successful
+Open **Routing**, then **Advanced routing**, then **Simulate** to dry-run the draft in the form. The simulation can use estimated input/output tokens, request tags, and a per-deployment assumed outcome. A successful
 outcome is the default; failure outcomes pass through the same retry classification, retry budget,
 candidate ordering, and fallback decisions used by gateway requests.
 
-The simulation uses the policy in the editor as a full replacement.
+The simulation uses the draft in the form as a full replacement.
 This matches validation and publication behavior.
 Empty retry or timeout controls remove those overrides.
-The **Inherit enabled** option uses the route group's enabled membership.
+**Include new group members automatically** uses the route group's enabled membership.
 It does not keep the published policy's previous explicit subset.
 
 The results distinguish:
@@ -390,7 +509,14 @@ That means:
 - Prompt Registry defines the prompt template and its versions
 - Route Groups decide which prompt is active for live traffic
 
-If a prompt is bound, the usage example on the page should include the variables needed to call it correctly.
+Use the **Prompt** tab to attach a saved prompt and select its label.
+You can only select a label that the prompt has. When the prompt has one label, the tab selects it for you.
+When there are more than 100 prompts, use **Search prompts** to find the prompt.
+**Variables callers send** lists the variables that each request must include.
+Turn off **Active** to stop the prompt without a change to the binding.
+Open **More options** to change the label or the priority. When several bindings apply, the lowest priority number is used.
+
+When a prompt is attached, the samples in **Use this group** include its required variables.
 
 ## Related API Surface
 

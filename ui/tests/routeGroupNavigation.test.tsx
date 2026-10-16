@@ -18,6 +18,7 @@ const KEYS = ['vendor/model', 'vendor/model/v2', 'vendor%2Fmodel', 'support / eu
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json' },
 });
+const tab = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((b) => b.textContent?.startsWith(label))!;
 
 test('legacy names decode once and the query resolver preserves the exact key', async () => {
   const previousFetch = globalThis.fetch;
@@ -107,10 +108,15 @@ test('detail navigation preserves names, redirects old links, and ignores a stal
       assert.ok(document.body.textContent?.includes(key), key);
       const resolution = requests.filter((r) => r.url.pathname.endsWith('/resolve/by-key')).at(-1);
       assert.equal(resolution?.url.searchParams.get('group_key'), key);
+      const preview = requests.filter((r) => r.url.pathname.endsWith('/preview-resolution')).at(-1);
+      assert.deepEqual(JSON.parse(String(preview?.init?.body)), { route_group_key: key });
+      assert.ok(!requests.some((r) => r.url.searchParams.get('scope_id') === key), 'the Prompt tab loads only when opened');
+      await act(async () => tab('Prompt').click());
       const binding = requests.filter((r) => r.url.searchParams.has('scope_id')).at(-1);
       assert.equal(binding?.url.searchParams.get('scope_id'), key);
     }
-    await act(async () => document.querySelector<HTMLButtonElement>('button[title="Delete group"]')!.click());
+    await act(async () => tab('Settings').click());
+    await act(async () => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Delete group')!.click());
     const confirm = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Delete Group')!;
     assert.ok(confirm);
     await act(async () => { confirm.click(); confirm.click(); });

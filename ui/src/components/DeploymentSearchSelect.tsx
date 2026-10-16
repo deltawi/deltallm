@@ -20,6 +20,8 @@ interface DeploymentSearchSelectProps {
   helperText?: string;
   emptyText?: string;
   inputClassName?: string;
+  /** Text on the closed control when nothing is selected. */
+  placeholder?: string;
 }
 
 export default function DeploymentSearchSelect({
@@ -33,6 +35,7 @@ export default function DeploymentSearchSelect({
   helperText,
   emptyText = 'No deployments found.',
   inputClassName = '',
+  placeholder = 'Select deployment',
 }: DeploymentSearchSelectProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -66,7 +69,7 @@ export default function DeploymentSearchSelect({
         aria-expanded={open}
       >
         <span className={selectedLabel ? 'text-gray-900' : 'text-gray-500'}>
-          {selectedLabel || 'Select deployment'}
+          {selectedLabel || placeholder}
         </span>
         <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>

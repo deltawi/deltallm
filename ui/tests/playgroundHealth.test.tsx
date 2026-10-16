@@ -3,6 +3,7 @@ import test from 'node:test';
 import { act, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
+import { MemoryRouter } from 'react-router-dom';
 import Playground from '../src/pages/Playground';
 import { BrandingContext } from '../src/lib/brandingContext';
 import { DEFAULT_BRANDING } from '../src/lib/branding';
@@ -14,7 +15,7 @@ const modelList = (healthy: boolean | null | undefined) => ({ data: [{
   model_info: {}, deltallm_params: {},
 }], pagination: { total: 1, limit: 200, offset: 0, has_more: false } });
 
-function setup(desktop = true) {
+function setup(desktop = true, path = '/playground') {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
   const timers = new Map<number, () => void>();
   let nextTimer = 0;
@@ -29,7 +30,7 @@ function setup(desktop = true) {
   for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, value });
   const originalFetch = globalThis.fetch;
   const root = createRoot(document.getElementById('root')!);
-  const render = () => root.render(<BrandingContext.Provider value={{ branding: DEFAULT_BRANDING, assetRevision: 0, setBranding() {}, async refreshBranding() { return DEFAULT_BRANDING; } }}><Playground /></BrandingContext.Provider>);
+  const render = () => root.render(<MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><BrandingContext.Provider value={{ branding: DEFAULT_BRANDING, assetRevision: 0, setBranding() {}, async refreshBranding() { return DEFAULT_BRANDING; } }}><Playground /></BrandingContext.Provider></MemoryRouter>);
   return { dom, root, render, flushTimers() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); }, async close() {
     await act(async () => root.unmount());
     globalThis.fetch = originalFetch;
@@ -67,6 +68,24 @@ for (const desktop of [true, false]) {
     });
   }
 }
+
+test('a Playground link selects the model group it names, even when it is not a deployment', async () => {
+  const env = setup(true, '/playground?model=support-group&mode=chat');
+  globalThis.fetch = async () => json(modelList(true));
+  try {
+    await act(async () => env.render());
+    assert.match(document.body.textContent || '', /support-group/);
+    assert.ok(document.querySelector('[title="Status: unknown"]'), 'the linked group is selected');
+    assert.equal(document.querySelector('[title="Status: online"]'), null);
+  } finally { await env.close(); }
+  const named = setup(true, '/playground?model=Support&mode=chat');
+  globalThis.fetch = async () => json(modelList(true));
+  try {
+    await act(async () => named.render());
+    assert.ok(document.querySelector('[title="Status: online"]'), 'a deployment with the same name is used as it is');
+    assert.doesNotMatch(document.body.textContent || '', /Model group/);
+  } finally { await named.close(); }
+});
 
 test('Playground model reads show loading and failure, support retry, and abort on unmount', async () => {
   const env = setup();
