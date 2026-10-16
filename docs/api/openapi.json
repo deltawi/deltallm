@@ -24851,6 +24851,7 @@
                     "name",
                     "mode",
                     "provider",
+                    "cost",
                     "health",
                     "created_by",
                     "updated_at",
