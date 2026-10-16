@@ -22,6 +22,12 @@ from src.db.identity.platform_accounts import (
     insert_platform_account_if_absent,
     refresh_sso_account,
 )
+from src.db.identity.platform_memberships import (
+    lock_sso_default_team,
+    seed_organization_membership,
+    seed_team_membership,
+)
+from src.services.organizations.organization_mutation_policy import OrganizationMutationPolicy
 
 
 class SSOIdentityStore(Protocol):
@@ -100,6 +106,20 @@ class SSOAccountService:
             subject=identity.subject,
         )
         return SSOAccountResolution(account=account, match=match)
+
+    async def seed_default_team(
+        self, account: PlatformAccountRecord, *, team_id: str, role: str
+    ) -> None:
+        """Add the account to the configured SSO default team and its organization."""
+        organization_id = await lock_sso_default_team(self.db, team_id=team_id)
+        if organization_id:
+            await OrganizationMutationPolicy.for_database(self.db).require_active(organization_id)
+            await seed_organization_membership(
+                self.db, account_id=account.account_id, organization_id=organization_id
+            )
+        await seed_team_membership(
+            self.db, account_id=account.account_id, team_id=team_id, role=role
+        )
 
     async def _resolve_unlinked(
         self,
