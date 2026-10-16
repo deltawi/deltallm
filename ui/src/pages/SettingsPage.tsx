@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useApi } from '../lib/hooks';
-import { settings } from '../lib/api';
+import { auth, settings } from '../lib/api';
 import {
   Settings, Route, Database, Shield, HeartPulse,
   Save, Check, ChevronRight, Plus, X, AlertTriangle,
@@ -14,6 +14,7 @@ import { useThemeSettingsController } from '../components/settings/useThemeSetti
 import { useToast } from '../components/ToastProvider';
 import { normalizeBranding } from '../lib/branding';
 import { useBranding } from '../lib/brandingContext';
+import { isSsoTabVisible } from '../lib/ssoGroupSync';
 import {
   fallbackStatusLabel,
   fallbackTargetLabel,
@@ -180,7 +181,10 @@ export default function SettingsPage() {
   const { data, loading, refetch } = useApi(() => settings.get(), []);
   const { branding, setBranding } = useBranding();
   const { pushToast } = useToast();
+  const { data: ssoConfig } = useApi(() => auth.ssoConfig(), []);
   const [activeTab, setActiveTab] = useState<TabId>('general');
+  const ssoTabVisible = isSsoTabVisible(ssoConfig);
+  const visibleTabs = TABS.filter((tab) => tab.id !== 'sso' || ssoTabVisible);
   const [form, setForm] = useState<SettingsForm>(DEFAULT_SETTINGS_FORM);
   const [savingSettings, setSavingSettings] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -308,7 +312,7 @@ export default function SettingsPage() {
       <div className="flex flex-col gap-6 md:flex-row">
         <nav className="w-56 shrink-0 hidden md:block">
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-1.5 sticky top-6">
-            {TABS.map((tab) => {
+            {visibleTabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
               return (
@@ -327,7 +331,7 @@ export default function SettingsPage() {
 
         <div className="md:hidden mb-4 w-full">
           <div className="flex gap-1 overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm p-1.5">
-            {TABS.map((tab) => {
+            {visibleTabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
               return (
@@ -520,7 +524,7 @@ export default function SettingsPage() {
             </SettingsSection>
           )}
 
-          {activeTab === 'sso' && (
+          {activeTab === 'sso' && ssoTabVisible && (
             <Suspense fallback={<div className="h-64 animate-pulse rounded-xl border border-gray-200 bg-white" aria-label="Loading" />}>
               <SsoGroupSyncPanel />
             </Suspense>

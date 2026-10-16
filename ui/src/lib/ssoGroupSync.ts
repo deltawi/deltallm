@@ -146,3 +146,8 @@ export function describeChange(change: SsoGroupPreviewChange): string {
   if (change.action === 'add') return `${target}: add as ${roleLabel(change.role_after)}`;
   return `${target}: ${roleLabel(change.role_before)} to ${roleLabel(change.role_after)}`;
 }
+
+/** The Single sign-on settings tab shows only when SSO is configured on the server. */
+export function isSsoTabVisible(config: { sso_enabled?: boolean } | null | undefined): boolean {
+  return Boolean(config?.sso_enabled);
+}

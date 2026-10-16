@@ -295,7 +295,15 @@ Group sync gives DeltaLLM access from a claim in the SSO token. At each SSO sign
 - A team role also gives membership in the team's organization as `org_member`.
 - When several values give the same team or organization, the highest role wins.
 
-Group sync is off by default. Only platform admins can change it. Use **Settings > Single sign-on** in the Admin UI, or set it in `config.yaml`:
+Group sync is off by default. Only platform admins can change it. The **Settings > Single sign-on** tab shows only when SSO is configured.
+
+![Settings > Single sign-on with group sync on and four mappings](../admin-ui/images/settings-single-sign-on.png)
+
+Use **Add mapping** to give a claim value a team role or an organization role:
+
+![Add mapping dialog](../admin-ui/images/settings-sso-add-mapping.png)
+
+You can also set group sync in `config.yaml`:
 
 ```yaml
 general_settings:
@@ -364,6 +372,8 @@ Group sync skips a mapping when the team or organization does not exist, the org
 #### Test a sign-in
 
 Use **Test a sign-in** on **Settings > Single sign-on** to see what the next sign-in would change. Enter an email and paste the decoded ID token claims, or values separated by commas. The preview uses the settings on the page, saved or not. It does not change data.
+
+![Test a sign-in preview](../admin-ui/images/settings-sso-test-sign-in.png)
 
 #### Provider examples
 
