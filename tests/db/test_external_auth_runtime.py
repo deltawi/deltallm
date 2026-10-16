@@ -69,7 +69,7 @@ async def test_owned_runtime_exchange_replay_readiness_and_shutdown(external_dat
         await audit.start()
         runtime = await init_external_auth_runtime(app, config)
         assert runtime is not None and await runtime.check_ready()
-        assert "connection_limit=4" in str(runtime.db._datasource["url"])
+        assert "connection_limit=5" in str(runtime.db._datasource["url"])
         await enable(fixture)
         app.include_router(router)
         claims = proof(fixture).claims.model_dump()
