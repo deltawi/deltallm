@@ -28,7 +28,7 @@ from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
 from src.lifecycle_settings import LifecycleSettings
 from src.deployment_capacity_settings import DeploymentCapacitySettings
-from src.auth.external_config import ExternalAuthSettings
+from src.auth.external_config import EXTERNAL_AUTH_DB_POOL_SIZE, ExternalAuthSettings
 from src.auth.email_domains import normalize_email_domains
 from src.auth.sso_group_settings import SSOGroupSyncSettings
 from src.auth.sign_in_settings import SSOSignInSettings
@@ -1399,8 +1399,10 @@ def resolve_external_auth_database_settings(
     if primary is None:
         return None
     return DatabaseConnectionSettings(
-        url=_apply_database_pool_settings(primary.url, pool_size=4, pool_timeout=1),
-        pool_size=4,
+        url=_apply_database_pool_settings(
+            primary.url, pool_size=EXTERNAL_AUTH_DB_POOL_SIZE, pool_timeout=1
+        ),
+        pool_size=EXTERNAL_AUTH_DB_POOL_SIZE,
         pool_timeout=1,
     )
 

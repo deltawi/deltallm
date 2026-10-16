@@ -9,6 +9,9 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Two mutation, two validation, and one maintenance connection per API process.
+EXTERNAL_AUTH_DB_POOL_SIZE = 5
+
 
 class ExternalVerificationKey(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)

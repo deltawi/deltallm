@@ -109,7 +109,7 @@ def test_external_auth_pool_is_counted_and_requires_a_restart_to_change():
     )
     initial = build_app_config({})
     snapshot = DependencyAllocationSnapshot.build(initial, settings)
-    assert snapshot.external_auth_connections == 4
+    assert snapshot.external_auth_connections == 5
     snapshot.validate_effective(initial, settings)
 
     disabled = build_app_config({"general_settings": {"external_auth": {"enabled": False}}})

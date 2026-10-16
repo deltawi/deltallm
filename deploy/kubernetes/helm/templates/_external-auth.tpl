@@ -22,11 +22,11 @@
 {{- if gt (int $peak) (int $capacity.maximumApiPods) -}}
 {{- fail "external_auth exceeds externalAuthCapacity.maximumApiPods including rolling surge and retiring pods" -}}
 {{- end -}}
-{{- $knownOther := sub $report.postgresqlConnections (mul 4 $api.peakProcesses) -}}
+{{- $knownOther := sub $report.postgresqlConnections (mul 5 $api.peakProcesses) -}}
 {{- if lt (int $capacity.otherReservedConnections) (int $knownOther) -}}
 {{- fail "externalAuthCapacity.otherReservedConnections must include API main and telemetry pools, workers, and all other database clients" -}}
 {{- end -}}
-{{- $required := add (int $capacity.otherReservedConnections) (mul 4 (int $capacity.maximumApiPods) $api.processesPerPod) -}}
+{{- $required := add (int $capacity.otherReservedConnections) (mul 5 (int $capacity.maximumApiPods) $api.processesPerPod) -}}
 {{- if lt (int $capacity.postgresConnectionBudget) (int $required) -}}
 {{- fail "externalAuthCapacity.postgresConnectionBudget cannot cover additive external-auth pools" -}}
 {{- end -}}
