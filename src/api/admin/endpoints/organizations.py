@@ -23,6 +23,10 @@ from src.services.access.asset_binding_mirror import (
     reload_callable_target_grants,
     route_group_repository,
 )
+from src.api.admin.membership_key_revocation import (
+    delete_keys_owned_in_organization,
+    finish_owned_key_revocation,
+)
 from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
@@ -2227,9 +2231,25 @@ async def remove_organization_member(
             "DELETE FROM deltallm_organizationmembership WHERE membership_id = $1",
             membership_id,
         )
+        revoked_tokens = (
+            await delete_keys_owned_in_organization(
+                tx, account_id=str(account_id), organization_id=organization_id
+            )
+            if int(deleted or 0) > 0
+            else []
+        )
+    await finish_owned_key_revocation(
+        request,
+        request_start=request_start,
+        scope=None,
+        token_hashes=revoked_tokens,
+        removed_account_id=str(account_id),
+        context={"organization_id": organization_id},
+    )
     response = {
         "deleted": int(deleted or 0) > 0,
         "team_memberships_removed": int(removed_team_memberships or 0),
+        "revoked_keys": len(revoked_tokens),
     }
     await emit_admin_mutation_audit(
         request=request,

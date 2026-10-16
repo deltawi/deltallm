@@ -86,9 +86,19 @@ To move a developer from sandbox access to production access:
 
 1. Open the user on the **People** page and confirm the account identity.
 2. Add the production organization or team membership with the correct role.
-3. Remove the sandbox team membership if the user should no longer create sandbox keys.
+3. Remove the sandbox team membership if the user should no longer create sandbox keys. This also deletes the API keys that the user owns in the sandbox team.
 4. Adjust runtime user limits or asset access if the production team requires different guardrails.
-5. Review API Keys and revoke any sandbox keys that should not remain active.
+5. Review API Keys and revoke any other sandbox keys that should not remain active.
+
+## Removing a Person
+
+When you remove a membership, DeltaLLM deletes the API keys that the person owns in the affected teams:
+
+- Remove a team membership: DeltaLLM deletes the keys that the person owns in that team.
+- Remove an organization membership: DeltaLLM also removes the person's team memberships in that organization and deletes the keys that the person owns in those teams.
+- Delete the account: DeltaLLM deletes all keys that the account owns.
+
+Keys that other people or service accounts own stay active. Each deleted key has an audit event.
 
 ## Recommended model
 

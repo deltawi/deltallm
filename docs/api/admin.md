@@ -387,6 +387,12 @@ ID-addressed simulation verifies that the requested group still exists in its da
 snapshot. If the group was deleted before that snapshot, it returns 404, including when
 another group has since been created with the same key.
 
+`prompt_ref` must name a prompt template that the caller can read. If the caller cannot read
+the template, the response is the same 400 `prompt_ref could not be resolved` that an unknown
+template gets. This prevents a caller from finding the prompt keys of other tenants.
+A `default_prompt` value sent inside route group `metadata` gets the same access check as the
+top-level `default_prompt` field. An unchanged value is kept without a new check.
+
 ### Prompt Registry
 
 | Method | Endpoint | Purpose |
@@ -505,6 +511,19 @@ another group has since been created with the same key.
 | `POST` | `/ui/api/organizations/{organization_id}/members` | Add a member |
 | `DELETE` | `/ui/api/organizations/{organization_id}/members/{membership_id}` | Remove a member |
 | `GET` | `/ui/api/organizations/{organization_id}/teams` | List teams in the organization |
+
+When you remove a person from a team or an organization, DeltaLLM deletes the API keys that the
+person owns in that team, or in all teams of that organization. The cached key entries are
+invalidated, and each key gets an `ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED` audit event. The
+response includes `revoked_keys`, the number of deleted keys. This applies to these endpoints:
+
+- `DELETE /ui/api/teams/{team_id}/members/{user_id}`
+- `DELETE /ui/api/organizations/{organization_id}/members/{membership_id}`
+- `DELETE /ui/api/rbac/team-memberships/{membership_id}`
+- `DELETE /ui/api/rbac/organization-memberships/{membership_id}`
+- `DELETE /ui/api/rbac/accounts/{account_id}`, which deletes all keys that the account owns
+
+Keys that other people or service accounts own stay active.
 
 Each item returned by `GET /ui/api/organizations` includes non-null `member_count` and
 `team_count` aggregates. `member_count` counts direct rows in

@@ -14,6 +14,12 @@ from src.auth.roles import (
     validate_team_role,
 )
 from src.audit import AuditAction
+from src.api.admin.membership_key_revocation import (
+    delete_all_owned_keys,
+    delete_keys_owned_in_organization,
+    delete_keys_owned_in_team,
+    finish_owned_key_revocation,
+)
 from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
@@ -616,7 +622,7 @@ async def provision_person(request: Request, payload: dict[str, Any]) -> dict[st
     "/ui/api/rbac/accounts/{account_id}",
     dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
 )
-async def delete_rbac_account(request: Request, account_id: str) -> dict[str, bool]:
+async def delete_rbac_account(request: Request, account_id: str) -> dict[str, bool | int]:
     request_start = perf_counter()
     db = db_or_503(request)
     if not hasattr(db, "tx"):
@@ -677,6 +683,8 @@ async def delete_rbac_account(request: Request, account_id: str) -> dict[str, bo
         )
 
         # Manual delete order keeps behavior deterministic regardless of FK cascade configuration.
+        # Owned keys go first: the foreign key would only clear the owner and keep them working.
+        revoked_tokens = await delete_all_owned_keys(tx, account_id=account_id)
         await tx.execute_raw(
             "DELETE FROM deltallm_teammembership WHERE account_id = $1", account_id
         )
@@ -692,7 +700,15 @@ async def delete_rbac_account(request: Request, account_id: str) -> dict[str, bo
         deleted = await tx.execute_raw(
             "DELETE FROM deltallm_platformaccount WHERE account_id = $1", account_id
         )
-    response = {"deleted": int(deleted or 0) > 0}
+    await finish_owned_key_revocation(
+        request,
+        request_start=request_start,
+        scope=None,
+        token_hashes=revoked_tokens,
+        removed_account_id=account_id,
+        context={"reason": "account_deleted"},
+    )
+    response = {"deleted": int(deleted or 0) > 0, "revoked_keys": len(revoked_tokens)}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -862,9 +878,25 @@ async def delete_org_membership(request: Request, membership_id: str) -> dict[st
             "DELETE FROM deltallm_organizationmembership WHERE membership_id = $1",
             membership_id,
         )
+        revoked_tokens = (
+            await delete_keys_owned_in_organization(
+                tx, account_id=str(account_id), organization_id=organization_id
+            )
+            if int(deleted or 0) > 0
+            else []
+        )
+    await finish_owned_key_revocation(
+        request,
+        request_start=request_start,
+        scope=None,
+        token_hashes=revoked_tokens,
+        removed_account_id=str(account_id),
+        context={"organization_id": organization_id},
+    )
     response = {
         "deleted": int(deleted or 0) > 0,
         "team_memberships_removed": int(removed_team_memberships or 0),
+        "revoked_keys": len(revoked_tokens),
     }
     await emit_admin_mutation_audit(
         request=request,
@@ -1019,7 +1051,7 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
     "/ui/api/rbac/team-memberships/{membership_id}",
     dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
 )
-async def delete_team_membership(request: Request, membership_id: str) -> dict[str, bool]:
+async def delete_team_membership(request: Request, membership_id: str) -> dict[str, bool | int]:
     request_start = perf_counter()
     db = db_or_503(request)
     if not hasattr(db, "tx"):
@@ -1030,7 +1062,7 @@ async def delete_team_membership(request: Request, membership_id: str) -> dict[s
     async with managed_asset_membership_transaction(db) as tx:
         existing_rows = await tx.query_raw(
             """
-            SELECT tm.membership_id, t.organization_id
+            SELECT tm.membership_id, tm.account_id, tm.team_id, t.organization_id
             FROM deltallm_teammembership tm
             JOIN deltallm_teamtable t ON t.team_id = tm.team_id
             WHERE tm.membership_id = $1
@@ -1039,18 +1071,35 @@ async def delete_team_membership(request: Request, membership_id: str) -> dict[s
             """,
             membership_id,
         )
+        revoked_tokens: list[str] = []
+        account_id = ""
+        team_id = ""
         if existing_rows:
             await require_active_organization_mutation(
                 tx,
                 str(existing_rows[0].get("organization_id") or ""),
             )
+            account_id = str(existing_rows[0].get("account_id") or "")
+            team_id = str(existing_rows[0].get("team_id") or "")
             deleted = await tx.execute_raw(
                 "DELETE FROM deltallm_teammembership WHERE membership_id = $1",
                 membership_id,
             )
+            if int(deleted or 0) > 0:
+                revoked_tokens = await delete_keys_owned_in_team(
+                    tx, account_id=account_id, team_id=team_id
+                )
         else:
             deleted = 0
-    response = {"deleted": int(deleted or 0) > 0}
+    await finish_owned_key_revocation(
+        request,
+        request_start=request_start,
+        scope=None,
+        token_hashes=revoked_tokens,
+        removed_account_id=account_id,
+        context={"team_id": team_id},
+    )
+    response = {"deleted": int(deleted or 0) > 0, "revoked_keys": len(revoked_tokens)}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

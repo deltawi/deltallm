@@ -906,8 +906,15 @@ async def test_mark_batch_failed_endpoint(client, test_app, monkeypatch):
     assert repository.provider_errors == [("batch-1", encode_operator_failed_reason("manual stop"))]
 
 
+
+def _configure_master_key(test_app) -> None:
+    # Scheduler routes require platform admin before the handler runs.
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+
 @pytest.mark.asyncio
 async def test_scheduler_status_includes_modes_and_metric_snapshot(client, test_app, monkeypatch):
+    _configure_master_key(test_app)
     test_app.state.app_config = AppConfig.model_validate(
         {
             "general_settings": {
@@ -979,6 +986,7 @@ async def test_scheduler_status_includes_modes_and_metric_snapshot(client, test_
 
 @pytest.mark.asyncio
 async def test_scheduler_status_reports_worker_config_mismatch(client, test_app, monkeypatch):
+    _configure_master_key(test_app)
     test_app.state.app_config = AppConfig.model_validate(
         {
             "general_settings": {
@@ -1027,6 +1035,7 @@ async def test_scheduler_status_ignores_global_generation_when_scheduler_config_
     test_app,
     monkeypatch,
 ):
+    _configure_master_key(test_app)
     test_app.state.app_config = AppConfig.model_validate(
         {
             "general_settings": {
@@ -1071,6 +1080,7 @@ async def test_scheduler_status_explicit_fifo_rolls_back_legacy_capabilities(
     test_app,
     monkeypatch,
 ):
+    _configure_master_key(test_app)
     test_app.state.app_config = AppConfig.model_validate(
         {
             "general_settings": {
@@ -1114,6 +1124,7 @@ async def test_scheduler_mode_endpoint_updates_dynamic_config_and_audits(
     test_app,
     monkeypatch,
 ) -> None:
+    _configure_master_key(test_app)
     initial_config = AppConfig.model_validate(
         {
             "general_settings": {
@@ -1184,6 +1195,7 @@ async def test_scheduler_mode_endpoint_fails_closed_when_dynamic_config_write_fa
     test_app,
     monkeypatch,
 ) -> None:
+    _configure_master_key(test_app)
     initial_config = AppConfig.model_validate(
         {
             "general_settings": {
@@ -1233,6 +1245,7 @@ async def test_scheduler_mode_endpoint_rejects_invalid_dynamic_config_before_aud
     test_app,
     monkeypatch,
 ) -> None:
+    _configure_master_key(test_app)
     initial_config = AppConfig.model_validate(
         {
             "general_settings": {
@@ -1278,6 +1291,7 @@ async def test_scheduler_mode_endpoint_rejects_invalid_dynamic_config_before_aud
 
 @pytest.mark.asyncio
 async def test_scheduler_dimensions_backfill_endpoint(client, test_app, monkeypatch):
+    _configure_master_key(test_app)
     repository = _FakeBatchRepairRepository()
     test_app.state.batch_repository = repository
 
@@ -1302,6 +1316,7 @@ async def test_scheduler_dimensions_backfill_endpoint(client, test_app, monkeypa
 
 @pytest.mark.asyncio
 async def test_scheduler_flows_get_lists_without_refreshing(client, test_app, monkeypatch):
+    _configure_master_key(test_app)
     repository = _FakeBatchRepairRepository()
     test_app.state.batch_repository = repository
     test_app.state.batch_tenant_fair_share_config = BatchTenantFairShareConfig(enabled=True)
@@ -1338,6 +1353,7 @@ async def test_scheduler_flows_get_lists_without_refreshing(client, test_app, mo
 
 @pytest.mark.asyncio
 async def test_scheduler_flows_refresh_endpoint_refreshes_and_audits(client, test_app, monkeypatch):
+    _configure_master_key(test_app)
     repository = _FakeBatchRepairRepository()
     test_app.state.batch_repository = repository
     test_app.state.batch_tenant_fair_share_config = BatchTenantFairShareConfig(
@@ -1435,6 +1451,7 @@ async def test_scheduler_flows_refresh_endpoint_refreshes_and_audits(client, tes
 
 @pytest.mark.asyncio
 async def test_scheduler_dimensions_backfill_endpoint_reports_lock_skip(client, test_app, monkeypatch):
+    _configure_master_key(test_app)
     class _LockedBackfillRepository(_FakeBatchRepairRepository):
         async def backfill_scheduler_dimensions(
             self,
@@ -1475,6 +1492,7 @@ async def test_scheduler_dimensions_backfill_endpoint_rejects_oversized_limit(
     test_app,
     monkeypatch,
 ):
+    _configure_master_key(test_app)
     test_app.state.batch_repository = _FakeBatchRepairRepository()
     monkeypatch.setattr(
         "src.api.admin.endpoints.batches.get_auth_scope",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import logging
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -84,6 +84,7 @@ from src.services.routing.route_policy_publication import (
     RoutePolicyPublicationNotFoundError,
     RoutePolicyPublicationService,
 )
+from src.services.prompts.prompt_registry import parse_prompt_reference
 from src.services.routing.route_group_refresh import refresh_route_group_runtime
 from src.services.routing.route_group_mutations import RouteGroupMutationService
 from src.services.access.creator_route_group_access import (
@@ -547,6 +548,30 @@ def _binding_response_payload(binding: Any) -> dict[str, Any]:
     return to_json_value(asdict(binding))
 
 
+async def _prompt_template_access(
+    request: Request,
+    template_key: str,
+    *,
+    principal: AssetPrincipal,
+) -> Literal["readable", "missing", "denied", "unchecked"]:
+    prompt_repository = _prompt_repository(request)
+    if prompt_repository is None:
+        return "unchecked"
+    template = await prompt_repository.get_template(template_key)
+    if template is None:
+        return "missing"
+    if principal.is_platform_admin:
+        return "readable"
+    policy = await _access_repository_or_503(request).get_policy_for_resource(
+        AssetKind.PROMPT_TEMPLATE,
+        str(template.prompt_template_id),
+        principal=principal,
+    )
+    if policy is None or not resolve_asset_capabilities(policy, principal).can_read:
+        return "denied"
+    return "readable"
+
+
 async def _validate_default_prompt(
     request: Request,
     value: Any,
@@ -569,25 +594,17 @@ async def _validate_default_prompt(
             detail="default_prompt.template_key is required",
         )
     label = str(value.get("label") or "").strip()
-    prompt_repository = _prompt_repository(request)
-    if prompt_repository is not None:
-        template = await prompt_repository.get_template(template_key)
-        if template is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="default_prompt.template_key does not exist",
-            )
-        if not principal.is_platform_admin:
-            policy = await _access_repository_or_503(request).get_policy_for_resource(
-                AssetKind.PROMPT_TEMPLATE,
-                str(template.prompt_template_id),
-                principal=principal,
-            )
-            if policy is None or not resolve_asset_capabilities(policy, principal).can_read:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="default_prompt.template_key is invalid or inaccessible",
-                )
+    access = await _prompt_template_access(request, template_key, principal=principal)
+    if access == "missing":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="default_prompt.template_key does not exist",
+        )
+    if access == "denied":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="default_prompt.template_key is invalid or inaccessible",
+        )
     payload: dict[str, str] = {"template_key": template_key}
     if label:
         payload["label"] = label
@@ -607,6 +624,16 @@ async def _resolve_group_metadata(
     metadata = dict(existing_metadata or {})
     raw_metadata_value = _validated_metadata(raw_metadata)
     if raw_metadata_value is not None:
+        raw_metadata_value = dict(raw_metadata_value)
+        # A prompt sent inside metadata gets the same access check as the
+        # top-level field. An unchanged value echoed back by the editor is kept.
+        metadata_prompt = raw_metadata_value.pop("default_prompt", ...)
+        if (
+            raw_default_prompt is ...
+            and metadata_prompt is not ...
+            and metadata_prompt != metadata.get("default_prompt")
+        ):
+            raw_default_prompt = metadata_prompt
         metadata.update(raw_metadata_value)
     has_default_prompt, default_prompt = await _validate_default_prompt(
         request,
@@ -1605,6 +1632,26 @@ async def rollback_route_group_policy(
     return response
 
 
+async def _require_readable_simulation_prompt(
+    request: Request,
+    simulation_request: RoutePolicySimulationRequest,
+    principal: AssetPrincipal,
+) -> None:
+    if simulation_request.prompt_ref is None:
+        return
+    prompt_ref = parse_prompt_reference(simulation_request.prompt_ref)
+    if prompt_ref is None:
+        return
+    access = await _prompt_template_access(request, prompt_ref.template_key, principal=principal)
+    if access == "denied" or (access == "unchecked" and not principal.is_platform_admin):
+        # Same answer as an unknown prompt, so the caller cannot probe other
+        # tenants' prompt keys.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="prompt_ref could not be resolved",
+        )
+
+
 async def simulate_route_group_policy(
     request: Request,
     group_key: str,
@@ -1616,6 +1663,7 @@ async def simulate_route_group_policy(
     if group is None:
         raise _route_group_not_found()
     principal, _ = await authorize_route_group_for_request(request, group)
+    await _require_readable_simulation_prompt(request, simulation_request, principal)
     if simulation_request.policy is not None:
         await _ensure_policy_references_allowed(
             request,

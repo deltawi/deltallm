@@ -18,6 +18,14 @@ def _account_self_registration_metadata() -> dict:
     }
 
 
+class _RecordingKeyService:
+    def __init__(self) -> None:
+        self.invalidated: list[str] = []
+
+    async def invalidate_key_cache_by_hash(self, token_hash: str) -> None:
+        self.invalidated.append(token_hash)
+
+
 class FakeDB:
     def __init__(self) -> None:
         now = datetime.now(tz=UTC)
@@ -53,6 +61,23 @@ class FakeDB:
                 "created_at": now,
                 "updated_at": now,
             }
+        }
+        self.keys: dict[str, dict] = {
+            "tok-team-1": {
+                "token": "tok-team-1",
+                "owner_account_id": "acct-1",
+                "team_id": "team-1",
+            },
+            "tok-other-team": {
+                "token": "tok-other-team",
+                "owner_account_id": "acct-1",
+                "team_id": "team-other-org",
+            },
+            "tok-someone-else": {
+                "token": "tok-someone-else",
+                "owner_account_id": "acct-2",
+                "team_id": "team-1",
+            },
         }
         self.sessions: list[dict] = [{"account_id": "acct-1"}]
         self.identities: list[dict] = [{"account_id": "acct-1"}]
@@ -110,7 +135,27 @@ class FakeDB:
     async def tx(self):
         yield self
 
+    def _delete_owned_keys(self, query: str, params: tuple[object, ...]) -> list[dict]:
+        account_id = str(params[0])
+
+        def matches(key: dict) -> bool:
+            if key["owner_account_id"] != account_id:
+                return False
+            if "organization_id = $2" in query:
+                team = self.teams.get(str(key["team_id"]), {})
+                return team.get("organization_id") == str(params[1])
+            if "team_id = $2" in query:
+                return key["team_id"] == str(params[1])
+            return True
+
+        deleted = [key for key in self.keys.values() if matches(key)]
+        for key in deleted:
+            del self.keys[key["token"]]
+        return [{"token": key["token"]} for key in deleted]
+
     async def query_raw(self, query: str, *params):
+        if "DELETE FROM deltallm_verificationtoken" in query and "RETURNING token" in query:
+            return self._delete_owned_keys(query, params)
         if "FROM deltallm_organizationtable" in query and "FOR SHARE" in query:
             row = self.organizations.get(str(params[0]))
             return [row] if row else []
@@ -140,9 +185,12 @@ class FakeDB:
                 if str(row.get("email") or "").lower() == email:
                     return [row]
             return []
-        if "FROM deltallm_teamtable WHERE team_id = $1" in query:
-            row = self.teams.get(str(params[0]))
-            return [row] if row else []
+        if "FROM deltallm_teamtable" in query and "team_id = $1" in query:
+            team = self.teams.get(str(params[0]))
+            if team is None:
+                return []
+            organization = self.organizations.get(str(team.get("organization_id")), {})
+            return [{**team, "organization_lifecycle_state": organization.get("lifecycle_state")}]
         if (
             "FROM deltallm_organizationmembership" in query
             and "WHERE account_id = $1 AND organization_id = $2" in query
@@ -452,6 +500,8 @@ def test_lower_runtime_email_lookup_migration_exists() -> None:
 async def test_delete_org_membership_removes_org_and_team_memberships_in_org(client, test_app):
     fake_db = FakeDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    key_service = _RecordingKeyService()
+    test_app.state.key_service = key_service
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     response = await client.delete(
@@ -463,6 +513,10 @@ async def test_delete_org_membership_removes_org_and_team_memberships_in_org(cli
     assert response.json()["team_memberships_removed"] == 1
     assert "om-1" not in fake_db.org_memberships
     assert "tm-1" not in fake_db.team_memberships
+    # Keys the person owns in this organization stop working; other keys stay.
+    assert response.json()["revoked_keys"] == 1
+    assert set(fake_db.keys) == {"tok-other-team", "tok-someone-else"}
+    assert key_service.invalidated == ["tok-team-1"]
 
 
 @pytest.mark.asyncio
@@ -478,6 +532,8 @@ async def test_delete_team_membership_removes_membership(client, test_app):
     assert response.status_code == 200
     assert response.json()["deleted"] is True
     assert "tm-1" not in fake_db.team_memberships
+    assert response.json()["revoked_keys"] == 1
+    assert set(fake_db.keys) == {"tok-other-team", "tok-someone-else"}
 
 
 @pytest.mark.asyncio
@@ -506,6 +562,7 @@ async def test_rbac_deletes_reject_inactive_organization(client, test_app, path)
     assert "acct-1" in fake_db.accounts
     assert "om-1" in fake_db.org_memberships
     assert "tm-1" in fake_db.team_memberships
+    assert len(fake_db.keys) == 3
 
 
 @pytest.mark.asyncio
@@ -525,6 +582,9 @@ async def test_delete_account_removes_memberships_sessions_identities(client, te
     assert fake_db.team_memberships == {}
     assert fake_db.sessions == []
     assert fake_db.identities == []
+    # Deleting the account revokes every key it owns, in any team.
+    assert response.json()["revoked_keys"] == 2
+    assert set(fake_db.keys) == {"tok-someone-else"}
 
 
 @pytest.mark.asyncio
@@ -542,3 +602,40 @@ async def test_upsert_team_membership_requires_org_membership(client, test_app):
 
     assert response.status_code == 400
     assert "team's organization" in response.text
+
+
+@pytest.mark.asyncio
+async def test_remove_organization_member_revokes_keys_owned_in_org(client, test_app):
+    fake_db = FakeDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    key_service = _RecordingKeyService()
+    test_app.state.key_service = key_service
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.delete(
+        "/ui/api/organizations/org-1/members/om-1", headers={"Authorization": "Bearer mk-test"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["deleted"] is True
+    assert response.json()["revoked_keys"] == 1
+    assert set(fake_db.keys) == {"tok-other-team", "tok-someone-else"}
+    assert key_service.invalidated == ["tok-team-1"]
+
+
+@pytest.mark.asyncio
+async def test_remove_team_member_revokes_keys_owned_in_team(client, test_app):
+    fake_db = FakeDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    key_service = _RecordingKeyService()
+    test_app.state.key_service = key_service
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.delete(
+        "/ui/api/teams/team-1/members/acct-1", headers={"Authorization": "Bearer mk-test"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"removed": True, "revoked_keys": 1}
+    assert set(fake_db.keys) == {"tok-other-team", "tok-someone-else"}
+    assert key_service.invalidated == ["tok-team-1"]

@@ -15,6 +15,10 @@ from src.auth.roles import (
     validate_team_role,
 )
 from src.audit import AuditAction
+from src.api.admin.membership_key_revocation import (
+    delete_keys_owned_in_team,
+    finish_owned_key_revocation,
+)
 from src.api.admin.endpoints.common import (
     AuthScope,
     db_or_503,
@@ -991,7 +995,7 @@ async def remove_team_member(
     user_id: str,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
-) -> dict[str, bool]:
+) -> dict[str, bool | int]:
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
@@ -1002,8 +1006,7 @@ async def remove_team_member(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Team membership mutation requires transaction support",
         )
-    owned_key_rows: list[dict[str, Any]] = []
-    revoked_keys = 0
+    revoked_tokens: list[str] = []
     async with managed_asset_membership_transaction(db) as tx:
         locked_team = await _lock_team_for_mutation(request, scope, tx, team_id)
         organization_id = str(locked_team.get("organization_id") or "").strip()
@@ -1014,42 +1017,18 @@ async def remove_team_member(
             user_id,
         )
         if int(removed or 0) > 0:
-            owned_key_rows = await tx.query_raw(
-                "SELECT token FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
-                team_id,
-                user_id,
+            revoked_tokens = await delete_keys_owned_in_team(
+                tx, account_id=user_id, team_id=team_id
             )
-            if owned_key_rows:
-                revoked_keys = int(
-                    await tx.execute_raw(
-                        "DELETE FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
-                        team_id,
-                        user_id,
-                    )
-                    or 0
-                )
-
-    if revoked_keys > 0:
-        try:
-            key_service = request.app.state.key_service
-            for key_row in owned_key_rows:
-                await key_service.invalidate_key_cache_by_hash(str(key_row["token"]))
-        except Exception:
-            import logging
-
-            logging.getLogger(__name__).exception(
-                "failed to invalidate key cache after membership removal auto-revoke"
-            )
-        for key_row in owned_key_rows:
-            await emit_admin_mutation_audit(
-                request=request,
-                request_start=request_start,
-                action=AuditAction.ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED,
-                scope=scope,
-                resource_type="api_key",
-                resource_id=str(key_row["token"]),
-                response_payload={"team_id": team_id, "removed_account_id": user_id},
-            )
+    await finish_owned_key_revocation(
+        request,
+        request_start=request_start,
+        scope=scope,
+        token_hashes=revoked_tokens,
+        removed_account_id=user_id,
+        context={"team_id": team_id},
+    )
+    revoked_keys = len(revoked_tokens)
 
     response = {"removed": int(removed or 0) > 0, "revoked_keys": revoked_keys}
     await emit_admin_mutation_audit(

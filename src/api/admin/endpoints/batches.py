@@ -58,13 +58,15 @@ from src.metrics import (
     increment_batch_webhook_replay,
     publish_batch_runtime_summary,
 )
-from src.middleware.admin import require_authenticated
+from src.middleware.admin import require_admin_permission, require_authenticated
 from src.services.ui.ui_authorization import (
     build_archived_batch_webhook_capabilities,
     build_batch_capabilities,
 )
 
 router = APIRouter(tags=["Admin Batches"], dependencies=[Depends(require_operator_batch_access)])
+# Scheduler routes change global state, so they deny before the handler runs.
+_PLATFORM_ADMIN = Depends(require_admin_permission(Permission.PLATFORM_ADMIN))
 logger = logging.getLogger(__name__)
 SCHEDULER_FLOW_LIST_DEFAULT_LIMIT = 200
 SCHEDULER_FLOW_LIST_MAX_LIMIT = 1000
@@ -668,7 +670,10 @@ async def batch_feature_status(
     }
 
 
-@router.get("/ui/api/batches/scheduler/model-capacity")
+@router.get(
+    "/ui/api/batches/scheduler/model-capacity",
+    dependencies=[_PLATFORM_ADMIN],
+)
 async def batch_scheduler_model_capacity(
     request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -694,7 +699,10 @@ async def batch_scheduler_model_capacity(
     }
 
 
-@router.get("/ui/api/batches/scheduler/status")
+@router.get(
+    "/ui/api/batches/scheduler/status",
+    dependencies=[_PLATFORM_ADMIN],
+)
 async def batch_scheduler_status(
     request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -709,7 +717,10 @@ async def batch_scheduler_status(
     return _scheduler_status_response(request)
 
 
-@router.post("/ui/api/batches/scheduler/mode")
+@router.post(
+    "/ui/api/batches/scheduler/mode",
+    dependencies=[_PLATFORM_ADMIN],
+)
 async def update_batch_scheduler_mode(
     request: Request,
     payload: SchedulerModeUpdateRequest,
@@ -776,7 +787,10 @@ async def update_batch_scheduler_mode(
     return response
 
 
-@router.get("/ui/api/batches/scheduler/flows")
+@router.get(
+    "/ui/api/batches/scheduler/flows",
+    dependencies=[_PLATFORM_ADMIN],
+)
 async def batch_scheduler_flows(
     request: Request,
     model_group: str | None = Query(default=None),
@@ -819,7 +833,10 @@ async def batch_scheduler_flows(
     }
 
 
-@router.post("/ui/api/batches/scheduler/flows/refresh")
+@router.post(
+    "/ui/api/batches/scheduler/flows/refresh",
+    dependencies=[_PLATFORM_ADMIN],
+)
 async def refresh_batch_scheduler_flows(
     request: Request,
     payload: SchedulerFlowRefreshRequest | None = None,
@@ -930,7 +947,10 @@ async def refresh_batch_scheduler_flows(
     return response
 
 
-@router.post("/ui/api/batches/scheduler-dimensions/backfill")
+@router.post(
+    "/ui/api/batches/scheduler-dimensions/backfill",
+    dependencies=[_PLATFORM_ADMIN],
+)
 async def backfill_scheduler_dimensions(
     request: Request,
     payload: SchedulerBackfillRequest | None = None,
