@@ -1,8 +1,9 @@
 import type React from 'react';
 import Modal from '../Modal';
 import ManagedAssetAccessFields from '../ManagedAssetAccessFields';
-import type { ManagedAssetGrantInput } from '../../lib/api';
+import type { ManagedAssetGrantInput, ModelDeploymentDetail } from '../../lib/api';
 import { groupKeySuffixFromName, ROUTE_GROUP_MODE_OPTIONS } from '../../lib/routeGroups';
+import CreateGroupModelPicker from './CreateGroupModelPicker';
 
 interface CreateDrawerProps {
   open: boolean;
@@ -22,6 +23,8 @@ interface CreateDrawerProps {
   allowPublic: boolean;
   useGeneratedPrefix: boolean;
   onGrantsChange: (grants: ManagedAssetGrantInput[]) => void;
+  models: ModelDeploymentDetail[];
+  onModelsChange: (models: ModelDeploymentDetail[]) => void;
 }
 
 export default function CreateDrawer({
@@ -42,11 +45,13 @@ export default function CreateDrawer({
   allowPublic,
   useGeneratedPrefix,
   onGrantsChange,
+  models,
+  onModelsChange,
 }: CreateDrawerProps) {
   if (!open) return null;
   const generatedKeyPreview = groupKeySuffixFromName(form.name) || 'group-name';
   return (
-    <Modal open={open} onClose={onClose} title="Create Model Group" description="Add the group shell, then configure members on the next page." wide footer={(
+    <Modal open={open} onClose={onClose} title="Create Model Group" description="Name the group and pick its models. You can add models later." wide footer={(
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
           <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
             Cancel
@@ -56,20 +61,12 @@ export default function CreateDrawer({
             disabled={creating}
             className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
-            {creating ? 'Creating…' : 'Create and continue →'}
+            {creating ? 'Creating…' : models.length > 0 ? 'Create group' : 'Create and continue →'}
           </button>
         </div>
     )}>
         {/* Drawer body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          {/* Info banner */}
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-            <div className="text-sm font-semibold text-blue-800">What happens next</div>
-            <div className="mt-1 text-xs text-blue-700">
-              Creates the group shell only. On the next page you will add members, configure routing, and optionally bind a prompt.
-            </div>
-          </div>
-
           {useGeneratedPrefix ? (
             <div>
               <label htmlFor="create-group-key" className="mb-1 block text-sm font-medium text-gray-700">
@@ -127,7 +124,11 @@ export default function CreateDrawer({
               <select
                 id="create-group-mode"
                 value={form.mode}
-                onChange={(e) => setForm({ ...form, mode: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, mode: e.target.value });
+                  // Picked models must support the workload type.
+                  if (models.length > 0) onModelsChange([]);
+                }}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {ROUTE_GROUP_MODE_OPTIONS.map((m) => (
@@ -148,6 +149,8 @@ export default function CreateDrawer({
               </div>
             ) : null}
           </div>
+
+          <CreateGroupModelPicker mode={form.mode} picked={models} disabled={creating} onChange={onModelsChange} />
 
           <div className="rounded-xl border border-slate-200 p-4">
             <ManagedAssetAccessFields

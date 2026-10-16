@@ -12,6 +12,7 @@ interface Props {
   onChange: (next: PolicyGuidedValues) => void;
   members: PolicyMemberOption[];
   workloadMode: string;
+  bare?: boolean;
 }
 
 export default function RouteGroupSelectorEditor(props: Props) {

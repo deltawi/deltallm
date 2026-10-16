@@ -13,9 +13,11 @@ interface Props {
   workloadMode: string;
   selectorOptions?: readonly SelectorDeploymentOption[];
   lookupControls?: ReactNode;
+  /** Drops the frame and intro when a surrounding card already titles the selector. */
+  bare?: boolean;
 }
 
-export default function PolicySelectorEditor({ values, onChange, members, workloadMode, selectorOptions = [], lookupControls }: Props) {
+export default function PolicySelectorEditor({ values, onChange, members, workloadMode, selectorOptions = [], lookupControls, bare = false }: Props) {
   const errorId = useId();
   const selector = values.selector;
   const enabled = selector.state === 'enabled';
@@ -35,9 +37,9 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
   };
 
   return (
-    <fieldset className="space-y-3 rounded-xl border border-slate-200 p-4" aria-describedby={error ? errorId : undefined}>
-      <legend className="px-1 text-sm font-semibold text-slate-900">Model selector (optional)</legend>
-      <p className="text-sm text-slate-600">Use a small model to send routine requests to economy models and harder requests to quality models.</p>
+    <fieldset className={bare ? 'space-y-3' : 'space-y-3 rounded-xl border border-slate-200 p-4'} aria-describedby={error ? errorId : undefined}>
+      <legend className={bare ? 'sr-only' : 'px-1 text-sm font-semibold text-slate-900'}>Model selector (optional)</legend>
+      {bare ? null : <p className="text-sm text-slate-600">Use a small model to send routine requests to economy models and harder requests to quality models.</p>}
       {selector.state === 'unsupported' ? <p role="alert" id={errorId}>{error}</p> : <>
         {lookupControls}
         <label className="block space-y-1">

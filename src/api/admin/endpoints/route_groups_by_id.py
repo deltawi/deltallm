@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.api.admin.endpoints import route_groups as operations
+from src.api.admin.endpoints.route_group_policy_drafts import discard_route_group_policy_draft
 from src.api.admin.request_validation import (
     BadRequestValidationRoute,
     PolicyBadRequestValidationRoute,
@@ -20,6 +21,7 @@ from src.api.admin.route_group_contracts import (
     RouteGroupUpdateRequest,
     RoutePolicyCurrentResponse,
     RoutePolicyDocumentRequest,
+    RoutePolicyDraftDiscardResponse,
     RoutePolicyHistoryResponse,
     RoutePolicyMutationResponse,
     RoutePolicyRollbackRequest,
@@ -176,6 +178,17 @@ async def save_route_group_policy_draft_by_id(
 ) -> RoutePolicyMutationResponse:
     return RoutePolicyMutationResponse.model_validate(
         await operations.save_route_group_policy_draft(request, group_key, payload)
+    )
+
+
+@router.delete(
+    _BASE + "/policy/draft", response_model=RoutePolicyDraftDiscardResponse, dependencies=_WRITE
+)
+async def discard_route_group_policy_draft_by_id(
+    request: Request, group_key: GroupKey
+) -> RoutePolicyDraftDiscardResponse:
+    return RoutePolicyDraftDiscardResponse.model_validate(
+        await discard_route_group_policy_draft(request, group_key)
     )
 
 

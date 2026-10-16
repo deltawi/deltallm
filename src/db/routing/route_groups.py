@@ -14,8 +14,8 @@ from src.db.routing.route_group_identity import (
     RouteGroupIdentityNotFoundError,
     RouteGroupLookup,
 )
+from src.db.routing.route_policy_drafts import RoutePolicyDraftMixin
 from src.db.routing.route_policy_lifecycle import (
-    RoutePolicyLifecycleMixin,
     RoutePolicyRecord,
     RoutePolicyStateConflictError,
     parse_policy_json,
@@ -147,7 +147,7 @@ class RouteGroupRuntimeSnapshot:
             object.__setattr__(self, "database_initialized", bool(self.groups))
 
 
-class RouteGroupRepository(RoutePolicyLifecycleMixin):
+class RouteGroupRepository(RoutePolicyDraftMixin):
     def __init__(
         self,
         prisma_client: Any | None = None,

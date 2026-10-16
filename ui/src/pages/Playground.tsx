@@ -1,6 +1,7 @@
 import { uiMount } from '../lib/uiMount';
 import ConsoleInferenceKey from '../components/playground/ConsoleInferenceKey';
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ApiError, models as modelsApi } from '../lib/api';
 import { useApi } from '../lib/hooks';
 import Button from '../components/Button';
@@ -18,21 +19,41 @@ const MODE_MAP: Record<PlaygroundMode, string[]> = {
   stt: ['audio_transcription'],
 };
 
+function isPlaygroundMode(value: string | null): value is PlaygroundMode {
+  return value === 'chat' || value === 'tts' || value === 'stt';
+}
+
+// A link such as /playground?model=support-chat&mode=chat opens with that model name selected.
+// Model groups are called by their key, so a name that is not a deployment gets its own option.
+function linkedOption(name: string, mode: PlaygroundMode): ModelOption {
+  return { id: `linked:${name}`, name, provider: 'Model group', status: 'unknown', mode: MODE_MAP[mode][0], defaultParams: {} };
+}
+
 export default function Playground() {
   const isMd = useIsMd();
-  const [mode, setModeState] = useState<PlaygroundMode>('chat');
+  const [searchParams] = useSearchParams();
+  const [linked] = useState(() => {
+    const name = searchParams.get('model')?.trim();
+    const linkMode = searchParams.get('mode');
+    return name ? { name, mode: isPlaygroundMode(linkMode) ? linkMode : 'chat' } : null;
+  });
+  const [mode, setModeState] = useState<PlaygroundMode>(linked?.mode ?? 'chat');
   const [apiKey, setApiKey] = useState('');
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const modelRead = useApi((signal) => modelsApi.list({ limit: 200 }, signal), []);
   const denied = modelRead.error instanceof ApiError && modelRead.error.status === 403;
-  const allModels = useMemo<ModelOption[]>(() => denied ? [] : (modelRead.data?.data || []).map((model) => ({
-    id: model.deployment_id || model.model_name,
-    name: model.model_name,
-    provider: model.provider,
-    status: model.healthy == null ? 'unknown' : model.healthy ? 'online' : 'offline',
-    mode: model.mode || 'chat',
-    defaultParams: model.model_info?.default_params || {},
-  })), [modelRead.data, denied]);
+  const allModels = useMemo<ModelOption[]>(() => {
+    const options: ModelOption[] = denied ? [] : (modelRead.data?.data || []).map((model) => ({
+      id: model.deployment_id || model.model_name,
+      name: model.model_name,
+      provider: model.provider,
+      status: model.healthy == null ? 'unknown' : model.healthy ? 'online' : 'offline',
+      mode: model.mode || 'chat',
+      defaultParams: model.model_info?.default_params || {},
+    }));
+    if (!linked || options.some((option) => option.name === linked.name)) return options;
+    return [linkedOption(linked.name, linked.mode), ...options];
+  }, [modelRead.data, denied, linked]);
 
   const chatModels = useMemo(
     () => allModels.filter((model) => MODE_MAP.chat.includes(model.mode)),
@@ -53,7 +74,9 @@ export default function Playground() {
   }, [chatModels, mode, sttModels, ttsModels]);
   const noModelsForMode = currentModels.length === 0;
 
-  const selectedModel = currentModels.find((model) => model.id === selectedModelId) || currentModels[0] || null;
+  const selectedModel = currentModels.find((model) => model.id === selectedModelId)
+    || (selectedModelId === null && linked ? currentModels.find((model) => model.name === linked.name) : undefined)
+    || currentModels[0] || null;
   const setSelectedModel = (model: ModelOption | null) => setSelectedModelId(model?.id ?? null);
   const setMode = (next: PlaygroundMode) => {
     if (next !== mode) setSelectedModelId(null);

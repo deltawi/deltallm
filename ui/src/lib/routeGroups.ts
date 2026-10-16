@@ -25,16 +25,6 @@ export const ROUTE_GROUP_STRATEGY_OPTIONS = [
   'rate-limit-aware',
 ] as const;
 
-export const ROUTE_GROUP_MODE_COLORS: Record<string, string> = {
-  chat: 'bg-blue-100 text-blue-700',
-  embedding: 'bg-violet-100 text-violet-700',
-  audio_speech: 'bg-orange-100 text-orange-700',
-  audio_transcription: 'bg-orange-100 text-orange-700',
-  realtime: 'bg-teal-100 text-teal-700',
-  image_generation: 'bg-pink-100 text-pink-700',
-  rerank: 'bg-teal-100 text-teal-700',
-};
-
 const ROUTE_GROUP_STRATEGY_LABELS: Record<string, string> = {
   'simple-shuffle': 'Shuffle',
   weighted: 'Weighted',
@@ -101,8 +91,6 @@ export const RETRYABLE_ERROR_OPTIONS = [
   'generic',
 ] as const;
 
-export type PolicyEditorMode = 'guided' | 'json';
-export type PolicyAction = 'validate' | 'save-draft' | 'publish-json' | 'publish-draft' | 'rollback' | null;
 export type GuidedMemberSelection = 'inherit' | 'explicit';
 export type GuidedContextMode = 'disabled' | 'eligible-only' | 'smallest-sufficient';
 
@@ -482,15 +470,4 @@ export function moveGuidedPolicyMember(values: PolicyGuidedValues, members: Poli
   if (index < 0 || next < 0 || next >= memberIds.length) return values;
   [memberIds[index], memberIds[next]] = [memberIds[next], memberIds[index]];
   return { ...values, memberSelection: 'explicit', memberIds };
-}
-
-export function configuredWeightShares(values: PolicyGuidedValues, members: PolicyMemberOption[]): Record<string, number> | null {
-  const ids = orderedGuidedMemberIds(values, members);
-  const weights = ids.map((id) => {
-    const text = values.memberWeights[id];
-    return text ? parseIntegerString(text, 1) : members.find((member) => member.deployment_id === id)?.weight ?? null;
-  });
-  if (!ids.length || weights.some((weight) => weight == null || weight < 1)) return null;
-  const total = weights.reduce<number>((sum, weight) => sum + (weight ?? 0), 0);
-  return Object.fromEntries(ids.map((id, index) => [id, (weights[index] ?? 0) / total * 100]));
 }

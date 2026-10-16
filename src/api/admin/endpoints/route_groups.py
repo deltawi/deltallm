@@ -240,8 +240,21 @@ def _raise_route_policy_conflict(exc: RoutePolicyStateConflictError) -> None:
     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-def _policy_response_payload(policy: Any) -> dict[str, Any]:
-    return to_json_value(asdict(policy))
+def _policy_response_payload(
+    policy: Any, principal: AssetPrincipal | None = None
+) -> dict[str, Any]:
+    payload = to_json_value(asdict(policy))
+    payload["published_by_email"] = visible_creator_email(
+        email=payload.get("published_by_email"),
+        creator_account_id=payload.get("published_by"),
+        principal=principal,
+    )
+    return payload
+
+
+def _policy_publisher(principal: AssetPrincipal) -> str:
+    """Record the publishing account; the master key has no account."""
+    return principal.account_id or "admin_api"
 
 
 def _prompt_repository(request: Request) -> PromptRegistryRepository | None:
@@ -728,12 +741,14 @@ async def _publish_route_group_policy_response(
     service = _policy_publication_service(request)
     try:
         if latest_draft:
-            result = await service.publish_latest_draft(group_key, published_by="admin_api")
+            result = await service.publish_latest_draft(
+                group_key, published_by=_policy_publisher(principal)
+            )
         else:
             result = await service.publish_document(
                 group_key,
                 payload,
-                published_by="admin_api",
+                published_by=_policy_publisher(principal),
             )
     except RoutePolicyPublicationNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -751,7 +766,7 @@ async def _publish_route_group_policy_response(
         )
     response = {
         "group_key": group_key,
-        "policy": _policy_response_payload(result.policy),
+        "policy": _policy_response_payload(result.policy, principal),
         "warnings": [*result.warnings, *access_warnings],
     }
     await emit_admin_mutation_audit(
@@ -862,7 +877,9 @@ async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
         ),
         "members": await _serialize_group_members(request, members),
         "policy": (
-            _policy_response_payload(published_policy) if published_policy is not None else None
+            _policy_response_payload(published_policy, principal)
+            if published_policy is not None
+            else None
         ),
         "bindings": [_binding_response_payload(binding) for binding in bindings],
     }
@@ -1449,11 +1466,11 @@ async def get_route_group_policy(request: Request, group_key: str) -> dict[str, 
     group = await repository.get_group(group_key)
     if group is None:
         raise _route_group_not_found()
-    await authorize_route_group_for_request(request, group)
+    principal, _ = await authorize_route_group_for_request(request, group)
     policy = await repository.get_published_policy(group_key)
     if policy is None:
         return {"group_key": group_key, "policy": None}
-    return {"group_key": group_key, "policy": _policy_response_payload(policy)}
+    return {"group_key": group_key, "policy": _policy_response_payload(policy, principal)}
 
 
 @router.get(
@@ -1466,12 +1483,12 @@ async def list_route_group_policies(request: Request, group_key: str) -> dict[st
     group = await repository.get_group(group_key)
     if group is None:
         raise _route_group_not_found()
-    await authorize_route_group_for_request(request, group)
+    principal, _ = await authorize_route_group_for_request(request, group)
 
     policies = await repository.list_policies(group_key)
     return {
         "group_key": group_key,
-        "policies": [_policy_response_payload(policy) for policy in policies],
+        "policies": [_policy_response_payload(policy, principal) for policy in policies],
     }
 
 
@@ -1531,7 +1548,7 @@ async def save_route_group_policy_draft(
 
     response = {
         "group_key": group_key,
-        "policy": _policy_response_payload(result.policy),
+        "policy": _policy_response_payload(result.policy, principal),
         "warnings": list(result.warnings),
     }
     await emit_admin_mutation_audit(
@@ -1593,7 +1610,7 @@ async def rollback_route_group_policy(
 
     try:
         policy = await repository.rollback_policy(
-            group_key, target_version=version, published_by="admin_api"
+            group_key, target_version=version, published_by=_policy_publisher(principal)
         )
     except RoutePolicyStateConflictError as exc:
         _raise_route_policy_conflict(exc)
@@ -1614,7 +1631,7 @@ async def rollback_route_group_policy(
     refresh_warnings = await _refresh_route_group_runtime(request)
     response = {
         "group_key": group_key,
-        "policy": _policy_response_payload(policy),
+        "policy": _policy_response_payload(policy, principal),
         "rolled_back_from_version": version,
     }
     warnings = (*access_warnings, *refresh_warnings)

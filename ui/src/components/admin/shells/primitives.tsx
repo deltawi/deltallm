@@ -49,7 +49,7 @@ type TextTabsProps<T extends string> = {
 type IconTabsProps<T extends string> = {
   id?: string;
   label?: string;
-  items: Array<{
+  items: ReadonlyArray<{
     id: T;
     label: ReactNode;
     icon?: LucideIcon;
@@ -58,7 +58,8 @@ type IconTabsProps<T extends string> = {
   active: T;
   onChange: (id: T) => void;
   // header: page tabs that sit on the bottom edge of the page header band.
-  variant?: 'line' | 'card' | 'header';
+  // segment: small pill buttons that switch a view inside a card or drawer.
+  variant?: 'line' | 'card' | 'header' | 'segment';
 };
 
 const toneClasses: Record<DetailStatTone, { bg: string; icon: string }> = {
@@ -232,7 +233,9 @@ export function IconTabs<T extends string>({
 }: IconTabsProps<T>) {
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   return (
-    <div role="tablist" aria-label={label} className={`flex overflow-x-auto ${variant === 'card' ? 'border-b border-gray-100' : variant === 'header' ? 'gap-1' : 'mb-4 gap-1 border-b border-gray-200'}`}>
+    <div role="tablist" aria-label={label} className={variant === 'segment'
+      ? 'inline-flex max-w-full overflow-x-auto rounded-lg border border-gray-200 bg-white p-0.5'
+      : `flex overflow-x-auto ${variant === 'card' ? 'border-b border-gray-100' : variant === 'header' ? 'gap-1' : 'mb-4 gap-1 border-b border-gray-200'}`}>
       {items.map((item, index) => {
         const Icon = item.icon;
         const selected = active === item.id;
@@ -260,11 +263,13 @@ export function IconTabs<T extends string>({
             }}
             className={variant === 'card'
               ? `flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-5 py-4 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary ${selected ? 'border-brand-primary bg-blue-50/40 text-brand-primary-ink' : 'border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-800'}`
-              : tabClass(selected)}
+              : variant === 'segment'
+                ? `flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${selected ? 'bg-brand-primary-soft text-brand-primary-ink' : 'text-gray-600 hover:text-gray-900'}`
+                : tabClass(selected)}
           >
             {Icon ? <Icon className="h-4 w-4" aria-hidden="true" /> : null}
             {item.label}
-            {item.count !== undefined && <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${variant === 'card' && selected ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{item.count}</span>}
+            {item.count !== undefined && <span className={`rounded font-semibold ${variant === 'segment' ? 'px-1 text-[10px]' : 'px-1.5 py-0.5 text-xs'} ${variant === 'card' && selected ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{item.count}</span>}
           </button>
         );
       })}

@@ -14,10 +14,11 @@ import { routeGroupStrategyLabel } from '../lib/routeGroups';
 import { useAssetListSort } from '../lib/useAssetListSort';
 import IndexShell from '../components/admin/shells/IndexShell';
 import { managedAssetAccessInput, routeGroups } from '../lib/api';
-import type { ManagedAssetGrantInput, RouteGroup } from '../lib/api';
+import type { ManagedAssetGrantInput, ModelDeploymentDetail, RouteGroup } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
 import { groupKeySuffixFromName, routeGroupMutationOutcome } from '../lib/routeGroups';
+import { createdGroupToast, setUpGroupModels } from '../lib/routeGroupCreate';
 import { useApi } from '../lib/hooks';
 import { routeGroupDetailPath } from '../lib/routeGroupRoutes';
 import { useRouteGroupMutationScope } from '../lib/useRouteGroupMutationScope';
@@ -53,6 +54,7 @@ export default function RouteGroups() {
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [form, setForm] = useState({ group_key: '', name: '', mode: 'chat' });
   const [grants, setGrants] = useState<ManagedAssetGrantInput[]>([]);
+  const [pickedModels, setPickedModels] = useState<ModelDeploymentDetail[]>([]);
 
   const pageSize = 20;
   const listSort = useAssetListSort(['name', 'routing', 'members', 'health', 'created_by', 'updated_at', 'visibility'] as const, () => setPageOffset(0));
@@ -72,6 +74,7 @@ export default function RouteGroups() {
   const resetForm = () => {
     setForm({ group_key: '', name: '', mode: 'chat' });
     setGrants([]);
+    setPickedModels([]);
   };
 
   const handleCreate = async () => {
@@ -103,13 +106,20 @@ export default function RouteGroups() {
         access: managedAssetAccessInput(grants),
       }, operation.signal);
       if (!mutations.isCurrent(operation)) return;
+      // The group exists now: a failure below is reported, and the detail page opens to finish the setup.
+      const setup = pickedModels.length > 0
+        ? await setUpGroupModels(created.route_group_id, pickedModels.map((model) => model.deployment_id), operation.signal)
+        : null;
+      if (!mutations.isCurrent(operation)) {
+        // The user left the page during setup. The group exists, so say what state it is in.
+        pushToast(setup?.failed
+          ? { tone: 'error', title: 'Model group created', message: `"${created.group_key}" was created, but its setup stopped when you left the page. Check its models and routing.` }
+          : createdGroupToast(created.group_key, created.warnings, setup));
+        return;
+      }
       setCreateOpen(false);
       resetForm();
-      const outcome = routeGroupMutationOutcome(
-        `"${created.group_key}" is ready for configuration.`,
-        created.warnings,
-      );
-      pushToast({ tone: outcome.tone, title: 'Model group created', message: outcome.message });
+      pushToast(createdGroupToast(created.group_key, created.warnings, setup));
       navigate(routeGroupDetailPath(created.route_group_id));
     } catch (error: unknown) {
       if (!mutations.isCurrent(operation)) return;
@@ -189,9 +199,11 @@ export default function RouteGroups() {
         allowPublic={isPlatformAdmin}
         useGeneratedPrefix={!isPlatformAdmin}
         onGrantsChange={(nextGrants) => { setGrants(nextGrants); if (formError) setFormError(null); }}
+        models={pickedModels}
+        onModelsChange={setPickedModels}
       />
       <AssetList columns={columns} data={groups} rowKey={(row) => row.route_group_id} loading={loading} error={error} onRetry={refetch} emptyMessage={search ? `No model groups matching "${search}"` : 'No model groups yet'} search={searchInput} searchLabel="Search model groups" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(routeGroupDetailPath(row.route_group_id))} rowActions={rowActions} />
-      <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Group setup</summary><p className="mt-2">Create the group shell, add members, then use default shuffle. Add a policy when you need more control.</p></details>
+      <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Group setup</summary><p className="mt-2">Create the group and pick its models. Requests are spread evenly by default. Change the routing on the group's Routing tab.</p></details>
 
       {/* Delete confirmation */}
       <ConfirmDialog

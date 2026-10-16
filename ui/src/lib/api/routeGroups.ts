@@ -100,6 +100,8 @@ export interface RoutePolicy {
   policy_json: StoredRoutePolicyDocument;
   published_at: string | null;
   published_by: string | null;
+  /** Shown only to platform admins and to the account that published the version. */
+  published_by_email?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -133,6 +135,12 @@ export interface RoutePolicyMutationResponse extends MutationWarnings {
 
 export interface RollbackRoutePolicyResponse extends RoutePolicyMutationResponse {
   rolled_back_from_version: number;
+}
+
+export interface RoutePolicyDraftDiscardResponse {
+  group_key: string;
+  discarded: boolean;
+  discarded_version: number;
 }
 
 export interface RoutePolicyCurrentResponse {
@@ -354,6 +362,11 @@ export const routeGroups = {
     apiFetch<RoutePolicyMutationResponse>(
       `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/draft`,
       { method: 'POST', json: payload, signal },
+    ),
+  discardPolicyDraft: (routeGroupId: string, signal?: AbortSignal) =>
+    apiFetch<RoutePolicyDraftDiscardResponse>(
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/draft`,
+      { method: 'DELETE', signal },
     ),
   publishPolicy: (
     routeGroupId: string,

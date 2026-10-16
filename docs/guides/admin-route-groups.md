@@ -12,18 +12,26 @@ You need platform administrator access and at least one healthy deployment of th
 1. Open **Gateway**, then **Route groups**.
 2. Select **Create Group**.
 3. Enter the public group key that applications will call.
-4. Add the deployments that may receive traffic.
-5. Start with the default routing behavior unless you need a weighted or primary-and-backup policy.
-6. Test the result in the simulator.
-7. Publish the policy and mark the group live.
+4. In **Models**, select the deployments that may receive traffic.
+5. Select **Create group**. DeltaLLM publishes the default routing: traffic is spread evenly,
+   and a call that times out or is rate limited is retried on another model.
+6. On the group page, select **Use this group**. Send a sample request, or open the group in the Playground.
+
+To change how traffic is shared, open the **Routing** tab.
+Select **Spread evenly**, **Primary & backup**, or **Custom split**, then select **Save changes**.
 
 A live route group takes control of its group key. Do not reuse an existing public model name unless
 you intend the route group to replace it.
 
 ## Change a live group
 
-Test policy changes in the simulator before publishing them. After publication, send a test request
-through the group key and confirm the selected deployment and any expected fallback behavior.
+For a small change, use simple routing on the **Routing** tab. After a save, select **Undo** if the result is not correct.
+
+For a larger change, open **Advanced routing**. Save a draft, run a dry run, then select **Review & publish**.
+The review lists each change in plain words. **History** shows who published each version,
+and **Restore as draft** copies an old version into the draft.
+
+After publication, send a test request through the group key. Confirm the selected deployment and any expected fallback behavior.
 
 Make sure the organization, team, and application key can use the group key. Access to a member
 deployment does not automatically grant access to the route group.
