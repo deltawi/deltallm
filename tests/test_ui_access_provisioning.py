@@ -68,8 +68,9 @@ class StubIdentityService:
     async def get_account_by_id(self, account_id: str):
         return self.accounts.get(account_id)
 
-    async def create_account(self, *, email: str, role: str, is_active: bool, password: str):
-        self.validate_password_policy(password)
+    async def create_account(self, *, email: str, role: str, is_active: bool, password: str | None):
+        if password is not None:
+            self.validate_password_policy(password)
         normalized = self.normalize_email(email)
         if any(item["email"] == normalized for item in self.accounts.values()):
             raise ValueError("account already exists")
@@ -296,3 +297,34 @@ async def test_principals_summary_returns_global_totals(client, test_app):
 
     assert response.status_code == 200
     assert response.json() == fake_db.principal_summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("password_login", "status_code"), [(True, 400), (False, 200)])
+async def test_provision_person_create_account_password_follows_password_login(
+    client, test_app, password_login: bool, status_code: int
+):
+    from src.config import AppConfig
+
+    fake_db = FakeDB()
+    identity_service = StubIdentityService(fake_db)
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.platform_identity_service = identity_service
+    test_app.state.invitation_service = StubInvitationService()
+    test_app.state.app_config = AppConfig.model_validate(
+        {"general_settings": {"enable_sso": True, "password_login_enabled": password_login}}
+    )
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/rbac/provision",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"email": "sso-person@example.com", "mode": "create_account", "platform_role": "org_user"},
+    )
+
+    assert response.status_code == status_code
+    if password_login:
+        assert "password is required" in response.json()["detail"]
+        assert identity_service.accounts == {}
+    else:
+        assert response.json()["mode"] == "create_account"

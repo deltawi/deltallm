@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { auth as authApi, type AuthSsoConfig } from '../lib/api';
 import { hasSandboxSelfRegistration } from '../lib/selfRegistration';
+import { showsPasswordLogin } from '../lib/ssoSignIn';
 import { returnToFromSearch } from '../lib/authRedirect';
 import { signedOutMessage } from '../lib/sessionLifetime';
 import { Mail, KeyRound, Globe } from 'lucide-react';
@@ -42,6 +43,7 @@ export default function Login() {
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [ssoProvider, setSsoProvider] = useState('oidc');
   const [sandboxSelfRegistration, setSandboxSelfRegistration] = useState(false);
+  const [passwordLogin, setPasswordLogin] = useState(true);
   const [ssoLoading, setSsoLoading] = useState(true);
 
   useEffect(() => {
@@ -50,6 +52,10 @@ export default function Login() {
         setSsoEnabled(cfg.sso_enabled);
         setSandboxSelfRegistration(hasSandboxSelfRegistration(cfg));
         if (cfg.provider) setSsoProvider(cfg.provider);
+        if (!showsPasswordLogin(cfg)) {
+          setPasswordLogin(false);
+          setTab(cfg.sso_enabled ? 'sso' : 'master_key');
+        }
       })
       .catch(() => {
         setSsoEnabled(false);
@@ -119,9 +125,10 @@ export default function Login() {
 
   const providerLabel = SSO_PROVIDER_LABELS[ssoProvider] || 'SSO';
 
-  const tabs: { key: Tab; label: string; icon: typeof Mail }[] = [
-    { key: 'credentials', label: 'Email Login', icon: Mail },
-  ];
+  const tabs: { key: Tab; label: string; icon: typeof Mail }[] = [];
+  if (passwordLogin) {
+    tabs.push({ key: 'credentials', label: 'Email Login', icon: Mail });
+  }
   if (ssoEnabled) {
     tabs.push({ key: 'sso', label: providerLabel, icon: Globe });
   }
@@ -170,7 +177,7 @@ export default function Login() {
               </div>
             )}
 
-            {tab === 'credentials' && (
+            {tab === 'credentials' && passwordLogin && (
               <form onSubmit={handleCredentialLogin}>
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>

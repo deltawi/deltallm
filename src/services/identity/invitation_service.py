@@ -6,6 +6,7 @@ import hashlib
 import json
 from typing import Any
 
+from src.auth.sign_in_settings import password_login_enabled
 from src.auth.roles import (
     OrganizationRole,
     PlatformRole,
@@ -20,6 +21,7 @@ from src.db.identity.invitations import InvitationRepository, PlatformInvitation
 from src.services.email.email_token_service import EmailTokenService
 from src.services.email.email_outbox_service import EmailOutboxService
 from src.services.organizations.organization_mutation_policy import OrganizationMutationPolicy
+from src.services.identity.login_results import AccountAuthState
 from src.services.identity.platform_identity_service import LoginResult, PlatformIdentityService
 
 
@@ -392,7 +394,7 @@ class InvitationService:
             expires_at=invitation.expires_at,
             inviter_email=await self._load_account_email(invitation.invited_by_account_id),
             metadata=invitation.metadata or {},
-            password_required=not auth_state.has_local_password and not auth_state.has_sso_identity,
+            password_required=self._password_required(auth_state),
         )
 
     async def accept_invitation(
@@ -443,7 +445,7 @@ class InvitationService:
         if auth_state is None:
             return None
 
-        password_required = not auth_state.has_local_password and not auth_state.has_sso_identity
+        password_required = self._password_required(auth_state)
         if password_required:
             if not password:
                 raise ValueError("password is required")
@@ -479,16 +481,18 @@ class InvitationService:
             raise RuntimeError("failed to load account after invitation acceptance")
 
         mfa_enabled = bool(account.get("mfa_enabled", False))
-        if mfa_enabled:
+        # Without password sign-in, the invite link activates the account; the person then
+        # signs in with SSO. The link itself does not start a session.
+        if mfa_enabled or not password_login_enabled(self._general_settings()):
             return InvitationAcceptResult(
                 account_id=invitation.account_id,
                 email=str(account.get("email") or invitation.email),
                 role=str(account.get("role") or "org_user"),
-                mfa_enabled=True,
+                mfa_enabled=mfa_enabled,
                 force_password_change=bool(account.get("force_password_change", False)),
                 session_established=False,
                 next_step="login",
-                mfa_required=True,
+                mfa_required=mfa_enabled,
                 mfa_prompt=False,
             )
 
@@ -811,6 +815,15 @@ class InvitationService:
         }
         encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _password_required(self, auth_state: AccountAuthState) -> bool:
+        """A new account sets a password at acceptance, unless password sign-in is off."""
+
+        return (
+            password_login_enabled(self._general_settings())
+            and not auth_state.has_local_password
+            and not auth_state.has_sso_identity
+        )
 
     def _general_settings(self) -> Any:
         cfg = self._config_getter()

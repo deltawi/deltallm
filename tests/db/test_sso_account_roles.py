@@ -17,7 +17,7 @@ from src.services.identity.platform_identity_service import (
     LoginSessionCreationError,
     PlatformIdentityService,
 )
-from src.auth.sso_identity import SSOIdentityOwnershipError
+from src.auth.sso_identity import SSOAccountCreationDisabledError, SSOIdentityOwnershipError
 from src.services.identity.self_registration_provisioning import SelfRegistrationProvisioningService
 from tests.services.test_self_registration_provisioning import _enabled_settings
 
@@ -442,7 +442,7 @@ async def test_default_memberships_preserve_concurrent_admin_edits(
     linked: bool,
     edit_timing: str,
 ) -> None:
-    import src.services.identity.platform_identity_service as platform_module
+    import src.services.identity.sso_account_service as account_module
 
     await create_default_targets(databases)
     service = PlatformIdentityService(databases.login, salt="test-salt")
@@ -474,22 +474,22 @@ async def test_default_memberships_preserve_concurrent_admin_edits(
         )
 
     if edit_timing == "before":
-        lock_team = platform_module.lock_sso_default_team
+        lock_team = account_module.lock_sso_default_team
 
         async def lock_then_edit(db, *, team_id: str):
             result = await lock_team(db, team_id=team_id)
             await edit_roles()
             return result
 
-        monkeypatch.setattr(platform_module, "lock_sso_default_team", lock_then_edit)
+        monkeypatch.setattr(account_module, "lock_sso_default_team", lock_then_edit)
     else:
-        seed_team = platform_module.seed_team_membership
+        seed_team = account_module.seed_team_membership
 
         async def seed_then_edit(db, **kwargs):
             await seed_team(db, **kwargs)
             await edit_roles()
 
-        monkeypatch.setattr(platform_module, "seed_team_membership", seed_then_edit)
+        monkeypatch.setattr(account_module, "seed_team_membership", seed_then_edit)
 
     result = await service.upsert_sso_account(
         identity=identity_for(databases), is_platform_admin=True, team_id=databases.team_id
@@ -510,7 +510,7 @@ async def test_failure_after_org_membership_seed_rolls_back_login(
     monkeypatch: pytest.MonkeyPatch,
     error_type: type[BaseException],
 ) -> None:
-    import src.services.identity.platform_identity_service as platform_module
+    import src.services.identity.sso_account_service as account_module
 
     await create_default_targets(databases)
 
@@ -522,7 +522,7 @@ async def test_failure_after_org_membership_seed_rolls_back_login(
         assert len(rows) == 1
         raise error_type("team write interrupted")
 
-    monkeypatch.setattr(platform_module, "seed_team_membership", fail_team)
+    monkeypatch.setattr(account_module, "seed_team_membership", fail_team)
     service = PlatformIdentityService(databases.login, salt="test-salt")
     with pytest.raises(error_type, match="team write interrupted"):
         await service.upsert_sso_account(
@@ -710,3 +710,32 @@ async def test_email_match_must_still_belong_to_account_when_binding(
         )
         == []
     )
+
+
+@pytest.mark.asyncio
+async def test_closed_sign_up_refuses_new_person_and_signs_in_sso_only_account(
+    databases: SSODatabases,
+) -> None:
+    service = PlatformIdentityService(databases.login, salt="test-salt")
+    with pytest.raises(SSOAccountCreationDisabledError):
+        await service.upsert_sso_account(
+            identity=identity_for(databases), is_platform_admin=False, allow_create=False
+        )
+    assert await service.get_account_by_email(databases.email) is None
+
+    account = await service.create_account(email=databases.email, password=None)
+    rows = await databases.login.query_raw(
+        "SELECT password_hash FROM deltallm_platformaccount WHERE account_id = $1",
+        account["account_id"],
+    )
+    assert rows == [{"password_hash": None}]
+
+    result = await service.upsert_sso_account(
+        identity=identity_for(databases), is_platform_admin=False, allow_create=False
+    )
+    assert result is not None and result.context.account_id == account["account_id"]
+    identities = await databases.login.query_raw(
+        "SELECT account_id FROM deltallm_platformidentity WHERE subject = $1",
+        databases.subject,
+    )
+    assert identities == [{"account_id": account["account_id"]}]

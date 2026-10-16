@@ -33,6 +33,13 @@ class SSOAccountEligibilityError(ValueError):
         super().__init__("Account is not eligible for external sign-in")
 
 
+class SSOAccountCreationDisabledError(ValueError):
+    """SSO found no account for this person, and sign-in rules do not allow a new one."""
+
+    def __init__(self) -> None:
+        super().__init__("No account exists for this email. Ask an administrator for access.")
+
+
 class SSOIdentityOwnershipError(ValueError):
     def __init__(self) -> None:
         super().__init__("SSO email is not verified")

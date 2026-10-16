@@ -58,3 +58,11 @@ test('account editing keeps immutable identity, omits an empty password, and doe
   assert.equal(validateAccountForm(form), null);
   assert.equal(validateAccountForm({ ...form, password: 'short' })?.field, 'password');
 });
+
+test('manual creation needs no password when password sign-in is off', () => {
+  const form = { ...initialProvisionForm({}), email: 'alex@example.com', mode: 'create_account' as const, password: '' };
+  assert.equal(validateProvisionForm(form)?.field, 'password');
+  assert.equal(validateProvisionForm(form, { passwordRequired: false }), null);
+  assert.equal(validateProvisionForm({ ...form, password: 'short' }, { passwordRequired: false })?.field, 'password');
+  assert.deepEqual(provisionPayload(form), { email: 'alex@example.com', mode: 'create_account', platform_role: 'org_user', is_active: true });
+});

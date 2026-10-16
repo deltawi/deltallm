@@ -39,6 +39,7 @@ class AccessProvisioningService:
         team_id: str | None = None,
         team_role: str | None = None,
         invited_by_account_id: str | None = None,
+        password_login_enabled: bool = True,
     ) -> dict[str, Any]:
         normalized_email = self.platform_identity_service.normalize_email(email)
         if not normalized_email:
@@ -77,6 +78,7 @@ class AccessProvisioningService:
             team_id=normalized_team_id,
             team_role=team_role,
             scope_type=scope_type,
+            password_login_enabled=password_login_enabled,
         )
 
     async def _invite_person(
@@ -135,8 +137,11 @@ class AccessProvisioningService:
         team_id: str | None,
         team_role: str | None,
         scope_type: str,
+        password_login_enabled: bool,
     ) -> dict[str, Any]:
-        if not password:
+        password = password or None
+        # Without password sign-in, a manual account is an SSO-only account.
+        if password is None and password_login_enabled:
             raise ValueError("password is required when creating an account manually")
 
         role = validate_platform_role(platform_role or PlatformRole.ORG_USER)
@@ -179,7 +184,7 @@ class AccessProvisioningService:
         *,
         identity_service: PlatformIdentityService,
         email: str,
-        password: str,
+        password: str | None,
         role: str,
         is_active: bool,
         organization_id: str | None,
@@ -188,7 +193,8 @@ class AccessProvisioningService:
         team_role: str | None,
         scope_type: str,
     ) -> dict[str, Any]:
-        identity_service.validate_password_policy(password)
+        if password is not None:
+            identity_service.validate_password_policy(password)
         existing = await identity_service.get_account_by_email(email)
         if existing is not None:
             raise ValueError("account already exists")

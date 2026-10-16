@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, FlaskConical, KeyRound, ListTree, Plus, RotateCcw, Save, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, FlaskConical, KeyRound, ListTree, Plus, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import Button from '../../Button';
 import ConfirmDialog from '../../ConfirmDialog';
-import ToggleSwitch from '../../ToggleSwitch';
 import { PanelError, Skeleton } from '../../usage/ReportBits';
 import { useToast } from '../../ToastProvider';
 import { SettingsField, SettingsSection } from '../SettingsSection';
 import AddSsoMappingDialog from './AddSsoMappingDialog';
+import ChipListInput from './ChipListInput';
 import SsoMappingTable from './SsoMappingTable';
 import SsoPreviewPanel from './SsoPreviewPanel';
+import SwitchRow from './SwitchRow';
 import { useApi } from '../../../lib/hooks';
 import { ssoGroupSync } from '../../../lib/api/ssoGroupSync';
 import type { SsoGroupMapping, SsoGroupSyncSettings, SsoGroupTarget } from '../../../lib/api/ssoGroupSync';
@@ -23,63 +24,6 @@ import {
 } from '../../../lib/ssoGroupSync';
 
 const INPUT_CLASS = 'w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary';
-
-function SwitchRow({ title, description, checked, onChange, warning = false }: {
-  title: string;
-  description: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  warning?: boolean;
-}) {
-  return (
-    <div className={`flex items-start justify-between gap-4 rounded-lg px-3 py-3 ${warning && checked ? 'border border-amber-200 bg-amber-50/60' : ''}`}>
-      <div>
-        <p className="text-sm font-medium text-gray-800">{title}</p>
-        <p className="mt-0.5 text-xs text-gray-500">{description}</p>
-      </div>
-      <ToggleSwitch checked={checked} onCheckedChange={onChange} aria-label={title} />
-    </div>
-  );
-}
-
-function AdminValuesInput({ values, onChange }: { values: string[]; onChange: (values: string[]) => void }) {
-  const [draft, setDraft] = useState('');
-  const commit = () => {
-    if (!draft.trim()) return;
-    onChange(addUniqueValues(values, draft));
-    setDraft('');
-  };
-  return (
-    <div>
-      <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 focus-within:bg-white focus-within:ring-2 focus-within:ring-brand-primary">
-        {values.map((value) => (
-          <span key={value} className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-0.5 font-mono text-xs text-gray-800 ring-1 ring-gray-200">
-            {value}
-            <button type="button" onClick={() => onChange(values.filter((item) => item !== value))} aria-label={`Remove ${value}`} className="text-gray-400 hover:text-gray-700">
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-        <input
-          id="sso-admin-values"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ',') {
-              event.preventDefault();
-              commit();
-            } else if (event.key === 'Backspace' && !draft && values.length) {
-              onChange(values.slice(0, -1));
-            }
-          }}
-          onBlur={commit}
-          placeholder={values.length ? '' : 'admin'}
-          className="min-w-[8rem] flex-1 bg-transparent px-1 py-0.5 font-mono text-xs focus:outline-none"
-        />
-      </div>
-    </div>
-  );
-}
 
 function PanelSkeleton() {
   return (
@@ -175,7 +119,7 @@ export default function SsoGroupSyncPanel() {
               <input id="sso-claim" value={draft.claim} onChange={(event) => update({ claim: event.target.value })} className={`${INPUT_CLASS} font-mono`} maxLength={128} autoComplete="off" />
             </SettingsField>
             <SettingsField label="Values that grant platform admin" htmlFor="sso-admin-values" hint="Press Enter to add a value. The config file admin email list still works.">
-              <AdminValuesInput values={draft.admin_values} onChange={(admin_values) => update({ admin_values })} />
+              <ChipListInput id="sso-admin-values" values={draft.admin_values} onChange={(admin_values) => update({ admin_values })} add={addUniqueValues} placeholder="admin" />
             </SettingsField>
           </div>
           <div className="space-y-1 border-t border-gray-100 pt-3">
@@ -190,7 +134,7 @@ export default function SsoGroupSyncPanel() {
               description="For mapped teams and organizations, and for platform admin. Removing an organization also removes the person's teams in it. Their API keys in removed teams are deleted. The last platform admin is never removed."
               checked={draft.remove_unlisted}
               onChange={(value) => (value ? setConfirmRemoval(true) : update({ remove_unlisted: false }))}
-              warning
+              highlight={draft.remove_unlisted}
             />
           </div>
         </div>

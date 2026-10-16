@@ -850,3 +850,59 @@ async def test_accept_invitation_does_not_create_session_for_mfa_enabled_account
     assert result.mfa_required is True
     assert identity_service.last_login_calls == []
     assert identity_service.org_memberships == [("acct-1", "org-1", "org_member")]
+
+
+def _sso_only_config():
+    return SimpleNamespace(
+        general_settings=SimpleNamespace(
+            instance_name="DeltaLLM", invitation_token_ttl_hours=72, password_login_enabled=False
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_accept_invitation_without_password_login_activates_without_session() -> None:
+    repository = FakeInvitationRepository()
+    token_service = FakeTokenService()
+    identity_service = FakePlatformIdentityService()
+    await identity_service.ensure_account(email="user@example.com", is_active=False)
+    invitation = await repository.create(
+        PlatformInvitationRecord(
+            invitation_id="inv-1",
+            account_id="acct-1",
+            email="user@example.com",
+            status="sent",
+            invite_scope_type="organization",
+            expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+            metadata={"organization_invites": [{"organization_id": "org-1", "role": "org_member"}]},
+        )
+    )
+    token_service.by_raw_token["raw-inv-1"] = SimpleNamespace(
+        token_id="tok-inv-1",
+        account_id="acct-1",
+        email="user@example.com",
+        invitation_id=invitation.invitation_id,
+        expires_at=invitation.expires_at,
+    )
+    service = InvitationService(
+        db_client=FakeDB(),
+        repository=repository,
+        token_service=token_service,
+        outbox_service=FakeOutboxService(),
+        platform_identity_service=identity_service,
+        config_getter=_sso_only_config,
+    )
+
+    described = await service.describe_invitation_token("raw-inv-1")
+    assert described is not None and described.password_required is False
+
+    result = await service.accept_invitation(raw_token="raw-inv-1", password=None)
+
+    assert result is not None
+    assert result.session_established is False
+    assert result.next_step == "login"
+    assert result.mfa_required is False
+    assert identity_service.password_calls == []
+    assert identity_service.active_calls == ["acct-1"]
+    assert identity_service.last_login_calls == []
+    assert identity_service.org_memberships == [("acct-1", "org-1", "org_member")]

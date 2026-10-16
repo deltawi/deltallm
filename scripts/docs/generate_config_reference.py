@@ -28,6 +28,7 @@ GROUP_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "session_",
             "platform_",
             "mfa_",
+            "password_login_",
             "self_registration",
             "external_auth",
         ),

@@ -16,6 +16,7 @@ const testSources = [
   'tests/brandingProvider.test.ts',
   'tests/settingsTheme.test.ts',
   'tests/ssoGroupSync.test.tsx',
+  'tests/ssoSignIn.test.ts',
   'tests/themeSettingsController.test.tsx',
   'tests/themeSettingsPanel.test.tsx',
   'tests/authRedirect.test.ts',

@@ -24,6 +24,7 @@ from src.api.admin.endpoints.route_groups import router as route_groups_router
 from src.api.admin.endpoints.service_accounts import router as service_accounts_router
 from src.api.admin.endpoints.spend import router as spend_router
 from src.api.admin.endpoints.sso_group_sync import router as sso_group_sync_router
+from src.api.admin.endpoints.sso_sign_in import router as sso_sign_in_router
 from src.api.admin.endpoints.workspace_logs import router as workspace_logs_router
 from src.api.admin.endpoints.teams import router as teams_router
 from src.api.admin.endpoints.telemetry_ingestion import router as telemetry_ingestion_router
@@ -59,6 +60,7 @@ __all__ = [
     "service_accounts_router",
     "spend_router",
     "sso_group_sync_router",
+    "sso_sign_in_router",
     "workspace_logs_router",
     "teams_router",
     "telemetry_ingestion_router",

@@ -8,6 +8,7 @@ from src.auth.roles import PlatformRole
 from src.auth.sso_identity import (
     AccountInactiveError,
     LoginSessionCreationError,
+    SSOAccountCreationDisabledError,
     SSOAccountEligibilityError,
     SSOAccountLinkRequiredError,
     SSOAccountMatch,
@@ -21,6 +22,12 @@ from src.db.identity.platform_accounts import (
     insert_platform_account_if_absent,
     refresh_sso_account,
 )
+from src.db.identity.platform_memberships import (
+    lock_sso_default_team,
+    seed_organization_membership,
+    seed_team_membership,
+)
+from src.services.organizations.organization_mutation_policy import OrganizationMutationPolicy
 
 
 class SSOIdentityStore(Protocol):
@@ -57,7 +64,9 @@ class SSOAccountService:
         initial_role: str = PlatformRole.ORG_USER,
         expected_account_id: str | None = None,
         policy: SSOAccountResolutionPolicy = SSOAccountResolutionPolicy.OPERATOR_SSO,
+        allow_create: bool = True,
     ) -> SSOAccountResolution:
+        """Find or create the account. With `allow_create=False`, only an existing account signs in."""
         policy = SSOAccountResolutionPolicy(policy)
         if policy is SSOAccountResolutionPolicy.EXTERNAL_CUSTOMER:
             identity.require_verified_email()
@@ -78,6 +87,7 @@ class SSOAccountService:
                 initial_role=initial_role,
                 expected_account_id=expected_account_id,
                 policy=policy,
+                allow_create=allow_create,
             )
             account, match = resolved.account, resolved.match
         self._require_active(account)
@@ -97,6 +107,20 @@ class SSOAccountService:
         )
         return SSOAccountResolution(account=account, match=match)
 
+    async def seed_default_team(
+        self, account: PlatformAccountRecord, *, team_id: str, role: str
+    ) -> None:
+        """Add the account to the configured SSO default team and its organization."""
+        organization_id = await lock_sso_default_team(self.db, team_id=team_id)
+        if organization_id:
+            await OrganizationMutationPolicy.for_database(self.db).require_active(organization_id)
+            await seed_organization_membership(
+                self.db, account_id=account.account_id, organization_id=organization_id
+            )
+        await seed_team_membership(
+            self.db, account_id=account.account_id, team_id=team_id, role=role
+        )
+
     async def _resolve_unlinked(
         self,
         identity: SSOIdentityAssertion,
@@ -104,6 +128,7 @@ class SSOAccountService:
         initial_role: str,
         expected_account_id: str | None,
         policy: SSOAccountResolutionPolicy,
+        allow_create: bool,
     ) -> SSOAccountResolution:
         if expected_account_id is not None:
             row = await self.identities.get_account_by_id(expected_account_id)
@@ -113,6 +138,11 @@ class SSOAccountService:
             self._require_active(account)
             if account.email.strip().lower() != identity.email:
                 raise ValueError("SSO email does not match account")
+        elif not allow_create:
+            row = await self.identities.get_account_by_email(identity.email)
+            if row is None:
+                raise SSOAccountCreationDisabledError()
+            account = PlatformAccountRecord.from_row(row)
         else:
             created = await insert_platform_account_if_absent(
                 self.db, email=identity.email, role=initial_role, is_active=True

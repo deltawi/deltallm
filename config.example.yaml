@@ -450,6 +450,14 @@ general_settings:
   # DeltaLLM TOTP code after SSO, "trust_idp" trusts the identity provider's MFA.
   # sso_local_mfa: optional
   #
+  # Optional sign-in restrictions. Off by default. Platform admins can also edit
+  # them in Settings > Single sign-on. The master key always works.
+  # password_login_enabled: false   # SSO-only sign-in; requires enable_sso: true
+  # sso_sign_in:
+  #   allow_new_accounts: false     # only existing accounts, listed admins, mapped groups
+  #   allowed_email_domains:        # every SSO sign-in needs a verified email here
+  #     - example.com
+  #
   # Optional SSO group sync: map values of a token claim to platform admin,
   # organization roles, and team roles at each SSO sign-in. Off by default.
   # Platform admins can also edit it in Settings > Single sign-on.
