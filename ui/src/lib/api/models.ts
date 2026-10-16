@@ -205,7 +205,7 @@ export interface ModelListResponse {
   };
 }
 
-export type ModelListSortKey = 'name' | 'mode' | 'provider' | 'health' | 'created_by' | 'updated_at' | 'visibility';
+export type ModelListSortKey = 'name' | 'mode' | 'provider' | 'cost' | 'health' | 'created_by' | 'updated_at' | 'visibility';
 
 export const models = {
   identity: (signal?: AbortSignal) =>

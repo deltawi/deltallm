@@ -39,11 +39,45 @@ If an old record has no update time, the cell shows **Not recorded**.
 so the name column only shows the name and key. Open a row for the full detail page.
 On small screens, each row becomes a card with the same fields and the actions in its header.
 
-You can sort by name, type, provider, health, creator ID, update time, or visibility.
+You can sort by name, type, provider, cost, health, creator ID, update time, or visibility.
 The **Deployment ID** column has a copy control. The provider column uses the existing provider icons.
 The type column uses the existing type pills.
 Credential settings remain on the model detail and edit pages.
 If health data is unavailable, the list shows **Unknown**.
+
+### Cost column
+
+The **Cost** column shows the price that the provider charges the gateway for each deployment.
+It uses the prices that you set in the model pricing fields. It does not show tier prices for customers.
+Customer prices come from [Tiers](tiers.md).
+
+Each cell has two lines:
+
+- The first line shows the main price. For a model with input and output prices, it shows both, for example `$2.50 / $10.00`.
+- The second line shows the unit. For chat models, it also shows the cached input price, for example `per 1M tokens · cached $1.25`.
+  If the second line is too long, the list cuts it short.
+
+Hold the pointer on a cell, or move the keyboard focus to it, to see all the prices of the deployment.
+This includes cached, batch, and audio prices.
+
+The list converts the stored per-unit prices to these units:
+
+| Model type | Stored price | Shown as |
+| --- | --- | --- |
+| Chat, embedding, rerank | `input_cost_per_token`, `output_cost_per_token` | per 1M tokens |
+| Realtime | text and audio token prices | per 1M text tokens, with the audio prices on the second line |
+| Text-to-speech | `input_cost_per_character`, then audio token, then second prices | per 1M characters |
+| Speech-to-text | `input_cost_per_second` | per minute of audio |
+| Image generation | `input_cost_per_image` | per image |
+
+**Not set** shows when a deployment has no standard price. DeltaLLM records requests to this model at $0.
+**Free** shows when you set the standard price to 0.
+
+When you sort by **Cost**, token-priced models come first, in price order.
+Models with other units come next, in groups by type and unit, so that the list does not compare a price per image with a price per token.
+Models without a standard price are always last.
+
+![Cost details on the Models list](images/models-cost-details.png)
 
 ## Quick Success Workflow
 

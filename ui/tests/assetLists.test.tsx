@@ -284,8 +284,9 @@ test('all three pages share metadata, reset the server page on sort, and retain 
         await act(async () => fixture.root.render(<MemoryRouter initialEntries={[scenario.path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><AuthProvider><BrandingContext.Provider value={{ branding: DEFAULT_BRANDING, assetRevision: 0, setBranding() {}, async refreshBranding() { return DEFAULT_BRANDING; } }}><ToastProvider><Location /><scenario.Page /></ToastProvider></BrandingContext.Provider></AuthProvider></MemoryRouter>));
         const listRequests = () => requests.filter((request) => request.url.pathname === scenario.api);
         assert.equal(listRequests().at(-1)?.url.searchParams.get('sort_by'), 'updated_at');
-        assert.equal(document.querySelectorAll('th').item(7).textContent, 'Visibility');
-        assert.equal(document.querySelectorAll('th').item(8).textContent, 'Actions');
+        const headers = [...document.querySelectorAll('th')];
+        assert.equal(headers.at(-2)?.textContent, 'Visibility');
+        assert.equal(headers.at(-1)?.textContent, 'Actions');
         assert.ok(document.querySelector('tbody tr td:last-child [aria-label="Delete Support"]'));
         assert.ok(document.querySelector(`button[aria-label="Copy user id ${USER_ID}"]`));
         if (scenario.Page === Models) {
@@ -293,6 +294,9 @@ test('all three pages share metadata, reset the server page on sort, and retain 
           assert.ok(!document.body.textContent?.includes('inline'));
           assert.ok(document.body.textContent?.includes('Chat'));
           assert.ok(document.querySelector('tbody tr td:last-child [aria-label="Edit Support"]'));
+          assert.equal(headers[4].textContent, 'Cost');
+          assert.equal(headers.length, 10);
+          assert.ok(document.querySelectorAll('tbody tr td').item(4).textContent?.includes('Not set'));
         }
         if (scenario.Page === RouteGroups) {
           assert.equal(document.querySelectorAll('th').item(1).textContent, 'Type');
