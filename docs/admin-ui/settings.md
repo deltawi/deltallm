@@ -35,6 +35,8 @@ The Single sign-on tab is available only to platform administrators, and only wh
 
 ![Settings > Single sign-on](images/settings-single-sign-on.png)
 
+The **Sign-in** card at the top of the tab has its own **Save sign-in settings** button. Use it to turn off email and password sign-in, to allow SSO sign-in only for people that already have an account, and to allow only some email domains. The card does not let you save a setting that locks you out. See [Restrict who can sign in](../features/authentication.md#restrict-who-can-sign-in).
+
 Other authentication and onboarding controls such as the SSO connection, invitations, and self-registration sandbox defaults are configured in `general_settings`, not from this page. See [General Settings](../configuration/general.md#self-registration-settings) and [Authentication & SSO](../features/authentication.md#self-service-sandbox-registration) for the self-registration sandbox flow.
 
 ## Good operating pattern
