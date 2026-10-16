@@ -24,6 +24,12 @@ from src.middleware.platform_auth import (
 from src.models.errors import RateLimitError
 from src.auth.roles import PlatformRole, TeamRole
 from src.auth.sso_identity import SSOIdentityAssertion, SSOIdentityOwnershipError
+from src.api.sso_group_login import (
+    finish_sso_group_sync,
+    group_access_kwargs,
+    resolve_sso_group_access,
+)
+from src.services.identity.sso_group_access import SSOGroupAccessPlan
 from src.db.identity.email_tokens import EmailTokenRepository
 from src.models.platform_auth import (
     ChangePasswordRequest,
@@ -340,6 +346,7 @@ async def _create_sso_login_for_existing_account(
     account: dict[str, Any],
     identity: SSOIdentityAssertion,
     trust_idp_mfa: bool,
+    group_access: SSOGroupAccessPlan | None = None,
 ) -> Any:
     account_id = str(account.get("account_id") or "").strip()
     if not account_id:
@@ -361,6 +368,7 @@ async def _create_sso_login_for_existing_account(
             account_id=account_id,
             identity=identity,
             trust_idp_mfa=trust_idp_mfa,
+            **group_access_kwargs(group_access),
         )
         if login is None:
             raise HTTPException(
@@ -1447,14 +1455,24 @@ async def auth_callback(
             for item in (getattr(general_settings, "sso_admin_email_list", []) or [])
             if str(item or "").strip()
         }
-        is_platform_admin = normalized_email in admins
+        group_access = resolve_sso_group_access(
+            general_settings, response_payload, listed_admin=normalized_email in admins
+        )
+        is_platform_admin = normalized_email in admins or bool(
+            group_access and group_access.grants_platform_admin
+        )
         provider = str(getattr(general_settings, "sso_provider", "sso") or "sso")
         identity = SSOIdentityAssertion.from_callback(response_payload, provider=provider)
         subject = identity.subject
         self_registration_settings = getattr(general_settings, "self_registration", None)
         trust_idp_mfa = getattr(general_settings, "sso_local_mfa", "optional") == "trust_idp"
 
-        if _is_self_registration_enabled(self_registration_settings) and not is_platform_admin:
+        # A mapped SSO group is an access grant, so it skips the self-registration sandbox.
+        if (
+            _is_self_registration_enabled(self_registration_settings)
+            and not is_platform_admin
+            and not (group_access and group_access.has_grants)
+        ):
             existing_account = await _existing_sso_account(
                 identity_service=identity_service,
                 email=normalized_email,
@@ -1476,6 +1494,7 @@ async def auth_callback(
                         account=existing_account.account,
                         identity=identity,
                         trust_idp_mfa=trust_idp_mfa,
+                        group_access=group_access,
                     )
                 except SSOIdentityOwnershipError as exc:
                     await _emit_self_registration_blocked(
@@ -1495,6 +1514,7 @@ async def auth_callback(
                     team_id=response_payload.get("team_id"),
                     default_team_role=TeamRole.VIEWER,
                     trust_idp_mfa=trust_idp_mfa,
+                    **group_access_kwargs(group_access),
                 )
             except AccountInactiveError as exc:
                 raise HTTPException(
@@ -1513,6 +1533,7 @@ async def auth_callback(
                 detail="Failed to establish session",
             )
 
+        group_sync = await finish_sso_group_sync(request, login)
         ttl = session_ttl_seconds(request)
 
         return_to = _safe_return_to(login_state.return_to)
@@ -1527,7 +1548,7 @@ async def auth_callback(
             actor_id=getattr(getattr(login, "context", None), "account_id", None),
             resource_type="session",
             request_payload={"provider": provider},
-            response_payload={"redirect": return_to},
+            response_payload={"redirect": return_to, "group_sync": group_sync},
             critical=True,
         )
         return response

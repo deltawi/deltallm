@@ -450,6 +450,20 @@ general_settings:
   # DeltaLLM TOTP code after SSO, "trust_idp" trusts the identity provider's MFA.
   # sso_local_mfa: optional
   #
+  # Optional SSO group sync: map values of a token claim to platform admin,
+  # organization roles, and team roles at each SSO sign-in. Off by default.
+  # Platform admins can also edit it in Settings > Single sign-on.
+  # sso_group_sync:
+  #   enabled: true
+  #   claim: deltallm_role
+  #   admin_values: [admin]
+  #   require_mapped_value: false
+  #   remove_unlisted: false   # true: also remove access the IdP no longer grants
+  #   mappings:
+  #     - value: team-ml
+  #       team_id: team_ml
+  #       team_role: team_developer
+  #
   # Optional self-service developer sandbox onboarding for first-time SSO users.
   # Defaults are applied only when the account is first provisioned; admins can
   # edit the seeded org, team, memberships, budgets, and limits later.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -13,6 +14,7 @@ import httpx
 from fastapi import HTTPException, status
 
 from src.models.errors import RateLimitError
+from src.auth.sso_group_claims import decode_id_token_claims
 from src.auth.sso_identity import SSOSubjectSource
 
 
@@ -108,6 +110,9 @@ class SSOAuthHandler:
             )
 
         user_info = await self._get_userinfo(access_token)
+        id_token_claims = decode_id_token_claims(
+            token_data.get("id_token"), client_id=self.config.client_id, now=int(time.time())
+        )
         raw_email = user_info.get("email")
         email = str(raw_email or "").strip().lower()
         if not email:
@@ -142,6 +147,10 @@ class SSOAuthHandler:
             "provider_subject_source": subject_source.value,
             "email_verified": email_verified,
             "token": self._generate_session_token(user),
+            # Group claims: the ID token first, then userinfo (see sso_group_claims).
+            "claim_sources": tuple(
+                source for source in (id_token_claims, user_info) if isinstance(source, dict)
+            ),
         }
 
     def _extract_provider_subject(

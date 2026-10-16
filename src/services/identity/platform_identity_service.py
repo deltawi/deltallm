@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import timedelta
 import base64
 import hashlib
@@ -31,23 +30,10 @@ from src.services.identity.sso_account_service import SSOAccountService
 from src.services.identity.platform_session_service import PlatformSessionService
 from src.services.identity.platform_password_change import PlatformPasswordChangeService
 from src.models.platform_auth import PlatformAuthContext, SessionAuthMethod
+from src.services.identity.login_results import AccountAuthState, LoginResult
+from src.services.identity.sso_group_access import SSOGroupAccessPlan
+from src.services.identity.sso_group_sync import SSOGroupSyncService
 from src.services.identity.totp import generate_totp_secret, totp_code, totp_uri, verify_totp
-
-
-@dataclass
-class LoginResult:
-    context: PlatformAuthContext
-    session_token: str
-    mfa_required: bool
-    mfa_prompt: bool
-
-
-@dataclass(frozen=True)
-class AccountAuthState:
-    account_id: str
-    email: str
-    has_local_password: bool
-    has_sso_identity: bool
 
 
 class PlatformIdentityService:
@@ -173,6 +159,7 @@ class PlatformIdentityService:
         team_id: str | None = None,
         default_team_role: str = TeamRole.VIEWER,
         trust_idp_mfa: bool = False,
+        group_access: SSOGroupAccessPlan | None = None,
     ) -> LoginResult | None:
         if self.db is None:
             return None
@@ -183,6 +170,7 @@ class PlatformIdentityService:
                 team_id=team_id,
                 default_team_role=default_team_role,
                 trust_idp_mfa=trust_idp_mfa,
+                group_access=group_access,
             )
 
     async def _upsert_sso_account(
@@ -193,6 +181,7 @@ class PlatformIdentityService:
         team_id: str | None,
         default_team_role: str,
         trust_idp_mfa: bool,
+        group_access: SSOGroupAccessPlan | None,
     ) -> LoginResult:
         resolved = await SSOAccountService(self.db, self).resolve(
             identity,
@@ -211,7 +200,9 @@ class PlatformIdentityService:
             await seed_team_membership(
                 self.db, account_id=account.account_id, team_id=team_id, role=default_team_role
             )
-        return await self.finish_sso_login(account.account_id, trust_idp_mfa=trust_idp_mfa)
+        return await self.finish_sso_login(
+            account.account_id, trust_idp_mfa=trust_idp_mfa, group_access=group_access
+        )
 
     async def create_sso_login_for_existing_account(
         self,
@@ -219,12 +210,16 @@ class PlatformIdentityService:
         account_id: str,
         identity: SSOIdentityAssertion,
         trust_idp_mfa: bool = False,
+        group_access: SSOGroupAccessPlan | None = None,
     ) -> LoginResult | None:
         if self.db is None:
             return None
         async with self.db.tx() as tx:
             return await self.with_db(tx)._create_sso_login_for_existing_account(
-                account_id=account_id, identity=identity, trust_idp_mfa=trust_idp_mfa
+                account_id=account_id,
+                identity=identity,
+                trust_idp_mfa=trust_idp_mfa,
+                group_access=group_access,
             )
 
     async def _create_sso_login_for_existing_account(
@@ -233,6 +228,7 @@ class PlatformIdentityService:
         account_id: str,
         identity: SSOIdentityAssertion,
         trust_idp_mfa: bool,
+        group_access: SSOGroupAccessPlan | None,
     ) -> LoginResult:
         normalized_account_id = account_id.strip()
         if not normalized_account_id:
@@ -240,16 +236,28 @@ class PlatformIdentityService:
         resolved = await SSOAccountService(self.db, self).resolve(
             identity, expected_account_id=normalized_account_id
         )
-        return await self.finish_sso_login(resolved.account.account_id, trust_idp_mfa=trust_idp_mfa)
+        return await self.finish_sso_login(
+            resolved.account.account_id, trust_idp_mfa=trust_idp_mfa, group_access=group_access
+        )
 
-    async def finish_sso_login(self, account_id: str, *, trust_idp_mfa: bool) -> LoginResult:
+    async def finish_sso_login(
+        self,
+        account_id: str,
+        *,
+        trust_idp_mfa: bool,
+        group_access: SSOGroupAccessPlan | None = None,
+    ) -> LoginResult:
         """Finish a validated SSO login; `trust_idp_mfa` starts the session MFA-verified."""
+        group_sync = None
+        if group_access is not None:
+            group_sync = await SSOGroupSyncService(self.db).apply(group_access, account_id)
         login = await self.create_login_result_for_account(
             account_id, auth_method="sso", mfa_verified=trust_idp_mfa
         )
         if login is None:
             raise LoginSessionCreationError("Failed to establish session")
         await self.mark_last_login(account_id)
+        login.group_sync = group_sync
         return login
 
     async def reconcile_sso_identity_for_account(

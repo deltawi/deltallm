@@ -286,6 +286,103 @@ Provisioning creates or links:
 
 The default organization, team, and runtime user values are applied once at provisioning time. Admin edits are not overwritten by config reloads.
 
+### Map SSO Groups to Roles and Teams
+
+Group sync gives DeltaLLM access from a claim in the SSO token. At each SSO sign-in, DeltaLLM reads the claim values and applies the mappings:
+
+- A value in `admin_values` makes the account a platform admin.
+- A mapping gives a team role or an organization role.
+- A team role also gives membership in the team's organization as `org_member`.
+- When several values give the same team or organization, the highest role wins.
+
+Group sync is off by default. Only platform admins can change it. Use **Settings > Single sign-on** in the Admin UI, or set it in `config.yaml`:
+
+```yaml
+general_settings:
+  sso_group_sync:
+    enabled: true
+    claim: deltallm_role
+    admin_values: [admin]
+    require_mapped_value: false
+    remove_unlisted: false
+    mappings:
+      - value: team-ml
+        team_id: team_ml
+        team_role: team_developer
+      - value: ml-leads
+        team_id: team_ml
+        team_role: team_admin
+      - value: finance
+        organization_id: org_acme
+        org_role: org_billing
+```
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Turns group sync on. |
+| `claim` | `groups` | The claim name. Use dots for nested claims, for example `realm_access.roles`. |
+| `admin_values` | `[]` | Values that make the account a platform admin. |
+| `require_mapped_value` | `false` | When `true`, SSO sign-in is denied with `403` if the token has no mapped value. |
+| `remove_unlisted` | `false` | When `true`, SSO removes access that the token no longer gives. See [Removal](#removal). |
+| `mappings` | `[]` | Up to 200 mappings. Each mapping has a `value` and one target: `team_id` with `team_role`, or `organization_id` with `org_role`. |
+
+Team roles are `team_admin`, `team_developer`, and `team_viewer`. Organization roles are `org_owner`, `org_admin`, `org_auditor`, `org_billing`, and `org_member`.
+
+#### How DeltaLLM reads the claim
+
+1. DeltaLLM reads the claim from the ID token, then from the userinfo response. The first source that has the claim is used.
+2. A JSON list gives one value for each item. A string is split on commas. Spaces stay in the value, so a group can have a name such as `DeltaLLM Admins`.
+3. If the token does not have the claim, DeltaLLM does not change access. An empty list means that the person has no values.
+
+DeltaLLM reads the ID token from the token endpoint over TLS. It checks the audience and expiry of the ID token.
+
+Group sync runs in the same database transaction as the sign-in. A person with a mapped value does not go to the self-registration sandbox, also when the mapped team or organization is skipped. Keep mappings current, or the person signs in with no team access.
+
+#### Removal
+
+When `remove_unlisted` is `false`, group sync only adds access and raises roles.
+
+When `remove_unlisted` is `true`, the identity provider controls the mapped scopes:
+
+- DeltaLLM removes team memberships in mapped teams that the token no longer gives.
+- DeltaLLM removes organization memberships in mapped organizations that the token no longer gives. Removal also removes the person's memberships in all teams of that organization, mapped or not.
+- In a mapped organization, a role higher than the mapped role goes back to the mapped role.
+- DeltaLLM removes platform admin when the token has no admin value. An email in `sso_admin_email_list` counts as an admin value.
+- DeltaLLM deletes the person's API keys in each removed team, the same as a manual team removal.
+
+Other teams and organizations that have no mapping do not change. DeltaLLM never removes the last active platform admin.
+
+If a creator-owned model still uses a named credential that is shared through a membership, DeltaLLM keeps that membership and the sign-in continues. The SSO sign-in audit event lists it as skipped with the reason `credential_in_use`.
+
+!!! warning
+    Group sync runs only at SSO sign-in. To remove access at once when a person leaves, also disable the account on the **People** page.
+
+#### Skipped targets
+
+Group sync skips a mapping when the team or organization does not exist, the organization is not active, or DeltaLLM Cloud manages the team. **Settings > Single sign-on** shows a warning on these rows. You cannot save a mapping to a team or organization that does not exist or that DeltaLLM Cloud manages.
+
+#### Test a sign-in
+
+Use **Test a sign-in** on **Settings > Single sign-on** to see what the next sign-in would change. Enter an email and paste the decoded ID token claims, or values separated by commas. The preview uses the settings on the page, saved or not. It does not change data.
+
+#### Provider examples
+
+**kanidm**: make a claim map for the OAuth2 client. Use the `array` join, or `csv`. Do not use `ssv`, because DeltaLLM does not split values on spaces.
+
+```bash
+kanidm system oauth2 update-claim-map deltallm deltallm_role ml_engineers team-ml
+kanidm system oauth2 update-claim-map deltallm deltallm_role idm_admins admin
+kanidm system oauth2 update-claim-map-join deltallm deltallm_role array
+```
+
+**Keycloak**: add a mapper of type "Group Membership" or "User Realm Role" to the client. Use `claim: groups` or `claim: realm_access.roles`.
+
+**Microsoft Entra**: add the `groups` claim to the ID token in the app registration. Entra sends group object IDs, so use the IDs as mapping values.
+
+#### Audit
+
+The SSO sign-in audit event includes a `group_sync` summary of the changes. Saving group sync settings writes an `ADMIN_SETTINGS_UPDATE` event with resource type `sso_group_sync`.
+
 ### Auto-Assign Platform Admins
 
 Add emails to `general_settings.sso_admin_email_list` to assign `platform_admin`
@@ -311,6 +408,8 @@ continue to work; DeltaLLM does not provide an authenticated account-linking UI.
 
 Manage subsequent promotions and demotions in **People**. Adding or
 removing an email from the list does not change an existing account's role.
+To give and remove platform admin from the identity provider at each sign-in,
+use `admin_values` in [group sync](#map-sso-groups-to-roles-and-teams).
 SSO login also preserves disabled status and rejects inactive accounts; complete
 invitation acceptance or reactivate the account through the admin workflow first.
 

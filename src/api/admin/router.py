@@ -24,6 +24,7 @@ from src.api.admin.endpoints import (
     route_groups_router,
     service_accounts_router,
     spend_router,
+    sso_group_sync_router,
     teams_router,
     telemetry_ingestion_router,
     tier_capacity_router,
@@ -81,6 +82,7 @@ admin_router.include_router(selector_evaluations_router)
 admin_router.include_router(route_groups_router)
 admin_router.include_router(prompt_registry_router)
 admin_router.include_router(config_router)
+admin_router.include_router(sso_group_sync_router)
 admin_router.include_router(audit_router)
 admin_router.include_router(spend_router)
 admin_router.include_router(usage_explorer_router)
