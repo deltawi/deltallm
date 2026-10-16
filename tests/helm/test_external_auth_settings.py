@@ -55,7 +55,7 @@ def enabled_values(tmp_path: Path) -> str:
         "externalAuthCapacity": {
             "maximumApiPods": 5,
             "otherReservedConnections": 210,
-            "postgresConnectionBudget": 230,
+            "postgresConnectionBudget": 235,
         },
         "config": {
             "general_settings": {
@@ -122,5 +122,5 @@ def test_separate_worker_pool_and_surge_are_included_in_the_budget(tmp_path):
         "--set",
         "externalAuthCapacity.otherReservedConnections=324",
         "--set",
-        "externalAuthCapacity.postgresConnectionBudget=344",
+        "externalAuthCapacity.postgresConnectionBudget=349",
     )

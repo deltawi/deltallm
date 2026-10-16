@@ -16,7 +16,7 @@ from src.redis_runtime import RedisLimits, startup_setting
 from src.bootstrap.capacity_contract import DeploymentCapacityContract
 from src.bootstrap.accounting_config import read_accounting_settings
 from src.accounting_settings import AccountingProtocolSettings
-from src.auth.external_config import ExternalAuthSettings
+from src.auth.external_config import EXTERNAL_AUTH_DB_POOL_SIZE, ExternalAuthSettings
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,7 @@ class DependencyAllocationSnapshot:
             ),
             accounting=accounting,
             external_auth_connections=(
-                4
+                EXTERNAL_AUTH_DB_POOL_SIZE
                 if startup_setting(
                     general, settings, "external_auth", ExternalAuthSettings()
                 ).enabled
