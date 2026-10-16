@@ -31,7 +31,7 @@ permanently removes uploaded logos and the favicon. This cannot be undone from t
 See [General Settings](../configuration/general.md#ui-branding) for supported file types, storage,
 and multi-instance behavior.
 
-The Single sign-on tab is available only to platform administrators. It has its own **Save changes** button. The identity provider connection is read only here. Group sync settings save to the database and apply to all replicas without a restart. Turning on removal asks for confirmation. See [Map SSO groups to roles and teams](../features/authentication.md#map-sso-groups-to-roles-and-teams).
+The Single sign-on tab is available only to platform administrators, and only when SSO is configured (`enable_sso: true` with a working provider configuration). When SSO is off, the tab does not show. It has its own **Save changes** button. The identity provider connection is read only here. Group sync settings save to the database and apply to all replicas without a restart. Turning on removal asks for confirmation. See [Map SSO groups to roles and teams](../features/authentication.md#map-sso-groups-to-roles-and-teams).
 
 Other authentication and onboarding controls such as the SSO connection, invitations, and self-registration sandbox defaults are configured in `general_settings`, not from this page. See [General Settings](../configuration/general.md#self-registration-settings) and [Authentication & SSO](../features/authentication.md#self-service-sandbox-registration) for the self-registration sandbox flow.
 

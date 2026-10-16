@@ -295,7 +295,7 @@ Group sync gives DeltaLLM access from a claim in the SSO token. At each SSO sign
 - A team role also gives membership in the team's organization as `org_member`.
 - When several values give the same team or organization, the highest role wins.
 
-Group sync is off by default. Only platform admins can change it. Use **Settings > Single sign-on** in the Admin UI, or set it in `config.yaml`:
+Group sync is off by default. Only platform admins can change it. The **Settings > Single sign-on** tab shows only when SSO is configured. Use that tab in the Admin UI, or set group sync in `config.yaml`:
 
 ```yaml
 general_settings:

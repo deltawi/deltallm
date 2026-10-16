@@ -9,6 +9,7 @@ import {
   buildSsoGroupSyncPayload,
   DEFAULT_SSO_GROUP_SYNC,
   describeChange,
+  isSsoTabVisible,
   parsePreviewInput,
   sameSsoGroupSync,
   targetIndex,
@@ -94,4 +95,11 @@ test('mapping table shows target names, roles and skipped targets', () => {
   assert.match(renderToStaticMarkup(
     <SsoMappingTable mappings={[]} targets={new Map()} onChange={() => undefined} onRemove={() => undefined} />,
   ), /No mappings yet/);
+});
+
+test('the Single sign-on tab shows only when SSO is configured', () => {
+  assert.equal(isSsoTabVisible({ sso_enabled: true }), true);
+  assert.equal(isSsoTabVisible({ sso_enabled: false }), false);
+  assert.equal(isSsoTabVisible(null), false);
+  assert.equal(isSsoTabVisible(undefined), false);
 });
