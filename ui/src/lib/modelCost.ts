@@ -62,7 +62,7 @@ const SECONDS: Primary = { input: 'input_cost_per_second', output: 'output_cost_
 const IMAGES: Primary = { input: 'input_cost_per_image', output: 'output_cost_per_image', unit: 'per image', inputScale: 1, outputScale: 1 };
 const REQUESTS: Primary = { input: 'cost_per_request', unit: 'per request', inputScale: 1 };
 
-/** Which price leads the cell, by model type, first one set wins. */
+/** Which price leads the cell, by model type, first one set wins. The cost sort in src/services/models/model_admin_listing.py uses the same order. */
 const PRIMARY_BY_MODE: Record<string, Primary[]> = {
   audio_speech: [CHARACTERS, AUDIO_TOKENS, SECONDS, TOKENS, REQUESTS],
   audio_transcription: [SECONDS, AUDIO_TOKENS, TOKENS, REQUESTS],
