@@ -39,11 +39,13 @@ export function changeProvisionRole(form: ProvisionForm, platformRole: string): 
   return { ...form, platformRole, scope: platformRole === 'platform_admin' ? 'none' : form.scope };
 }
 
-export function validateProvisionForm(form: ProvisionForm): PersonFormIssue | null {
+/** `passwordRequired` is false when password sign-in is off: a manual account then signs in with SSO. */
+export function validateProvisionForm(form: ProvisionForm, { passwordRequired = true }: { passwordRequired?: boolean } = {}): PersonFormIssue | null {
   if (!form.email.trim()) return { tab: 'details', field: 'email', message: 'Enter an email address.' };
   if (!/^[^\s@]+@[^\s@]+$/.test(form.email.trim())) return { tab: 'details', field: 'email', message: 'Enter a valid email address.' };
   if (form.mode === 'invite_email' && form.scope === 'none') return { tab: 'access', field: 'scope', message: 'Choose an organization or team for this invitation.' };
-  if (form.mode === 'create_account' && form.password.trim().length < 12) return { tab: 'details', field: 'password', message: 'Use a password with at least 12 characters.' };
+  const password = form.password.trim();
+  if (form.mode === 'create_account' && (passwordRequired || password) && password.length < 12) return { tab: 'details', field: 'password', message: 'Use a password with at least 12 characters.' };
   if (form.scope === 'organization' && !form.organizationId) return { tab: 'access', field: 'organizationId', message: 'Select an organization.' };
   if (form.scope === 'team' && !form.teamId) return { tab: 'access', field: 'teamId', message: 'Select a team.' };
   return null;
@@ -53,7 +55,7 @@ export function provisionPayload(form: ProvisionForm): Parameters<typeof rbac.pr
   const platformRole = form.mode === 'invite_email' ? 'org_user' : form.platformRole;
   return {
     email: form.email.trim(), mode: form.mode, platform_role: platformRole,
-    ...(form.mode === 'create_account' ? { password: form.password.trim(), is_active: form.active } : {}),
+    ...(form.mode === 'create_account' ? { ...(form.password.trim() ? { password: form.password.trim() } : {}), is_active: form.active } : {}),
     ...(platformRole !== 'platform_admin' && form.scope === 'organization' ? { organization_id: form.organizationId, organization_role: form.organizationRole } : {}),
     ...(platformRole !== 'platform_admin' && form.scope === 'team' ? { team_id: form.teamId, team_role: form.teamRole } : {}),
   };

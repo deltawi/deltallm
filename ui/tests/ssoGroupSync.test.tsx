@@ -97,9 +97,11 @@ test('mapping table shows target names, roles and skipped targets', () => {
   ), /No mappings yet/);
 });
 
-test('the Single sign-on tab shows only when SSO is configured', () => {
+test('the Single sign-on tab shows when SSO is configured or password sign-in is off', () => {
   assert.equal(isSsoTabVisible({ sso_enabled: true }), true);
   assert.equal(isSsoTabVisible({ sso_enabled: false }), false);
   assert.equal(isSsoTabVisible(null), false);
   assert.equal(isSsoTabVisible(undefined), false);
+  assert.equal(isSsoTabVisible({ sso_enabled: false, password_login_enabled: false }), true);
+  assert.equal(isSsoTabVisible({ sso_enabled: false, password_login_enabled: true }), false);
 });

@@ -10,6 +10,8 @@ export interface SelfRegistrationPublicConfig {
 
 export interface AuthSsoConfig {
   sso_enabled: boolean;
+  /** False when the operator turned off email and password sign-in. Older servers omit it. */
+  password_login_enabled?: boolean;
   provider?: string;
   self_registration?: SelfRegistrationPublicConfig;
 }
