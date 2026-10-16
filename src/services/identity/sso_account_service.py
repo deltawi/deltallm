@@ -8,6 +8,7 @@ from src.auth.roles import PlatformRole
 from src.auth.sso_identity import (
     AccountInactiveError,
     LoginSessionCreationError,
+    SSOAccountCreationDisabledError,
     SSOAccountEligibilityError,
     SSOAccountLinkRequiredError,
     SSOAccountMatch,
@@ -57,7 +58,9 @@ class SSOAccountService:
         initial_role: str = PlatformRole.ORG_USER,
         expected_account_id: str | None = None,
         policy: SSOAccountResolutionPolicy = SSOAccountResolutionPolicy.OPERATOR_SSO,
+        allow_create: bool = True,
     ) -> SSOAccountResolution:
+        """Find or create the account. With `allow_create=False`, only an existing account signs in."""
         policy = SSOAccountResolutionPolicy(policy)
         if policy is SSOAccountResolutionPolicy.EXTERNAL_CUSTOMER:
             identity.require_verified_email()
@@ -78,6 +81,7 @@ class SSOAccountService:
                 initial_role=initial_role,
                 expected_account_id=expected_account_id,
                 policy=policy,
+                allow_create=allow_create,
             )
             account, match = resolved.account, resolved.match
         self._require_active(account)
@@ -104,6 +108,7 @@ class SSOAccountService:
         initial_role: str,
         expected_account_id: str | None,
         policy: SSOAccountResolutionPolicy,
+        allow_create: bool,
     ) -> SSOAccountResolution:
         if expected_account_id is not None:
             row = await self.identities.get_account_by_id(expected_account_id)
@@ -113,6 +118,11 @@ class SSOAccountService:
             self._require_active(account)
             if account.email.strip().lower() != identity.email:
                 raise ValueError("SSO email does not match account")
+        elif not allow_create:
+            row = await self.identities.get_account_by_email(identity.email)
+            if row is None:
+                raise SSOAccountCreationDisabledError()
+            account = PlatformAccountRecord.from_row(row)
         else:
             created = await insert_platform_account_if_absent(
                 self.db, email=identity.email, role=initial_role, is_active=True

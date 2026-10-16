@@ -17,7 +17,7 @@ from src.services.identity.platform_identity_service import (
     LoginSessionCreationError,
     PlatformIdentityService,
 )
-from src.auth.sso_identity import SSOIdentityOwnershipError
+from src.auth.sso_identity import SSOAccountCreationDisabledError, SSOIdentityOwnershipError
 from src.services.identity.self_registration_provisioning import SelfRegistrationProvisioningService
 from tests.services.test_self_registration_provisioning import _enabled_settings
 
@@ -710,3 +710,32 @@ async def test_email_match_must_still_belong_to_account_when_binding(
         )
         == []
     )
+
+
+@pytest.mark.asyncio
+async def test_closed_sign_up_refuses_new_person_and_signs_in_sso_only_account(
+    databases: SSODatabases,
+) -> None:
+    service = PlatformIdentityService(databases.login, salt="test-salt")
+    with pytest.raises(SSOAccountCreationDisabledError):
+        await service.upsert_sso_account(
+            identity=identity_for(databases), is_platform_admin=False, allow_create=False
+        )
+    assert await service.get_account_by_email(databases.email) is None
+
+    account = await service.create_account(email=databases.email, password=None)
+    rows = await databases.login.query_raw(
+        "SELECT password_hash FROM deltallm_platformaccount WHERE account_id = $1",
+        account["account_id"],
+    )
+    assert rows == [{"password_hash": None}]
+
+    result = await service.upsert_sso_account(
+        identity=identity_for(databases), is_platform_admin=False, allow_create=False
+    )
+    assert result is not None and result.context.account_id == account["account_id"]
+    identities = await databases.login.query_raw(
+        "SELECT account_id FROM deltallm_platformidentity WHERE subject = $1",
+        databases.subject,
+    )
+    assert identities == [{"account_id": account["account_id"]}]

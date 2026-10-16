@@ -29,7 +29,9 @@ from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
 from src.lifecycle_settings import LifecycleSettings
 from src.deployment_capacity_settings import DeploymentCapacitySettings
 from src.auth.external_config import ExternalAuthSettings
+from src.auth.email_domains import normalize_email_domains
 from src.auth.sso_group_settings import SSOGroupSyncSettings
+from src.auth.sign_in_settings import SSOSignInSettings
 from src.ui.config import UIMountSettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
@@ -373,24 +375,7 @@ class SelfRegistrationSettings(BaseModel):
     @field_validator("allowed_domains")
     @classmethod
     def normalize_allowed_domains(cls, value: list[str]) -> list[str]:
-        normalized_domains: list[str] = []
-        seen: set[str] = set()
-        for raw_domain in value:
-            domain = str(raw_domain or "").strip().lower()
-            if not domain:
-                continue
-            if (
-                "@" in domain
-                or "/" in domain
-                or "\\" in domain
-                or domain.startswith(".")
-                or domain.endswith(".")
-            ):
-                raise ValueError("allowed_domains entries must be bare email domains")
-            if domain not in seen:
-                normalized_domains.append(domain)
-                seen.add(domain)
-        return normalized_domains
+        return normalize_email_domains(value, field="allowed_domains")
 
     @model_validator(mode="after")
     def validate_enabled_defaults(self) -> "SelfRegistrationSettings":
@@ -692,6 +677,8 @@ class GeneralSettings(
     sso_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     sso_local_mfa: Literal["optional", "trust_idp"] = "optional"
     sso_group_sync: SSOGroupSyncSettings = Field(default_factory=SSOGroupSyncSettings)
+    sso_sign_in: SSOSignInSettings = Field(default_factory=SSOSignInSettings)
+    password_login_enabled: bool = True
     self_registration: SelfRegistrationSettings = Field(default_factory=SelfRegistrationSettings)
     enable_jwt_auth: bool = False
     jwt_public_key_url: str | None = None
@@ -1068,6 +1055,16 @@ class GeneralSettings(
             cache_worker_enabled=self.cache_invalidation_worker_enabled,
             cache_ttl_seconds=self.api_key_auth_cache_ttl_seconds,
         )
+        return self
+
+    @model_validator(mode="after")
+    def validate_sign_in_methods(self) -> "GeneralSettings":
+        if not self.password_login_enabled and not self.enable_sso:
+            raise ValueError("password_login_enabled: false requires enable_sso: true")
+        if not self.sso_sign_in.allow_new_accounts and self.self_registration.enabled:
+            raise ValueError(
+                "self_registration.enabled requires sso_sign_in.allow_new_accounts: true"
+            )
         return self
 
     @model_validator(mode="after")

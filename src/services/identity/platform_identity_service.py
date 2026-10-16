@@ -160,6 +160,7 @@ class PlatformIdentityService:
         default_team_role: str = TeamRole.VIEWER,
         trust_idp_mfa: bool = False,
         group_access: SSOGroupAccessPlan | None = None,
+        allow_create: bool = True,
     ) -> LoginResult | None:
         if self.db is None:
             return None
@@ -171,6 +172,7 @@ class PlatformIdentityService:
                 default_team_role=default_team_role,
                 trust_idp_mfa=trust_idp_mfa,
                 group_access=group_access,
+                allow_create=allow_create,
             )
 
     async def _upsert_sso_account(
@@ -182,10 +184,12 @@ class PlatformIdentityService:
         default_team_role: str,
         trust_idp_mfa: bool,
         group_access: SSOGroupAccessPlan | None,
+        allow_create: bool,
     ) -> LoginResult:
         resolved = await SSOAccountService(self.db, self).resolve(
             identity,
             initial_role=PlatformRole.ADMIN if is_platform_admin else PlatformRole.ORG_USER,
+            allow_create=allow_create,
         )
         account = resolved.account
         if account.role == PlatformRole.ORG_USER and team_id:
@@ -600,12 +604,14 @@ class PlatformIdentityService:
         email: str,
         role: str = PlatformRole.ORG_USER,
         is_active: bool = True,
-        password: str,
+        password: str | None,
     ) -> dict[str, Any]:
+        """Create an account. `password=None` makes an SSO-only account with no local password."""
         normalized_email = self.normalize_email(email)
         if not normalized_email:
             raise ValueError("email is required")
-        self.validate_password_policy(password)
+        if password is not None:
+            self.validate_password_policy(password)
         if self.db is None:
             return {
                 "account_id": "",
@@ -632,6 +638,8 @@ class PlatformIdentityService:
         account = await self.get_account_by_email(normalized_email)
         if account is None:
             raise RuntimeError("failed to create account")
+        if password is None:
+            return account
         await self.set_password(
             account_id=str(account.get("account_id") or ""), new_password=password
         )

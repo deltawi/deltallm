@@ -23,6 +23,13 @@ from src.middleware.platform_auth import (
 )
 from src.models.errors import RateLimitError
 from src.auth.roles import PlatformRole, TeamRole
+from src.auth.email_domains import email_domain
+from src.auth.sign_in_settings import password_login_enabled
+from src.auth.sign_in_policy import (
+    require_password_login,
+    require_sso_email_admitted,
+    sso_may_create_account,
+)
 from src.auth.sso_identity import SSOIdentityAssertion, SSOIdentityOwnershipError
 from src.api.sso_group_login import (
     finish_sso_group_sync,
@@ -201,13 +208,6 @@ def _outbox_service_for_db(service: Any, db_client: Any) -> Any:
     return service
 
 
-def _normalized_email_domain(email: str) -> str | None:
-    local_part, separator, domain = str(email or "").strip().lower().rpartition("@")
-    if not separator or not local_part or not domain:
-        return None
-    return domain
-
-
 def _is_self_registration_enabled(settings: Any) -> bool:
     return bool(settings is not None and getattr(settings, "enabled", False))
 
@@ -229,7 +229,7 @@ def _self_registration_sso_config(general_settings: Any, *, sso_enabled: bool) -
 
 
 def _is_allowed_self_registration_domain(settings: Any, *, email: str) -> bool:
-    domain = _normalized_email_domain(email)
+    domain = email_domain(email)
     if domain is None:
         return False
     allowed_domains = {
@@ -263,7 +263,7 @@ async def _emit_self_registration_blocked(
         request_payload={
             "provider": provider,
             "email": email,
-            "email_domain": _normalized_email_domain(email),
+            "email_domain": email_domain(email),
             "reason": reason,
         },
         response_payload={"detail": detail},
@@ -312,7 +312,7 @@ async def _emit_self_registration_provisioning_failed(
         request_payload={
             "provider": provider,
             "email": email,
-            "email_domain": _normalized_email_domain(email),
+            "email_domain": email_domain(email),
         },
         error=error,
         critical=True,
@@ -511,7 +511,7 @@ async def _create_self_registered_sso_login(
         request_payload={
             "provider": provider,
             "email": email,
-            "email_domain": _normalized_email_domain(email),
+            "email_domain": email_domain(email),
         },
         response_payload={
             "account_id": result.account_id,
@@ -554,6 +554,7 @@ async def internal_login(request: Request, payload: InternalLoginRequest) -> Res
     request_start = perf_counter()
     normalized_email = payload.email.strip().lower()
     try:
+        require_password_login(request)
         await _enforce_auth_rate_limit(
             request,
             scope="auth_internal_login_ip",
@@ -1098,6 +1099,7 @@ async def forgot_password(request: Request, payload: ForgotPasswordRequest) -> d
     normalized_email = payload.email.strip().lower()
     generic_response = {"requested": True}
     try:
+        require_password_login(request)
         await _enforce_auth_rate_limit(
             request,
             scope="auth_forgot_password_ip",
@@ -1220,6 +1222,7 @@ async def forgot_password(request: Request, payload: ForgotPasswordRequest) -> d
 
 @router.get("/internal/reset-password/{token}", response_model=ResetPasswordTokenResponse)
 async def get_reset_password_token(request: Request, token: str) -> ResetPasswordTokenResponse:
+    require_password_login(request)
     await _enforce_auth_rate_limit(
         request,
         scope="auth_reset_password_validate_ip",
@@ -1248,6 +1251,7 @@ async def get_reset_password_token(request: Request, token: str) -> ResetPasswor
 async def reset_password(request: Request, payload: ResetPasswordRequest) -> dict[str, bool]:
     request_start = perf_counter()
     try:
+        require_password_login(request)
         await _enforce_auth_rate_limit(
             request,
             scope="auth_reset_password_ip",
@@ -1335,14 +1339,17 @@ async def sso_config(request: Request):
     app_config = getattr(request.app.state, "app_config", None)
     general_settings = getattr(app_config, "general_settings", None)
     handler = getattr(request.app.state, "sso_auth_handler", None)
+    password_login = password_login_enabled(general_settings)
     if handler is None:
         return {
             "sso_enabled": False,
+            "password_login_enabled": password_login,
             "self_registration": _self_registration_sso_config(general_settings, sso_enabled=False),
         }
     provider = str(getattr(general_settings, "sso_provider", "oidc"))
     return {
         "sso_enabled": True,
+        "password_login_enabled": password_login,
         "provider": provider,
         "self_registration": _self_registration_sso_config(general_settings, sso_enabled=True),
     }
@@ -1450,6 +1457,10 @@ async def auth_callback(
         if not normalized_email:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO email")
 
+        provider = str(getattr(general_settings, "sso_provider", "sso") or "sso")
+        identity = SSOIdentityAssertion.from_callback(response_payload, provider=provider)
+        subject = identity.subject
+        require_sso_email_admitted(general_settings, identity)
         admins = {
             str(item or "").strip().lower()
             for item in (getattr(general_settings, "sso_admin_email_list", []) or [])
@@ -1461,9 +1472,6 @@ async def auth_callback(
         is_platform_admin = normalized_email in admins or bool(
             group_access and group_access.grants_platform_admin
         )
-        provider = str(getattr(general_settings, "sso_provider", "sso") or "sso")
-        identity = SSOIdentityAssertion.from_callback(response_payload, provider=provider)
-        subject = identity.subject
         self_registration_settings = getattr(general_settings, "self_registration", None)
         trust_idp_mfa = getattr(general_settings, "sso_local_mfa", "optional") == "trust_idp"
 
@@ -1514,6 +1522,11 @@ async def auth_callback(
                     team_id=response_payload.get("team_id"),
                     default_team_role=TeamRole.VIEWER,
                     trust_idp_mfa=trust_idp_mfa,
+                    allow_create=sso_may_create_account(
+                        general_settings,
+                        is_platform_admin=is_platform_admin,
+                        group_access=group_access,
+                    ),
                     **group_access_kwargs(group_access),
                 )
             except AccountInactiveError as exc:

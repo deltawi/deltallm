@@ -338,6 +338,17 @@ async def test_create_account_rejects_missing_password_write() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_account_without_password_makes_sso_only_account() -> None:
+    db = FakePlatformIdentityDB()
+    service = PasswordWriteDroppingIdentityService(db_client=db, salt="salt-key")
+
+    account = await service.create_account(email="User@Example.com", password=None)
+
+    assert account["email"] == "user@example.com"
+    assert not account.get("password_hash")
+
+
+@pytest.mark.asyncio
 async def test_link_sso_identity_does_not_mutate_account_role_or_active_state() -> None:
     db = FakePlatformIdentityDB()
     db.add_account(account_id="acct-1", email="user@example.com", role="org_user", is_active=False)

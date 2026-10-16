@@ -1404,6 +1404,7 @@ async def test_sso_config_reports_disabled_when_handler_is_unavailable(client, t
     assert response.status_code == 200
     assert response.json() == {
         "sso_enabled": False,
+        "password_login_enabled": True,
         "self_registration": {
             "enabled": False,
             "mode": None,
@@ -1425,6 +1426,7 @@ async def test_sso_config_reports_self_registration_sandbox_status(client, test_
     assert response.status_code == 200
     assert response.json() == {
         "sso_enabled": True,
+        "password_login_enabled": True,
         "provider": "oidc",
         "self_registration": {
             "enabled": True,
