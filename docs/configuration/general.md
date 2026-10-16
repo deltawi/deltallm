@@ -152,6 +152,10 @@ general_settings:
   sso_default_team_id: null
   sso_state_ttl_seconds: 600
   sso_local_mfa: optional
+  password_login_enabled: true
+  sso_sign_in:
+    allow_new_accounts: true
+    allowed_email_domains: []
   sso_group_sync:
     enabled: false
     claim: groups
@@ -545,6 +549,9 @@ The admin settings API returns `409 restart_required` for a dynamic update to th
 | `sso_default_team_id` | — | Optional team assigned to ordinary SSO accounts; missing memberships are created and existing organization/team roles are preserved |
 | `sso_state_ttl_seconds` | `600` | TTL for Redis-backed SSO callback state |
 | `sso_local_mfa` | `optional` | DeltaLLM TOTP step for SSO logins of accounts with MFA enabled: `optional` asks for the code, `trust_idp` trusts the identity provider. SSO logins never show the MFA enrollment prompt. See [MFA and SSO](../features/authentication.md#mfa-and-sso) |
+| `password_login_enabled` | `true` | Email and password sign-in. Set `false` for SSO-only sign-in; requires `enable_sso: true`. See [Restrict who can sign in](../features/authentication.md#restrict-who-can-sign-in) |
+| `sso_sign_in.allow_new_accounts` | `true` | When `false`, SSO signs in only existing accounts, emails in `sso_admin_email_list`, and people with a mapped group sync value |
+| `sso_sign_in.allowed_email_domains` | `[]` | When set, every SSO sign-in needs a verified email in one of these domains (exact match) |
 | `sso_group_sync` | off | Maps values of an SSO token claim to platform admin, organization roles, and team roles at each SSO sign-in. Platform admins can edit it in **Settings > Single sign-on**. See [Map SSO groups to roles and teams](../features/authentication.md#map-sso-groups-to-roles-and-teams) |
 
 SSO callback state is stored in Redis. If SSO is enabled but Redis is unavailable, DeltaLLM keeps SSO disabled instead of exposing a broken login flow.

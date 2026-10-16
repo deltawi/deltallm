@@ -244,6 +244,74 @@ general_settings:
 !!! note
     SSO callback state is stored in Redis. If Redis is unavailable, DeltaLLM keeps SSO disabled instead of advertising a broken login flow.
 
+### Restrict Who Can Sign In
+
+By default, DeltaLLM accepts email and password sign-in, and SSO creates an account for each new person that the identity provider lets in. A new account has no team, so it cannot use models. Three settings close these paths. They are off by default and apply to all replicas without a restart.
+
+```yaml
+general_settings:
+  enable_sso: true
+  password_login_enabled: false
+  sso_sign_in:
+    allow_new_accounts: false
+    allowed_email_domains:
+      - example.com
+```
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `password_login_enabled` | `true` | When `false`, people sign in only with SSO. Requires `enable_sso: true`. |
+| `sso_sign_in.allow_new_accounts` | `true` | When `false`, SSO signs in only people that already have an account. |
+| `sso_sign_in.allowed_email_domains` | `[]` | When set, every SSO sign-in needs a verified email in one of these domains. |
+
+Platform admins can also change these settings in **Settings > Single sign-on > Sign-in**. Saving writes an `ADMIN_SETTINGS_UPDATE` audit event with resource type `sso_sign_in`.
+
+![Settings > Single sign-on > Sign-in card](../admin-ui/images/settings-sso-sign-in.png)
+
+The master key always works. Use it to sign in when the identity provider is down.
+
+#### Turn off password sign-in
+
+When `password_login_enabled` is `false`:
+
+- The login page does not show **Email Login** or **Forgot password?**.
+- `POST /auth/internal/login`, `POST /auth/internal/forgot-password`, and the reset-password endpoints return `403`.
+- Sessions that started with a password end at once. SSO sessions, master-key sessions, and trusted Console customer sessions continue.
+- Invitations do not ask for a password. Accepting an invitation activates the account. Then the person signs in with SSO. The invitation link does not start a session.
+- **People > Add person > Create manually** does not ask for a password. The person signs in with SSO with that email.
+
+To prevent a lockout, the Admin UI does not let you turn off password sign-in from a password session, or when SSO is not running. Sign in with SSO first.
+
+![Login page with password sign-in turned off](../admin-ui/images/login-sso-only.png)
+
+#### Close sign-up
+
+When `sso_sign_in.allow_new_accounts` is `false`, SSO signs in a person only when one of these is true:
+
+- The identity provider subject is already linked to an account.
+- An account with the same email exists, and the identity provider reports the email as verified. Add people on the **People** page first, or invite them.
+- The email is in `sso_admin_email_list`.
+- A [group sync](#map-sso-groups-to-roles-and-teams) mapping or admin value matches the token.
+
+All other people get `403` with "No account exists for this email". DeltaLLM does not create an account for them. The check runs in the same database transaction as the sign-in.
+
+`allow_new_accounts: false` cannot be used with `self_registration.enabled: true`, because self-registration creates new accounts.
+
+To admit only people in one identity provider group, also use group sync with `require_mapped_value: true`.
+
+#### Allow only some email domains
+
+When `sso_sign_in.allowed_email_domains` has domains, DeltaLLM checks every SSO sign-in, platform admins too:
+
+- The domain of the email must be in the list. The match is exact, so `example.com` does not include `eu.example.com`. Add each subdomain.
+- The identity provider must send `email_verified: true`. Without a verified email, the domain proves nothing.
+
+Other sign-ins get `403` before DeltaLLM reads or changes an account. This check is useful with shared identity providers, such as Google, Microsoft Entra multi-tenant apps, or GitHub, where people from other companies can also sign in.
+
+`self_registration.allowed_domains` is a different list. It selects the people that self-registration puts in the sandbox.
+
+The Admin UI does not let an SSO admin save a list that does not include their own email domain.
+
 ### Self-Service Sandbox Registration
 
 With SSO enabled, DeltaLLM can provision new users from approved email domains into a restricted developer sandbox.
