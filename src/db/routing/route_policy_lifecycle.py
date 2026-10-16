@@ -42,6 +42,8 @@ class RoutePolicyRecord:
     published_by: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Read models join the publisher account; write results leave it unset.
+    published_by_email: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +121,16 @@ def to_policy_record(row: dict[str, Any]) -> RoutePolicyRecord:
         published_by=row.get("published_by"),
         created_at=_parse_datetime(row.get("created_at")),
         updated_at=_parse_datetime(row.get("updated_at")),
+        published_by_email=row.get("published_by_email") or None,
     )
+
+
+# Policy reads join the publisher account so the API can show its email address.
+_POLICY_READ_COLUMNS = (
+    "p.route_policy_id, p.route_group_id, p.version, p.semantics_version, p.status, p.policy_json,"
+    " p.published_at, p.published_by, p.created_at, p.updated_at, pub.email AS published_by_email"
+)
+_POLICY_PUBLISHER_JOIN = "LEFT JOIN deltallm_platformaccount pub ON pub.account_id = p.published_by"
 
 
 class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
@@ -147,10 +158,10 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
             f"""
-            SELECT p.route_policy_id, p.route_group_id, p.version, p.semantics_version, p.status,
-                   p.policy_json, p.published_at, p.published_by, p.created_at, p.updated_at
+            SELECT {_POLICY_READ_COLUMNS}
             FROM deltallm_routepolicy p
             JOIN deltallm_routegroup g ON g.route_group_id = p.route_group_id
+            {_POLICY_PUBLISHER_JOIN}
             WHERE g.{lookup.column} = $1
               AND p.status = 'published'
             ORDER BY p.version DESC
@@ -479,10 +490,10 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
             f"""
-            SELECT p.route_policy_id, p.route_group_id, p.version, p.semantics_version, p.status,
-                   p.policy_json, p.published_at, p.published_by, p.created_at, p.updated_at
+            SELECT {_POLICY_READ_COLUMNS}
             FROM deltallm_routepolicy p
             JOIN deltallm_routegroup g ON g.route_group_id = p.route_group_id
+            {_POLICY_PUBLISHER_JOIN}
             WHERE g.{lookup.column} = $1
             ORDER BY p.version DESC
             """,

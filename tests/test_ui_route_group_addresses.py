@@ -162,6 +162,7 @@ async def test_legacy_keys_and_ids_do_not_alias(
         ("GET", "/policies", None),
         ("POST", "/policy/validate", {}),
         ("POST", "/policy/draft", {}),
+        ("DELETE", "/policy/draft", None),
         ("POST", "/policy/publish", {}),
         ("POST", "/policy/rollback", {"version": 1}),
         ("POST", "/policy/simulate", {}),

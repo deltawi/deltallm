@@ -79,6 +79,8 @@ class RoutePolicyResponse(BaseModel):
     published_by: str | None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Shown only to platform admins and to the account that published the version.
+    published_by_email: str | None = None
 
 
 class RoutePolicyMutationResponse(BaseModel):
@@ -89,6 +91,12 @@ class RoutePolicyMutationResponse(BaseModel):
 
 class RoutePolicyRollbackResponse(RoutePolicyMutationResponse):
     rolled_back_from_version: int
+
+
+class RoutePolicyDraftDiscardResponse(BaseModel):
+    group_key: str
+    discarded: bool
+    discarded_version: int
 
 
 class RoutePolicyContextDocument(BaseModel):

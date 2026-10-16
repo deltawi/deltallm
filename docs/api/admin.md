@@ -309,6 +309,7 @@ Access-group binding upserts use this payload:
 | `GET` | `/ui/api/route-groups/by-id/{route_group_id}/policies` | Read policy history |
 | `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/validate` | Validate a policy payload |
 | `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/draft` | Save a draft policy |
+| `DELETE` | `/ui/api/route-groups/by-id/{route_group_id}/policy/draft` | Discard the draft policy |
 | `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/publish` | Publish a policy |
 | `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/rollback` | Roll back to an earlier policy |
 | `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/simulate` | Simulate routing behavior |
@@ -318,6 +319,14 @@ Use `POST /ui/api/route-groups/by-id/{route_group_id}/policy/publish` for new in
 publishes that document; an omitted or empty body publishes the latest draft. The legacy `PUT`
 endpoint always treats its body as an explicit document and returns a `Link` header identifying the
 POST successor.
+
+Publish and rollback record the account that does the operation in `published_by`. The master key
+has no account, so its publications show `admin_api`. Policy reads also return
+`published_by_email`. Only platform admins and the publishing account see this value. For other
+callers, it is `null`.
+
+`DELETE .../policy/draft` deletes the draft and returns `discarded_version`. The published policy
+and live routing do not change. If the group has no draft, the endpoint returns `404`.
 
 `strategy` is the canonical policy routing field. Legacy `mode: "weighted"` and
 `mode: "fallback"` inputs remain accepted with deprecation warnings and normalize to `weighted` and
