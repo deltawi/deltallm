@@ -147,7 +147,13 @@ export function describeChange(change: SsoGroupPreviewChange): string {
   return `${target}: ${roleLabel(change.role_before)} to ${roleLabel(change.role_after)}`;
 }
 
-/** The Single sign-on settings tab shows only when SSO is configured on the server. */
-export function isSsoTabVisible(config: { sso_enabled?: boolean } | null | undefined): boolean {
-  return Boolean(config?.sso_enabled);
+/**
+ * The Single sign-on settings tab shows only when SSO is configured on the server.
+ * It also shows while password sign-in is off, so that an admin who signed in with the
+ * master key can turn password sign-in back on when SSO stops working.
+ */
+export function isSsoTabVisible(
+  config: { sso_enabled?: boolean; password_login_enabled?: boolean } | null | undefined,
+): boolean {
+  return Boolean(config?.sso_enabled) || config?.password_login_enabled === false;
 }

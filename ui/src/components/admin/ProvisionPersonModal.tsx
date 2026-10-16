@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Mail, ShieldCheck, UserRound, UserRoundPlus } from 'lucide-react';
 import Modal from '../Modal';
-import { rbac, type ProvisionPersonResponse } from '../../lib/api';
+import { auth, rbac, type ProvisionPersonResponse } from '../../lib/api';
+import { useApi } from '../../lib/hooks';
+import { showsPasswordLogin } from '../../lib/ssoSignIn';
 import { changeProvisionMethod, initialProvisionForm, ORGANIZATION_ROLES, personInputClass, provisionPayload, TEAM_ROLES, validateProvisionForm, type OrganizationOption, type PersonFormIssue, type PersonTab, type ProvisionForm, type TeamOption } from '../../lib/peopleForm';
 import { useToast } from '../ToastProvider';
 import Button from '../Button';
@@ -29,6 +31,8 @@ function ProvisionPersonEditor({ onClose, onSuccess, orgList, teamList, initialO
   const [saving, setSaving] = useState(false);
   const [issue, setIssue] = useState<PersonFormIssue | null>(null);
   const [error, setError] = useState('');
+  const { data: signInConfig } = useApi(() => auth.ssoConfig(), []);
+  const passwordLogin = showsPasswordLogin(signInConfig);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const close = () => { if (!pending.current) onClose(); };
   const change = (next: ProvisionForm) => { setForm(next); setIssue(null); setError(''); };
@@ -45,7 +49,7 @@ function ProvisionPersonEditor({ onClose, onSuccess, orgList, teamList, initialO
   };
   const submit = async () => {
     if (pending.current) return;
-    const nextIssue = validateProvisionForm(form);
+    const nextIssue = validateProvisionForm(form, { passwordRequired: passwordLogin });
     if (nextIssue) { reportIssue(nextIssue); return; }
     if (form.scope !== 'none') {
       const field = form.scope === 'organization' ? 'organizationId' : 'teamId';
@@ -87,15 +91,17 @@ function ProvisionPersonEditor({ onClose, onSuccess, orgList, teamList, initialO
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {(['invite_email', 'create_account'] as const).map((mode) => <label key={mode} className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 ${form.mode === mode ? 'border-brand-primary bg-brand-primary-soft' : 'border-gray-200'}`}>
                   <input type="radio" name={`${id}-method`} value={mode} checked={form.mode === mode} onChange={() => change(changeProvisionMethod(form, mode, { initialOrganizationId, initialTeamId }))} className="mt-1 shrink-0 accent-brand-primary" />
-                  <span><span className="block text-sm font-medium text-gray-900">{mode === 'invite_email' ? 'Email invitation' : 'Create manually'}</span><span className="block text-xs leading-5 text-gray-500">{mode === 'invite_email' ? 'Send a link to accept access.' : 'Set the initial password now.'}</span></span>
+                  <span><span className="block text-sm font-medium text-gray-900">{mode === 'invite_email' ? 'Email invitation' : 'Create manually'}</span><span className="block text-xs leading-5 text-gray-500">{mode === 'invite_email' ? 'Send a link to accept access.' : passwordLogin ? 'Set the initial password now.' : 'Add the account now. They sign in with SSO.'}</span></span>
                 </label>)}
               </div>
             </fieldset>
             {form.mode === 'invite_email' ? <p className="flex items-start gap-2 rounded-lg bg-gray-50 p-3 text-xs leading-5 text-gray-500"><Mail aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />The invitation includes the organization or team access selected in the Access tab.</p> : <div className="space-y-4 border-t border-gray-200 pt-5">
-              <label className="block space-y-1.5 text-sm font-medium text-gray-700">Password
-                <input type="password" value={form.password} onChange={(event) => change({ ...form, password: event.target.value })} autoComplete="new-password" placeholder="At least 12 characters" data-person-field="password" aria-invalid={issue?.field === 'password' || undefined} aria-describedby={issue?.field === 'password' ? `${id}-error` : `${id}-password-hint`} className={personInputClass} />
-              </label>
-              <p id={`${id}-password-hint`} className="text-xs leading-5 text-gray-500">Required for manual account creation.</p>
+              {passwordLogin ? <>
+                <label className="block space-y-1.5 text-sm font-medium text-gray-700">Password
+                  <input type="password" value={form.password} onChange={(event) => change({ ...form, password: event.target.value })} autoComplete="new-password" placeholder="At least 12 characters" data-person-field="password" aria-invalid={issue?.field === 'password' || undefined} aria-describedby={issue?.field === 'password' ? `${id}-error` : `${id}-password-hint`} className={personInputClass} />
+                </label>
+                <p id={`${id}-password-hint`} className="text-xs leading-5 text-gray-500">Required for manual account creation.</p>
+              </> : <p className="rounded-lg bg-gray-50 p-3 text-xs leading-5 text-gray-500">Password sign-in is off, so the account has no password. The person signs in with SSO using this email.</p>}
               <AccountStatusControl active={form.active} onChange={(active) => change({ ...form, active })} />
             </div>}
           </> : <PersonAccessFields id={id} form={form} onChange={change} organizations={orgList} teams={teamList} saving={saving} issue={issue} onSelectionStatus={setSelection} selection={selection} />}

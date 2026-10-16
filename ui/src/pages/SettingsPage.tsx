@@ -24,6 +24,7 @@ import {
 
 // Loaded only when the Single sign-on tab opens.
 const SsoGroupSyncPanel = lazy(() => import('../components/settings/sso/SsoGroupSyncPanel'));
+const SsoSignInPanel = lazy(() => import('../components/settings/sso/SsoSignInPanel'));
 
 interface FallbackEntry {
   from: string;
@@ -526,6 +527,7 @@ export default function SettingsPage() {
 
           {activeTab === 'sso' && ssoTabVisible && (
             <Suspense fallback={<div className="h-64 animate-pulse rounded-xl border border-gray-200 bg-white" aria-label="Loading" />}>
+              <SsoSignInPanel />
               <SsoGroupSyncPanel />
             </Suspense>
           )}
