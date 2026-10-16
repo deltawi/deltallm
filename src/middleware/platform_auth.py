@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, status
 
 from src.auth.external_errors import ExternalAuthUnavailable
 from src.auth.external_policy import CUSTOMER_PERMISSION_CEILING
+from src.auth.sign_in_policy import request_general_settings, session_allowed
 from src.middleware.external_auth import carries_external_session, require_unmixed_external_auth
 from src.auth.roles import (
     ORG_ROLE_PERMISSIONS,
@@ -63,7 +64,7 @@ async def attach_platform_auth_context(request: Request) -> None:
     except ExternalAuthUnavailable:
         request.state.external_session_unavailable = True
         return
-    if context is None:
+    if context is None or not session_allowed(request_general_settings(request), context):
         return
 
     request.state.platform_auth = context

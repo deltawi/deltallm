@@ -13,6 +13,8 @@ from src.auth.roles import (
     validate_platform_role,
     validate_team_role,
 )
+from src.auth.sign_in_policy import request_general_settings
+from src.auth.sign_in_settings import password_login_enabled
 from src.audit import AuditAction
 from src.api.admin.membership_key_revocation import (
     delete_all_owned_keys,
@@ -581,6 +583,7 @@ async def provision_person(request: Request, payload: dict[str, Any]) -> dict[st
             invited_by_account_id=getattr(
                 getattr(request.state, "platform_auth", None), "account_id", None
             ),
+            password_login_enabled=password_login_enabled(request_general_settings(request)),
         )
     except ValueError as exc:
         detail = str(exc)
