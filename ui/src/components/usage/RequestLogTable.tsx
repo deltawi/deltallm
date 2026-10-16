@@ -1,5 +1,5 @@
 import type { RequestLog } from '../../lib/api/usageReports';
-import { fmtCompact, fmtSpendValue } from '../../lib/format';
+import { fmtCompact, fmtDuration, fmtSpendValue } from '../../lib/format';
 import { logDurationMs, logKeyName, logProvider, logStatusCode, relativeTime, utcTimestamp } from '../../lib/requestLogs';
 import { keyTail } from '../../lib/usageFilters';
 import { TableSkeleton } from './ReportBits';
@@ -84,7 +84,7 @@ export default function RequestLogTable({ logs, loading, refreshing, selectedId,
                 </td>
                 <td className={`${CELL} text-right`}>{log.spend ? fmtSpendValue(log.spend) : '—'}</td>
                 <td className={`${CELL} ${LARGE} text-right ${duration !== null && duration > 5000 ? 'text-rose-700' : ''}`}>
-                  {duration === null ? '—' : `${(duration / 1000).toFixed(1)} s`}
+                  {fmtDuration(duration)}
                 </td>
                 <td className={`${CELL} ${WIDE}`}>
                   <span className={`rounded-full px-[7px] py-px text-[11px] ${log.cache_hit ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>

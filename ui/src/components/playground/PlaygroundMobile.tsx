@@ -35,6 +35,7 @@ import type { ChatEngine } from './useChatEngine';
 import type { TTSEngine } from './useTTSEngine';
 import type { STTEngine } from './useSTTEngine';
 import { useBranding } from '../../lib/brandingContext';
+import { fmtDuration } from '../../lib/format';
 import PlaygroundModelStatus from './PlaygroundModelStatus';
 
 interface SharedProps {
@@ -528,7 +529,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                 <div className="text-sm font-medium text-gray-900 truncate">Generated Audio</div>
                 <div className="text-[10px] text-gray-500 truncate">
                   {voice} · {format.toUpperCase()}
-                  {duration > 0 && ` · ${duration.toFixed(1)}s`}
+                  {duration > 0 && ` · ${fmtDuration(duration * 1000)}`}
                 </div>
               </div>
             </div>
@@ -573,9 +574,9 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             <div className="grid grid-cols-4 gap-2 pt-2 border-t border-gray-100">
               {[
                 { label: 'Chars', value: stats.characters.toString() },
-                { label: 'Dur', value: duration > 0 ? `${duration.toFixed(1)}s` : '—' },
+                { label: 'Dur', value: duration > 0 ? fmtDuration(duration * 1000) : '—' },
                 { label: 'Size', value: formatBytes(stats.fileSize) },
-                { label: 'Latency', value: `${(stats.latencyMs / 1000).toFixed(1)}s` },
+                { label: 'Latency', value: fmtDuration(stats.latencyMs) },
               ].map((s) => (
                 <div key={s.label} className="text-center">
                   <div className="text-[9px] text-gray-400 uppercase tracking-wider">{s.label}</div>
@@ -810,7 +811,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
               </div>
               <div className="text-[11px]">
                 <span className="text-gray-400">Latency: </span>
-                <span className="font-semibold text-gray-700">{(stats.latencyMs / 1000).toFixed(1)}s</span>
+                <span className="font-semibold text-gray-700">{fmtDuration(stats.latencyMs)}</span>
               </div>
             </div>
           )}
@@ -1151,7 +1152,7 @@ export default function PlaygroundMobile({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
                       <div className="text-[10px] text-gray-500 mb-1">Latency</div>
                       <div className="text-base font-semibold text-gray-900">
-                        {(lastStats.latencyMs / 1000).toFixed(2)}s
+                        {fmtDuration(lastStats.latencyMs)}
                       </div>
                     </div>
                   </div>

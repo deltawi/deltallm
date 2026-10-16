@@ -9,7 +9,6 @@ import {
   actorRole,
   auditQuery,
   clientName,
-  durationLabel,
   eventSummary,
   parseAuditFilters,
   parseAuditWindow,
@@ -76,13 +75,10 @@ test('actions read as plain words', () => {
   assert.equal(actionLabel('SOMETHING_NEW'), 'Something new');
 });
 
-test('status, duration and time', () => {
+test('status and time', () => {
   assert.equal(statusLabel(event({ status: 'success' })), 'OK');
   assert.equal(statusLabel(event({ status: 'error', error_code: '504' })), '504');
   assert.equal(statusLabel(event({ status: 'error', error_code: 'invalid_credentials' })), 'Failed');
-  assert.equal(durationLabel(41), '41 ms');
-  assert.equal(durationLabel(30_000), '30.0 s');
-  assert.equal(durationLabel(null), '—');
   const now = new Date('2026-10-14T12:00:00Z');
   assert.equal(utcClock('2026-10-14T10:21:44Z', now), '10:21:44');
   assert.equal(utcClock('2026-10-13T17:40:02Z', now), 'Oct 13 17:40:02');

@@ -11,7 +11,6 @@ import {
   categoryInfo,
   changedFields,
   clientName,
-  durationLabel,
   errorDetail,
   errorTitle,
   eventSummary,
@@ -28,6 +27,7 @@ import {
   type AuditFilters,
   type NowTone,
 } from '../../lib/auditEvents';
+import { fmtDuration } from '../../lib/format';
 import { errorMessage } from '../../lib/errorMessage';
 import { relativeTime } from '../../lib/requestLogs';
 import { useReport } from '../../lib/useReport';
@@ -322,7 +322,7 @@ export default function AuditEventPanel({
     event.input_tokens != null || event.output_tokens != null
       ? { label: 'Tokens', value: `${(event.input_tokens ?? 0).toLocaleString()} in · ${(event.output_tokens ?? 0).toLocaleString()} out` }
       : false,
-    event.latency_ms != null ? { label: 'Duration', value: durationLabel(event.latency_ms) } : false,
+    event.latency_ms != null ? { label: 'Duration', value: fmtDuration(event.latency_ms) } : false,
     context?.resource?.total_items ? { label: 'Requests', value: context.resource.total_items.toLocaleString() } : false,
     resourceState
       ? {
@@ -364,7 +364,7 @@ export default function AuditEventPanel({
           {failed ? (statusLabel(event) !== 'Failed' ? `${statusLabel(event)} Failed` : 'Failed') : 'Succeeded'}
         </span>
         <span className="text-xs text-gray-500" title={utcLong(event.occurred_at)}>
-          · {relativeTime(event.occurred_at)}{event.latency_ms != null ? ` · ${durationLabel(event.latency_ms)}` : ''}
+          · {relativeTime(event.occurred_at)}{event.latency_ms != null ? ` · ${fmtDuration(event.latency_ms)}` : ''}
         </span>
         {badge && <span className={`rounded-full px-2 py-px text-[11.5px] font-medium ${badge === 'Redacted' ? PILL.warn : 'bg-sky-50 text-sky-700'}`}>{badge}</span>}
       </div>

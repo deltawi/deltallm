@@ -46,6 +46,7 @@ import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import { DEFAULT_MCP_APPROVAL_STATUS, type MCPApprovalStatusFilter } from '../lib/mcpApprovals';
 import { errorMessage } from '../lib/errorMessage';
+import { fmtDuration } from '../lib/format';
 import { useToast } from '../components/ToastProvider';
 import { DetailMetricCard, EntityAvatar, IconTabs, PageShell } from '../components/admin/shells';
 import { navTrail } from '../lib/navigation';
@@ -266,7 +267,7 @@ export default function MCPServerDetail() {
         title: 'Health check completed',
         message:
           result.health.status === 'healthy'
-            ? `Server responded in ${result.health.latency_ms} ms.`
+            ? `Server responded in ${fmtDuration(result.health.latency_ms)}.`
             : result.health.error || 'The MCP server is unhealthy.',
       });
       refetch();
@@ -460,7 +461,7 @@ export default function MCPServerDetail() {
                   <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                 </span>
                 <span className="text-xs font-medium text-emerald-700">
-                  Healthy{latencyMs != null ? ` · ${latencyMs}ms` : ''}
+                  Healthy{latencyMs != null ? ` · ${fmtDuration(latencyMs)}` : ''}
                 </span>
               </div>
             ) : healthStatus === 'unhealthy' ? (
@@ -538,7 +539,7 @@ export default function MCPServerDetail() {
             <DetailMetricCard
               icon={BarChart2}
               label="Avg latency"
-              value={operations ? `${Math.round(operations.summary.avg_latency_ms)}ms` : latencyMs != null ? `${latencyMs}ms` : '—'}
+              value={operations?.summary.total_calls ? fmtDuration(operations.summary.avg_latency_ms) : fmtDuration(latencyMs)}
               tone="blue"
             />
           </>
@@ -1086,7 +1087,7 @@ export default function MCPServerDetail() {
                       { label: 'Total Calls', value: operations.summary.total_calls },
                       { label: 'Failures', value: operations.summary.failed_calls },
                       { label: 'Failure Rate', value: fmtPct(operations.summary.failure_rate) },
-                      { label: 'Avg Latency', value: `${Math.round(operations.summary.avg_latency_ms)}ms` },
+                      { label: 'Avg Latency', value: fmtDuration(operations.summary.avg_latency_ms) },
                     ].map((item) => (
                       <div key={item.label} className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
                         <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{item.label}</p>
@@ -1102,7 +1103,7 @@ export default function MCPServerDetail() {
                           { key: 'tool_name', header: 'Tool', render: (row: MCPOperationsToolRow) => <span className="font-mono text-xs">{row.tool_name}</span> },
                           { key: 'total_calls', header: 'Calls' },
                           { key: 'failed_calls', header: 'Failures' },
-                          { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: MCPOperationsToolRow) => `${Math.round(Number(row.avg_latency_ms || 0))}ms` },
+                          { key: 'avg_latency_ms', header: 'Avg Latency', render: (row: MCPOperationsToolRow) => fmtDuration(row.avg_latency_ms) },
                         ]}
                         data={operations.top_tools}
                         emptyMessage="No tool calls in the last 24h"

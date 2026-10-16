@@ -6,7 +6,6 @@ import {
   actorDisplay,
   categoryInfo,
   clientName,
-  durationLabel,
   isFailed,
   OPTIONAL_COLUMNS,
   resourceName,
@@ -19,6 +18,7 @@ import {
   type AuditColumn,
   type AuditFilters,
 } from '../../lib/auditEvents';
+import { fmtDuration } from '../../lib/format';
 import { relativeTime, utcTimestamp } from '../../lib/requestLogs';
 import { TableSkeleton } from '../usage/ReportBits';
 
@@ -254,7 +254,7 @@ export default function AuditEventTable({
                       {optionalCell(column.key, event)}
                     </td>
                   ))}
-                  <td className={`${CELL} ${WIDE} text-right ${slow ? 'text-rose-700' : 'text-gray-700'}`}>{durationLabel(event.latency_ms)}</td>
+                  <td className={`${CELL} ${WIDE} text-right ${slow ? 'text-rose-700' : 'text-gray-700'}`}>{fmtDuration(event.latency_ms)}</td>
                   <td className={CELL} />
                 </tr>
               );

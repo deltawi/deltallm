@@ -39,6 +39,7 @@ import type { ChatEngine } from './useChatEngine';
 import type { TTSEngine } from './useTTSEngine';
 import type { STTEngine } from './useSTTEngine';
 import { useBranding } from '../../lib/brandingContext';
+import { fmtDuration } from '../../lib/format';
 import PlaygroundModelStatus from './PlaygroundModelStatus';
 import { Breadcrumbs } from '../admin/shells';
 import Button from '../Button';
@@ -288,7 +289,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                   <div className="text-sm font-medium text-gray-900">Generated Audio</div>
                   <div className="text-xs text-gray-500">
                     Voice: {voice} · Format: {format.toUpperCase()}
-                    {duration > 0 && ` · Duration: ${duration.toFixed(1)}s`}
+                    {duration > 0 && ` · Duration: ${fmtDuration(duration * 1000)}`}
                   </div>
                 </div>
               </div>
@@ -335,9 +336,9 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                 <div className="flex-1 flex items-center gap-6">
                   {[
                     { label: 'Characters', value: stats.characters.toString() },
-                    { label: 'Duration', value: duration > 0 ? `${duration.toFixed(1)}s` : '—' },
+                    { label: 'Duration', value: duration > 0 ? fmtDuration(duration * 1000) : '—' },
                     { label: 'File Size', value: formatBytes(stats.fileSize) },
-                    { label: 'Latency', value: `${(stats.latencyMs / 1000).toFixed(1)}s` },
+                    { label: 'Latency', value: fmtDuration(stats.latencyMs) },
                   ].map((stat) => (
                     <div key={stat.label} className="text-center">
                       <div className="text-xs text-gray-400">{stat.label}</div>
@@ -599,7 +600,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
               <div className="flex items-center gap-6 px-4 py-3 border-t border-gray-100 bg-gray-50">
                 {[
                   { label: 'Words', value: stats.words.toString() },
-                  { label: 'Latency', value: `${(stats.latencyMs / 1000).toFixed(1)}s` },
+                  { label: 'Latency', value: fmtDuration(stats.latencyMs) },
                   ...(stats.detectedLang ? [{ label: 'Language', value: stats.detectedLang }] : []),
                 ].map((stat) => (
                   <div key={stat.label}>
@@ -1059,7 +1060,7 @@ export default function PlaygroundDesktop({
                           </div>
                           <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
                             <div className="text-[10px] text-gray-500 mb-1">Latency</div>
-                            <div className="text-lg font-semibold text-gray-900">{(lastStats.latencyMs / 1000).toFixed(2)}s</div>
+                            <div className="text-lg font-semibold text-gray-900">{fmtDuration(lastStats.latencyMs)}</div>
                           </div>
                         </div>
                       </>
