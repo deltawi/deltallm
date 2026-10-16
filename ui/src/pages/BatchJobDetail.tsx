@@ -1,21 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { Layers, RefreshCw, Search } from 'lucide-react';
 import {
   ApiError,
   batches,
-  type BatchCapabilities,
-  type BatchJobCosts,
+  type BatchItemStatus,
   type BatchJobItem,
-  type BatchJobItemDetail,
   type BatchWebhookDelivery,
 } from '../lib/api';
 import Button from '../components/Button';
-import Card from '../components/Card';
-import DataTable from '../components/DataTable';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
 import { EntityAvatar, PageShell } from '../components/admin/shells';
+import { ActionMenu, CopyButton, EndpointTag, StatusText, type ActionMenuItem } from '../components/batch-jobs/BatchBits';
+import BatchItemDrawer from '../components/batch-jobs/BatchItemDrawer';
+import BatchItemsTable from '../components/batch-jobs/BatchItemsTable';
+import { FailuresCard, FilesCard, ProgressCard, TimelineCard, WebhooksCard } from '../components/batch-jobs/BatchRail';
+import { Segmented, Skeleton } from '../components/usage/ReportBits';
+import {
+  BATCH_ITEM_FILTERS,
+  batchProgress,
+  endpointLabel,
+  fmtAgo,
+  fmtDateTime,
+  isActiveJob,
+  jobStatus,
+} from '../lib/batchJobs';
+import { errorMessage } from '../lib/errorMessage';
 import { navTrail } from '../lib/navigation';
-import { Layers, XCircle, Clock, DollarSign, Hash, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
-import clsx from 'clsx';
+import { useAutoRefresh } from '../lib/useAutoRefresh';
+import { useReport } from '../lib/useReport';
 import {
   applyBatchDetailCancellation,
   canCancelBatchDetailJob,
@@ -29,241 +43,95 @@ import {
   type BatchDetailResource,
 } from './batchDetailResource';
 
-const STATUS_COLORS: Record<string, string> = {
-  validating: 'bg-purple-100 text-purple-700',
-  queued: 'bg-blue-100 text-blue-700',
-  in_progress: 'bg-yellow-100 text-yellow-700',
-  finalizing: 'bg-yellow-100 text-yellow-700',
-  completed: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  cancelled: 'bg-gray-100 text-gray-600',
-  expired: 'bg-gray-100 text-gray-600',
-  pending: 'bg-blue-100 text-blue-700',
-  processing: 'bg-yellow-100 text-yellow-700',
-  retrying: 'bg-orange-100 text-orange-700',
-  delivered: 'bg-green-100 text-green-700',
+const ITEMS_PAGE_SIZE = 25;
+/** Reload interval while the batch is still running. */
+const LIVE_MS = 10_000;
+
+type ItemFilter = BatchItemStatus | 'all';
+
+interface ItemsQuery {
+  offset: number;
+  afterLineNumber: number | null;
+  status: ItemFilter;
+  customId: string;
+}
+
+const FIRST_PAGE: ItemsQuery = { offset: 0, afterLineNumber: null, status: 'all', customId: '' };
+
+type PendingAction =
+  | { kind: 'cancel' }
+  | { kind: 'retry_finalization' }
+  | { kind: 'requeue_stale' }
+  | { kind: 'mark_failed' }
+  | { kind: 'replay'; delivery: BatchWebhookDelivery };
+
+const ACTION_COPY: Record<Exclude<PendingAction['kind'], 'replay'>, { title: string; description: string; confirm: string; destructive: boolean }> = {
+  cancel: {
+    title: 'Cancel this batch?',
+    description: 'The batch stops after the lines that are running now. Lines that did not start are cancelled. You cannot undo this.',
+    confirm: 'Cancel batch',
+    destructive: true,
+  },
+  retry_finalization: {
+    title: 'Retry finalization?',
+    description: 'The gateway writes the output and error files again for this batch. Use this when finalization stopped.',
+    confirm: 'Retry finalization',
+    destructive: false,
+  },
+  requeue_stale: {
+    title: 'Requeue stale lines?',
+    description: 'Lines whose worker lease expired go back to the queue. Lines that are running correctly do not change.',
+    confirm: 'Requeue lines',
+    destructive: false,
+  },
+  mark_failed: {
+    title: 'Mark this batch as failed?',
+    description: 'All lines that did not finish are marked failed, and the batch stops. You cannot undo this.',
+    confirm: 'Mark failed',
+    destructive: true,
+  },
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  validating: 'Validating',
-  queued: 'Queued',
-  in_progress: 'In Progress',
-  finalizing: 'Finalizing',
-  completed: 'Completed',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-  expired: 'Expired',
-  pending: 'Pending',
-  processing: 'Processing',
-  retrying: 'Retrying',
-  delivered: 'Delivered',
-};
+function ResourceReloadNotice({ message }: { message: string | null }) {
+  if (!message) return null;
+  return <p className="rounded-lg bg-amber-50 px-4 py-2.5 text-sm text-amber-800">{message}</p>;
+}
 
-const ITEMS_PAGE_SIZE = 50;
-
-function StatusBadge({ status }: { status: string }) {
+function DetailSkeleton() {
   return (
-    <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium', STATUS_COLORS[status] || 'bg-gray-100 text-gray-600')}>
-      {STATUS_LABELS[status] || status}
-    </span>
-  );
-}
-
-function formatDateTime(d: string | null | undefined): string {
-  if (!d) return '--';
-  return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function formatDuration(start: string | null | undefined, end: string | null | undefined): string {
-  if (!start) return '--';
-  const s = new Date(start).getTime();
-  const e = end ? new Date(end).getTime() : Date.now();
-  const diff = Math.max(0, e - s);
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ${secs % 60}s`;
-  const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m`;
-}
-
-function formatCost(value: number | null | undefined, loading: boolean): string {
-  if (typeof value === 'number') return `$${value.toFixed(6)}`;
-  return loading ? 'Loading...' : '--';
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
-function itemDetailKey(batchId: string, itemId: string): string {
-  return `${batchId}:${itemId}`;
-}
-
-function ProgressRing({ total, completed, failed, inProgress, cancelled }: {
-  total: number; completed: number; failed: number; inProgress: number; cancelled: number;
-}) {
-  if (total === 0) return <div className="text-gray-400 text-sm">No items</div>;
-  const pct = Math.round(((completed + failed + cancelled) / total) * 100);
-  const radius = 52;
-  const circumference = 2 * Math.PI * radius;
-  const completedArc = (completed / total) * circumference;
-  const failedArc = (failed / total) * circumference;
-  const cancelledArc = (cancelled / total) * circumference;
-
-  return (
-    <div className="flex items-center gap-6">
-      <div className="relative w-32 h-32">
-        <svg className="w-32 h-32 transform -rotate-90" viewBox="0 0 120 120">
-          <circle cx="60" cy="60" r={radius} fill="none" stroke="#f3f4f6" strokeWidth="10" />
-          <circle cx="60" cy="60" r={radius} fill="none" stroke="#22c55e" strokeWidth="10"
-            strokeDasharray={`${completedArc} ${circumference}`} strokeLinecap="round" />
-          <circle cx="60" cy="60" r={radius} fill="none" stroke="#ef4444" strokeWidth="10"
-            strokeDasharray={`${failedArc} ${circumference}`}
-            strokeDashoffset={`${-completedArc}`} strokeLinecap="round" />
-          {cancelledArc > 0 && (
-            <circle cx="60" cy="60" r={radius} fill="none" stroke="#9ca3af" strokeWidth="10"
-              strokeDasharray={`${cancelledArc} ${circumference}`}
-              strokeDashoffset={`${-(completedArc + failedArc)}`} strokeLinecap="round" />
-          )}
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-2xl font-bold text-gray-900">{pct}%</span>
-        </div>
-      </div>
-      <div className="space-y-2 text-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-green-500" />
-          <span className="text-gray-600">Completed</span>
-          <span className="font-semibold text-gray-900 ml-auto">{completed}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-red-500" />
-          <span className="text-gray-600">Failed</span>
-          <span className="font-semibold text-gray-900 ml-auto">{failed}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-yellow-400" />
-          <span className="text-gray-600">In Progress</span>
-          <span className="font-semibold text-gray-900 ml-auto">{inProgress}</span>
-        </div>
-        {cancelled > 0 && (
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-gray-400" />
-            <span className="text-gray-600">Cancelled</span>
-            <span className="font-semibold text-gray-900 ml-auto">{cancelled}</span>
-          </div>
-        )}
-        <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
-          <div className="w-3 h-3 rounded-full bg-gray-200" />
-          <span className="text-gray-600">Total</span>
-          <span className="font-semibold text-gray-900 ml-auto">{total}</span>
-        </div>
+    <div className="grid gap-3.5" role="status" aria-label="Loading batch">
+      <Skeleton className="h-8 w-80" />
+      <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_330px]">
+        <Skeleton className="h-[420px] w-full rounded-xl" />
+        <Skeleton className="h-[420px] w-full rounded-xl" />
       </div>
     </div>
   );
 }
 
-function WebhookDeliveriesCard({
-  deliveries,
-  capabilities,
-  replayingEventId,
-  replayNotice,
-  onReplay,
-}: {
-  deliveries: BatchWebhookDelivery[];
-  capabilities: BatchCapabilities;
-  replayingEventId: string | null;
-  replayNotice: string | null;
-  onReplay: (eventId: string) => void;
-}) {
-  if (deliveries.length === 0) return null;
-
-  return (
-    <Card>
-      <div className="border-b border-gray-100 p-4">
-        <h3 className="text-sm font-semibold text-gray-900">Webhook Delivery</h3>
-        <p className="mt-0.5 text-xs text-gray-500">
-          Delivery state is shown without the destination URL, headers, payload, or signing secret.
-        </p>
-        {replayNotice && (
-          <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            {replayNotice}
-          </p>
-        )}
-      </div>
-      <div className="divide-y divide-gray-100">
-        {deliveries.map((delivery) => (
-          <div key={delivery.event_id} className="p-4">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="grid flex-1 grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                <div>
-                  <p className="text-xs text-gray-500">Event</p>
-                  <p className="font-mono text-xs text-gray-900">{delivery.event_id}</p>
-                  <p className="mt-1 text-xs text-gray-500">{delivery.event_type}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Status</p>
-                  <div className="mt-1"><StatusBadge status={delivery.status} /></div>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Attempts</p>
-                  <p className="font-medium text-gray-900">{delivery.attempt_count} / {delivery.max_attempts}</p>
-                  <p className="mt-1 text-xs text-gray-500">HTTP {delivery.last_status_class || 'none'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Last update</p>
-                  <p className="text-gray-900">{formatDateTime(delivery.updated_at)}</p>
-                  {delivery.last_error && <p className="mt-1 text-xs text-red-600">{delivery.last_error}</p>}
-                </div>
-              </div>
-              {capabilities.replay_webhook && delivery.status === 'failed' && (
-                <button
-                  onClick={() => onReplay(delivery.event_id)}
-                  disabled={replayingEventId !== null}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
-                >
-                  <RefreshCw className={clsx('h-4 w-4', replayingEventId === delivery.event_id && 'animate-spin')} />
-                  {replayingEventId === delivery.event_id ? 'Scheduling...' : 'Replay delivery'}
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function ResourceReloadNotice({ message }: { message: string | null }) {
-  if (!message) return null;
-  return (
-    <p className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800">
-      {message}
-    </p>
-  );
-}
-
 export default function BatchJobDetail() {
   const { batchId } = useParams<{ batchId: string }>();
+  const { pushToast } = useToast();
   const activeBatchIdRef = useRef(batchId);
-  const [itemsPage, setItemsPage] = useState<{ offset: number; afterLineNumber: number | null }>({ offset: 0, afterLineNumber: null });
+  const [itemsQuery, setItemsQuery] = useState<ItemsQuery>(FIRST_PAGE);
   const [itemPageCursors, setItemPageCursors] = useState<Array<number | null>>([null]);
-  const [expandedItem, setExpandedItem] = useState<string | null>(null);
-  const [itemDetails, setItemDetails] = useState<Record<string, BatchJobItemDetail>>({});
-  const [itemDetailLoading, setItemDetailLoading] = useState<Record<string, boolean>>({});
-  const [itemDetailErrors, setItemDetailErrors] = useState<Record<string, string>>({});
-  const [costs, setCosts] = useState<BatchJobCosts | null>(null);
-  const [costsLoading, setCostsLoading] = useState(false);
-  const [costsError, setCostsError] = useState<string | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  const [customIdInput, setCustomIdInput] = useState('');
+  // A copy of the open line, so the panel stays open when a reload moves the line off this page.
+  const [selectedSnapshot, setSelectedSnapshot] = useState<BatchJobItem | null>(null);
+  const selectedItemId = selectedSnapshot?.item_id ?? null;
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [failReason, setFailReason] = useState('');
+  const [actionRunning, setActionRunning] = useState(false);
   const [replayingWebhook, setReplayingWebhook] = useState<string | null>(null);
   const [webhookReplayNotice, setWebhookReplayNotice] = useState<string | null>(null);
   const [resourceReloadNotice, setResourceReloadNotice] = useState<string | null>(null);
   const [resource, setResource] = useState<BatchDetailResource | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
-  const itemsPageRef = useRef(itemsPage);
+  const [loadedAt, setLoadedAt] = useState(() => Date.now());
+  // The query of the lines on screen. The table dims only while other lines load, not on a live reload.
+  const [loadedQuery, setLoadedQuery] = useState<ItemsQuery | null>(null);
+  const itemsQueryRef = useRef(itemsQuery);
   const requestGenerationRef = useRef(0);
   const routeGenerationRef = useRef(0);
   const webhookStateGenerationRef = useRef(0);
@@ -280,17 +148,12 @@ export default function BatchJobDetail() {
     webhookStateGenerationRef.current += 1;
     setResource(null);
     setLoadError(null);
-    const initialItemsPage = { offset: 0, afterLineNumber: null };
-    itemsPageRef.current = initialItemsPage;
-    setItemsPage(initialItemsPage);
+    itemsQueryRef.current = FIRST_PAGE;
+    setItemsQuery(FIRST_PAGE);
     setItemPageCursors([null]);
-    setExpandedItem(null);
-    setItemDetails({});
-    setItemDetailLoading({});
-    setItemDetailErrors({});
-    setCosts(null);
-    setCostsLoading(false);
-    setCostsError(null);
+    setCustomIdInput('');
+    setSelectedSnapshot(null);
+    setPendingAction(null);
     setReplayingWebhook(null);
     setWebhookReplayNotice(null);
     setResourceReloadNotice(null);
@@ -302,20 +165,24 @@ export default function BatchJobDetail() {
     if (!batchId) return null;
     const requestGeneration = ++requestGenerationRef.current;
     const requestedWebhookGeneration = webhookStateGenerationRef.current;
-    const requestedItemsPage = itemsPageRef.current;
+    const query = itemsQueryRef.current;
     setLoading(true);
     setLoadError(null);
     try {
       const next = await loadBatchDetailResource(batches, batchId, {
         items_limit: ITEMS_PAGE_SIZE,
-        items_offset: requestedItemsPage.offset,
-        after_line_number: requestedItemsPage.afterLineNumber,
+        items_offset: query.offset,
+        after_line_number: query.afterLineNumber,
+        item_status: query.status === 'all' ? undefined : query.status,
+        custom_id: query.customId || undefined,
       });
       if (
         activeBatchIdRef.current === batchId
         && requestGenerationRef.current === requestGeneration
       ) {
         setResourceReloadNotice(null);
+        setLoadedAt(Date.now());
+        setLoadedQuery(query);
         setResource((current) => reconcileBatchDetailReload(
           current,
           next,
@@ -335,9 +202,7 @@ export default function BatchJobDetail() {
           webhookStateGenerationRef.current,
           preserveCurrentOnError,
         )) {
-          setResourceReloadNotice(
-            'The batch details could not be refreshed. The current state has been preserved.',
-          );
+          setResourceReloadNotice('The batch could not be refreshed. The page shows the last state that loaded.');
         } else {
           setResourceReloadNotice(null);
           setResource(null);
@@ -360,128 +225,226 @@ export default function BatchJobDetail() {
     return () => {
       requestGenerationRef.current += 1;
     };
-  }, [itemsPage.afterLineNumber, itemsPage.offset, reloadResource]);
+  }, [itemsQuery, reloadResource]);
 
-  async function handleCancel() {
-    if (!batchId || !confirm('Are you sure you want to cancel this batch job?')) return;
-    const cancelBatchId = batchId;
-    const cancelRouteGeneration = routeGenerationRef.current;
-    const isCurrentCancelRoute = () => isCurrentBatchDetailRoute(
-      activeBatchIdRef.current,
-      routeGenerationRef.current,
-      cancelBatchId,
-      cancelRouteGeneration,
-    );
-    setCancelling(true);
+  const job = resource?.kind === 'live' ? resource.job : null;
+  const active = job ? isActiveJob(job.status) : false;
+  useAutoRefresh(active ? LIVE_MS : 0, () => {
+    // A slow load is not stopped by the next tick. The tick waits for it.
+    if (loading) return;
+    void reloadResource({ preserveCurrentOnError: true }).catch(() => undefined);
+  });
+
+  const changeItemsQuery = useCallback((patch: Partial<ItemsQuery>) => {
+    const next = { ...itemsQueryRef.current, ...patch };
+    itemsQueryRef.current = next;
+    setItemsQuery(next);
+  }, []);
+
+  const setItemFilter = (status: ItemFilter) => {
+    setSelectedSnapshot(null);
+    setItemPageCursors([null]);
+    changeItemsQuery({ status, offset: 0, afterLineNumber: null });
+  };
+
+  // The custom ID box waits for a pause in typing before it loads.
+  useEffect(() => {
+    const value = customIdInput.trim();
+    if (value === itemsQueryRef.current.customId) return;
+    const timer = window.setTimeout(() => {
+      setSelectedSnapshot(null);
+      setItemPageCursors([null]);
+      changeItemsQuery({ customId: value, offset: 0, afterLineNumber: null });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [changeItemsQuery, customIdInput]);
+
+  const progress = useMemo(() => (job ? batchProgress({ ...job, total: job.total_items }) : null), [job]);
+  // Costs and error groups are sums over every line. Load them again only when the counts move.
+  const costBucket = progress && progress.total > 0 ? Math.floor(((progress.done + progress.failed) / progress.total) * 20) : 0;
+  const jobId = job?.batch_id ?? '';
+  const costs = useReport(
+    job ? `batch:costs|${jobId}|${job.status}|${costBucket}` : null,
+    ({ signal }) => batches.costs(jobId, signal),
+    { maxAgeMs: 300_000 },
+  );
+  const errors = useReport(
+    job && job.failed_items > 0 ? `batch:errors|${jobId}|${job.failed_items}` : null,
+    ({ signal }) => batches.errors(jobId, signal),
+    { maxAgeMs: 300_000 },
+  );
+
+  const isCurrentRoute = (requestBatchId: string, requestRouteGeneration: number) => isCurrentBatchDetailRoute(
+    activeBatchIdRef.current,
+    routeGenerationRef.current,
+    requestBatchId,
+    requestRouteGeneration,
+  );
+
+  async function runJobAction(kind: Exclude<PendingAction['kind'], 'replay'>) {
+    if (!batchId) return;
+    const actionBatchId = batchId;
+    const routeGeneration = routeGenerationRef.current;
+    setActionRunning(true);
     setResourceReloadNotice(null);
     try {
-      await runMutationAndRefresh(
-        () => batches.cancel(cancelBatchId),
-        async (cancellation) => {
-          if (!isCurrentCancelRoute()) return;
-          setResource((current) => current
-            ? applyBatchDetailCancellation(current, cancellation)
-            : current);
-          await reloadResource({ preserveCurrentOnError: true });
-        },
-      );
+      if (kind === 'cancel') {
+        await runMutationAndRefresh(
+          () => batches.cancel(actionBatchId),
+          async (cancellation) => {
+            if (!isCurrentRoute(actionBatchId, routeGeneration)) return;
+            setResource((current) => (current ? applyBatchDetailCancellation(current, cancellation) : current));
+            await reloadResource({ preserveCurrentOnError: true });
+          },
+        );
+        pushToast({ tone: 'success', title: 'Cancel requested', message: 'The batch stops after the lines that are running now.' });
+      } else {
+        let message = '';
+        if (kind === 'retry_finalization') {
+          await batches.retryFinalization(actionBatchId);
+          message = 'Finalization starts again.';
+        } else if (kind === 'requeue_stale') {
+          const result = await batches.requeueStale(actionBatchId);
+          message = `${result.requeued_items.toLocaleString()} line${result.requeued_items === 1 ? '' : 's'} went back to the queue.`;
+        } else {
+          const result = await batches.markFailed(actionBatchId, failReason.trim() || undefined);
+          message = `${result.failed_items.toLocaleString()} line${result.failed_items === 1 ? '' : 's'} marked failed.`;
+        }
+        pushToast({ tone: 'success', title: ACTION_COPY[kind].confirm, message });
+        if (isCurrentRoute(actionBatchId, routeGeneration)) {
+          await reloadResource({ preserveCurrentOnError: true }).catch(() => undefined);
+        }
+      }
+      if (isCurrentRoute(actionBatchId, routeGeneration)) setPendingAction(null);
     } catch (error: unknown) {
-      if (isCurrentCancelRoute()) {
-        alert(errorMessage(error, 'Failed to cancel'));
+      if (isCurrentRoute(actionBatchId, routeGeneration)) {
+        pushToast({ tone: 'error', title: `${ACTION_COPY[kind].confirm} failed`, message: errorMessage(error, 'The action could not be completed.') });
       }
     } finally {
-      if (isCurrentCancelRoute()) {
-        setCancelling(false);
-      }
+      if (isCurrentRoute(actionBatchId, routeGeneration)) setActionRunning(false);
     }
   }
 
-  async function handleReplayWebhook(eventId: string) {
-    if (!batchId || replayingWebhook || !confirm('Replay this failed webhook delivery?')) return;
+  async function replayWebhook(eventId: string) {
+    if (!batchId || replayingWebhook) return;
     const replayBatchId = batchId;
-    const replayRouteGeneration = routeGenerationRef.current;
-    const isCurrentReplayRoute = () => isCurrentBatchDetailRoute(
-      activeBatchIdRef.current,
-      routeGenerationRef.current,
-      replayBatchId,
-      replayRouteGeneration,
-    );
+    const routeGeneration = routeGenerationRef.current;
     setReplayingWebhook(eventId);
     setWebhookReplayNotice(null);
     setResourceReloadNotice(null);
+    setPendingAction(null);
     webhookStateGenerationRef.current += 1;
     try {
       const outcome = await runMutationAndRefresh(
         () => batches.replayWebhook(replayBatchId, eventId),
         async (replay) => {
-          if (!isCurrentReplayRoute()) return;
+          if (!isCurrentRoute(replayBatchId, routeGeneration)) return;
           webhookStateGenerationRef.current += 1;
-          setResource((current) => current
-            ? replaceBatchDetailWebhookDelivery(current, replay.delivery)
-            : current);
+          setResource((current) => (current ? replaceBatchDetailWebhookDelivery(current, replay.delivery) : current));
           const refreshed = await batches.webhookDeliveries(replayBatchId);
-          if (!isCurrentReplayRoute()) return;
+          if (!isCurrentRoute(replayBatchId, routeGeneration)) return;
           webhookStateGenerationRef.current += 1;
-          setResource((current) => current
-            ? mergeBatchDetailWebhookDeliveries(current, refreshed)
-            : current);
+          setResource((current) => (current ? mergeBatchDetailWebhookDeliveries(current, refreshed) : current));
         },
       );
-      if (outcome.refreshError && isCurrentReplayRoute()) {
-        setWebhookReplayNotice(
-          'Replay was scheduled, but the latest delivery state could not be refreshed.',
-        );
+      if (isCurrentRoute(replayBatchId, routeGeneration)) {
+        if (outcome.refreshError) {
+          setWebhookReplayNotice('The replay is scheduled, but the latest delivery state could not be loaded.');
+        } else {
+          pushToast({ tone: 'success', title: 'Replay scheduled', message: 'The webhook is sent again.' });
+        }
       }
     } catch (error: unknown) {
-      if (isCurrentReplayRoute()) {
-        alert(error instanceof Error && error.message ? error.message : 'Failed to replay webhook delivery');
+      if (isCurrentRoute(replayBatchId, routeGeneration)) {
+        pushToast({ tone: 'error', title: 'Replay failed', message: errorMessage(error, 'The webhook could not be sent again.') });
       }
     } finally {
-      if (isCurrentReplayRoute()) {
-        setReplayingWebhook((current) => current === eventId ? null : current);
+      if (isCurrentRoute(replayBatchId, routeGeneration)) {
+        setReplayingWebhook((current) => (current === eventId ? null : current));
       }
     }
   }
 
-  const resourceBatchId = resource?.kind === 'live'
-    ? resource.job.batch_id
-    : resource?.delivery.batch_id;
-  if ((loading && !resource) || (resourceBatchId && resourceBatchId !== batchId)) {
+  const items = useMemo(() => job?.items?.data ?? [], [job]);
+  const selectedIndex = selectedItemId ? items.findIndex((item) => item.item_id === selectedItemId) : -1;
+  const stepItem = useCallback((direction: -1 | 1) => {
+    if (selectedIndex < 0) return;
+    const target = items[selectedIndex + direction];
+    if (target) setSelectedSnapshot(target);
+  }, [items, selectedIndex]);
+
+  const confirmDialog = pendingAction && (
+    pendingAction.kind === 'replay' ? (
+      <ConfirmDialog
+        open
+        title="Send this webhook again?"
+        description={`The gateway sends the ${pendingAction.delivery.event_type} event to the webhook URL again.`}
+        confirmLabel="Replay"
+        confirming={replayingWebhook !== null}
+        onConfirm={() => void replayWebhook(pendingAction.delivery.event_id)}
+        onClose={() => setPendingAction(null)}
+      />
+    ) : (
+      <ConfirmDialog
+        open
+        title={ACTION_COPY[pendingAction.kind].title}
+        description={ACTION_COPY[pendingAction.kind].description}
+        confirmLabel={ACTION_COPY[pendingAction.kind].confirm}
+        cancelLabel="Keep as is"
+        destructive={ACTION_COPY[pendingAction.kind].destructive}
+        confirming={actionRunning}
+        onConfirm={() => void runJobAction(pendingAction.kind as Exclude<PendingAction['kind'], 'replay'>)}
+        onClose={() => setPendingAction(null)}
+      >
+        {pendingAction.kind === 'mark_failed' && (
+          <label className="grid gap-1 text-sm text-gray-700">
+            Reason (optional)
+            <input
+              type="text"
+              value={failReason}
+              maxLength={500}
+              onChange={(event) => setFailReason(event.target.value)}
+              placeholder="Marked failed by operator"
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            />
+          </label>
+        )}
+      </ConfirmDialog>
+    )
+  );
+
+  const resourceBatchId = resource?.kind === 'live' ? resource.job.batch_id : resource?.delivery.batch_id;
+  const breadcrumbs = [...navTrail('/batches'), { label: batchId ?? 'Batch job' }];
+
+  if ((loading && !resource && !loadError) || (resourceBatchId && resourceBatchId !== batchId)) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
-      </div>
+      <PageShell breadcrumbs={breadcrumbs} avatar={<EntityAvatar icon={Layers} />} title={<span className="font-mono text-lg">{batchId}</span>}>
+        <DetailSkeleton />
+      </PageShell>
     );
   }
 
   if (loadError || !resource) {
     const notFound = loadError instanceof ApiError && loadError.status === 404;
     return (
-      <PageShell
-        breadcrumbs={[...navTrail('/batches'), { label: batchId ?? 'Batch job' }]}
-        avatar={<EntityAvatar icon={Layers} />}
-        title="Batch Job"
-      >
-        <div className="space-y-6">
+      <PageShell breadcrumbs={breadcrumbs} avatar={<EntityAvatar icon={Layers} />} title={<span className="font-mono text-lg">{batchId}</span>}>
+        <div className="grid gap-3.5">
           <ResourceReloadNotice message={resourceReloadNotice} />
-          <Card>
-            <div className="p-8 text-center">
-              <h2 className="text-base font-semibold text-gray-900">
-                {notFound ? 'Batch job not found' : 'Unable to load batch job'}
-              </h2>
-              <p className="mt-2 text-sm text-gray-500">
-                {notFound
-                  ? 'Neither live batch metadata nor retained webhook delivery state is available.'
-                  : loadError instanceof Error ? loadError.message : 'The request could not be completed.'}
-              </p>
-              <button
-                onClick={() => { void reloadResource().catch(() => undefined); }}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100"
-              >
-                <RefreshCw className="h-4 w-4" /> Retry
-              </button>
-            </div>
-          </Card>
+          <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
+            <h2 className="text-base font-semibold text-gray-900">{notFound ? 'Batch job not found' : 'The batch job could not be loaded'}</h2>
+            <p className="mt-2 text-sm text-gray-500">
+              {notFound
+                ? 'There is no batch with this ID, and no stored webhook state for it.'
+                : errorMessage(loadError, 'The request could not be completed.')}
+            </p>
+            <button
+              type="button"
+              onClick={() => { void reloadResource().catch(() => undefined); }}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" /> Retry
+            </button>
+          </div>
         </div>
       </PageShell>
     );
@@ -492,396 +455,213 @@ export default function BatchJobDetail() {
       <PageShell
         breadcrumbs={[...navTrail('/batches'), { label: resource.delivery.batch_id }]}
         avatar={<EntityAvatar icon={Layers} />}
-        title="Archived Webhook Delivery"
-        meta={<span className="font-mono">{resource.delivery.batch_id}</span>}
+        title={<span className="font-mono text-lg">{resource.delivery.batch_id}</span>}
+        badges={<StatusText label="Archived" tone="idle" />}
+        meta="The batch record was cleaned up. Its webhook state stays here until its own retention period ends."
       >
-        <div className="space-y-6">
+        <div className="grid max-w-xl gap-3.5">
           <ResourceReloadNotice message={resourceReloadNotice} />
-          <Card>
-            <div className="p-5">
-              <h2 className="text-sm font-semibold text-gray-900">Batch metadata has been cleaned up</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                Retained webhook delivery state remains available for inspection and replay until its separate retention period expires.
-              </p>
-            </div>
-          </Card>
-          <WebhookDeliveriesCard
+          <WebhooksCard
             deliveries={resource.delivery.data}
             capabilities={resource.delivery.capabilities}
             replayingEventId={replayingWebhook}
-            replayNotice={webhookReplayNotice}
-            onReplay={(eventId) => { void handleReplayWebhook(eventId); }}
+            notice={webhookReplayNotice}
+            onReplay={(delivery) => setPendingAction({ kind: 'replay', delivery })}
           />
         </div>
+        {confirmDialog}
       </PageShell>
     );
   }
 
-  const job = resource.job;
-  const canCancel = canCancelBatchDetailJob(job);
+  const liveJob = resource.job;
+  const jobProgress = progress ?? batchProgress({ ...liveJob, total: liveJob.total_items });
+  const status = jobStatus(liveJob.status);
+  const canCancel = canCancelBatchDetailJob(liveJob);
+  const itemsPagination = liveJob.items?.pagination;
+  const deliveries = liveJob.webhook_deliveries ?? [];
+  const now = loadedAt;
 
-  async function handleExpandItem(itemId: string) {
-    if (!batchId) return;
-    const detailKey = itemDetailKey(batchId, itemId);
-    if (expandedItem === itemId) {
-      setExpandedItem(null);
-      return;
-    }
-    setExpandedItem(itemId);
-    if (itemDetails[detailKey] || itemDetailLoading[detailKey]) return;
+  const menuItems: ActionMenuItem[] = [
+    ...(liveJob.capabilities.retry_finalization ? [{ label: 'Retry finalization', hint: 'Write the output files again', onSelect: () => setPendingAction({ kind: 'retry_finalization' }) }] : []),
+    ...(liveJob.capabilities.requeue_stale ? [{ label: 'Requeue stale lines', hint: 'For lines whose worker stopped', onSelect: () => setPendingAction({ kind: 'requeue_stale' }) }] : []),
+    ...(liveJob.capabilities.mark_failed ? [{ label: 'Mark as failed', danger: true, hint: 'Stop the batch and fail open lines', onSelect: () => { setFailReason(''); setPendingAction({ kind: 'mark_failed' }); } }] : []),
+  ];
 
-    setItemDetailErrors((current) => {
-      const next = { ...current };
-      delete next[detailKey];
-      return next;
-    });
-    setItemDetailLoading((current) => ({ ...current, [detailKey]: true }));
-    try {
-      const detail = await batches.getItem(batchId, itemId);
-      if (activeBatchIdRef.current !== batchId) return;
-      setItemDetails((current) => ({ ...current, [detailKey]: detail }));
-    } catch (error: unknown) {
-      if (activeBatchIdRef.current === batchId) {
-        setItemDetailErrors((current) => ({
-          ...current,
-          [detailKey]: errorMessage(error, 'Failed to load item payload'),
-        }));
-      }
-    } finally {
-      if (activeBatchIdRef.current === batchId) {
-        setItemDetailLoading((current) => ({ ...current, [detailKey]: false }));
-      }
-    }
-  }
-
-  async function handleLoadCosts() {
-    if (!batchId || costsLoading) return;
-    setCostsLoading(true);
-    setCostsError(null);
-    try {
-      const result = await batches.costs(batchId);
-      if (activeBatchIdRef.current !== batchId) return;
-      setCosts(result);
-    } catch (error: unknown) {
-      if (activeBatchIdRef.current === batchId) {
-        setCostsError(errorMessage(error, 'Failed to load costs'));
-      }
-    } finally {
-      if (activeBatchIdRef.current === batchId) {
-        setCostsLoading(false);
-      }
-    }
-  }
-
-  function handleItemsNextPage() {
+  const handleItemsNextPage = () => {
     const nextAfterLineNumber = itemsPagination?.next_after_line_number;
     if (nextAfterLineNumber == null) return;
-    const nextOffset = itemsPage.offset + ITEMS_PAGE_SIZE;
+    const nextOffset = itemsQuery.offset + ITEMS_PAGE_SIZE;
     const nextIndex = Math.floor(nextOffset / ITEMS_PAGE_SIZE);
-    setExpandedItem(null);
+    setSelectedSnapshot(null);
     setItemPageCursors((current) => {
       const next = current.slice(0, nextIndex + 1);
       next[nextIndex] = nextAfterLineNumber;
       return next;
     });
-    const nextItemsPage = { offset: nextOffset, afterLineNumber: nextAfterLineNumber };
-    itemsPageRef.current = nextItemsPage;
-    setItemsPage(nextItemsPage);
-  }
+    changeItemsQuery({ offset: nextOffset, afterLineNumber: nextAfterLineNumber });
+  };
 
-  function handleItemsPreviousPage() {
-    const previousOffset = Math.max(0, itemsPage.offset - ITEMS_PAGE_SIZE);
+  const handleItemsPreviousPage = () => {
+    const previousOffset = Math.max(0, itemsQuery.offset - ITEMS_PAGE_SIZE);
     const previousIndex = Math.floor(previousOffset / ITEMS_PAGE_SIZE);
-    const previousAfterLineNumber = itemPageCursors[previousIndex] ?? null;
-    setExpandedItem(null);
-    const previousItemsPage = {
-      offset: previousOffset,
-      afterLineNumber: previousAfterLineNumber,
-    };
-    itemsPageRef.current = previousItemsPage;
-    setItemsPage(previousItemsPage);
-  }
+    setSelectedSnapshot(null);
+    changeItemsQuery({ offset: previousOffset, afterLineNumber: itemPageCursors[previousIndex] ?? null });
+  };
 
-  const itemsData = job.items?.data || [];
-  const itemsPagination = job.items?.pagination;
-
-  const itemColumns = [
-    {
-      key: 'line_number',
-      header: '#',
-      render: (row: BatchJobItem) => <span className="font-mono text-xs">{row.line_number}</span>,
-    },
-    {
-      key: 'custom_id',
-      header: 'Custom ID',
-      render: (row: BatchJobItem) => <span className="font-mono text-xs max-w-[120px] truncate block">{row.custom_id}</span>,
-    },
-    {
-      key: 'status',
-      header: 'Status',
-      render: (row: BatchJobItem) => <StatusBadge status={row.status} />,
-    },
-    {
-      key: 'attempts',
-      header: 'Attempts',
-      render: (row: BatchJobItem) => <span className="text-sm">{row.attempts}</span>,
-    },
-    {
-      key: 'billed_cost',
-      header: 'Cost',
-      render: (row: BatchJobItem) => <span className="text-sm">${(row.billed_cost || 0).toFixed(6)}</span>,
-    },
-    {
-      key: 'last_error',
-      header: 'Error',
-      render: (row: BatchJobItem) => row.last_error
-        ? <span className="text-xs text-red-600 max-w-[200px] truncate block">{row.last_error}</span>
-        : <span className="text-xs text-gray-400">--</span>,
-    },
-    {
-      key: 'expand',
-      header: '',
-      render: (row: BatchJobItem) => (
-        <button
-          onClick={(e) => { e.stopPropagation(); handleExpandItem(row.item_id); }}
-          className="p-1 hover:bg-gray-100 rounded"
-          title="View item payload"
-        >
-          {expandedItem === row.item_id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
-      ),
-    },
-  ];
-
-  const expandedRow = expandedItem ? itemsData.find((item: BatchJobItem) => item.item_id === expandedItem) : null;
-  const expandedDetailKey = batchId && expandedItem ? itemDetailKey(batchId, expandedItem) : null;
-  const expandedDetail = expandedDetailKey ? itemDetails[expandedDetailKey] : null;
+  const firstLine = items.length > 0 ? itemsQuery.offset + 1 : 0;
+  const lastLine = itemsQuery.offset + items.length;
+  const filteredTotal = itemsPagination?.total ?? null;
+  const filterOptions = BATCH_ITEM_FILTERS.map((entry) => ({
+    key: entry.key,
+    label: `${entry.label} ${entry.count(jobProgress).toLocaleString()}`,
+  }));
+  const selectedItem: BatchJobItem | null = selectedIndex >= 0 ? items[selectedIndex] : selectedSnapshot;
 
   return (
     <PageShell
-      breadcrumbs={[...navTrail('/batches'), { label: job.batch_id }]}
+      breadcrumbs={[...navTrail('/batches'), { label: liveJob.batch_id }]}
       avatar={<EntityAvatar icon={Layers} />}
-      title="Batch Job"
-      badges={<StatusBadge status={job.status} />}
-      meta={<span className="font-mono">{job.batch_id}</span>}
-      actions={canCancel ? (
-        <Button variant="danger-outline" onClick={handleCancel} disabled={cancelling}>
-          <XCircle className="w-4 h-4" />
-          {cancelling ? 'Cancelling...' : 'Cancel Batch'}
-        </Button>
-      ) : undefined}
-    >
-      <div className="space-y-6">
-        <ResourceReloadNotice message={resourceReloadNotice} />
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <Card>
-            <div className="p-5">
-              <h3 className="text-sm font-semibold text-gray-900 mb-4">Progress</h3>
-              <ProgressRing
-                total={job.total_items}
-                completed={job.completed_items}
-                failed={job.failed_items}
-                inProgress={job.in_progress_items}
-                cancelled={job.cancelled_items}
-              />
-            </div>
-          </Card>
-
-          <Card>
-            <div className="p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-gray-900 mb-4">Details</h3>
-              <div className="grid grid-cols-2 gap-y-3 text-sm">
-                <span className="text-gray-500">Endpoint</span>
-                <span className="font-medium text-gray-900">{job.endpoint}</span>
-                <span className="text-gray-500">Model</span>
-                <span className="font-medium text-gray-900">{job.model || '--'}</span>
-                <span className="text-gray-500">Team</span>
-                <span className="font-medium text-gray-900">{job.team_alias || '--'}</span>
-                <span className="text-gray-500">API Key</span>
-                <span className="font-mono text-xs text-gray-700">{job.created_by_api_key || '--'}</span>
-                <span className="text-gray-500">Mode</span>
-                <span className="font-medium text-gray-900 text-xs">{job.execution_mode}</span>
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <div className="p-5 space-y-4">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold text-gray-900">Timing & Cost</h3>
-                {!costs && (
-                  <button
-                    onClick={handleLoadCosts}
-                    disabled={costsLoading}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50"
-                  >
-                    <RefreshCw className={clsx('h-3.5 w-3.5', costsLoading && 'animate-spin')} />
-                    {costsError ? 'Retry' : 'Load costs'}
-                  </button>
-                )}
-              </div>
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-blue-50 rounded-lg">
-                    <Clock className="w-4 h-4 text-brand-primary-ink" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Duration</p>
-                    <p className="text-sm font-semibold text-gray-900">{formatDuration(job.started_at, job.completed_at)}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-green-50 rounded-lg">
-                    <DollarSign className="w-4 h-4 text-green-600" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Billed Cost</p>
-                    <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_billed_cost ?? job.total_billed_cost, costsLoading)}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-gray-50 rounded-lg">
-                    <Hash className="w-4 h-4 text-gray-600" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Provider Cost</p>
-                    <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_provider_cost ?? job.total_provider_cost, costsLoading)}</p>
-                  </div>
-                </div>
-                {costsError && <p className="text-xs text-red-600">{costsError}</p>}
-              </div>
-              <div className="pt-3 border-t border-gray-100 space-y-1.5 text-xs text-gray-500">
-                <div className="flex justify-between">
-                  <span>Created</span>
-                  <span className="text-gray-700">{formatDateTime(job.created_at)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Started</span>
-                  <span className="text-gray-700">{formatDateTime(job.started_at)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Completed</span>
-                  <span className="text-gray-700">{formatDateTime(job.completed_at)}</span>
-                </div>
-                {job.expires_at && (
-                  <div className="flex justify-between">
-                    <span>Expires</span>
-                    <span className="text-gray-700">{formatDateTime(job.expires_at)}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        <WebhookDeliveriesCard
-          deliveries={job.webhook_deliveries || []}
-          capabilities={job.capabilities}
-          replayingEventId={replayingWebhook}
-          replayNotice={webhookReplayNotice}
-          onReplay={(eventId) => { void handleReplayWebhook(eventId); }}
-        />
-
-        <Card>
-          <div className="p-4 border-b border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-900">Batch Items</h3>
-            <p className="text-xs text-gray-500 mt-0.5">{itemsPagination?.total ?? 0} items total</p>
-          </div>
-          <DataTable
-            columns={itemColumns}
-            data={itemsData}
-            loading={loading}
-            emptyMessage="No items found"
-            pagination={itemsPagination}
-            onPreviousPage={handleItemsPreviousPage}
-            onNextPage={handleItemsNextPage}
-          />
-          {expandedItem && expandedRow && (
-            <ExpandedItemView
-              item={expandedDetail || expandedRow}
-              loading={Boolean(expandedDetailKey && itemDetailLoading[expandedDetailKey])}
-              error={expandedDetailKey ? itemDetailErrors[expandedDetailKey] : undefined}
-            />
+      title={(
+        <span className="inline-flex items-center gap-1">
+          <span className="font-mono text-lg">{liveJob.batch_id}</span>
+          <CopyButton value={liveJob.batch_id} label="Copy batch ID" />
+        </span>
+      )}
+      badges={<StatusText label={liveJob.cancel_requested_at && active ? 'Cancelling' : status.label} tone={status.tone} />}
+      meta={(
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <EndpointTag label={endpointLabel(liveJob.endpoint)} />
+          <span className="text-gray-900">{liveJob.model}</span>
+          <span>Team <span className="text-gray-900">{liveJob.team_alias || liveJob.created_by_team_id || 'none'}</span></span>
+          {liveJob.created_by_api_key && <span>Key <span className="font-mono text-gray-900">{liveJob.created_by_api_key}</span></span>}
+          <span title={fmtDateTime(liveJob.created_at)}>Created {fmtAgo(liveJob.created_at, now)}</span>
+        </span>
+      )}
+      actions={(
+        <>
+          {active && (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-700" title="This page loads again every 10 seconds while the batch runs">
+              <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${resourceReloadNotice ? 'bg-rose-600' : 'bg-emerald-600 motion-safe:animate-pulse'}`} />
+              Live
+            </span>
           )}
-        </Card>
-      </div>
-    </PageShell>
-  );
-}
-
-function ExpandedItemView({
-  item,
-  loading,
-  error,
-}: {
-  item: BatchJobItem | BatchJobItemDetail;
-  loading?: boolean;
-  error?: string | null;
-}) {
-  if (loading) {
-    return (
-      <div className="border-t border-gray-100 bg-gray-50 p-4">
-        <div className="flex items-center gap-2 text-sm text-gray-500">
-          <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-brand-primary" />
-          Loading item payload...
+          {canCancel && (
+            <Button variant="danger-outline" size="sm" onClick={() => setPendingAction({ kind: 'cancel' })} disabled={actionRunning}>
+              Cancel batch
+            </Button>
+          )}
+          <ActionMenu label="More batch actions" items={menuItems} />
+        </>
+      )}
+    >
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3.5">
+        <ResourceReloadNotice message={resourceReloadNotice} />
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="max-w-full overflow-x-auto [&_button]:whitespace-nowrap">
+            <Segmented<ItemFilter> label="Line status" value={itemsQuery.status} options={filterOptions} onChange={setItemFilter} />
+          </div>
+          <label className="relative w-full sm:w-56">
+            <span className="sr-only">Find a custom ID</span>
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+            <input
+              type="search"
+              value={customIdInput}
+              maxLength={256}
+              onChange={(event) => setCustomIdInput(event.target.value)}
+              placeholder="Custom ID"
+              className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-2.5 text-[13px] text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            />
+          </label>
+        </div>
+        {/* The rail stretches to the height of the table, and the table to the rail. */}
+        <div className="grid items-stretch gap-3.5 xl:grid-cols-[minmax(0,1fr)_330px]">
+          <section aria-label="Batch lines" className="flex min-w-0 flex-col rounded-xl border border-gray-200 bg-white px-2 py-1">
+            {items.length === 0 && !loading ? (
+              <p className="px-4 py-10 text-center text-sm text-gray-500">
+                {itemsQuery.customId
+                  ? `No line has the custom ID "${itemsQuery.customId}".`
+                  : itemsQuery.status !== 'all'
+                    ? 'No lines have this status.'
+                    : 'This batch has no lines yet.'}
+              </p>
+            ) : (
+              <BatchItemsTable
+                items={items}
+                loading={false}
+                refreshing={loading && loadedQuery !== itemsQuery}
+                selectedId={selectedItemId}
+                onSelect={setSelectedSnapshot}
+              />
+            )}
+            <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-2.5 py-2 text-[12.5px] text-gray-500">
+              <span className="tabular-nums">
+                {items.length > 0
+                  ? `Lines ${firstLine.toLocaleString()}–${lastLine.toLocaleString()}${filteredTotal !== null ? ` of ${filteredTotal.toLocaleString()}` : ''}`
+                  : 'No lines'}
+              </span>
+              <span className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleItemsPreviousPage}
+                  disabled={itemsQuery.offset === 0 || loading}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={handleItemsNextPage}
+                  disabled={itemsPagination?.next_after_line_number == null || loading}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                >
+                  Next
+                </button>
+              </span>
+            </div>
+          </section>
+          <aside aria-label="Batch facts" className="flex flex-col gap-3">
+            <ProgressCard
+              job={liveJob}
+              progress={jobProgress}
+              costs={costs.data}
+              costsError={costs.error}
+              onRetryCosts={costs.retry}
+              now={now}
+            />
+            <FailuresCard
+              failed={liveJob.failed_items}
+              groups={errors.data?.data ?? null}
+              loading={errors.loading}
+              error={errors.error}
+              onRetry={errors.retry}
+              onShowFailed={() => setItemFilter('failed')}
+            />
+            <TimelineCard job={liveJob} progress={jobProgress} now={now} />
+            {deliveries.length > 0 && (
+              <WebhooksCard
+                deliveries={deliveries}
+                capabilities={liveJob.capabilities}
+                replayingEventId={replayingWebhook}
+                notice={webhookReplayNotice}
+                onReplay={(delivery) => setPendingAction({ kind: 'replay', delivery })}
+              />
+            )}
+            <FilesCard job={liveJob} />
+          </aside>
         </div>
       </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="border-t border-gray-100 bg-red-50 p-4 text-sm text-red-700">
-        {error}
-      </div>
-    );
-  }
-
-  if (!item.request_body && !item.response_body && !item.error_body && !item.usage) {
-    return (
-      <div className="border-t border-gray-100 bg-gray-50 p-4 text-sm text-gray-500">
-        No item payload available.
-      </div>
-    );
-  }
-
-  return (
-    <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-3">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {item.request_body && (
-          <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Request</h4>
-            <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-auto max-h-48">
-              {JSON.stringify(item.request_body, null, 2)}
-            </pre>
-          </div>
-        )}
-        {item.response_body && (
-          <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Response</h4>
-            <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-auto max-h-48">
-              {JSON.stringify(item.response_body, null, 2)}
-            </pre>
-          </div>
-        )}
-        {item.error_body && (
-          <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Error</h4>
-            <pre className="text-xs bg-red-50 border border-red-200 rounded-lg p-3 overflow-auto max-h-48">
-              {JSON.stringify(item.error_body, null, 2)}
-            </pre>
-          </div>
-        )}
-        {item.usage && (
-          <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Usage</h4>
-            <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-auto max-h-48">
-              {JSON.stringify(item.usage, null, 2)}
-            </pre>
-          </div>
-        )}
-      </div>
-    </div>
+      {selectedItem && batchId && (
+        <BatchItemDrawer
+          batchId={batchId}
+          item={selectedItem}
+          hasPrevious={selectedIndex > 0}
+          hasNext={selectedIndex >= 0 && selectedIndex < items.length - 1}
+          onStep={stepItem}
+          onClose={() => setSelectedSnapshot(null)}
+        />
+      )}
+      {confirmDialog}
+    </PageShell>
   );
 }

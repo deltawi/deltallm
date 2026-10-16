@@ -1,300 +1,263 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useApi } from '../lib/hooks';
-import { batches, type BatchFeatureStatus, type BatchJobListItem, type BatchJobSummary } from '../lib/api';
-import DataTable from '../components/DataTable';
-import { Layers, Search, Clock, CheckCircle2, XCircle, Loader2, Info } from 'lucide-react';
-import clsx from 'clsx';
-import { ContentCard, IndexShell } from '../components/admin/shells';
+import { useCallback, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Info, Layers } from 'lucide-react';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
+import { HeaderTabBar, IndexShell } from '../components/admin/shells';
+import BatchFilterBar from '../components/batch-jobs/BatchFilterBar';
 import BatchJobsMobileList from '../components/batch-jobs/BatchJobsMobileList';
+import BatchJobsTable from '../components/batch-jobs/BatchJobsTable';
+import RefreshControl from '../components/usage/RefreshControl';
+import { PanelError, Segmented } from '../components/usage/ReportBits';
+import { batches, type BatchJobListItem } from '../lib/api/batches';
+import {
+  BATCH_TABS,
+  BATCH_WINDOWS,
+  batchListFilters,
+  hasBatchFilters,
+  isActiveJob,
+  parseBatchListState,
+  writeBatchListState,
+  type BatchListState,
+  type BatchWindow,
+} from '../lib/batchJobs';
 import { errorMessage } from '../lib/errorMessage';
 import { navSectionLabel } from '../lib/navigation';
+import { useAutoRefresh, type AutoRefreshMs } from '../lib/useAutoRefresh';
+import { useReport } from '../lib/useReport';
 
-const STATUS_COLORS: Record<string, string> = {
-  validating: 'bg-purple-100 text-purple-700',
-  queued: 'bg-blue-100 text-blue-700',
-  in_progress: 'bg-yellow-100 text-yellow-700',
-  finalizing: 'bg-yellow-100 text-yellow-700',
-  completed: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  cancelled: 'bg-gray-100 text-gray-600',
-  expired: 'bg-gray-100 text-gray-600',
-};
+const PAGE_SIZE = 25;
+/** Reload interval while a job on screen is still running. */
+const LIVE_MS = 10_000;
 
-const STATUS_LABELS: Record<string, string> = {
-  validating: 'Validating',
-  queued: 'Queued',
-  in_progress: 'In Progress',
-  finalizing: 'Finalizing',
-  completed: 'Completed',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-  expired: 'Expired',
-};
-
-function BatchStatusBadge({ status }: { status: string }) {
+function TabLabel({ label, count, tone }: { label: string; count: number | null; tone?: string }) {
+  const toneClass = tone === 'run' && count ? 'bg-blue-50 text-blue-700' : tone === 'bad' && count ? 'bg-rose-50 text-rose-700' : 'bg-gray-100 text-gray-600';
   return (
-    <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', STATUS_COLORS[status] || 'bg-gray-100 text-gray-600')}>
-      {STATUS_LABELS[status] || status}
-    </span>
+    <>
+      {label}
+      {count !== null && <span className={`rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums ${toneClass}`}>{count.toLocaleString()}</span>}
+    </>
   );
 }
-
-function ProgressBar({ total, completed, failed, inProgress }: { total: number; completed: number; failed: number; inProgress: number }) {
-  if (total === 0) return <span className="text-xs text-gray-400">--</span>;
-  const completedPct = (completed / total) * 100;
-  const failedPct = (failed / total) * 100;
-  const inProgressPct = (inProgress / total) * 100;
-  return (
-    <div className="w-28">
-      <div className="flex justify-between text-[10px] mb-0.5 text-gray-500">
-        <span>{completed + failed}/{total}</span>
-        <span>{Math.round(((completed + failed) / total) * 100)}%</span>
-      </div>
-      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden flex">
-        {completedPct > 0 && <div className="h-full bg-green-500" style={{ width: `${completedPct}%` }} />}
-        {failedPct > 0 && <div className="h-full bg-red-500" style={{ width: `${failedPct}%` }} />}
-        {inProgressPct > 0 && <div className="h-full bg-yellow-400" style={{ width: `${inProgressPct}%` }} />}
-      </div>
-    </div>
-  );
-}
-
-function formatDuration(start: string | null | undefined, end: string | null | undefined): string {
-  if (!start) return '--';
-  const s = new Date(start).getTime();
-  const e = end ? new Date(end).getTime() : Date.now();
-  const diff = Math.max(0, e - s);
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ${secs % 60}s`;
-  const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m`;
-}
-
-function formatDate(d: string | null | undefined): string {
-  if (!d) return '--';
-  return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-const STATUS_TABS = [
-  { value: '', label: 'All' },
-  { value: 'queued', label: 'Queued' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'cancelled', label: 'Cancelled' },
-];
 
 export default function BatchJobs() {
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [pageOffset, setPageOffset] = useState(0);
-  const pageSize = 10;
+  const { pushToast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const state = useMemo(() => parseBatchListState(searchParams), [searchParams]);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [autoRefreshMs, setAutoRefreshMs] = useState<AutoRefreshMs>(0);
+  const [cancelTarget, setCancelTarget] = useState<BatchJobListItem | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
-  useEffect(() => {
-    const t = setTimeout(() => { setSearch(searchInput); setPageOffset(0); }, 300);
-    return () => clearTimeout(t);
-  }, [searchInput]);
+  // Keys name the window, not its start time, so a reload keeps the rows on screen.
+  const filterKey = JSON.stringify(batchListFilters({ ...state, window: 'all' }));
+  const listKey = `batch:list|${state.window}|${filterKey}|${state.page}`;
+  const summaryKey = `batch:summary|${state.window}|${JSON.stringify(batchListFilters({ ...state, tab: 'all', window: 'all' }))}`;
 
-  const { data: featureStatus } = useApi<BatchFeatureStatus | null>(() => batches.featureStatus(), []);
-  const { data: summary, refetch: refetchSummary } = useApi<BatchJobSummary | null>(() => batches.summary(), []);
-  const { data: result, loading, refetch } = useApi(
-    () => batches.list({ search, status: statusFilter || undefined, limit: pageSize, offset: pageOffset }),
-    [search, statusFilter, pageOffset],
+  const list = useReport(
+    listKey,
+    ({ signal }) => batches.list({ ...batchListFilters(state), limit: PAGE_SIZE, offset: (state.page - 1) * PAGE_SIZE }, signal),
+    { refreshToken, reloadToken, maxAgeMs: 10_000 },
   );
+  const summary = useReport(
+    summaryKey,
+    ({ signal }) => {
+      // Tab counts use every filter except the status tab itself.
+      const filters = batchListFilters(state);
+      delete filters.status;
+      return batches.summary(filters, signal);
+    },
+    { refreshToken, reloadToken, maxAgeMs: 10_000 },
+  );
+  const feature = useReport('batch:feature-status', ({ signal }) => batches.featureStatus(signal), { maxAgeMs: 300_000 });
 
-  const items: BatchJobListItem[] = result?.data || [];
-  const pagination = result?.pagination;
-  // Members without key.read only see batches they created; the server enforces it.
-  const ownJobsOnly = result?.view === 'own';
-  const emptyMessage = ownJobsOnly ? 'You have not created any batch jobs yet' : 'No batch jobs found';
+  const jobs = useMemo(() => list.data?.data ?? [], [list.data]);
+  const anyActive = jobs.some((job) => isActiveJob(job.status));
+  const live = anyActive && autoRefreshMs === 0;
+  useAutoRefresh(live ? LIVE_MS : autoRefreshMs, () => setReloadToken((value) => value + 1));
+  // Time labels move forward with each load, not with every render.
+  const now = list.updatedAt ?? Date.now();
 
-  const handleCancel = async (batchId: string) => {
-    if (!confirm('Cancel this batch job? In-flight requests will stop processing.')) return;
+  const commit = useCallback((patch: Partial<BatchListState>, replace = false) => {
+    const next = { ...parseBatchListState(searchParams), ...patch };
+    if (!('page' in patch)) next.page = 1;
+    setSearchParams(writeBatchListState(next), { replace });
+  }, [searchParams, setSearchParams]);
+  const onFilterChange = useCallback((patch: Partial<BatchListState>) => commit(patch, 'search' in patch), [commit]);
+
+  const teamLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const job of jobs) {
+      if (job.created_by_team_id && job.team_alias) labels[job.created_by_team_id] = job.team_alias;
+    }
+    return labels;
+  }, [jobs]);
+
+  const openJob = (batchId: string) => navigate(`/batches/${encodeURIComponent(batchId)}`);
+
+  const confirmCancel = async () => {
+    if (!cancelTarget) return;
+    setCancelling(true);
     try {
-      await batches.cancel(batchId);
-      refetch();
-      refetchSummary();
-    } catch (err: unknown) {
-      alert(errorMessage(err, 'Failed to cancel batch job'));
+      await batches.cancel(cancelTarget.batch_id);
+      pushToast({ tone: 'success', title: 'Cancel requested', message: `Batch ${cancelTarget.batch_id} stops after the lines that are running now.` });
+      setCancelTarget(null);
+      setRefreshToken((value) => value + 1);
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Cancel failed', message: errorMessage(error, 'The batch could not be cancelled.') });
+    } finally {
+      setCancelling(false);
     }
   };
 
-  const summaryCards = [
-    { label: 'Total Jobs', value: summary?.total ?? 0, icon: Layers, color: 'text-brand-primary-ink', bg: 'bg-blue-50' },
-    { label: 'In Progress', value: (summary?.queued ?? 0) + (summary?.in_progress ?? 0), icon: Loader2, color: 'text-yellow-600', bg: 'bg-yellow-50' },
-    { label: 'Completed', value: summary?.completed ?? 0, icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-50' },
-    { label: 'Failed', value: summary?.failed ?? 0, icon: XCircle, color: 'text-red-600', bg: 'bg-red-50' },
-  ];
+  const ownJobsOnly = list.data?.view === 'own';
+  const pagination = list.data?.pagination;
+  const total = pagination?.total ?? null;
+  const firstRow = pagination && pagination.total > 0 ? pagination.offset + 1 : 0;
+  const lastRow = pagination ? pagination.offset + jobs.length : 0;
+  const anyFilter = hasBatchFilters(state) || state.tab !== 'all' || state.window !== 'all';
+  const counts = summary.data;
 
-  const columns = [
-    {
-      key: 'batch_id',
-      header: 'Batch ID',
-      render: (row: BatchJobListItem) => (
-        <span className="font-mono text-xs">{(row.batch_id || '').substring(0, 8)}...</span>
-      ),
-    },
-    {
-      key: 'model',
-      header: 'Model',
-      render: (row: BatchJobListItem) => <span className="text-sm">{row.model || '--'}</span>,
-    },
-    {
-      key: 'status',
-      header: 'Status',
-      render: (row: BatchJobListItem) => <BatchStatusBadge status={row.status} />,
-    },
-    {
-      key: 'progress',
-      header: 'Progress',
-      render: (row: BatchJobListItem) => (
-        <ProgressBar
-          total={row.total_items}
-          completed={row.completed_items}
-          failed={row.failed_items}
-          inProgress={row.in_progress_items}
-        />
-      ),
-    },
-    {
-      key: 'total_cost',
-      header: 'Cost',
-      render: (row: BatchJobListItem) => <span className="text-sm">${(row.total_cost || 0).toFixed(4)}</span>,
-    },
-    {
-      key: 'team_alias',
-      header: 'Team',
-      render: (row: BatchJobListItem) => <span className="text-sm text-gray-500">{row.team_alias || '--'}</span>,
-    },
-    {
-      key: 'created_at',
-      header: 'Created',
-      render: (row: BatchJobListItem) => <span className="text-xs text-gray-500">{formatDate(row.created_at)}</span>,
-    },
-    {
-      key: 'duration',
-      header: 'Duration',
-      render: (row: BatchJobListItem) => (
-        <div className="flex items-center gap-1 text-xs text-gray-500">
-          <Clock className="w-3 h-3" />
-          {formatDuration(row.started_at, row.completed_at)}
-        </div>
-      ),
-    },
-  ];
+  const tabs = BATCH_TABS.map((tab) => ({
+    to: `/batches${(() => {
+      const query = writeBatchListState({ ...state, tab: tab.key, page: 1 }).toString();
+      return query ? `?${query}` : '';
+    })()}`,
+    label: <TabLabel label={tab.label} count={counts ? tab.count(counts) : null} tone={tab.tone} />,
+    active: state.tab === tab.key,
+  }));
 
   return (
     <IndexShell
       eyebrowPrefix={navSectionLabel('/batches')}
-      title="Batch Jobs"
+      title="Batch jobs"
       titleIcon={Layers}
-      count={pagination?.total ?? null}
+      count={counts?.total ?? null}
       description={ownJobsOnly
-        ? 'Batch jobs you created with your API keys, in your current organizations and teams.'
-        : 'Monitor and manage batch embedding jobs.'}
-      summary={(
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          {summaryCards.map((card) => (
-            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className={clsx('rounded-lg p-2', card.bg)}>
-                  <card.icon className={clsx('h-5 w-5', card.color)} />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-900">{card.value}</p>
-                  <p className="text-xs text-gray-500">{card.label}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        ? 'Batches you sent with your API keys, in your organizations and teams. Newest first.'
+        : (<>Embedding and chat batches sent with <code className="rounded bg-gray-100 px-1 text-[12px]">/v1/batches</code>. Newest first.</>)}
+      action={(
+        <RefreshControl
+          updatedAt={list.updatedAt}
+          refreshing={list.refreshing}
+          failed={list.error !== null}
+          label={live ? (list.refreshing ? 'Updating' : 'Live · every 10 s') : undefined}
+          onRefresh={() => setRefreshToken((value) => value + 1)}
+          // While a job runs the page is live, so the interval menu has nothing to add.
+          autoRefreshMs={live ? undefined : autoRefreshMs}
+          onAutoRefreshChange={live ? undefined : setAutoRefreshMs}
+        />
       )}
-      toolbar={(
-        <div className="hidden md:block space-y-3">
-          <div className="relative max-w-sm">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by batch ID or model..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-3 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
+      tabs={(
+        <HeaderTabBar
+          label="Batch status"
+          items={tabs}
+          controls={(
+            <Segmented<BatchWindow>
+              label="Created in"
+              value={state.window}
+              options={BATCH_WINDOWS.map((item) => ({ key: item.key, label: item.label }))}
+              onChange={(window) => commit({ window })}
             />
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {STATUS_TABS.map((tab) => (
-              <button
-                key={tab.value}
-                onClick={() => {
-                  setStatusFilter(tab.value);
-                  setPageOffset(0);
-                }}
-                className={clsx(
-                  'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
-                  statusFilter === tab.value
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'text-gray-500 hover:bg-gray-100 hover:text-gray-700'
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
+          )}
+        />
       )}
     >
-      <div className="space-y-4">
-        {featureStatus?.embeddings_batch_enabled === false && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            <div className="flex items-start gap-3">
-              <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">Embeddings batch API is disabled.</p>
-                <p className="mt-1 text-amber-800 break-words">
-                  Enable <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">general_settings.embeddings_batch_enabled: true</code>{' '}
-                  to allow <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">/v1/files</code> and{' '}
-                  <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">/v1/batches</code>. Existing batch records remain visible here.
-                </p>
-              </div>
-            </div>
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3.5">
+        {feature.data?.embeddings_batch_enabled === false && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+            <p className="min-w-0 break-words">
+              <b className="font-medium">The batch API is off.</b> Set{' '}
+              <code className="rounded bg-amber-100 px-1 text-xs">general_settings.embeddings_batch_enabled: true</code> to turn on{' '}
+              <code className="rounded bg-amber-100 px-1 text-xs">/v1/files</code> and <code className="rounded bg-amber-100 px-1 text-xs">/v1/batches</code>. You can still see old batches here.
+            </p>
           </div>
         )}
-        <div className="hidden md:block">
-          <ContentCard>
-            <DataTable
-              columns={columns}
-              data={items}
-              loading={loading}
-              emptyMessage={emptyMessage}
-              onRowClick={(row) => navigate(`/batches/${row.batch_id}`)}
-              pagination={pagination}
-              onPageChange={setPageOffset}
-            />
-          </ContentCard>
-        </div>
-        <div className="md:hidden">
-          <BatchJobsMobileList
-            items={items}
-            loading={loading}
-            pagination={pagination}
-            pageSize={pageSize}
-            onPageChange={setPageOffset}
-            searchValue={searchInput}
-            onSearchChange={setSearchInput}
-            statusFilter={statusFilter}
-            onStatusFilterChange={(v) => { setStatusFilter(v); setPageOffset(0); }}
-            statusTabs={STATUS_TABS}
-            emptyMessage={emptyMessage}
-            onView={(id) => navigate(`/batches/${id}`)}
-            onCancel={handleCancel}
-          />
-        </div>
+        <BatchFilterBar
+          state={state}
+          teamLabels={teamLabels}
+          summary={total === null ? null : `${total.toLocaleString()} job${total === 1 ? '' : 's'}`}
+          onChange={onFilterChange}
+        />
+        {list.error && <PanelError message={list.error} onRetry={list.retry} stale={list.data !== null} />}
+        <section className="rounded-xl border border-gray-200 bg-white px-2 py-1" aria-label="Batch jobs">
+          {!list.loading && jobs.length === 0 ? (
+            <div className="px-4 py-10 text-center text-sm text-gray-500">
+              {list.error
+                ? 'Batch jobs could not be loaded.'
+                : state.page > 1
+                  ? 'There are no batch jobs on this page.'
+                  : anyFilter
+                  ? 'No batch jobs match these filters.'
+                  : ownJobsOnly ? 'You have not sent a batch yet.' : 'No batch jobs yet.'}
+              {state.page > 1 && (
+                <button
+                  type="button"
+                  onClick={() => commit({ page: 1 })}
+                  className="ml-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50"
+                >
+                  Go to the first page
+                </button>
+              )}
+              {anyFilter && state.page === 1 && (
+                <button
+                  type="button"
+                  onClick={() => setSearchParams(new URLSearchParams())}
+                  className="ml-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50"
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="hidden md:block">
+                <BatchJobsTable jobs={jobs} loading={list.loading} refreshing={list.refreshing && !live} now={now} onOpen={openJob} onCancel={setCancelTarget} />
+              </div>
+              <div className="md:hidden">
+                <BatchJobsMobileList jobs={jobs} loading={list.loading} now={now} onOpen={openJob} />
+              </div>
+            </>
+          )}
+          {pagination && jobs.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-2.5 py-2 text-[12.5px] text-gray-500">
+              <span className="tabular-nums">{firstRow.toLocaleString()}–{lastRow.toLocaleString()} of {pagination.total.toLocaleString()}</span>
+              <span className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={state.page <= 1}
+                  onClick={() => commit({ page: state.page - 1 })}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  disabled={!pagination.has_more}
+                  onClick={() => commit({ page: state.page + 1 })}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                >
+                  Next
+                </button>
+              </span>
+            </div>
+          )}
+        </section>
       </div>
+      <ConfirmDialog
+        open={cancelTarget !== null}
+        title="Cancel this batch?"
+        description={`Batch ${cancelTarget?.batch_id ?? ''} stops after the lines that are running now. Lines that did not start are cancelled. You cannot undo this.`}
+        confirmLabel="Cancel batch"
+        cancelLabel="Keep running"
+        destructive
+        confirming={cancelling}
+        onConfirm={() => void confirmCancel()}
+        onClose={() => setCancelTarget(null)}
+      />
     </IndexShell>
   );
 }

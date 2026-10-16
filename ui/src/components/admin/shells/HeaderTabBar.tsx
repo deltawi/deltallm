@@ -25,7 +25,7 @@ export default function HeaderTabBar({ label, items = [], controls }: HeaderTabB
   return (
     <div className={`flex flex-col-reverse gap-3 xl:flex-row xl:items-end xl:justify-between ${hasTabs ? '' : 'pb-4'}`}>
       {hasTabs ? (
-        <nav aria-label={label} className="flex gap-1">
+        <nav aria-label={label} className="flex max-w-full gap-1 overflow-x-auto">
           {items.map((item) => (
             <Link
               key={item.to}

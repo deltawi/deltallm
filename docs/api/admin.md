@@ -723,7 +723,9 @@ The list response also contains `pagination` (`limit`, `count`, `has_more`, `nex
 |--------|----------|---------|
 | `GET` | `/ui/api/batches/summary` | Batch counts by status |
 | `GET` | `/ui/api/batches` | List batches |
+| `GET` | `/ui/api/batches/facets` | Models and teams that have batches, for the list filters |
 | `GET` | `/ui/api/batches/{batch_id}` | Get one batch with items and redacted webhook delivery state |
+| `GET` | `/ui/api/batches/{batch_id}/errors` | Failed lines in groups by safe error message |
 | `GET` | `/ui/api/batches/{batch_id}/webhook-deliveries` | Inspect redacted delivery state, including after batch metadata cleanup |
 | `POST` | `/ui/api/batches/{batch_id}/cancel` | Cancel a batch |
 | `POST` | `/ui/api/batches/{batch_id}/webhook-deliveries/{event_id}/replay` | Reschedule a failed webhook delivery while preserving its event ID and body |
@@ -735,6 +737,39 @@ The read routes (summary, list, detail, items, costs, and webhook inspection) ap
 - Every other organization or team membership shows only the batches that the account created, as
   recorded in `created_by_owner_account_id` when the batch was created. The batch must also be in
   one of the account's current organizations or teams.
+
+`GET /ui/api/batches` and `GET /ui/api/batches/summary` accept these filters. Each filter makes
+the result smaller. It never shows batches outside the caller's scope.
+
+| Parameter | Value |
+|-----------|-------|
+| `search` | Part of a batch ID or a model name |
+| `status` | One status or a comma-separated list, for example `in_progress,finalizing`. Unknown values are ignored. The summary does not accept it. |
+| `model` | The model name, exact match |
+| `endpoint` | `/v1/embeddings` or `/v1/chat/completions`. Other values return `400`. |
+| `team_id` | The team that created the batch |
+| `created_after` | An ISO 8601 time. A time without a time zone is UTC. |
+
+The summary returns `total`, `queued`, `in_progress`, `finalizing`, `completed`, `failed`,
+`cancelled`, and `expired`. `in_progress` includes the finalizing batches, as before.
+
+`GET /ui/api/batches/facets` accepts `created_after`. It returns `models` and `teams`, each a list of
+`value`, `label`, and `count`, most used first, at most 50 of each.
+
+`GET /ui/api/batches/{batch_id}` accepts these item parameters:
+
+| Parameter | Value |
+|-----------|-------|
+| `items_limit` | 1 to 500, default 50 |
+| `items_offset` or `after_line_number` | The page of lines. `after_line_number` is faster for later pages. |
+| `item_status` | `pending`, `in_progress`, `completed`, `failed`, or `cancelled`. Other values return `400`. |
+| `custom_id` | One custom ID, exact match |
+
+The detail response also contains `input_file_id`, `output_file_id`, and `error_file_id`.
+
+`GET /ui/api/batches/{batch_id}/errors` returns at most 20 groups of failed lines. Each group has
+`message`, `retry_category`, `code`, and `count`. The message is a safe message from the retry
+category. The response never contains the error text from the provider.
 
 A batch outside this scope returns `403`. The list response also contains `view`. The value is
 `own` when the caller sees only its own batches, and `operator` in all other cases.
