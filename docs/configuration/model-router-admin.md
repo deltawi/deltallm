@@ -21,6 +21,8 @@ provider may receive that data. It adds one provider call and latency. Customers
 pay the selector's actual provider cost even when an answer later fails; public
 response usage remains answer-only. Whole-response cache hits skip the selector.
 
+[Session affinity](#keep-each-conversation-on-one-model) skips the selector call on follow-up requests in a conversation.
+
 The defaults are two lanes, highest-capability `quality` as the safe default,
 a 750 ms timeout, and an 8,000-character input limit. Advanced settings allow
 2–8 lanes, consecutive ranks starting at zero, descriptions of 1–512 characters,
@@ -86,6 +88,28 @@ or making its metadata incompatible, including for temporarily disabled groups.
 All APIs and Batch workers must run the independent-selector release before
 you publish an external reference. Follow your deployment's rollout and rollback
 procedure when you enable it.
+
+## Keep each conversation on one model
+
+**Keep each conversation on one model** is on by default. Follow-up requests in a
+session go to the same lane and the same deployment, so the provider prompt cache
+keeps working:
+
+- Tool results and other requests without new user text reuse the lane. They make
+  no selector call and have no selector charge.
+- A new user message runs the selector again. The conversation can move up a lane,
+  but never down. A conversation in the top lane is not classified again.
+- If the pinned deployment fails, normal failover runs, and the session moves to
+  the deployment that answered.
+
+DeltaLLM finds the session from the `x-deltallm-session-id` or `x-session-id`
+header, the Claude Code and Codex session headers, `metadata.session_id`, or a
+fingerprint of the first messages. Send `x-deltallm-session-affinity: off` to
+classify one request on its own. **Session memory** in **Advanced selector
+settings** sets how long a session without requests is kept (60–86,400 seconds,
+3,600 by default). Sessions are kept in Redis; see the
+[session affinity design](../design/selector-session-affinity.md) for storage and
+failure behavior.
 
 ## Disable, import/export, canary and rollback
 

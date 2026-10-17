@@ -292,6 +292,12 @@ It does not receive credentials, unrestricted metadata, tool schemas, or attachm
 This prompt content goes to the configured classifier's provider.
 Before publication, qualify that provider's data-handling policy and the necessary routing tags.
 
+An optional `session` block (`enabled`, default `true`; `ttl_seconds`, 60–86,400, default
+3,600) keeps a conversation on one lane and deployment. A request without new user text reuses
+the session lane without classification. New user text classifies again, and the session lane
+is a floor. An omitted block means the defaults and is not stored. See
+[selector session affinity](../design/selector-session-affinity.md).
+
 Classification makes at most one provider attempt per external operation. Provider/parse/timeout
 or capacity failures select the configured safe lane; authentication, accounting and parent-deadline
 failures do not. The selected minimum rank is reused across retries, stream setup, MCP continuations

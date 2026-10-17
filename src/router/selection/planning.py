@@ -11,6 +11,7 @@ from src.router.context_policy import (
 )
 from src.router.selection.contracts import SelectorDecision, SelectorInvariantError
 from src.router.selection.lanes import SelectorLaneRouting
+from src.router.selection.session import preferred_deployment
 from src.router.strategies import RoutingStrategyImpl, StrategyStateSnapshot
 
 if TYPE_CHECKING:
@@ -76,6 +77,7 @@ async def order_candidates(
             partition[member.lane].append(deployment)
 
     minimum_rank = decision.minimum_rank if decision is not None else None
+    preferred = preferred_deployment(context)
     lanes: list[RouteCandidateLane] = []
     for lane in selector.policy.lanes:
         candidates = partition[lane.id]
@@ -83,8 +85,11 @@ async def order_candidates(
             candidates = candidates if lane.rank >= minimum_rank else []
             if candidates:
                 ordered = await strategy.order(candidates, context, snapshot)
-                candidates = order_context_candidates(
-                    cast("list[Deployment]", ordered), demand, context_policy
+                candidates = _prefer(
+                    order_context_candidates(
+                        cast("list[Deployment]", ordered), demand, context_policy
+                    ),
+                    preferred,
                 )
         lanes.append(RouteCandidateLane(lane.id, lane.rank, tuple(candidates)))
     if decision is None:
@@ -97,3 +102,17 @@ async def order_candidates(
         minimum_rank,
         None if deployments else "no_eligible_selector_lane",
     )
+
+
+def _prefer(candidates: list[Deployment], deployment_id: str | None) -> list[Deployment]:
+    """Try the session's last deployment first so its provider prompt cache stays warm.
+
+    Only hard-filtered, healthy, fitting candidates reach this point; the others keep
+    the strategy order as failover targets.
+    """
+    if deployment_id is None:
+        return candidates
+    for index, deployment in enumerate(candidates):
+        if deployment.deployment_id == deployment_id:
+            return [deployment, *candidates[:index], *candidates[index + 1 :]]
+    return candidates

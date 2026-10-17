@@ -13,7 +13,7 @@ from src.models.errors import ProxyError, RoutingFailureAction
 from src.models.responses import UserAPIKeyAuth
 from src.router.execution import RequestDeadline
 from src.router.runtime_generation import RoutingRuntimeGeneration
-from src.router.selection.contracts import SelectorDecision
+from src.router.selection.contracts import SelectorCause, SelectorDecision
 from src.router.selection.operation import (
     SelectorOperation,
     SelectorPrincipal,
@@ -22,7 +22,13 @@ from src.router.selection.operation import (
 from src.router.selection.request_context import set_request_selector_state
 from src.router.selection.request_state import RequestSelectorState
 from src.router.selection.runtime import SelectorExecutionFactory
-from src.routers.routing_decision import attach_selector_decision
+from src.router.selection.session import (
+    SelectorSession,
+    SelectorSessionStore,
+    has_new_user_text,
+)
+from src.router.selection.session_identity import selector_session_identity
+from src.routers.routing_decision import attach_selector_decision, attach_selector_session
 from src.services.access.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
@@ -77,15 +83,37 @@ def bind_selector_operation(
         cache=cache,
         capacity_owner=runtime.router.state,
         authorize=lambda target: _authorize(request, runtime, auth, target),
-        observe=lambda decision: attach_selector_decision(
-            request, ProtectedSelectorDecision.from_decision(decision)
-        ),
+        observe=lambda decision: _observe_decision(request, decision),
         run_connected=lambda work: _while_connected(request, work),
         context=context,
         planner=runtime.router,
+        session=_selector_session(request, payload=payload, auth=auth),
     )
     bind_selector_preparation(context, operation)
     return deadline
+
+
+def _selector_session(
+    request: Request, *, payload: ChatCompletionRequest, auth: UserAPIKeyAuth
+) -> SelectorSession | None:
+    store = getattr(request.app.state, "selector_session_store", None)
+    if store is None:
+        return None
+    identity = selector_session_identity(
+        headers=request.headers, payload=payload, api_key=auth.api_key
+    )
+    if identity is None:
+        return None
+    session_store: SelectorSessionStore = store
+    return SelectorSession(identity, session_store, new_user_turn=has_new_user_text(payload))
+
+
+def _observe_decision(request: Request, decision: SelectorDecision) -> None:
+    if decision.cause is SelectorCause.SESSION_PINNED:
+        # No classifier ran, so the answer must not reference a selector charge.
+        attach_selector_session(request, lane=decision.lane, rank=decision.minimum_rank)
+        return
+    attach_selector_decision(request, ProtectedSelectorDecision.from_decision(decision))
 
 
 def _authorize(
