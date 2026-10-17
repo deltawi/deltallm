@@ -6,6 +6,7 @@ import type { RouteGroupMemberDetail } from '../../lib/api';
 import { chooseSelector } from '../../lib/routeGroupSelector';
 import { supportsContextRouting, type PolicyGuidedValues } from '../../lib/routeGroups';
 import { inputClass, NumberedCard } from './AdvancedRoutingCards';
+import { QUALITY_ROUTING_DESCRIPTION, QUALITY_ROUTING_TITLE, QualitySensitivityPicker } from './QualityRoutingCard';
 import RouteGroupSelectorEditor from './RouteGroupSelectorEditor';
 
 interface OptionCardProps {
@@ -112,6 +113,39 @@ export function SelectorCard({ values, workloadMode, disabled, changed, onChange
           <fieldset disabled={disabled}>
             <RouteGroupSelectorEditor routeGroupId={routeGroupId} values={values} onChange={onChange} members={members} workloadMode={workloadMode} bare />
           </fieldset>
+        </div>
+      ) : null}
+    </NumberedCard>
+  );
+}
+
+export function QualityCard({ values, workloadMode, disabled, changed, onChange }: OptionCardProps) {
+  const chat = workloadMode === 'chat';
+  const setting = values.quality;
+  const on = !!setting?.deprioritize;
+  const sensitivity = setting?.sensitivity ?? 'balanced';
+  return (
+    <NumberedCard
+      step={6}
+      title={QUALITY_ROUTING_TITLE}
+      changed={changed}
+      description={!chat
+        ? 'Works only for chat groups.'
+        : setting === undefined
+          ? 'The draft has quality settings that only the JSON view shows.'
+          : QUALITY_ROUTING_DESCRIPTION}
+      action={chat && setting !== undefined ? (
+        <span className="flex items-center gap-2">
+          <StatePill on={on} />
+          <ToggleSwitch checked={on} disabled={disabled} activeColor="rgb(var(--brand-primary))" aria-label={QUALITY_ROUTING_TITLE}
+            onCheckedChange={(next) => onChange({ ...values, quality: { deprioritize: next, sensitivity } })} />
+        </span>
+      ) : undefined}
+    >
+      {chat && on ? (
+        <div className="px-4 py-3">
+          <QualitySensitivityPicker sensitivity={sensitivity} disabled={disabled} sentLast={null}
+            onChange={(next) => onChange({ ...values, quality: { deprioritize: true, sensitivity: next } })} />
         </div>
       ) : null}
     </NumberedCard>

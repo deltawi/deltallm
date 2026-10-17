@@ -63,6 +63,7 @@ const testSources = [
   'tests/routeGroupsPolicy.test.ts',
   'tests/routeGroupRouting.test.ts',
   'tests/routeGroupRoutingTab.test.tsx',
+  'tests/routeGroupQuality.test.tsx',
   'tests/routeGroupEditorControls.test.tsx',
   'tests/routeGroupPromptTab.test.tsx',
   'tests/routeGroupSelector.test.ts',

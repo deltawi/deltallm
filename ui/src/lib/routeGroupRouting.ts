@@ -1,13 +1,15 @@
 import { effectiveRouteGroupStrategy, orderedGuidedMemberIds, toGuidedPolicy } from './routeGroups';
 import type { RouteGroupMemberDetail } from './api/routeGroups';
+import { qualitySettingLabel, readQualitySetting, sameQualitySetting, type QualitySetting } from './routeGroupQuality';
 
 /*
  * Simple routing maps three plain choices onto policy documents:
  *   even   -> simple-shuffle, every enabled group member (no member list)
  *   backup -> priority-based-routing, explicit member list, priority = position
  *   split  -> weighted, explicit member list, weight = percentage (0% is left out)
- * Anything else (other strategies, selector, context, timeouts, custom retries,
- * per-member extras) is only editable in advanced routing.
+ * plus the optional "send low-quality models last" setting. Anything else (other
+ * strategies, selector, context, timeouts, custom retries, per-member extras) is
+ * only editable in advanced routing.
  */
 
 export type SimpleChoice = 'even' | 'backup' | 'split';
@@ -22,6 +24,8 @@ export interface SimpleRouting {
   retry: SimpleRetry;
   /** Models the live policy lists but the group has paused. A save keeps them, so they route as before once they are back. */
   paused?: PausedMember[];
+  /** Null when the policy has no quality setting; a save then leaves it out. */
+  quality?: QualitySetting | null;
 }
 
 export interface PausedMember {
@@ -72,7 +76,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   'tag-based-routing': 'Tag based (legacy)',
 };
 
-const SIMPLE_POLICY_KEYS = new Set(['strategy', 'mode', 'members', 'retry', 'timeouts', 'context', 'selector']);
+const SIMPLE_POLICY_KEYS = new Set(['strategy', 'mode', 'members', 'retry', 'timeouts', 'context', 'selector', 'quality']);
 const SIMPLE_MEMBER_KEYS = new Set(['deployment_id', 'enabled', 'weight', 'priority']);
 const EXTRA_MEMBER_SETTINGS = 'It has per-model settings that only advanced routing shows.';
 
@@ -184,6 +188,8 @@ export function readSimpleRouting(
   if (isRecord(doc.timeouts) && Object.keys(doc.timeouts).length > 0) add('It sets a request timeout.');
   const retry = readSimpleRetry(doc.retry);
   if (retry === null) add('It uses custom retry settings.');
+  const quality = readQualitySetting(doc.quality);
+  if (quality === undefined) add('It has quality settings that only the JSON view shows.');
   const strategy = effectiveRouteGroupStrategy(policy, groupDefault ?? null) ?? 'simple-shuffle';
   const choice = (Object.keys(CHOICE_STRATEGY) as SimpleChoice[]).find((key) => CHOICE_STRATEGY[key] === strategy);
   if (!choice) add(`It uses the ${strategyLabel(strategy)} strategy.`);
@@ -209,9 +215,9 @@ export function readSimpleRouting(
       priorities.set(id, typeof entry.priority === 'number' ? entry.priority : null);
     }
   }
-  if (reasons.length > 0 || !choice || retry === null) return { routing: null, reasons };
+  if (reasons.length > 0 || !choice || retry === null || quality === undefined) return { routing: null, reasons };
 
-  const base: SimpleRouting = { choice, order: [], percents: {}, retry };
+  const base: SimpleRouting = { choice, order: [], percents: {}, retry, quality };
   if (choice === 'even') {
     if (listed && routable.some((id) => !listed?.includes(id))) {
       return { routing: null, reasons: ['It uses only some of the group’s models.'] };
@@ -323,6 +329,7 @@ export function buildSimpleRoutingPolicy(routing: SimpleRouting, members: Routin
   } else if (routing.retry === 'off') {
     policy.retry = { max_attempts: 0 };
   }
+  if (routing.quality) policy.quality = { ...routing.quality };
   return policy;
 }
 
@@ -412,6 +419,9 @@ export function simpleRoutingChanges(
     }
   }
   if (baseline.retry !== current.retry) changes.push(RETRY_LABEL[current.retry]);
+  if (!sameQualitySetting(baseline.quality, current.quality)) {
+    changes.push(`Send low-quality models last: ${qualitySettingLabel(current.quality)}`);
+  }
   return changes;
 }
 

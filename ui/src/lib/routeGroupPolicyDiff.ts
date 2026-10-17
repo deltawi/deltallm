@@ -1,4 +1,5 @@
 import { effectiveRouteGroupStrategy } from './routeGroups';
+import { qualitySettingLabel, readQualitySetting } from './routeGroupQuality';
 import { strategyLabel } from './routeGroupRouting';
 
 export interface PolicyChange {
@@ -14,7 +15,7 @@ export interface DiffLine {
 
 type Policy = Record<string, unknown>;
 
-const KNOWN_KEYS = new Set(['strategy', 'mode', 'members', 'timeouts', 'retry', 'context', 'selector']);
+const KNOWN_KEYS = new Set(['strategy', 'mode', 'members', 'timeouts', 'retry', 'context', 'selector', 'quality']);
 export const RETRY_CLASS_LABELS: Record<string, string> = {
   timeout: 'Timeout',
   rate_limit: 'Rate limit',
@@ -152,6 +153,8 @@ export function policyChanges(
   if (selector[0] === selector[1] && stableJson(before?.selector ?? null) !== stableJson(after.selector ?? null)) {
     push('Model selector', selector[0], `${selector[1]} (settings changed)`);
   } else push('Model selector', selector[0], selector[1]);
+
+  push('Send low-quality models last', qualitySettingLabel(readQualitySetting(before?.quality)), qualitySettingLabel(readQualitySetting(after.quality)));
 
   const rest = (policy: Policy | null) => Object.fromEntries(Object.entries(policy ?? {}).filter(([key]) => !KNOWN_KEYS.has(key)));
   if (stableJson(rest(before)) !== stableJson(rest(after))) push('Other settings', 'Before', 'Changed (see JSON)');

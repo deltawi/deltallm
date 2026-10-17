@@ -1,3 +1,4 @@
+import { readQualitySetting, type QualitySetting } from './routeGroupQuality';
 import { applyGuidedSelector, readGuidedSelector, selectorDefaults, validateGuidedSelector, type GuidedSelector } from './routeGroupSelector';
 
 export const ROUTE_GROUP_MODE_OPTIONS = ['chat', 'embedding', 'image_generation', 'audio_speech', 'audio_transcription', 'realtime', 'rerank'] as const;
@@ -117,6 +118,8 @@ export interface PolicyGuidedValues {
   contextUnknownCapacity: 'allow' | 'exclude';
   contextDefaultOutputTokens: string;
   contextSafetyMarginTokens: string;
+  /** Null when the policy has no quality block, undefined when only the JSON view can show it. */
+  quality: QualitySetting | null | undefined;
 }
 
 export const GUIDED_POLICY_DEFAULTS: PolicyGuidedValues = {
@@ -132,6 +135,7 @@ export const GUIDED_POLICY_DEFAULTS: PolicyGuidedValues = {
   contextUnknownCapacity: 'allow',
   contextDefaultOutputTokens: '1024',
   contextSafetyMarginTokens: '256',
+  quality: null,
 };
 
 export { mutationOutcome as routeGroupMutationOutcome } from './mutationOutcome';
@@ -229,7 +233,7 @@ export function restoreDraftPolicyTombstones(
   publishedPolicy: Record<string, unknown> | null,
 ): Record<string, unknown> {
   const restored = { ...draftPolicy };
-  for (const key of ['context', 'selector']) {
+  for (const key of ['context', 'selector', 'quality']) {
     if (publishedPolicy && key in publishedPolicy && !(key in draftPolicy)) {
       restored[key] = null;
     }
@@ -293,6 +297,7 @@ export function toGuidedPolicy(
     contextSafetyMarginTokens: contextBlock
       ? toIntegerString(contextBlock.safety_margin_tokens ?? 256, 0)
       : GUIDED_POLICY_DEFAULTS.contextSafetyMarginTokens,
+    quality: readQualitySetting(policy.quality),
   };
 }
 
@@ -450,6 +455,9 @@ export function buildPolicyFromGuided(
     );
     policy.context = currentContext;
   }
+
+  // A block that the form cannot show stays as it is.
+  if (guided.quality) policy.quality = { ...guided.quality };
 
   return applyGuidedSelector(policy, basePolicy, guided.selector);
 }
