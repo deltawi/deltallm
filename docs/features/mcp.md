@@ -147,6 +147,10 @@ Streaming requests (`"stream": true`) also work. DeltaLLM streams the model text
 each MCP tool call between model answers, and continues in the same response. The client does not
 see the MCP tool call chunks. For the stream format, see [Streaming](../api/mcp.md#streaming).
 
+If a caller can see many tools, set `"tool_search": true` on the MCP entry. The model then gets
+one search tool and DeltaLLM adds only the tools that match its search. Use `"server": "*"` to
+search all tools that the caller can see. See [Tool search](../api/mcp.md#tool-search).
+
 The `usage` of a request is the sum of all model calls that the request made, so the spend includes
 the model calls that asked for tools.
 

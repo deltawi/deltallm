@@ -76,6 +76,8 @@ class MCPToolDefinition(BaseModel):
     server: str
     allowed_tools: list[str] | None = None
     require_approval: Literal["never"] = "never"
+    # Give the model a search tool instead of the full tool list.
+    tool_search: bool = False
 
 
 ToolDefinition: TypeAlias = FunctionToolDefinition | MCPToolDefinition

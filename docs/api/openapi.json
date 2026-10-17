@@ -2574,6 +2574,11 @@
             "title": "Server",
             "type": "string"
           },
+          "tool_search": {
+            "default": false,
+            "title": "Tool Search",
+            "type": "boolean"
+          },
           "type": {
             "const": "mcp",
             "default": "mcp",
