@@ -105,8 +105,9 @@ The build itself is pinned too:
 - Every third-party GitHub Action is pinned to a full commit SHA with its version in a comment.
   A test in the CI suite (`tests/test_release_supply_chain.py`) fails if a workflow uses a tag or
   branch instead.
-- Dependabot opens grouped weekly pull requests to move those pins forward, so updates are
-  reviewed like any other change.
+- Dependabot opens at most one grouped weekly pull request to move those pins forward, so
+  updates are reviewed like any other change. It proposes a version only after it has been
+  public for 7 days, and it skips major versions, which maintainers upgrade by hand.
 - The Dockerfile pins its Node and Python base images and the Dockerfile syntax frontend by
   digest, installs Python dependencies from the locked `uv.lock` with `--frozen`, and runs as the
   non-root user `10001`.

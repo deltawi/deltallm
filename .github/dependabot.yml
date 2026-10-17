@@ -6,11 +6,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Propose a release only after it has been public for a week, so a
+    # compromised version is usually pulled before it reaches this repo.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
     groups:
       github-actions:
         patterns:
           - "*"
+    # Major versions can change inputs or artifact formats; upgrade them by hand.
+    ignore:
+      - dependency-name: "*"
         update-types:
-          - minor
-          - patch
+          - version-update:semver-major
