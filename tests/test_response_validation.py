@@ -274,3 +274,10 @@ async def test_scope_does_not_heal_by_default() -> None:
     scope = ResponseValidationScope(_request(response_format={"type": "json_object"}), SETTINGS)
     with pytest.raises(ResponseValidationError):
         await scope.checked(_deployment(), _result(_response({"content": "```json\n{}\n```"})))
+
+
+def test_heal_json_text_slices_large_answers_without_scanning() -> None:
+    body = '{"items": [' + ",".join(['"x"'] * 20_000) + "]}"
+    assert heal_json_text(f"```json\n{body}\n```", require_object=True) == body
+    trailing = '{"items": [' + ",".join(['"x"'] * 20_000) + ",]}"
+    assert heal_json_text(trailing, require_object=True) is None
