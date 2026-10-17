@@ -53,13 +53,13 @@ export default function CreateDrawer({
   return (
     <Modal open={open} onClose={onClose} title="Create Model Group" description="Name the group and pick its models. You can add models later." wide footer={(
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
-          <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+          <button onClick={onClose} className="control-md rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50">
             Cancel
           </button>
           <button
             onClick={onCreate}
             disabled={creating}
-            className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+            className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             {creating ? 'Creating…' : models.length > 0 ? 'Create group' : 'Create and continue →'}
           </button>
@@ -86,7 +86,7 @@ export default function CreateDrawer({
                   placeholder="Customer Support"
                   maxLength={64}
                   data-autofocus="true"
-                  className="min-w-0 flex-1 rounded-r-lg px-3 py-2 text-sm focus:outline-none"
+                  className="control-field-inset min-w-0 flex-1 rounded-r-lg px-3 focus:outline-none"
                 />
               </div>
               <p className="mt-1 text-xs text-gray-400">
@@ -108,7 +108,7 @@ export default function CreateDrawer({
                 }}
                 placeholder="prod-chat-primary"
                 data-autofocus="true"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="mt-1 text-xs text-gray-400">Stable key used by clients, policies, and bindings.</p>
             </div>
@@ -129,7 +129,7 @@ export default function CreateDrawer({
                   // Picked models must support the workload type.
                   if (models.length > 0) onModelsChange([]);
                 }}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {ROUTE_GROUP_MODE_OPTIONS.map((m) => (
                   <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>
@@ -144,7 +144,7 @@ export default function CreateDrawer({
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder="Production Chat"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                  className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
             ) : null}

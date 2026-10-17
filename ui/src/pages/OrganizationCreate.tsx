@@ -593,7 +593,7 @@ export default function OrganizationCreate() {
                   onChange={(event) => { setName(event.target.value); setNameError(false); }}
                   onBlur={() => setNameError(!name.trim())}
                   placeholder="e.g. Acme Corp"
-                  className={`w-full rounded-lg border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ${
+                  className={`control-field w-full rounded-lg border px-3 focus:outline-none focus:ring-2 ${
                     nameError ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-brand-primary'
                   }`}
                 />
@@ -655,7 +655,7 @@ export default function OrganizationCreate() {
                           value={selectedTierId}
                           onChange={(event) => setSelectedTierId(event.target.value)}
                           disabled={tiersLoading || availableTiers.length === 0}
-                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50"
+                          className="control-field w-full rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50"
                         >
                           {availableTiers.length === 0 && <option value="">No active tiers available</option>}
                           {availableTiers.map((tier) => (
@@ -746,7 +746,7 @@ export default function OrganizationCreate() {
                         step="0.01"
                         value={budgetValue}
                         onChange={(event) => setBudgetValue(event.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div>
@@ -758,7 +758,7 @@ export default function OrganizationCreate() {
                         step="0.01"
                         value={softBudgetValue}
                         onChange={(event) => setSoftBudgetValue(event.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div className="sm:col-span-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -776,7 +776,7 @@ export default function OrganizationCreate() {
                             type="datetime-local"
                             value={budgetResetAt}
                             onChange={(event) => setBudgetResetAt(event.target.value)}
-                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                            className="control-field w-full rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           />
                         </div>
                       )}
@@ -830,7 +830,7 @@ export default function OrganizationCreate() {
                               value={hardCaps[cap.field]}
                               onChange={(event) => setHardCaps((current) => ({ ...current, [cap.field]: event.target.value }))}
                               placeholder={cap.placeholder}
-                              className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                              className="control-field w-full rounded-lg border border-gray-300 px-3 pr-14 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             />
                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-gray-400">{cap.unit}</span>
                           </div>
@@ -965,7 +965,7 @@ export default function OrganizationCreate() {
                   <button
                     type="button"
                     onClick={() => navigate('/organizations')}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    className="control-md rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50"
                   >
                     Cancel
                   </button>
@@ -973,7 +973,7 @@ export default function OrganizationCreate() {
                     type="button"
                     onClick={continueToGuardrails}
                     disabled={!canContinue}
-                    className="inline-flex items-center gap-1 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    className="control-md inline-flex items-center gap-1 rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Continue <ChevronRight className="h-3.5 w-3.5" />
                   </button>
@@ -984,7 +984,7 @@ export default function OrganizationCreate() {
                     type="button"
                     onClick={() => setStep(1)}
                     disabled={saving}
-                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    className="control-md inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                   >
                     <ArrowLeft className="h-3.5 w-3.5" /> Back
                   </button>
@@ -992,7 +992,7 @@ export default function OrganizationCreate() {
                     type="button"
                     onClick={handleCreate}
                     disabled={!canCreate || saving}
-                    className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {saving ? 'Creating…' : 'Create organization'}
                   </button>

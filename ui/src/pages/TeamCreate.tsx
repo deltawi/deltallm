@@ -471,7 +471,7 @@ export default function TeamCreate() {
                   onBlur={() => setNameError(!teamName.trim())}
                   placeholder="e.g. Engineering, Data Science…"
                   disabled={saving}
-                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary transition-colors disabled:opacity-50 ${
+                  className={`control-field w-full px-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary transition-colors disabled:opacity-50 ${
                     nameError ? 'border-red-400 focus:ring-red-400' : 'border-gray-300'
                   }`}
                 />
@@ -524,7 +524,7 @@ export default function TeamCreate() {
                         type="number"
                         min="0"
                         step="0.01"
-                        className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field w-full pl-7 pr-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     {selectedOrg?.max_budget != null && (
@@ -562,7 +562,7 @@ export default function TeamCreate() {
                       placeholder={selectedOrg?.rpm_limit ? `max ${selectedOrg.rpm_limit.toLocaleString()}` : 'unlimited'}
                       type="number"
                       min="1"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                      className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     />
                   </div>
                 )}
@@ -594,7 +594,7 @@ export default function TeamCreate() {
                       placeholder={selectedOrg?.tpm_limit ? `max ${selectedOrg.tpm_limit.toLocaleString()}` : 'unlimited'}
                       type="number"
                       min="1"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                      className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     />
                   </div>
                 )}
@@ -629,7 +629,7 @@ export default function TeamCreate() {
                       placeholder={selectedOrg?.rph_limit ? `max ${selectedOrg.rph_limit.toLocaleString()}` : 'unlimited'}
                       type="number"
                       min="1"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
                 )}
@@ -661,7 +661,7 @@ export default function TeamCreate() {
                       placeholder={selectedOrg?.rpd_limit ? `max ${selectedOrg.rpd_limit.toLocaleString()}` : 'unlimited'}
                       type="number"
                       min="1"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
                     />
                   </div>
                 )}
@@ -693,7 +693,7 @@ export default function TeamCreate() {
                       placeholder={selectedOrg?.tpd_limit ? `max ${selectedOrg.tpd_limit.toLocaleString()}` : 'unlimited'}
                       type="number"
                       min="1"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+                      className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500"
                     />
                   </div>
                 )}
@@ -891,14 +891,14 @@ export default function TeamCreate() {
               <button
                 onClick={handleCancel}
                 disabled={saving}
-                className="px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                className="control-sm font-medium text-gray-700 border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreate}
                 disabled={saving || !isReady || assetAccessLoading || Boolean(assetAccessLoadError)}
-                className="px-3 py-1.5 text-xs font-medium text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="control-sm font-medium text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? 'Creating…' : 'Create Team'}
               </button>

@@ -20,7 +20,7 @@ export interface AudienceOptions {
   refetch: () => void;
 }
 
-const fieldClass = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50 disabled:text-gray-500';
+const fieldClass = 'control-field w-full rounded-lg border border-gray-200 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50 disabled:text-gray-500';
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -139,7 +139,7 @@ export default function RouteGroupSettingsTab({
             <label className="block space-y-1 text-xs font-medium text-gray-700">
               <span>Group key</span>
               <span className="flex overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
-                <input className="min-w-0 flex-1 bg-transparent px-3 py-2 font-mono text-sm text-gray-700 focus:outline-none" value={group.group_key} readOnly aria-describedby="route-group-key-fixed" />
+                <input className="control-field-inset min-w-0 flex-1 bg-transparent px-3 font-mono text-gray-700 focus:outline-none" value={group.group_key} readOnly aria-describedby="route-group-key-fixed" />
                 <span id="route-group-key-fixed" className="border-l border-gray-200 px-3 py-2 text-xs font-normal text-gray-500">Fixed</span>
               </span>
             </label>

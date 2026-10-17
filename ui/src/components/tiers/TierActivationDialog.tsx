@@ -75,19 +75,19 @@ export default function TierActivationDialog({
               type="button"
               onClick={onRefresh}
               disabled={loading || activating}
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="control-md inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               <RefreshCw aria-hidden="true" className="h-4 w-4" />
               Refresh preview
             </button>
             <div className="flex gap-2">
-              <button type="button" onClick={onClose} disabled={activating} className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={onClose} disabled={activating} className="control-md rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
               <button
                 type="button"
                 data-autofocus="true"
                 onClick={onActivate}
                 disabled={!preview.can_activate || activating}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+                className="control-md inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
               >
                 <Send aria-hidden="true" className="h-4 w-4" />
                 {activating ? 'Activating…' : `Activate v${preview.draft.version_number}`}
@@ -98,7 +98,7 @@ export default function TierActivationDialog({
       ) : (
         <div className="space-y-3 py-6 text-center">
           <p className="text-sm text-gray-600">{error || 'Activation preview is unavailable.'}</p>
-          <button type="button" onClick={onRefresh} className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover">Try again</button>
+          <button type="button" onClick={onRefresh} className="control-md rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover">Try again</button>
         </div>
       )}
     </Modal>

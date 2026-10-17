@@ -37,7 +37,7 @@ export default function OrganizationTierAssignmentDrawer({
   onClose,
   onSave,
 }: OrganizationTierAssignmentDrawerProps) {
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
   const selectedTier = tierOptions.find((tier) => tier.tier_id === form.tier_id);
   const enabledTierConflict = form.enabled && selectedTier?.enabled === false;
 
@@ -106,8 +106,8 @@ export default function OrganizationTierAssignmentDrawer({
           </label>
         </div>
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
-          <button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
-          <button type="button" onClick={onSave} disabled={saving || enabledTierConflict} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50">
+          <button type="button" onClick={onClose} disabled={saving} className="control-md rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+          <button type="button" onClick={onSave} disabled={saving || enabledTierConflict} className="control-md inline-flex items-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50">
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save'}
           </button>

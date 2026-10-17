@@ -70,7 +70,7 @@ export default function TierPolicyPreviewPanel({
             <button
               type="button"
               onClick={onRefresh}
-              className="rounded-lg border border-white/60 bg-white/70 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white"
+              className="control-sm rounded-lg border border-white/60 bg-white/70 font-semibold text-gray-700 hover:bg-white"
             >
               Refresh
             </button>

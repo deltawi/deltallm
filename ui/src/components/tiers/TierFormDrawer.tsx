@@ -136,7 +136,7 @@ export default function TierFormDrawer({
               onChange={(event) => onChange({ ...values, tier_key: event.target.value })}
               placeholder="enterprise"
               disabled={saving}
-              className={inputClassName}
+              className={`${inputClassName} control-field`}
             />
             <p className="mt-1 text-xs text-gray-400">Stable identifier used in logs, spend metadata, and assignment history.</p>
           </div>
@@ -149,7 +149,7 @@ export default function TierFormDrawer({
               onChange={(event) => onChange({ ...values, name: event.target.value })}
               placeholder="Enterprise"
               disabled={saving}
-              className={inputClassName}
+              className={`${inputClassName} control-field`}
             />
           </div>
 
@@ -186,14 +186,14 @@ export default function TierFormDrawer({
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="control-md rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+            className="control-md rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             {saving ? 'Saving...' : submitLabel}
           </button>

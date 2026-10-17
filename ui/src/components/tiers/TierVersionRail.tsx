@@ -64,7 +64,7 @@ export default function TierVersionRail({
             type="button"
             onClick={primaryAction.action}
             disabled={busy}
-            className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+            className="control-md mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             <PrimaryActionIcon aria-hidden="true" className="h-3.5 w-3.5" />
             {primaryAction.label}
@@ -104,7 +104,7 @@ export default function TierVersionRail({
             type="button"
             onClick={onLoadMoreArchived}
             disabled={busy}
-            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            className="control-md w-full rounded-lg border border-gray-200 font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             Load 10 more archived versions
           </button>
@@ -118,7 +118,7 @@ export default function TierVersionRail({
               type="button"
               onClick={() => onClone(selected)}
               disabled={busy}
-              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-brand-primary-ink hover:bg-blue-50 disabled:opacity-50"
+              className="control-md inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-white font-semibold text-brand-primary-ink hover:bg-blue-50 disabled:opacity-50"
             >
               <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
               Restore as draft
@@ -128,7 +128,7 @@ export default function TierVersionRail({
               type="button"
               onClick={() => onClone(selected)}
               disabled={busy}
-              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+              className="control-md inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-50"
             >
               <Copy aria-hidden="true" className="h-3.5 w-3.5" />
               Clone as new draft
@@ -139,7 +139,7 @@ export default function TierVersionRail({
               type="button"
               onClick={() => onArchive(selected)}
               disabled={busy}
-              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+              className="control-md inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white font-semibold text-gray-600 hover:bg-gray-100 disabled:opacity-50"
             >
               <Archive aria-hidden="true" className="h-3.5 w-3.5" />
               Archive version

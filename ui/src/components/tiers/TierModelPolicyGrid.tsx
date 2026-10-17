@@ -160,7 +160,7 @@ export default function TierModelPolicyGrid({
   const [poolLookupHasMore, setPoolLookupHasMore] = useState(false);
   const [poolLookupError, setPoolLookupError] = useState<string | null>(null);
   const locked = readOnly || saving;
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
   const sortedPolicies = useMemo(
     () => [...policies].sort((a, b) => a.callable_key.localeCompare(b.callable_key)),
@@ -340,7 +340,7 @@ export default function TierModelPolicyGrid({
             type="button"
             onClick={openNew}
             disabled={locked}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+            className="control-sm inline-flex items-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />
             Add model policy
@@ -367,7 +367,7 @@ export default function TierModelPolicyGrid({
                   setLocalError(null);
                   onDiscardConflict();
                 }}
-                className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                className="control-sm rounded-md border border-amber-300 bg-white font-semibold text-amber-900 hover:bg-amber-100"
               >
                 Discard my unsaved changes
               </button>
@@ -390,14 +390,14 @@ export default function TierModelPolicyGrid({
             value={searchInput}
             onChange={(event) => onSearchInputChange(event.target.value)}
             placeholder="Search models or capacity pools"
-            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            className="control-field-md w-full rounded-lg border border-gray-300 pl-9 pr-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
         </label>
         <select
           aria-label="Filter policies by enabled state"
           value={enabledFilter}
           onChange={(event) => onEnabledFilterChange(event.target.value as 'all' | 'enabled' | 'disabled')}
-          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+          className="control-field-md rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
         >
           <option value="all">All states</option>
           <option value="enabled">Enabled</option>
@@ -407,7 +407,7 @@ export default function TierModelPolicyGrid({
           aria-label="Filter policies by access"
           value={accessFilter}
           onChange={(event) => onAccessFilterChange(event.target.value as 'all' | 'allow' | 'deny')}
-          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+          className="control-field-md rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
         >
           <option value="all">Allow and deny</option>
           <option value="allow">Allow</option>
@@ -429,7 +429,7 @@ export default function TierModelPolicyGrid({
               type="button"
               onClick={applyBulk}
               disabled={locked || !Object.values(bulk).some((value) => value.trim())}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="control-md rounded-lg border border-gray-200 bg-white font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Apply to all filtered
             </button>
@@ -557,7 +557,7 @@ export default function TierModelPolicyGrid({
                       setLocalError(null);
                       onDiscardConflict();
                     }}
-                    className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900"
+                    className="control-sm rounded-md border border-amber-300 bg-white font-semibold text-amber-900"
                   >
                     Discard my unsaved changes
                   </button>
@@ -762,7 +762,7 @@ export default function TierModelPolicyGrid({
               type="button"
               onClick={saveForm}
               disabled={locked}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+              className="control-md inline-flex items-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
               {editingPolicy === 'new' ? 'Add policy' : 'Save policy'}
@@ -959,7 +959,7 @@ function BulkInput({ label, value, disabled, onChange }: { label: string; value:
         onChange={(event) => onChange(event.target.value)}
         placeholder={label}
         disabled={disabled}
-        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+        className="control-field w-full rounded-lg border border-gray-200 bg-white px-3 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
       />
     </label>
   );

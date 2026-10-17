@@ -139,7 +139,7 @@ export default function Dashboard() {
           {uiAccess.usage && (
             <Link
               to="/usage?range=30d"
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
+              className="control-md inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
             >
               Open Usage <ArrowRight className="h-4 w-4" />
             </Link>

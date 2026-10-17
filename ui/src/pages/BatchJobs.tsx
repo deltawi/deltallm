@@ -197,7 +197,7 @@ export default function BatchJobs() {
                 <button
                   type="button"
                   onClick={() => commit({ page: 1 })}
-                  className="ml-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50"
+                  className="control-sm ml-2 rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50"
                 >
                   Go to the first page
                 </button>
@@ -206,7 +206,7 @@ export default function BatchJobs() {
                 <button
                   type="button"
                   onClick={() => setSearchParams(new URLSearchParams())}
-                  className="ml-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50"
+                  className="control-sm ml-2 rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50"
                 >
                   Clear filters
                 </button>
@@ -230,7 +230,7 @@ export default function BatchJobs() {
                   type="button"
                   disabled={state.page <= 1}
                   onClick={() => commit({ page: state.page - 1 })}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                  className="control-sm rounded-lg border border-gray-200 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                 >
                   Previous
                 </button>
@@ -238,7 +238,7 @@ export default function BatchJobs() {
                   type="button"
                   disabled={!pagination.has_more}
                   onClick={() => commit({ page: state.page + 1 })}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                  className="control-sm rounded-lg border border-gray-200 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                 >
                   Next
                 </button>

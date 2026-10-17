@@ -391,7 +391,7 @@ export default function Guardrails() {
                   value={scopeSearch}
                   onChange={(e) => { setScopeSearch(e.target.value); setShowAll(false); }}
                   placeholder={`Search ${activeScope === 'organization' ? 'organizations' : activeScope === 'team' ? 'teams' : 'API keys'}…`}
-                  className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-xs text-gray-700 placeholder:text-gray-400 focus:border-violet-300 focus:outline-none focus:ring-1 focus:ring-brand-primary/20"
+                  className="control-field-md w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 text-xs text-gray-700 placeholder:text-gray-400 focus:border-violet-300 focus:outline-none focus:ring-1 focus:ring-brand-primary/20"
                 />
               </div>
               {filteredEntities.length === 0 ? (
