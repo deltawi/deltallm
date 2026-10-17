@@ -151,14 +151,16 @@ class ResponsesRequest(BaseModel):
 
 
 class AnthropicMessage(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Messages fields are an open list: new capabilities add fields that the native
+    # Anthropic hop forwards unchanged.
+    model_config = ConfigDict(extra="allow")
 
     role: Literal["user", "assistant", "system"]
     content: str | list[dict[str, Any]]
 
 
 class AnthropicMessagesRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     model: str
     messages: list[AnthropicMessage]

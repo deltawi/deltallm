@@ -14,6 +14,12 @@ from src.models.requests import ChatCompletionRequest
 from src.services.admission.output_token_context import OutputTokenContext
 from src.metrics import observe_request_phase
 from src.metrics.request_phases import track_request_phase
+from src.providers.anthropic_messages import (
+    NATIVE_MESSAGES_RESPONSE_KEY,
+    NativeMessagesRequest,
+    bind_native_messages_upstream,
+    served_native_response,
+)
 from src.providers.base import ProviderAdapter, read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
 from src.providers.chat_hop import HopOutcome, HopPhase, execute_chat_hop
@@ -65,6 +71,7 @@ async def execute_chat(
     deployment: Deployment,
     *,
     record_usage: bool = True,
+    native: NativeMessagesRequest | None = None,
 ) -> tuple[dict[str, Any], float]:
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
@@ -72,7 +79,9 @@ async def execute_chat(
     if context is not None:
         await context.begin()
     try:
-        return await _execute_chat(request, payload, deployment, record_usage=record_usage)
+        return await _execute_chat(
+            request, payload, deployment, record_usage=record_usage, native=native
+        )
     except BaseException:
         if context is not None:
             await context.finish()
@@ -85,10 +94,13 @@ async def _execute_chat(
     deployment: Deployment,
     *,
     record_usage: bool = True,
+    native: NativeMessagesRequest | None = None,
 ) -> tuple[dict[str, Any], float]:
     transform_started = perf_counter()
     params = deployment.deltallm_params
-    upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
+    upstream = bind_native_messages_upstream(
+        resolve_chat_upstream(request, params, is_stream=bool(payload.stream)), native
+    )
     adapter, timeout = upstream.adapter, upstream.timeout
     upstream_request = _upstream_chat_request(payload)
     upstream_payload = await adapter.translate_request(upstream_request, params)
@@ -131,6 +143,9 @@ async def _execute_chat(
     if context is not None:
         await context.finish()
     canonical_payload = canonical.model_dump(mode="json")
+    native_response = served_native_response(adapter)
+    if native_response is not None:
+        canonical_payload[NATIVE_MESSAGES_RESPONSE_KEY] = native_response
 
     if record_usage:
         router_state_backend = getattr(request.app.state, "router_state_backend", None)
@@ -163,7 +178,11 @@ def _observe_answer_hop(phase: HopPhase, outcome: HopOutcome, latency: float) ->
 
 
 async def open_stream_with_first_chunk(
-    request: Request, payload: ChatCompletionRequest, deployment: Deployment
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    *,
+    native: NativeMessagesRequest | None = None,
 ) -> OpenedStream:
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
@@ -171,7 +190,7 @@ async def open_stream_with_first_chunk(
     if context is not None:
         await context.begin()
     try:
-        return await _open_stream_with_first_chunk(request, payload, deployment)
+        return await _open_stream_with_first_chunk(request, payload, deployment, native=native)
     except BaseException:
         if context is not None:
             await context.finish()
@@ -182,10 +201,14 @@ async def _open_stream_with_first_chunk(
     request: Request,
     payload: ChatCompletionRequest,
     deployment: Deployment,
+    *,
+    native: NativeMessagesRequest | None = None,
 ) -> OpenedStream:
     transform_started = perf_counter()
     params = deployment.deltallm_params
-    upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
+    upstream = bind_native_messages_upstream(
+        resolve_chat_upstream(request, params, is_stream=bool(payload.stream)), native
+    )
     adapter, api_base, endpoint, headers, timeout = (
         upstream.adapter,
         upstream.api_base,

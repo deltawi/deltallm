@@ -46,6 +46,7 @@ from src.mcp.orchestrator import (
 )
 from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
+from src.providers.anthropic_messages import NATIVE_MESSAGES_RESPONSE_KEY, NativeMessagesRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
 from src.router import ROUTING_MODE_CONTEXT_KEY, require_initial_deployment
@@ -112,6 +113,7 @@ async def handle_chat_like_request(
     stream_error_transform: Callable[[ProxyError], str] | None = None,
     stream_response_object: str = "chat.completion.chunk",
     enable_stream_cache: bool = True,
+    native_messages: Callable[[ChatCompletionRequest], NativeMessagesRequest | None] | None = None,
 ):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -135,6 +137,8 @@ async def handle_chat_like_request(
     request_data = preflight.request_data
     callback_manager = preflight.callback_manager
     guardrail_middleware = preflight.guardrail_middleware
+    # Built after hooks and guardrails so the native body carries their changes.
+    native = native_messages(payload) if native_messages is not None else None
     has_mcp_tools = chat_request_has_mcp_tools(payload)
     if payload.stream and has_mcp_tools:
         raise InvalidRequestError(
@@ -203,7 +207,9 @@ async def handle_chat_like_request(
             managed_stream = await routing_runtime.failover_manager.execute_managed_with_failover(
                 primary_deployment=primary,
                 model_group=model_group,
-                execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
+                execute=lambda dep: open_stream_with_first_chunk(
+                    request, payload, dep, native=native
+                ),
                 on_attempt=track_attempt,
                 routing_context=request_context,
                 **failover_kwargs,
@@ -543,7 +549,9 @@ async def handle_chat_like_request(
             ) = await routing_runtime.failover_manager.execute_with_failover(
                 primary_deployment=primary,
                 model_group=model_group,
-                execute=lambda deployment: execute_chat(request, payload, deployment),
+                execute=lambda deployment: execute_chat(
+                    request, payload, deployment, native=native
+                ),
                 return_deployment=True,
                 on_attempt=track_attempt,
                 routing_context=request_context,
@@ -563,9 +571,13 @@ async def handle_chat_like_request(
         request.state.cache_store_deployment_model = (
             str(served_deployment.deltallm_params.get("model") or "") or None
         )
-        response_payload = (
-            response_transform(payload_data) if response_transform is not None else payload_data
-        )
+        native_response = payload_data.pop(NATIVE_MESSAGES_RESPONSE_KEY, None)
+        if native_response is not None:
+            response_payload = native_response
+        elif response_transform is not None:
+            response_payload = response_transform(payload_data)
+        else:
+            response_payload = payload_data
         api_provider = resolve_provider(served_deployment.deltallm_params)
         observation = selector_answer_observation(request_context)
         if observation is not None:

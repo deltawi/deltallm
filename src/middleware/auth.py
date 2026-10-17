@@ -22,6 +22,22 @@ from src.telemetry.event_identity import get_or_create_billing_event_id
 if TYPE_CHECKING:
     from src.config_runtime.dynamic import DynamicConfigManager
 
+# Anthropic SDKs and Claude Code send the key as `x-api-key`. Accept it only on the
+# Anthropic-compatible routes, and only when `Authorization` is absent.
+_X_API_KEY_PATHS = frozenset({"/v1/messages", "/v1/models"})
+
+
+def request_authorization(request: HTTPConnection) -> str | None:
+    """Return the request credential in `Authorization` form; the one resolver for auth."""
+
+    authorization = request.headers.get("authorization")
+    if authorization:
+        return authorization
+    if request.url.path.rstrip("/") not in _X_API_KEY_PATHS:
+        return None
+    api_key = (request.headers.get("x-api-key") or "").strip()
+    return f"Bearer {api_key}" if api_key else None
+
 
 async def authenticate_request(
     request: HTTPConnection,
@@ -46,7 +62,7 @@ async def _authenticate_request(
         return existing
 
     if authorization is None:
-        authorization = request.headers.get("authorization")
+        authorization = request_authorization(request)
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
 

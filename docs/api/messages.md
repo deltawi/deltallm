@@ -1,28 +1,38 @@
 # Anthropic Messages Endpoint
 
 DeltaLLM provides an Anthropic Messages API-compatible endpoint at `POST /v1/messages`.
-DeltaLLM converts requests to its standard chat format.
-It uses the same deployment routing, budgets, rate limits, and failover as `/v1/chat/completions`.
-The target model can use a configured provider other than Anthropic.
+It uses the same authentication, prompts, guardrails, model access, budgets, rate limits,
+routing, failover, and accounting as `/v1/chat/completions`.
+
+The provider hop depends on the deployment that serves the request:
+
+| Deployment | Provider hop |
+| --- | --- |
+| `provider: anthropic` | **Native.** DeltaLLM sends your Messages body to Anthropic unchanged and returns the Anthropic response unchanged. |
+| Any other provider | **Translation.** DeltaLLM converts the request to chat format and converts the answer back. |
+
+Use the native hop for coding agents such as Claude Code. See
+[Use coding agents](../guides/coding-agents.md).
 
 ## Authentication
 
-The endpoint uses the same authentication as every other proxy endpoint: `Authorization: Bearer YOUR_API_KEY`.
+Send the DeltaLLM key in one of these headers:
 
-The Anthropic SDKs send the API key in an `x-api-key` header by default.
-This endpoint does not accept that header.
+- `Authorization: Bearer YOUR_API_KEY`
+- `x-api-key: YOUR_API_KEY` (the Anthropic SDK default)
 
-Configure your client to send a bearer token.
-For the Python SDK, use `Anthropic(auth_token="YOUR_API_KEY", base_url="http://localhost:8000")`.
+If a request has both headers, DeltaLLM uses `Authorization`.
+DeltaLLM accepts `x-api-key` only on `/v1/messages` and `/v1/models`.
 
 ## Example
 
 ```bash
 curl http://localhost:8000/v1/messages \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "x-api-key: YOUR_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-4-5",
+    "model": "claude-sonnet-4-6",
     "max_tokens": 1024,
     "messages": [
       {"role": "user", "content": "Hello from DeltaLLM"}
@@ -32,21 +42,68 @@ curl http://localhost:8000/v1/messages \
 
 The `model` value is a DeltaLLM public model name, resolved through the gateway's routing configuration like any other endpoint.
 
-## Supported
+## Native hop (Anthropic deployments)
 
-- Text conversations with `system` prompts (string or text-block form)
-- `text`, `tool_use`, and `tool_result` content blocks, including the `is_error` flag on `tool_result` (forwarded as an `Error: ` prefix on the tool message content)
-- Tool calling: `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), including full pass-through to Anthropic and Bedrock deployments in their native formats
-- Streaming via `"stream": true` — responses use Anthropic SSE event types (`message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`), including streamed tool use
-- `max_tokens` (required), `temperature`, `top_p`, `stop_sequences`, `metadata`
+DeltaLLM forwards the request body as an open list. New Messages fields work without a
+DeltaLLM change. DeltaLLM changes only these fields:
 
-## Not Supported
+- `model`: the deployment's upstream model.
+- `max_tokens`: the value after DeltaLLM output policy.
+- `stream`: the request mode.
+- `metadata`: DeltaLLM keeps only `user_id`. Other keys are DeltaLLM controls.
 
-Unsupported input is rejected with a `400 invalid_request_error` — never silently dropped. This includes:
+Everything else goes to Anthropic unchanged. This includes `system` in block form,
+`cache_control`, `thinking` and signed thinking blocks, `image` and `document` blocks,
+`top_k`, `output_config`, `context_management`, and server tools.
 
-- `image` and `document` content blocks (and any other non-text, non-tool block types)
-- `top_k`
-- Extended thinking (top-level `thinking` field), prompt caching (`cache_control` on any block), citations (`citations` on text blocks), and any other unrecognized top-level field or block field
+Headers:
+
+- DeltaLLM forwards the client `anthropic-beta` header unchanged.
+- The client `anthropic-version` header replaces the deployment's `api_version`.
+
+Responses:
+
+- A non-streaming response is the Anthropic JSON, unchanged.
+- A streaming response relays each Anthropic SSE event in order, including `ping`,
+  `thinking_delta`, and `signature_delta` events.
+
+### Guardrails on the native hop
+
+Guardrails and pre-call hooks read the text of the request. If a guardrail changes text
+(for example, PII redaction), DeltaLLM writes the new text back into the text blocks of
+that message. The changed message keeps one text block that holds all of its text.
+
+If a hook adds or removes messages (for example, a prompt from the prompt registry),
+DeltaLLM uses the translation hop for that request. If that request also has content that
+only the native hop supports, DeltaLLM rejects it with a `400 invalid_request_error`.
+
+### Usage and cost
+
+Anthropic reports `input_tokens`, `cache_creation_input_tokens`, and
+`cache_read_input_tokens` separately. DeltaLLM records:
+
+- Prompt tokens: the sum of the three values.
+- Cached prompt tokens: `cache_read_input_tokens`.
+
+Cache reads use the model's `input_cost_per_token_cache_hit` price when it is set.
+Other prompt tokens, which include cache writes, use `input_cost_per_token`.
+
+## Translation hop (other providers)
+
+The translation hop supports:
+
+- `system` prompts (string or text-block form).
+- `text`, `tool_use`, and `tool_result` content blocks, including the `is_error` flag on `tool_result` (forwarded as an `Error: ` prefix on the tool message content).
+- Tool calling: `tools` and `tool_choice` (`auto`, `any`, `tool`, `none`).
+- Streaming via `"stream": true`, with Anthropic SSE event types.
+- `max_tokens` (required), `temperature`, `top_p`, `stop_sequences`, and `metadata`.
+
+The translation hop ignores fields that have no chat equivalent and do not change the
+content: `thinking`, earlier `thinking` blocks, `cache_control`, `citations`, `top_k`, and
+other unknown fields.
+
+The translation hop rejects content that it cannot carry with a `400 invalid_request_error`.
+This includes `image` and `document` blocks and server tools such as `web_search`.
 
 ## Errors
 
@@ -57,14 +114,13 @@ Errors use the Anthropic error envelope:
   "type": "error",
   "error": {
     "type": "invalid_request_error",
-    "message": "messages[0].content[1]: unsupported content block type 'image'; this endpoint only forwards text and tool blocks"
+    "message": "messages[0].content[1]: content block type 'image' is supported only when the model is served by an Anthropic deployment"
   }
 }
 ```
 
 Each failure before the response starts uses this envelope.
 This includes authentication, request validation, rate limits, budget exhaustion, and upstream or provider failures.
-DeltaLLM never forwards provider response bodies or messages.
 It maps the gateway status to an Anthropic error type:
 
 - `authentication_error`.
@@ -73,6 +129,12 @@ It maps the gateway status to an Anthropic error type:
 - `rate_limit_error`.
 - `overloaded_error`.
 - `api_error`.
+
+On the native hop, an Anthropic `invalid_request_error` with status `400`, `413`, or `422`
+keeps the Anthropic message text. The text describes the client's own request, and
+Anthropic clients use it to recover automatically (for example, Claude Code turns off a
+capability that the model rejects). DeltaLLM never forwards other provider messages or
+response bodies.
 
 For rate limits, DeltaLLM keeps a valid `Retry-After` header.
 
@@ -96,3 +158,14 @@ withholds the terminal event.
 The default `legacy` writer can swallow database-write failures, so `message_stop`
 in that mode does not prove that billing was persisted. See the shared
 [streaming accounting contract](proxy.md#streaming-accounting) for the mode-specific guarantees.
+
+## Limits
+
+- DeltaLLM rejects `mcp_servers`, `container`, and content with a `file` source
+  (`file_id`). These refer to objects in the deployment's Anthropic account, which all
+  DeltaLLM tenants share. Send file content inline instead.
+- DeltaLLM does not bill Anthropic server tools such as `web_search`. Anthropic charges
+  the deployment's account for them.
+- `/v1/messages/count_tokens` is not available. Claude Code then estimates context size.
+- Amazon Bedrock Claude deployments use the translation hop.
+- Anthropic `anthropic-ratelimit-*` response headers are not forwarded.

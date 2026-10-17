@@ -289,13 +289,13 @@ async def _resolve_request_auth(request: Request) -> Any | None:
     if auth is not None:
         return auth
 
-    authorization = request.headers.get("authorization")
+    from src.middleware.auth import authenticate_request, request_authorization
+
+    authorization = request_authorization(request)
     if not authorization:
         return None
 
     try:
-        from src.middleware.auth import authenticate_request
-
         return await authenticate_request(request, authorization=authorization)
     except Exception:
         return None

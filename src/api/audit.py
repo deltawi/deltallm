@@ -31,6 +31,8 @@ _SENSITIVE_KEYS = {
     "secret",
     "client_secret",
     "authorization",
+    "x-api-key",
+    "x_api_key",
     "x_master_key",
     "master_key",
 }

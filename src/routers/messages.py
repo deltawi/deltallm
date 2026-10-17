@@ -11,11 +11,12 @@ from src.middleware.errors import anthropic_error_payload, anthropic_error_respo
 from src.middleware.auth import require_api_key
 from src.models.errors import InvalidRequestError, ProxyError
 from src.models.requests import AnthropicMessagesRequest
+from src.providers.anthropic_messages import NativeSSEFrame
 from src.routers.anthropic_adapters import (
     AnthropicStreamTranslator,
-    anthropic_messages_to_chat_request,
     chat_response_to_anthropic_response,
 )
+from src.routers.anthropic_request_view import build_messages_policy_view
 from src.routers.chat import handle_chat_like_request
 
 router = APIRouter(prefix="/v1", tags=["messages"])
@@ -47,6 +48,12 @@ async def messages(request: Request):
             error_type="invalid_request_error",
             message="Invalid JSON body",
         )
+    if not isinstance(request_body, dict):
+        return anthropic_error_response(
+            status_code=400,
+            error_type="invalid_request_error",
+            message="Request body must be a JSON object",
+        )
 
     try:
         payload = AnthropicMessagesRequest.model_validate(request_body)
@@ -54,14 +61,27 @@ async def messages(request: Request):
         return _anthropic_validation_error_response(exc)
 
     try:
-        canonical = anthropic_messages_to_chat_request(payload)
+        view = build_messages_policy_view(
+            payload,
+            request_body,
+            anthropic_beta=request.headers.get("anthropic-beta"),
+            anthropic_version=request.headers.get("anthropic-version"),
+        )
     except InvalidRequestError as exc:
         return anthropic_error_response(
             status_code=exc.status_code,
             error_type=exc.error_type,
             message=exc.message,
         )
+    canonical = view.canonical
     translator = AnthropicStreamTranslator(model=payload.model)
+
+    def stream_line(line: str) -> str | None:
+        # Native frames already carry the provider's own event; relay it unchanged.
+        if isinstance(line, NativeSSEFrame):
+            return line.native
+        return translator.translate_line(line)
+
     if canonical.stream:
         # Messages always reports usage. Keep canonical evidence for its
         # translator, including the provider's usage-only terminal chunk.
@@ -70,8 +90,9 @@ async def messages(request: Request):
         request,
         canonical,
         response_transform=chat_response_to_anthropic_response,
-        stream_line_transform=translator.translate_line,
+        stream_line_transform=stream_line,
         stream_error_transform=_anthropic_stream_error_event,
         stream_response_object="message",
         enable_stream_cache=False,
+        native_messages=view.native_request,
     )
