@@ -24,3 +24,13 @@ def resolve_general_setting(
             if value is not _MISSING:
                 return cast(T, value)
     return cast(T, getattr(runtime_settings, field_name, default))
+
+
+def resolve_redis_degraded_mode(
+    general_settings: GeneralSettings | None,
+    runtime_settings: Settings | None,
+    default: str = "fail_open",
+) -> str:
+    return str(
+        resolve_general_setting(general_settings, runtime_settings, "redis_degraded_mode", default)
+    )

@@ -33,6 +33,9 @@ def configure_cache_runtime(
     if cache_settings.cache_backend == "memory":
         cache_backend = InMemoryBackend(max_size=cache_settings.cache_max_size)
     elif cache_settings.cache_backend == "redis":
+        if redis_client is None:
+            logger.error("cache_backend 'redis' needs redis_url; response caching is disabled")
+            return
         cache_backend = RedisBackend(redis_client)
     elif cache_settings.cache_backend == "s3":
         # The S3 backend is a stub that fails every lookup; serving traffic matters more.

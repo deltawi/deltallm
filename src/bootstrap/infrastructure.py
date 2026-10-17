@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.shutdown import BoundedExitStack
 import asyncio
+import logging
 from src.startup_settings import startup_setting
 from dataclasses import dataclass
 from typing import Any
@@ -71,6 +72,9 @@ from src.upstream_http import (
 )
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.providers.discovery_runtime import ProviderDiscoveryRuntime
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -201,6 +205,11 @@ async def _init_infrastructure_runtime(
     app.state.dynamic_config_manager = dynamic_config_manager
     app.state.app_config = cfg
     app.state.salt_key = resolve_salt_key(cfg, settings)
+    if not cfg.general_settings.master_key:
+        logger.warning(
+            "master_key is not set; master-key admin access is disabled. "
+            "Set general_settings.master_key, for example os.environ/DELTALLM_MASTER_KEY"
+        )
 
     spend_ingestion_mode = str(
         _startup_setting(cfg.general_settings, settings, "spend_ingestion_mode", "legacy")

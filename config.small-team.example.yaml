@@ -1,0 +1,113 @@
+# DeltaLLM small-team configuration
+#
+# One server (Docker Compose "single" profile) or a one-replica Helm release
+# serving a team. Compared with config.example.yaml it adds:
+# - durable spend and audit writes (outbox), which the Model Selector and
+#   Realtime require
+# - the Batch API with local artifact storage
+#
+# Every setting left out uses its built-in default. Which features to turn on,
+# what each needs, and the other profiles: docs/deployment/feature-switches.md
+#
+# PostgreSQL connections: about 38 per DeltaLLM process (db_pool_size 20 +
+# db_foreground_pool_size 8 + telemetry pools 5 + 5). Keep PostgreSQL
+# max_connections above that for every process you run, plus one restart overlap.
+
+model_list:
+  - model_name: gpt-4o-mini
+    deltallm_params:
+      provider: openai
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://api.openai.com/v1
+      timeout: 60
+
+router_settings:
+  routing_strategy: simple-shuffle
+  # One retry on the same deployment, then fail over to the next one.
+  num_retries: 1
+  retry_after: 1
+  timeout: 600
+  # A deployment rests for cooldown_time seconds after more than allowed_fails
+  # rate-limit, server, or timeout errors within five minutes.
+  cooldown_time: 60
+  allowed_fails: 2
+  response_validation:
+    enabled: true
+    on_exhausted: return_response
+    json_healing: false
+
+general_settings:
+  instance_name: DeltaLLM
+
+  master_key: os.environ/DELTALLM_MASTER_KEY
+  salt_key: os.environ/DELTALLM_SALT_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+
+  platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
+  platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
+
+  # Manage deployments in the Admin UI; the sample model seeds the first boot only.
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: true
+
+  background_health_checks: true
+  health_check_interval: 300
+
+  # Durable spend and audit writes through a background worker in this process.
+  # Restart after changing either mode.
+  spend_ingestion_mode: outbox
+  audit_ingestion_mode: outbox
+
+  # Batch API (/v1/batches). local storage is safe with one server only; switch to
+  # s3 (embeddings_batch_s3_bucket, region, prefix) before adding a second one.
+  embeddings_batch_enabled: true
+  embeddings_batch_storage_backend: local
+
+  # Organization deletion requests. Startup fails while the deletion readiness check
+  # finds missing migrations or unowned records, so enable only after it passes and
+  # every API and worker replica reports the backend's current lifecycle
+  # protocol version (v2 for this rollout).
+  organization_deletion_requests_enabled: false
+
+  # ---------------------------------------------------------------------------
+  # Common next steps. Uncomment what you need.
+  # ---------------------------------------------------------------------------
+  #
+  # Email for invitations, password reset, and notifications.
+  # email_enabled: true
+  # email_provider: smtp
+  # email_from_address: no-reply@example.com
+  # email_base_url: https://llm.example.com
+  # smtp_host: smtp.example.com
+  # smtp_port: 587
+  # smtp_username: os.environ/SMTP_USERNAME
+  # smtp_password: os.environ/SMTP_PASSWORD
+  #
+  # Single sign-on (needs Redis). Restrict sign-in to your company's domains.
+  # enable_sso: true
+  # sso_provider: oidc
+  # sso_client_id: os.environ/SSO_CLIENT_ID
+  # sso_client_secret: os.environ/SSO_CLIENT_SECRET
+  # sso_authorize_url: https://idp.example.com/oauth2/authorize
+  # sso_token_url: https://idp.example.com/oauth2/token
+  # sso_userinfo_url: https://idp.example.com/oauth2/userinfo
+  # sso_redirect_uri: https://llm.example.com/auth/callback
+  # sso_sign_in:
+  #   allowed_email_domains:
+  #     - example.com
+  #
+  # Budget and key-expiry emails (need email).
+  # governance_notifications_enabled: true
+  # budget_notifications_enabled: true
+  # key_lifecycle_notifications_enabled: true
+  #
+  # OpenAI Realtime sessions (need Redis and the spend outbox above). Restart.
+  # realtime:
+  #   enabled: true
+
+deltallm_settings:
+  success_callback: []
+  failure_callback: []
+  turn_off_message_logging: false

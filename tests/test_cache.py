@@ -1243,3 +1243,16 @@ def test_s3_cache_backend_disables_cache_instead_of_failing_requests():
 
     assert app.state.cache_backend is None
     assert app.state.streaming_cache_handler is None
+
+
+def test_redis_cache_backend_without_redis_disables_cache():
+    from src.cache import configure_cache_runtime
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    app_config = SimpleNamespace(
+        general_settings=SimpleNamespace(cache_enabled=True, cache_backend="redis")
+    )
+    configure_cache_runtime(app, app_config=app_config, redis_client=None, salt_key="salt")
+
+    assert app.state.cache_backend is None
+    assert app.state.streaming_cache_handler is None

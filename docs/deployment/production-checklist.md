@@ -33,7 +33,7 @@ A selected checkbox without this evidence is not sufficient for release.
 - [ ] PostgreSQL is supported, monitored, encrypted, and backed up independently of the cluster.
 - [ ] Redis persistence/replication and loss behavior match the features enabled in DeltaLLM.
 - [ ] The release migration ran exactly once and completed before application/worker rollout.
-- [ ] API and worker commands bypass the image's per-container migration bootstrap.
+- [ ] Every API and worker role runs with `migration_mode: external`, so pods verify the schema instead of migrating it.
 - [ ] A recent backup was restored into an isolated environment and application checks passed.
 - [ ] The upgrade's backward-compatibility window and database-safe rollback point are documented.
 - [ ] Release-specific rollout pages were reviewed for required feature gates, backfills, or cutovers.

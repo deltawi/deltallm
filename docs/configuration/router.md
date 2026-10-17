@@ -13,10 +13,10 @@ router_settings:
   retry_after: 1
   timeout: 600
   cooldown_time: 60
-  allowed_fails: 0
+  allowed_fails: 2
 ```
 
-That is enough for most first deployments.
+That is enough for most first deployments. It matches `config.example.yaml` and the Helm chart.
 
 Tip: check the effective `allowed_fails` value in the config your deployment actually loads. Depending on how you run DeltaLLM, the source of truth is usually your `config.yaml` from `DELTALLM_CONFIG_PATH`, your Helm `values.yaml`, or the rendered Kubernetes ConfigMap.
 
@@ -29,7 +29,7 @@ Tip: check the effective `allowed_fails` value in the config your deployment act
 | `retry_after` | `0` | Base backoff delay in seconds |
 | `timeout` | `600` | Total inference deadline from ingress through response delivery and finalization; see [request deadlines](../deployment/request-deadlines.md) |
 | `cooldown_time` | `60` | Seconds a failing deployment stays out of rotation |
-| `allowed_fails` | `0` | Failures allowed before cooldown starts |
+| `allowed_fails` | `2` | Health-affecting failures (429, 5xx, timeouts, connection errors) a deployment may have before cooldown starts |
 | `enable_pre_call_checks` | `false` | Skip deployments already over configured RPM or TPM metadata |
 | `model_group_alias` | `{}` | Friendly names that map to real model groups |
 | `route_groups` | `[]` | File-defined route groups and membership |
@@ -62,7 +62,9 @@ A request whose endpoint workload does not match the route group is rejected bef
 routing-state reads. Invalid group/member combinations fail runtime snapshot validation and do not
 replace the last valid live registry.
 
-`allowed_fails: 0` starts cooldown on the first health-affecting provider failure. After
+With the default `allowed_fails: 2`, the third health-affecting provider failure within the failure
+window (five minutes) starts cooldown. `allowed_fails: 0` starts cooldown on the first one, so a single rate-limit
+answer takes a lone deployment out of rotation for `cooldown_time` seconds. After
 `cooldown_time` expires, the router admits one shared-Redis half-open request for that deployment;
 successful recovery restores normal routing and failed recovery re-enters cooldown. Request-side
 validation, policy, budget, guardrail, cancellation, and local gateway-capacity failures are

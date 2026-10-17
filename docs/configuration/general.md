@@ -302,7 +302,7 @@ If the request fails or takes more than three seconds, the UI uses the built-in 
 |---------|---------|-------------|
 | `master_key` | — | Master API key with full access to all endpoints |
 | `deltallm_key_header_name` | `Authorization` | HTTP header name for API key authentication |
-| `salt_key` | `change-me` | Salt used for hashing virtual API keys |
+| `salt_key` | — (required) | Salt used for hashing virtual API keys. Startup fails when it is missing or `change-me` |
 | `platform_bootstrap_admin_email` | — | Email for the initial platform admin account |
 | `platform_bootstrap_admin_password` | — | Password for the initial platform admin account |
 | `auth_session_ttl_hours` | `12` | Hard cap on a browser session, in hours from sign-in |
@@ -479,7 +479,7 @@ Email delivery is optional but required for:
 | `email_retry_initial_seconds` | `60` | Initial retry backoff |
 | `email_retry_max_seconds` | `3600` | Max retry backoff |
 | `smtp_host` | — | SMTP server hostname |
-| `smtp_port` | — | SMTP server port |
+| `smtp_port` | `587` | SMTP server port |
 | `smtp_username` | — | SMTP username |
 | `smtp_password` | — | SMTP password |
 | `smtp_use_tls` | `false` | Use TLS for SMTP |
@@ -530,7 +530,6 @@ The admin settings API returns `409 restart_required` for a dynamic update to th
 |---------|---------|-------------|
 | `background_health_checks` | `false` | Run periodic health checks on deployments |
 | `health_check_interval` | `300` | Seconds between health checks |
-| `health_check_model` | `gpt-3.5-turbo` | Model to use for health check probes |
 
 ## SSO Settings
 
@@ -649,7 +648,6 @@ Governance notifications are opt-in and disabled by default.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `prometheus_endpoint` | `/metrics` | Path for Prometheus metrics endpoint |
-| `metrics_retention_days` | `30` | Days to retain spend log data |
 
 ## Batch Settings
 

@@ -83,6 +83,7 @@ Before you give users access to the service, do these steps:
 
 ## Next steps
 
+- Decide which features to turn on with [Choose what to turn on](../deployment/feature-switches.md).
 - Complete the [production checklist](../deployment/production-checklist.md).
 - Set up [monitoring](monitoring.md).
 - Read the [Kubernetes and Helm reference](../deployment/kubernetes.md) for all chart options and high-availability settings.

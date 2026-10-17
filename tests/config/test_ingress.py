@@ -42,8 +42,10 @@ def test_defaults_environment_explicit_settings_and_chart_agree(monkeypatch) -> 
     for name in IngressLimits.__dataclass_fields__:
         field = f"gateway_ingress_{name}"
         assert getattr(general, field) == getattr(environment, field) == getattr(defaults, name)
-        assert chart["config"]["general_settings"][field] == getattr(defaults, name)
-        assert example["general_settings"][field] == getattr(defaults, name)
+        # Example files may omit a default; a value they do show must match it.
+        default = getattr(defaults, name)
+        assert chart["config"]["general_settings"].get(field, default) == default
+        assert example["general_settings"].get(field, default) == default
     monkeypatch.setenv("DELTALLM_GATEWAY_INGRESS_ENABLED", "true")
     monkeypatch.setenv("DELTALLM_GATEWAY_INGRESS_MAX_ACTIVE", "17")
     environment = Settings()
@@ -91,7 +93,7 @@ def test_auth_fallback_limits_are_typed_and_match_examples(name, monkeypatch) ->
         config = yaml.safe_load(Path(path).read_text())
         for part in prefix:
             config = config[part]
-        assert config[field] == default
+        assert config.get(field, default) == default
     for model in (Settings, GeneralSettings):
         with pytest.raises(ValueError):
             model.model_validate({field: -1})

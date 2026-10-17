@@ -170,3 +170,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Chart config: files/config-defaults.yaml under .Values.config, values winning.
+Every role's ConfigMap renders these settings explicitly.
+*/}}
+{{- define "deltallm.chartConfig" -}}
+{{- $defaults := .Files.Get "files/config-defaults.yaml" | fromYaml -}}
+{{- toYaml (mergeOverwrite $defaults (deepCopy .Values.config)) -}}
+{{- end -}}

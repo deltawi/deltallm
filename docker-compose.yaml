@@ -23,7 +23,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
       REDIS_URL: redis://redis:6379/0
-      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
+      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-}
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
     depends_on:
@@ -60,7 +60,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
       REDIS_URL: redis://redis:6379/0
-      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
+      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-}
       INSTANCE_ID: instance-1
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
@@ -92,7 +92,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
       REDIS_URL: redis://redis:6379/0
-      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
+      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-}
       INSTANCE_ID: instance-2
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
@@ -116,7 +116,8 @@ services:
   db:
     image: postgres:15-alpine
     ports:
-      - "5432:5432"
+      # Local only: reachable from this machine, not from the network.
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -132,7 +133,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
