@@ -41,7 +41,7 @@ function AttentionRow({
       <div className="flex flex-none items-center gap-1.5">
         <Link
           to={item.action.to}
-          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs text-gray-900 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+          className="control-sm inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
         >
           {item.action.label} <ArrowRight className="h-3.5 w-3.5" />
         </Link>

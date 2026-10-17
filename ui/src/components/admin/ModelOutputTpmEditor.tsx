@@ -17,14 +17,14 @@ export default function ModelOutputTpmEditor({ rows, onChange, disabled = false 
     {rows.map((row, index) => <div key={index} className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
       <div><label className="text-xs text-gray-600" htmlFor={`${id}-model-${index}`}>Model ID {index + 1}</label>
         <input id={`${id}-model-${index}`} value={row.model} onChange={(e) => update(index, 'model', e.target.value)}
-          placeholder="Exact model ID" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" /></div>
+          placeholder="Exact model ID" className="control-field w-full rounded-lg border border-gray-300 px-3" /></div>
       <div><label className="text-xs text-gray-600" htmlFor={`${id}-limit-${index}`}>Output TPM {index + 1}</label>
         <input id={`${id}-limit-${index}`} type="number" min={1} max={2147483647} step={1} value={row.limit}
-          onChange={(e) => update(index, 'limit', e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" /></div>
-      <button type="button" className="self-end rounded-lg border px-3 py-2 text-sm" aria-label={`Remove model limit ${index + 1}`}
+          onChange={(e) => update(index, 'limit', e.target.value)} className="control-field w-full rounded-lg border border-gray-300 px-3" /></div>
+      <button type="button" className="control-md self-end rounded-lg border" aria-label={`Remove model limit ${index + 1}`}
         onClick={() => onChange(rows.filter((_, i) => i !== index))}>Remove</button>
     </div>)}
-    <button type="button" disabled={disabled || rows.length >= 64} className="rounded-lg border px-3 py-2 text-sm"
+    <button type="button" disabled={disabled || rows.length >= 64} className="control-md rounded-lg border"
       onClick={() => onChange([...rows, { model: '', limit: '' }])}>Add model limit</button>
   </fieldset>;
 }

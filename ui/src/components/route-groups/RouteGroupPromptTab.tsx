@@ -16,7 +16,7 @@ type BindingInput = { template_key: string; label: string; priority: number; ena
 
 const PROMPT_LIMIT = 100;
 const SEARCH_DELAY_MS = 250;
-const fieldClass = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50';
+const fieldClass = 'control-field w-full rounded-lg border border-gray-200 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50';
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;

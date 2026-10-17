@@ -600,14 +600,14 @@ export default function RBACAccounts() {
           <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
             <button
               onClick={() => setViewTab('users')}
-              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'users' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+              className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'users' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               <UsersRound className="h-3.5 w-3.5" />
               Users
             </button>
             <button
               onClick={() => setViewTab('invitations')}
-              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'invitations' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+              className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'invitations' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               <Mail className="h-3.5 w-3.5" />
               Invitations
@@ -626,7 +626,7 @@ export default function RBACAccounts() {
                 setInvitationSearchInput(e.target.value);
               }}
               placeholder={viewTab === 'users' ? 'Search accounts...' : 'Search invitations...'}
-              className="w-full rounded-lg border border-gray-300 py-2 pl-10 pr-4 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full rounded-lg border border-gray-300 pl-10 pr-4 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           {viewTab === 'invitations' ? (
@@ -636,7 +636,7 @@ export default function RBACAccounts() {
                 setInvitationStatusFilter(e.target.value as InvitationStatusFilter);
                 setInvitationPageOffset(0);
               }}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md rounded-lg border border-gray-300 px-3 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="active">Active</option>
               <option value="sent">Sent</option>
@@ -692,7 +692,7 @@ export default function RBACAccounts() {
                         {!principalSearchTerm ? (
                           <button
                             onClick={openCreateAccount}
-                            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
+                            className="control-md mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-primary font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
                           >
                             <Plus className="h-4 w-4" />
                             Add Person
@@ -816,14 +816,14 @@ export default function RBACAccounts() {
                 <button
                   onClick={() => setPrincipalPageOffset(Math.max(0, principalPageOffset - pageSize))}
                   disabled={!hasPrev || principalLoading}
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                  className="control-sm rounded-lg border border-gray-300 font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Previous
                 </button>
                 <button
                   onClick={() => setPrincipalPageOffset(principalPageOffset + pageSize)}
                   disabled={!hasNext || principalLoading}
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                  className="control-sm rounded-lg border border-gray-300 font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Next
                 </button>
@@ -1070,14 +1070,14 @@ export default function RBACAccounts() {
             <button
               onClick={() => setShowUserAccessModal(false)}
               disabled={saving}
-              className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              className="control-md flex-1 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               onClick={saveUserAssetAccess}
               disabled={saving || userAssetLoading || !canSaveUserAssetAccess}
-              className="flex-1 bg-brand-primary text-brand-on-primary py-2 rounded-lg text-sm font-medium hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+              className="control-md flex-1 bg-brand-primary text-brand-on-primary rounded-lg font-medium hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Access'}
             </button>
@@ -1095,7 +1095,7 @@ export default function RBACAccounts() {
             <select
               value={membershipOrgId}
               onChange={(e) => setMembershipOrgId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             >
               {orgList.length === 0 && <option value="">No organizations available</option>}
               {orgList.map(o => (
@@ -1110,7 +1110,7 @@ export default function RBACAccounts() {
             <select
               value={membershipOrgRole}
               onChange={(e) => setMembershipOrgRole(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             >
               {ORG_ROLES.map(r => (
                 <option key={r.value} value={r.value}>{r.label}</option>
@@ -1120,14 +1120,14 @@ export default function RBACAccounts() {
           <div className="flex gap-3 pt-2">
             <button
               onClick={() => setShowOrgMembershipModal(false)}
-              className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+              className="control-md flex-1 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
             >
               Cancel
             </button>
             <button
               onClick={saveOrgMembership}
               disabled={saving}
-              className="flex-1 bg-brand-primary text-brand-on-primary py-2 rounded-lg text-sm font-medium hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+              className="control-md flex-1 bg-brand-primary text-brand-on-primary rounded-lg font-medium hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Add Membership'}
             </button>
@@ -1145,7 +1145,7 @@ export default function RBACAccounts() {
             <select
               value={membershipTeamId}
               onChange={(e) => setMembershipTeamId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             >
               {teamList.length === 0 && <option value="">No teams available</option>}
               {teamList.map(t => (
@@ -1160,7 +1160,7 @@ export default function RBACAccounts() {
             <select
               value={membershipTeamRole}
               onChange={(e) => setMembershipTeamRole(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             >
               {TEAM_ROLES.map(r => (
                 <option key={r.value} value={r.value}>{r.label}</option>
@@ -1170,14 +1170,14 @@ export default function RBACAccounts() {
           <div className="flex gap-3 pt-2">
             <button
               onClick={() => setShowTeamMembershipModal(false)}
-              className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+              className="control-md flex-1 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
             >
               Cancel
             </button>
             <button
               onClick={saveTeamMembership}
               disabled={saving}
-              className="flex-1 bg-brand-primary text-brand-on-primary py-2 rounded-lg text-sm font-medium hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+              className="control-md flex-1 bg-brand-primary text-brand-on-primary rounded-lg font-medium hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Add Membership'}
             </button>

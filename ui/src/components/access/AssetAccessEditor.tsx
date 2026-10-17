@@ -259,7 +259,7 @@ export default function AssetAccessEditor({
           }}
           placeholder="Search models and route groups..."
           disabled={disabled}
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-500"
+          className="control-field-md w-full rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-500"
         />
         <select
           value={targetType}
@@ -272,7 +272,7 @@ export default function AssetAccessEditor({
             }
           }}
           disabled={disabled}
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-500"
+          className="control-field w-full rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-500"
         >
           <option value="all">All targets</option>
           <option value="model">Models</option>
@@ -381,7 +381,7 @@ export default function AssetAccessEditor({
                   type="button"
                   onClick={() => onAccessGroupPageChange(Math.max(0, accessGroupPagination.offset - accessGroupPagination.limit))}
                   disabled={disabled || accessGroupPagination.offset <= 0 || groupLoading}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="control-sm rounded-lg border border-gray-200 bg-white font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Previous
                 </button>
@@ -389,7 +389,7 @@ export default function AssetAccessEditor({
                   type="button"
                   onClick={() => onAccessGroupPageChange(accessGroupPagination.offset + accessGroupPagination.limit)}
                   disabled={disabled || !accessGroupPagination.has_more || groupLoading}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="control-sm rounded-lg border border-gray-200 bg-white font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Next
                 </button>
@@ -496,7 +496,7 @@ export default function AssetAccessEditor({
               type="button"
               onClick={() => onPageChange(Math.max(0, pagination.offset - pagination.limit))}
               disabled={disabled || pagination.offset <= 0}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="control-sm rounded-lg border border-gray-200 bg-white font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Previous
             </button>
@@ -504,7 +504,7 @@ export default function AssetAccessEditor({
               type="button"
               onClick={() => onPageChange(pagination.offset + pagination.limit)}
               disabled={disabled || !pagination.has_more}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="control-sm rounded-lg border border-gray-200 bg-white font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Next
             </button>

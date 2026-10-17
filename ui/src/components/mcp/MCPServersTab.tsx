@@ -142,11 +142,11 @@ export default function MCPServersTab({ canRegister }: MCPServersTabProps) {
             placeholder="Search servers..."
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
-            className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
+            className="control-field-md w-full rounded-lg border border-gray-200 bg-white pl-9 pr-4 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1">
+          <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-0.5">
             <span className="inline-flex items-center gap-1.5 px-2 text-xs font-medium text-gray-500">
               <Filter className="h-3.5 w-3.5" aria-hidden="true" />
               Status
@@ -164,7 +164,7 @@ export default function MCPServersTab({ canRegister }: MCPServersTabProps) {
                   setEnabledFilter(value);
                   setPageOffset(0);
                 }}
-                className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                className={`control-segment rounded-md font-medium transition-colors ${
                   enabledFilter === value ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
@@ -185,7 +185,7 @@ export default function MCPServersTab({ canRegister }: MCPServersTabProps) {
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary shadow-sm transition-colors hover:bg-brand-primary-hover"
+              className="control-md inline-flex items-center gap-2 rounded-lg bg-brand-primary font-medium text-brand-on-primary shadow-sm transition-colors hover:bg-brand-primary-hover"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               Register server

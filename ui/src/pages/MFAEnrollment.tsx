@@ -166,7 +166,7 @@ export default function MFAEnrollment() {
                   placeholder="Enter 6-digit code"
                   autoComplete="one-time-code"
                   maxLength={6}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent font-mono tracking-wider text-center text-lg"
+                  className="control-field-lg w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent font-mono tracking-wider text-center text-lg"
                 />
               </div>
               <Button

@@ -153,14 +153,14 @@ export default function InvitationPanel({
           <button
             onClick={() => onPageChange(Math.max(0, pagination.offset - pagination.limit))}
             disabled={!hasPrev || loading}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="control-sm rounded-lg border border-gray-300 font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             Previous
           </button>
           <button
             onClick={() => onPageChange(pagination.offset + pagination.limit)}
             disabled={!hasNext || loading}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="control-sm rounded-lg border border-gray-300 font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             Next
           </button>

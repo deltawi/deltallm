@@ -755,7 +755,7 @@ export default function OrganizationDetail() {
                                   type="button"
                                   onClick={handleClearLegacyModelLimits}
                                   disabled={saving}
-                                  className="mt-2 rounded-md border border-red-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                  className="control-sm mt-2 rounded-md border border-red-300 bg-white text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
                                 >
                                   Clear legacy model caps
                                 </button>
@@ -777,7 +777,7 @@ export default function OrganizationDetail() {
                     <button
                       type="button"
                       onClick={() => setTab('tiers')}
-                      className="shrink-0 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                      className="control-sm shrink-0 rounded-lg border border-blue-200 bg-white font-medium text-blue-700 hover:bg-blue-50"
                     >
                       {canManageServicePolicy
                         ? hasTier ? 'Manage policy' : 'Assign tier'
@@ -888,7 +888,7 @@ export default function OrganizationDetail() {
                   {canAddTeam ? (
                     <button
                       onClick={openCreateTeam}
-                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-brand-primary-ink border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                      className="control-sm flex items-center gap-1 font-medium text-brand-primary-ink border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
                     >
                       <Plus className="w-3 h-3" /> Add Team
                     </button>
@@ -982,7 +982,7 @@ export default function OrganizationDetail() {
                       <input
                         value={form.organization_name}
                         onChange={(e) => setForm({ ...form, organization_name: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div>
@@ -991,7 +991,7 @@ export default function OrganizationDetail() {
                         type="number"
                         value={form.max_budget}
                         onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         placeholder="No limit"
                       />
                     </div>
@@ -1001,7 +1001,7 @@ export default function OrganizationDetail() {
                         type="number"
                         value={form.soft_budget}
                         onChange={(e) => setForm({ ...form, soft_budget: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         placeholder="Notify before cap"
                       />
                     </div>
@@ -1024,7 +1024,7 @@ export default function OrganizationDetail() {
                             type="datetime-local"
                             value={form.budget_reset_at}
                             onChange={(e) => setForm({ ...form, budget_reset_at: e.target.value })}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                            className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           />
                         </div>
                       )}
@@ -1040,7 +1040,7 @@ export default function OrganizationDetail() {
                           type="number"
                           value={form.rpm_limit}
                           onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -1050,7 +1050,7 @@ export default function OrganizationDetail() {
                           type="number"
                           value={form.tpm_limit}
                           onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -1061,7 +1061,7 @@ export default function OrganizationDetail() {
                           type="number"
                           value={form.rph_limit}
                           onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -1071,7 +1071,7 @@ export default function OrganizationDetail() {
                           type="number"
                           value={form.rpd_limit}
                           onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -1081,7 +1081,7 @@ export default function OrganizationDetail() {
                           type="number"
                           value={form.tpd_limit}
                           onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -1098,14 +1098,14 @@ export default function OrganizationDetail() {
                     <div className="flex gap-2 pt-1">
                       <button
                         onClick={() => { setIsEditingSettings(false); setOrgError(null); }}
-                        className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        className="control-sm flex-1 text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={handleSaveSettings}
                         disabled={saving}
-                        className="flex-1 px-3 py-1.5 text-xs text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+                        className="control-sm flex-1 text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                       >
                         {saving ? 'Saving…' : 'Save'}
                       </button>
@@ -1271,7 +1271,7 @@ export default function OrganizationDetail() {
               {canAddTeam ? (
                 <button
                   onClick={openCreateTeam}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
+                  className="control-sm flex items-center gap-1.5 font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
                 >
                   <Plus className="w-3.5 h-3.5" /> Add Team
                 </button>
@@ -1356,13 +1356,13 @@ export default function OrganizationDetail() {
                 <div className="flex items-center gap-2">
                   <Link
                     to={`/users?invite_org_id=${encodeURIComponent(orgId || '')}`}
-                    className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50"
+                    className="control-sm flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white font-medium text-blue-700 transition-colors hover:bg-blue-50"
                   >
                     Invite by Email
                   </Link>
                   <button
                     onClick={openAddMember}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
+                    className="control-sm flex items-center gap-1.5 font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
                   >
                     <UserPlus className="w-3.5 h-3.5" /> Add Member
                   </button>
@@ -1576,7 +1576,7 @@ export default function OrganizationDetail() {
                     <button
                       onClick={handleSaveAssets}
                       disabled={saving || orgAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
-                      className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+                      className="control-md bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                     >
                       {saving ? 'Saving…' : 'Save Changes'}
                     </button>
@@ -1655,7 +1655,7 @@ export default function OrganizationDetail() {
               {!isEditingAssets && canManageAssets && (
                 <button
                   onClick={openEditAssets}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
+                  className="control-md w-full flex items-center justify-center gap-1.5 font-medium border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   <Pencil className="w-3.5 h-3.5" /> Edit Asset Access
                 </button>
@@ -1689,7 +1689,7 @@ export default function OrganizationDetail() {
             <select
               value={memberForm.role}
               onChange={(e) => setMemberForm({ ...memberForm, role: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="org_member">Member</option>
               <option value="org_admin">Admin</option>
@@ -1703,7 +1703,7 @@ export default function OrganizationDetail() {
             <button
               onClick={handleAddMember}
               disabled={saving}
-              className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+              className="control-md bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
             >
               {saving ? 'Adding…' : 'Add Member'}
             </button>

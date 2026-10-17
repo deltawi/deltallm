@@ -145,7 +145,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
               if (draft.trim() !== requestId) applySearch();
             }}
             placeholder="Find a request ID"
-            className="w-[260px] rounded-lg border border-gray-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            className="control-field-md w-[260px] rounded-lg border border-gray-300 bg-white pl-8 pr-2.5 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
           />
         </form>
         <RequestFilterChips
@@ -164,7 +164,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
           <div className="px-4 py-10 text-center text-sm text-gray-500">
             No requests match these filters in this period.
             {anyFilter && (
-              <button type="button" onClick={clearAll} className="ml-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50">
+              <button type="button" onClick={clearAll} className="control-sm ml-2 rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50">
                 Clear filters
               </button>
             )}
@@ -187,7 +187,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
               type="button"
               disabled={page <= 1}
               onClick={() => setPages({ key: queryKey, cursors: cursors.slice(0, -1) })}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs text-gray-900 hover:bg-gray-50 disabled:opacity-40"
+              className="control-sm inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-40"
             >
               <ChevronLeft className="h-3.5 w-3.5" /> Newer
             </button>
@@ -195,7 +195,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
               type="button"
               disabled={!hasMore}
               onClick={() => setPages({ key: queryKey, cursors: [...cursors, logs.data?.pagination.next_cursor ?? null] })}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs text-gray-900 hover:bg-gray-50 disabled:opacity-40"
+              className="control-sm inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-40"
             >
               Older <ChevronRight className="h-3.5 w-3.5" />
             </button>

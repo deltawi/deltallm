@@ -127,7 +127,7 @@ export default function Models() {
 
     >
       <AssetList columns={columns} data={items} rowKey={(row) => row.deployment_id} loading={loading} error={error} onRetry={refetch} emptyMessage="No models configured" search={searchInput} searchLabel="Search models" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))} rowActions={rowActions} filters={
-        <select value={modeFilter} onChange={(event) => handleModeFilterChange(event.target.value)} aria-label="Filter model type" className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary md:text-sm"><option value="all">All types</option>{MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+        <select value={modeFilter} onChange={(event) => handleModeFilterChange(event.target.value)} aria-label="Filter model type" className="control-field-md rounded-lg border border-gray-200 bg-white px-3 text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary md:text-sm"><option value="all">All types</option>{MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
       } />
       <ConfirmDialog
         open={deleteTarget !== null}

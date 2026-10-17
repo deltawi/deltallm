@@ -28,7 +28,7 @@ export function FilterChip({
         type="button"
         onClick={onClick}
         aria-label={`Remove filter: ${label} is ${value}`}
-        className="inline-flex max-w-xs items-center gap-1.5 rounded-full border border-brand-primary bg-brand-primary-soft px-2.5 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+        className="control-sm inline-flex max-w-xs items-center gap-1.5 rounded-full border border-brand-primary bg-brand-primary-soft text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
       >
         <span className="truncate">
           {label} is <b className="font-semibold">{value}</b>
@@ -41,7 +41,7 @@ export function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-600 hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+      className="control-sm inline-flex items-center gap-1.5 rounded-full border border-dashed border-gray-300 bg-white text-gray-600 hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
     >
       + {label}
     </button>

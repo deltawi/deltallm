@@ -61,7 +61,7 @@ export default function TierCapacityPoolEditor({
   const [form, setForm] = useState<TierCapacityPoolForm>(emptyCapacityPoolForm());
   const [localError, setLocalError] = useState<string | null>(null);
   const locked = readOnly || saving;
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
   const sortedPools = useMemo(
     () => [...pools].sort((a, b) => `${a.pool_key}:${a.callable_key}`.localeCompare(`${b.pool_key}:${b.callable_key}`)),
@@ -139,7 +139,7 @@ export default function TierCapacityPoolEditor({
             type="button"
             onClick={openNew}
             disabled={locked}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className="control-sm inline-flex items-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />
             Add pool
@@ -170,7 +170,7 @@ export default function TierCapacityPoolEditor({
                   setLocalError(null);
                   onDiscardConflict();
                 }}
-                className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                className="control-sm rounded-md border border-amber-300 bg-white font-semibold text-amber-900 hover:bg-amber-100"
               >
                 Discard my unsaved changes
               </button>
@@ -187,14 +187,14 @@ export default function TierCapacityPoolEditor({
             value={searchInput}
             onChange={(event) => onSearchInputChange(event.target.value)}
             placeholder="Search pool or model"
-            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            className="control-field-md w-full rounded-lg border border-gray-300 pl-9 pr-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
         </label>
         <select
           aria-label="Filter capacity pools by strategy"
           value={strategyFilter}
           onChange={(event) => onStrategyFilterChange(event.target.value as typeof strategyFilter)}
-          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+          className="control-field-md rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
         >
           <option value="all">All strategies</option>
           <option value="hard_cap">Hard cap</option>
@@ -295,7 +295,7 @@ export default function TierCapacityPoolEditor({
                       setLocalError(null);
                       onDiscardConflict();
                     }}
-                    className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900"
+                    className="control-sm rounded-md border border-amber-300 bg-white font-semibold text-amber-900"
                   >
                     Discard my unsaved changes
                   </button>
@@ -452,7 +452,7 @@ export default function TierCapacityPoolEditor({
               type="button"
               onClick={saveForm}
               disabled={locked}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+              className="control-md inline-flex items-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
               {editingPool === 'new' ? 'Add pool' : 'Save pool'}

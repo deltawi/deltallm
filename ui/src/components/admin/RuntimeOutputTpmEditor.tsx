@@ -44,6 +44,6 @@ export default function RuntimeOutputTpmEditor({ user, onSaved }: { user: Runtim
   };
   return <div className="mt-4">
     <OutputTpmField value={value} onChange={setValue} error={error} disabled={saving} />
-    <button type="button" onClick={() => void save()} disabled={saving} className="mt-2 rounded-lg bg-brand-primary px-3 py-2 text-sm text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save output limit'}</button>
+    <button type="button" onClick={() => void save()} disabled={saving} className="control-md mt-2 rounded-lg bg-brand-primary text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save output limit'}</button>
   </div>;
 }

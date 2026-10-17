@@ -138,6 +138,26 @@ breadcrumb, title and button styles.
   for the main action, `outline` for the others, `danger-outline` for delete or cancel, and
   `size="icon"` with an `aria-label` for icon-only buttons.
 
+## Control Sizes
+
+Buttons, fields and segmented controls use four heights. The classes live in `src/index.css`
+(`@layer components`), so a utility on the element still wins. Below 768 px every size is 8 px
+taller so controls stay easy to tap.
+
+| Size | Desktop | Use for | `Button` | Class |
+| --- | --- | --- | --- | --- |
+| Small | 28 px, 12 px text | Row actions, filter chips, card actions, pagination | `size="sm"`, `size="icon-sm"` | `control-sm`, `control-icon-sm` |
+| Default | 32 px, 13 px text | Page header actions, toolbars, search, dialog and drawer footers | default, `size="icon"` | `control-md`, `control-icon-md`, `control-field-md` |
+| Form field | 36 px, 14 px text | Inputs and selects inside forms and dialogs | | `control-field` |
+| Large | 40 px, 14 px text | Sign-in, password and MFA pages only | `size="lg"` | `control-lg`, `control-field-lg` |
+
+- Use `Button` for new buttons. Use the classes only where an element cannot be a `Button`
+  (a `Link` styled as a button, a select, a native input).
+- Segmented controls use `control-segment` (26 px) inside a track with `p-0.5` and a border, so the
+  whole group is 32 px, the same as the toolbar around it.
+- A field inside a bordered group (a prefix select, a unit label) uses `control-field-inset`, so the
+  group is 36 px.
+
 ## Development Notes
 
 - The Vite dev server proxies `/v1`, `/health`, `/auth`, `/ui/api`, and `/metrics` to the backend on port 8000

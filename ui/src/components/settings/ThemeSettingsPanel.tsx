@@ -92,7 +92,7 @@ function BrandingAssetField({
             type="button"
             onClick={() => { void onRemove(); }}
             disabled={disabled}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:border-red-200 hover:text-red-600 disabled:opacity-50"
+            className="control-md inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white font-medium text-gray-600 transition-colors hover:border-red-200 hover:text-red-600 disabled:opacity-50"
           >
             <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /> Remove
           </button>
@@ -136,7 +136,7 @@ function ColorField({
           id={id}
           value={value}
           onChange={(event) => onChange(event.target.value.toUpperCase())}
-          className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-sm uppercase transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="control-field min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 font-mono uppercase transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-50"
           maxLength={7}
           spellCheck={false}
           disabled={disabled}
@@ -166,7 +166,7 @@ export default function ThemeSettingsPanel({
   const secondaryPreview = visibleBrandSurface(preview.secondary_color);
   const menuHoverPreview = visibleMenuHoverSurface(preview.menu_hover_color);
   const busy = mutation !== null;
-  const inputClass = 'w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-50';
+  const inputClass = 'control-field w-full rounded-lg border border-gray-200 bg-gray-50 px-3 transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-50';
 
   return (
     <>

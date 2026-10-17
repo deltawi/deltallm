@@ -185,7 +185,7 @@ export default function PromptRegistry() {
                   placeholder="support.reply"
                   maxLength={isPlatformAdmin ? 201 : 128}
                   data-autofocus="true"
-                  className="min-w-0 flex-1 rounded-r-lg px-3 py-2 text-sm focus:outline-none"
+                  className="control-field-inset min-w-0 flex-1 rounded-r-lg px-3 focus:outline-none"
                 />
               </div>
               <p className="mt-1 text-xs text-gray-500">
@@ -201,7 +201,7 @@ export default function PromptRegistry() {
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
                 placeholder="Support Reply Prompt"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           </div>
@@ -239,7 +239,7 @@ export default function PromptRegistry() {
                     value={form.owner_scope}
                     onChange={(event) => setForm({ ...form, owner_scope: event.target.value })}
                     placeholder="platform / team:ops / org:acme"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </div>
               ) : null}
@@ -247,13 +247,13 @@ export default function PromptRegistry() {
           </details>
 
           <div className="flex justify-end gap-2 pt-2">
-            <button onClick={() => setCreateOpen(false)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+            <button onClick={() => setCreateOpen(false)} className="control-md rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50">
               Cancel
             </button>
             <button
               onClick={handleCreate}
               disabled={creating}
-              className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+              className="control-md rounded-lg bg-brand-primary text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {creating ? 'Creating...' : 'Create and Continue'}
             </button>
