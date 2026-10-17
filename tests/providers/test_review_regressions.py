@@ -162,7 +162,7 @@ def test_mcp_assistant_history_preserves_reasoning_presence(reasoning):
         ],
         **reasoning,
     }
-    result = MCPChatOrchestrator._assistant_message_from_response(
+    result = MCPChatOrchestrator.assistant_message_from_response(
         {"choices": [{"message": message}]}
     ).model_dump(mode="json", exclude_unset=True)
     assert result["content"] is None
@@ -188,5 +188,5 @@ def test_invalid_reasoning_history_raises_safe_error_before_tools():
         ]
     }
     with pytest.raises(ServiceUnavailableError) as error:
-        MCPChatOrchestrator._assistant_message_from_response(payload)
+        MCPChatOrchestrator.assistant_message_from_response(payload)
     assert "private-provider-material" not in "".join(traceback.format_exception(error.value))

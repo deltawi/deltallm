@@ -15,11 +15,32 @@ from tests.test_routing_cache_identity import _publish
 pytestmark = pytest.mark.app
 
 
+def _sse(*chunks):
+    lines = [f"data: {json.dumps(chunk)}" for chunk in chunks] + ["data: [DONE]"]
+    return httpx.Response(
+        200,
+        content=("\n\n".join(lines) + "\n\n").encode(),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+def _delta_chunk(delta, finish=None):
+    return {
+        "id": "chatcmpl-stream",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "quality",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+
+
 @pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/responses"])
 @pytest.mark.parametrize("from_hook", [False, True])
-async def test_streaming_mcp_rejection_precedes_selector_economic_work(
+async def test_streaming_mcp_continuation_reuses_selector_and_original_deadline(
     client, test_app, endpoint, from_hook
 ):
+    from tests.mcp.test_chat_execution import _RecordingAuditService, _RecordingGateway
+
     tools = [{"type": "mcp", "server": "docs"}]
     calls = []
 
@@ -28,8 +49,19 @@ async def test_streaming_mcp_rejection_precedes_selector_economic_work(
             return {**data, "tools": tools}
 
     def handle(request):
-        calls.append(json.loads(request.content)["model"])
-        return httpx.Response(200, json=response_body(text='{"lane":"quality"}'))
+        data = json.loads(request.content)
+        calls.append(data["model"])
+        if data["model"] == "classifier":
+            return httpx.Response(200, json=response_body(text='{"lane":"quality"}'))
+        if any(message["role"] == "tool" for message in data["messages"]):
+            return _sse(_delta_chunk({"content": "final answer"}), _delta_chunk({}, "stop"))
+        call = {
+            "index": 0,
+            "id": "call_docs_search",
+            "type": "function",
+            "function": {"name": "docs.search", "arguments": '{"query":"delta"}'},
+        }
+        return _sse(_delta_chunk({"tool_calls": [call]}), _delta_chunk({}, "tool_calls"))
 
     body = (
         deepcopy(BODY)
@@ -45,16 +77,28 @@ async def test_streaming_mcp_rejection_precedes_selector_economic_work(
         body["tools"] = tools
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as upstream:
         billing, _ = configure(test_app, upstream)
-        response = await client.post(endpoint, headers=HEADERS, json=body)
-        assert response.status_code == 400, response.text
-        assert response.json()["error"]["message"] == (
-            "MCP tools are not supported on streaming chat requests yet"
+        gateway = _RecordingGateway()
+        test_app.state.mcp_gateway_service = gateway
+        test_app.state.audit_service = _RecordingAuditService()
+        failover = (
+            test_app.state.routing_runtime_generation_store.require_snapshot().failover_manager
         )
-        assert calls == []
-        billing.reserve.assert_not_awaited()
-        billing.dispatch.assert_not_awaited()
-        billing.accept_selector.assert_not_awaited()
-        billing.unattempted.assert_not_awaited()
+        original = failover.execute_managed_with_failover
+        deadlines = []
+
+        async def execute(*args, **kwargs):
+            deadlines.append(kwargs["request_deadline"])
+            return await original(*args, **kwargs)
+
+        failover.execute_managed_with_failover = execute
+        response = await client.post(endpoint, headers=HEADERS, json=body)
+        assert response.status_code == 200, response.text
+        assert "final answer" in response.text
+        assert calls == ["classifier", "quality", "quality"]
+        assert gateway.tool_calls == ["docs.search"]
+        assert len(deadlines) == 2 and deadlines[0] is deadlines[1]
+        billing.reserve.assert_awaited_once()
+        billing.accept_selector.assert_awaited_once()
 
 
 @pytest.mark.parametrize("reason", ["tags", "capacity", "context"])

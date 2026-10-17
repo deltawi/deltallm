@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 _ANTHROPIC_MESSAGES_PATH = "/v1/messages"
 
 
-def _serialize_error(exc: ProxyError) -> dict[str, object]:
+def serialize_proxy_error(exc: ProxyError) -> dict[str, object]:
     payload: dict[str, object] = {
         "error": {
             "message": exc.message,
@@ -106,7 +106,9 @@ def proxy_error_response(exc: ProxyError) -> JSONResponse:
         and retry_after is not None
     ):
         headers["Retry-After"] = str(retry_after)
-    return JSONResponse(status_code=exc.status_code, content=_serialize_error(exc), headers=headers)
+    return JSONResponse(
+        status_code=exc.status_code, content=serialize_proxy_error(exc), headers=headers
+    )
 
 
 def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:

@@ -143,10 +143,16 @@ Example request shape:
 
 DeltaLLM translates the visible MCP tools into OpenAI-style function tools, executes any resulting tool calls, and feeds the tool result back into the model.
 
+Streaming requests (`"stream": true`) also work. DeltaLLM streams the model text as it arrives, runs
+each MCP tool call between model answers, and continues in the same response. The client does not
+see the MCP tool call chunks. For the stream format, see [Streaming](../api/mcp.md#streaming).
+
+The `usage` of a request is the sum of all model calls that the request made, so the spend includes
+the model calls that asked for tools.
+
 ### Current limits
 
-- MCP tools are not supported on streaming chat requests yet
-- MCP tools are not supported on streaming responses requests yet
+- a streaming request with MCP tools must use `n: 1`
 - chat and responses requests do not support manual approval. DeltaLLM rejects the request if a tool that it can use requires manual approval. Use `allowed_tools` to remove that tool, or call it through `/mcp`
 - the upstream model still needs reliable tool-calling support
 
@@ -202,7 +208,8 @@ For the day-to-day UI workflow, see [Admin UI: MCP](../admin-ui/mcp.md).
 | `No visible MCP tools are available for server 'docs'` | The caller has no matching binding, or the binding and policy combination hides every tool |
 | `Unknown MCP tool 'docs.search'` | The tool is not visible to that caller, or the upstream capabilities changed and were not refreshed |
 | Health check reports `unhealthy` | Base URL, upstream auth, or network reachability is wrong |
-| `/mcp` works but chat fails | The provider/model may not support tool calling well enough, or the request is streaming |
+| `/mcp` works but chat fails | The provider/model may not support tool calling well enough |
+| A stream ends with `data: {"error": ...}` and no `[DONE]` | A tool or a later model call failed after the stream started. The error message tells which |
 | Chat returns a manual approval error | Remove the tool with `allowed_tools`, or use `/mcp tools/call`, approve the request, and send the identical call again |
 
 ## Related pages

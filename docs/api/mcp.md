@@ -199,10 +199,47 @@ curl http://localhost:8000/v1/responses \
 | `allowed_tools` | Optional subset of visible tool names from that server |
 | `require_approval` | Currently `never` in the request contract |
 
+### Streaming
+
+Set `"stream": true` to stream a request that uses MCP tools. This works on
+`/v1/chat/completions` and `/v1/responses`.
+
+- DeltaLLM sends the model text to the client as it arrives.
+- DeltaLLM does not send the tool call chunks of an MCP tool to the client. It runs the tool and then
+  streams the next model answer in the same response.
+- While a tool runs, the stream sends an SSE comment line, for example `: mcp_tool_call docs.search`.
+  SSE clients ignore comment lines. The line prevents idle proxies from closing the connection.
+- If the model calls one of your own `function` tools, the client gets the tool call chunks and
+  `finish_reason: "tool_calls"`, the same as in a stream without MCP tools.
+- All chunks have the `id` of the first model answer.
+- With `"stream_options": {"include_usage": true}`, the last chunk before `[DONE]` has the usage of
+  all model calls in the request together.
+- If a tool or a later model call fails after the stream started, the last frame is
+  `data: {"error": {...}}` and DeltaLLM does not send `[DONE]`.
+- A streaming request with MCP tools must use `n: 1`.
+
+Example frames:
+
+```text
+data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"Let me search. "}}]}
+
+: mcp_tool_call docs.search
+
+data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"DeltaLLM is a gateway."}}]}
+
+data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+### Usage and billing
+
+One request with MCP tools can call the model more than one time: one call that asks for a tool,
+and one more call after each tool result. The `usage` in the response, and the spend that DeltaLLM
+records, is the sum of all these model calls. This is true for streaming and non-streaming requests.
+
 ### Important Limits
 
-- streaming chat requests do not support MCP tools yet
-- streaming responses requests do not support MCP tools yet
 - chat and responses requests do not support manual approval. If a tool that the request can use requires manual approval, DeltaLLM rejects the full request with HTTP `400`. Use `allowed_tools` to remove that tool from the request, or call the tool through `/mcp`
 - the upstream model/provider must support tool calling well enough for the bridge to work reliably
 

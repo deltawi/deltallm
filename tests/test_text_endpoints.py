@@ -260,6 +260,8 @@ async def test_responses_with_mcp_tool_auto_executes(client, test_app):
     assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
     assert response.headers["x-deltallm-route-fallback-used"] == "true"
     assert gateway.tool_calls == [("docs.search", {"query": "delta"})]
+    # Both model hops are billed: 5 tokens for the tool call turn, 8 for the answer.
+    assert response.json()["usage"]["total_tokens"] == 13
 
 
 @pytest.mark.asyncio
@@ -272,30 +274,6 @@ async def test_responses_stream_success(client, test_app):
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "data: [DONE]" in response.text
     assert '"object":"response.output_text.delta"' in response.text
-
-
-@pytest.mark.asyncio
-async def test_responses_stream_with_mcp_tools_returns_400(client, test_app):
-    test_app.state.mcp_gateway_service = _FakeMCPGateway()
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {
-        "model": "gpt-4o-mini",
-        "input": "hello",
-        "stream": True,
-        "tools": [
-            {
-                "type": "mcp",
-                "server": "docs",
-                "allowed_tools": ["search"],
-                "require_approval": "never",
-            }
-        ],
-    }
-
-    response = await client.post("/v1/responses", headers=headers, json=body)
-
-    assert response.status_code == 400
-    assert "MCP tools are not supported on streaming chat requests yet" in response.text
 
 
 @pytest.mark.asyncio

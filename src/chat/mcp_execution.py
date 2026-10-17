@@ -46,6 +46,25 @@ class MCPChatExecutionResult:
     response_validation_headers: dict[str, str] = field(default_factory=dict)
 
 
+def refresh_hop_routing_context(
+    routing_context: dict[str, Any], hop_payload: ChatCompletionRequest
+) -> None:
+    """Route each model hop on its own prompt size; tool results make it grow."""
+    token_estimate = estimate_tokens(dump_request_for_preflight(hop_payload))
+    refresh_selector_payload(routing_context, hop_payload, token_estimate)
+    set_request_token_demand(
+        routing_context,
+        RequestTokenDemand(
+            input_tokens=token_estimate,
+            requested_output_tokens=(
+                hop_payload.max_completion_tokens
+                if hop_payload.max_completion_tokens is not None
+                else hop_payload.max_tokens
+            ),
+        ),
+    )
+
+
 class MCPChatExecutionService:
     """Own the model/tool phase sequence without making tool calls retryable."""
 
@@ -84,19 +103,7 @@ class MCPChatExecutionService:
             phase_payload: ChatCompletionRequest,
         ) -> tuple[dict[str, Any], float]:
             nonlocal fallback_used, phase_primary, served_deployment
-            token_estimate = estimate_tokens(dump_request_for_preflight(phase_payload))
-            refresh_selector_payload(routing.routing_context, phase_payload, token_estimate)
-            set_request_token_demand(
-                routing.routing_context,
-                RequestTokenDemand(
-                    input_tokens=token_estimate,
-                    requested_output_tokens=(
-                        phase_payload.max_completion_tokens
-                        if phase_payload.max_completion_tokens is not None
-                        else phase_payload.max_tokens
-                    ),
-                ),
-            )
+            refresh_hop_routing_context(routing.routing_context, phase_payload)
             attempted_primary = phase_primary
             phase_validation = ResponseValidationScope(phase_payload, validation_settings)
             result, phase_served_deployment = await phase_validation.run(
