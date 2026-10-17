@@ -12,7 +12,7 @@ import { orderedGuidedMemberIds, restoreDraftPolicyTombstones, validateGuidedPol
 import { savedRoutingDocument, useAdvancedRoutingDraft } from '../../lib/useAdvancedRoutingDraft';
 import { useRoutePolicySimulation } from '../../lib/useRoutePolicySimulation';
 import { DeploymentsCard, StrategyCard, TimeoutsCard } from './AdvancedRoutingCards';
-import { ContextCard, SelectorCard } from './AdvancedRoutingOptions';
+import { ContextCard, QualityCard, SelectorCard } from './AdvancedRoutingOptions';
 import DraftCheckRail from './DraftCheckRail';
 import PolicyHistoryPanel from './PolicyHistoryPanel';
 import PolicyJsonDrawer from './PolicyJsonDrawer';
@@ -142,6 +142,7 @@ export default function AdvancedRouting({
               <TimeoutsCard {...cardProps} changed={changed('Request timeout', 'Retries', 'Retry on')} />
               <ContextCard {...cardProps} workloadMode={group.mode} changed={changed('Context-aware routing')} />
               <SelectorCard {...cardProps} workloadMode={group.mode} changed={changed('Model selector')} routeGroupId={group.route_group_id} members={members} />
+              <QualityCard {...cardProps} workloadMode={group.mode} changed={changed('Send low-quality models last')} />
             </div>
             <DraftCheckRail simulation={simulation} onRun={runDryRun} issues={issues} members={members} draftShares={draftShares} liveShares={liveShares}
               canSimulate={canSimulate} blocked={!!error} onOpenSimulate={() => onSection('simulate')} />

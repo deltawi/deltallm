@@ -2,8 +2,10 @@ import { useMemo, useState } from 'react';
 import { ChevronRight, Plus } from 'lucide-react';
 import Button from '../Button';
 import ToggleSwitch from '../ToggleSwitch';
-import type { RouteGroup, RouteGroupMemberDetail, RoutePolicy } from '../../lib/api';
+import { routeGroups, type RouteGroup, type RouteGroupMemberDetail, type RoutePolicy } from '../../lib/api';
+import { useApi } from '../../lib/hooks';
 import { publisherLabel } from '../../lib/routeGroupPolicyDiff';
+import { sameQualitySetting } from '../../lib/routeGroupQuality';
 import { relativeTime } from '../../lib/requestLogs';
 import {
   buildSimpleRoutingPolicy,
@@ -15,6 +17,7 @@ import {
   withSplitMembers,
   type SimpleRouting,
 } from '../../lib/routeGroupRouting';
+import QualityRoutingCard from './QualityRoutingCard';
 import { ModelAvatar } from './RouteGroupModelCell';
 import SimpleRoutingChoices from './SimpleRoutingChoices';
 
@@ -65,6 +68,15 @@ export default function SimpleRoutingEditor({
   const labels = memberLabels(members);
   const disabled = !canWrite || saving;
   const seed = () => (changes.length > 0 && !error ? buildSimpleRoutingPolicy(routing, members) : null);
+  const qualityOn = group.mode === 'chat' && !!baseline.quality?.deprioritize;
+  // Only the live setting has live results, so the list shows while the form matches it.
+  const liveQuality = useApi(
+    (signal) => (qualityOn ? routeGroups.quality(group.route_group_id, signal) : Promise.resolve(null)),
+    [group.route_group_id, qualityOn],
+  );
+  const sentLast = liveQuality.data && sameQualitySetting(baseline.quality, routing.quality)
+    ? liveQuality.data.members.filter((item) => item.sent_last_reason).map((item) => labels[item.deployment_id] ?? item.deployment_id)
+    : null;
 
   return (
     <div className="max-w-4xl space-y-3">
@@ -111,6 +123,10 @@ export default function SimpleRoutingEditor({
             <ToggleSwitch checked={routing.retry === 'on'} disabled={disabled} activeColor="rgb(var(--brand-primary))" aria-label="Retry on another model when a call fails"
               onCheckedChange={(on) => setRouting({ ...routing, retry: on ? 'on' : 'off' })} />
           </section>
+          {group.mode === 'chat' ? (
+            <QualityRoutingCard setting={routing.quality} disabled={disabled} sentLast={sentLast}
+              onChange={(quality) => setRouting({ ...routing, quality })} />
+          ) : null}
         </>
       )}
 

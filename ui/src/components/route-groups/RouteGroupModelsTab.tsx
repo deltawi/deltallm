@@ -5,14 +5,17 @@ import Button from '../Button';
 import ConfirmDialog from '../ConfirmDialog';
 import DeploymentSearchSelect from '../DeploymentSearchSelect';
 import { useToast } from '../ToastProvider';
+import { Skeleton } from '../usage/ReportBits';
 import { routeGroups, type RouteGroup, type RouteGroupMemberDetail, type RoutePolicy } from '../../lib/api';
 import { modelDetailPath } from '../../lib/modelRoutes';
 import { routeGroupMutationOutcome } from '../../lib/routeGroups';
 import { memberLabels, memberTrafficShares, type TrafficShare } from '../../lib/routeGroupRouting';
 import { tokenPricePerMillion } from '../../lib/routeGroupSnippets';
+import { useApi } from '../../lib/hooks';
 import { useDeploymentCandidates } from '../../lib/useDeploymentCandidates';
 import type { useRouteGroupMutationScope } from '../../lib/useRouteGroupMutationScope';
 import { HealthText, ModelCell } from './RouteGroupModelCell';
+import RouteGroupQualityCell from './RouteGroupQualityCell';
 
 type MutationScope = ReturnType<typeof useRouteGroupMutationScope>;
 
@@ -71,6 +74,16 @@ export default function RouteGroupModelsTab({
   const listsMembers = Array.isArray(policy?.policy_json?.members);
   const hasUnused = Object.values(shares).some((share) => share.kind === 'off' && share.reason === 'unused');
   const selected = candidates.options.find((option) => option.deployment_id === selectedId) ?? null;
+  // Quality covers chat answers only. The stats live in gateway memory, so this read is cheap.
+  const showQuality = group.mode === 'chat' && members.length > 0;
+  const quality = useApi(
+    (signal) => (showQuality ? routeGroups.quality(group.route_group_id, signal) : Promise.resolve(null)),
+    [group.route_group_id, showQuality],
+  );
+  const qualityById = new Map((quality.data?.members ?? []).map((item) => [item.deployment_id, item]));
+  const windowLabel = `last ${Math.round((quality.data?.window_seconds ?? 900) / 60)} min`;
+  const qualityHeader = `Quality · ${Math.round((quality.data?.window_seconds ?? 900) / 60)} min`;
+  const columns = showQuality ? 5 : 4;
 
   const closeAdd = () => { setAdding(false); setSelectedId(''); candidates.reset(); };
 
@@ -158,11 +171,12 @@ export default function RouteGroupModelsTab({
       ) : null}
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] text-sm">
+        <table className={`w-full text-sm ${showQuality ? 'min-w-[720px]' : 'min-w-[560px]'}`}>
           <thead>
             <tr className="border-b border-gray-100 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
               <th scope="col" className="px-4 py-2">Model</th>
               <th scope="col" className="px-4 py-2">Health</th>
+              {showQuality ? <th scope="col" className="px-4 py-2">{qualityHeader}</th> : null}
               <th scope="col" className="px-4 py-2">Traffic</th>
               <th scope="col" className="w-12 px-4 py-2"><span className="sr-only">Actions</span></th>
             </tr>
@@ -170,7 +184,7 @@ export default function RouteGroupModelsTab({
           <tbody>
             {members.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-4 py-10 text-center text-sm text-gray-500">
+                <td colSpan={columns} className="px-4 py-10 text-center text-sm text-gray-500">
                   No models yet. {canWrite ? 'Add a model so this group can answer requests.' : 'Ask the owner to add a model.'}
                 </td>
               </tr>
@@ -182,6 +196,15 @@ export default function RouteGroupModelsTab({
                   </Link>
                 </td>
                 <td className="px-4 py-2.5"><HealthText healthy={member.healthy} enabled={member.enabled} /></td>
+                {showQuality ? (
+                  <td className="px-4 py-2.5">
+                    {quality.data ? (
+                      <RouteGroupQualityCell quality={qualityById.get(member.deployment_id)} modelLabel={labels[member.deployment_id]} windowLabel={windowLabel} />
+                    ) : quality.error ? (
+                      <span className="text-xs text-gray-400">Unavailable</span>
+                    ) : <Skeleton className="h-4 w-24" />}
+                  </td>
+                ) : null}
                 <td className="px-4 py-2.5"><TrafficCell share={shares[member.deployment_id]} /></td>
                 <td className="px-4 py-2.5 text-right">
                   {canWrite ? (
@@ -204,7 +227,11 @@ export default function RouteGroupModelsTab({
 
       {members.length > 0 ? (
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 bg-gray-50 px-4 py-2.5 text-xs text-gray-500">
-          <span>{hasUnused ? 'Models marked “Not used” get no traffic until you add them in Routing.' : 'Traffic follows the Routing tab.'}</span>
+          <span>
+            {hasUnused ? 'Models marked “Not used” get no traffic until you add them in Routing.' : 'Traffic follows the Routing tab.'}
+            {showQuality ? ' Quality = calls without a provider error or a rejected answer. Hover a score for details.' : null}
+            {quality.data?.source === 'local' ? ' Quality numbers come from one gateway process only, because shared stats are not reachable now.' : null}
+          </span>
           <Button size="sm" variant="link" onClick={onOpenRouting}>Change routing</Button>
         </footer>
       ) : null}

@@ -31,6 +31,30 @@ export interface RouteGroupMember {
   updated_at?: string | null;
 }
 
+export interface RouteGroupMemberQuality {
+  deployment_id: string;
+  calls: number;
+  failed_calls: number;
+  provider_errors: number;
+  empty_answers: number;
+  bad_tool_calls: number;
+  bad_json: number;
+  failure_rate: number | null;
+  avg_first_token_ms: number | null;
+  output_tokens_per_second: number | null;
+  sent_last_reason: 'failed_calls' | 'slow_first_token' | null;
+}
+
+export interface RouteGroupQuality {
+  group_key: string;
+  /** "local" means one gateway process only, because shared stats were not reachable. */
+  source: 'cluster' | 'local' | 'unavailable';
+  window_seconds: number;
+  deprioritize: boolean;
+  sensitivity: 'relaxed' | 'balanced' | 'strict' | null;
+  members: RouteGroupMemberQuality[];
+}
+
 export interface RouteGroupMemberDetail extends RouteGroupMember {
   model_name?: string | null;
   provider?: string | null;
@@ -86,6 +110,7 @@ export interface RoutePolicyDocument {
   };
   context?: RoutePolicyContextDocument | null;
   selector?: RoutePolicySelector | null;
+  quality?: { deprioritize: boolean; sensitivity: 'relaxed' | 'balanced' | 'strict' } | null;
   [opaqueField: string]: unknown;
 }
 
@@ -330,6 +355,11 @@ export const routeGroups = {
     apiFetch<DeleteRouteGroupResponse>(
       `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/members/${encodeURIComponent(deploymentId)}`,
       { method: 'DELETE', signal },
+    ),
+  quality: (routeGroupId: string, signal?: AbortSignal) =>
+    apiFetch<RouteGroupQuality>(
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/quality`,
+      { signal },
     ),
   getPolicy: (routeGroupId: string, signal?: AbortSignal) =>
     apiFetch<RoutePolicyCurrentResponse>(

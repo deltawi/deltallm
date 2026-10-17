@@ -146,6 +146,14 @@ To change the shares, open the **Routing** tab.
 When the routing lists its models, a model that you add gets no traffic.
 Open **Routing** and add the model there.
 
+Chat groups also show a **Quality · 15 min** column.
+The column shows the percentage of calls in the last 15 minutes that did not fail, and the number of calls.
+A failed call is a provider error or timeout, an empty answer, a bad tool call, or bad JSON.
+Hover over, focus, or select the value to see each count, the average time to the first token, and the output speed.
+A model with no calls in the window shows **No calls yet**.
+When **Send traffic away from low-quality models** is on, a model that the router sends last shows **Sent last**.
+When the gateway cannot read the shared counts from Redis, the column shows the counts of one instance only, and the text under the table tells you.
+
 ## Routing tab
 
 The **Routing** tab starts with simple routing. Select one of three choices:
@@ -165,6 +173,22 @@ The retry switch controls what happens when a call fails:
 
 - On: a call that times out or is rate limited is retried on another model, up to 2 retries.
 - Off: the error goes back to the caller.
+
+Chat groups with two or more models also show **Send traffic away from low-quality models**.
+This switch is off by default.
+When it is on, a model with too many failed calls in the last 15 minutes goes to the end of the order.
+The model still answers when the other models are busy or fail.
+A model needs at least 20 calls in the window before it can be sent last, and the router never sends all models last.
+Select a sensitivity:
+
+| Sensitivity | A model is sent last when |
+|-------------|---------------------------|
+| **Relaxed** | More than 40% of its calls fail. |
+| **Balanced** (default) | More than 20% of its calls fail. |
+| **Strict** | More than 10% of its calls fail, or its first token is more than 2 times slower than the other models. |
+
+The text under the presets shows the models that the router sends last now.
+See [Quality-based routing](../configuration/router.md#quality-based-routing) for the policy fields.
 
 When you change a setting, a bar at the bottom shows the changes.
 Select **Save changes** to publish them as a new version.
@@ -202,7 +226,7 @@ You can also edit or paste a policy and select **Apply** to load it into the for
 
 ### Configure
 
-**Configure** has five numbered cards. A card that differs from the live version shows **Changed**.
+**Configure** has six numbered cards. A card that differs from the live version shows **Changed**.
 
 1. **How to pick a deployment**: Custom split, Primary & backup, Spread evenly,
    or one of the other strategies in **More strategies**.
@@ -215,6 +239,8 @@ You can also edit or paste a policy and select **Apply** to load it into the for
    the number of extra attempts, and the error types that cause a retry.
 4. **Context-aware routing**: see [Route by context size](#route-by-context-size).
 5. **Model selector**: see [Model-router Policies](#model-router-policies). Chat groups only.
+6. **Send traffic away from low-quality models**: the same switch and sensitivity as the [Routing tab](#routing-tab).
+   With a model selector, a model is sent last only inside its own lane. Chat groups only.
 
 The **Draft check** panel updates as you edit.
 It shows the live and draft traffic shares, unhealthy or missing models, and errors that stop a publish.

@@ -52,6 +52,13 @@ function setup(server: Server) {
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
     server.requests.push({ method, path: url.pathname, body });
     if (url.pathname === '/auth/me') return json({ authenticated: true, auth_mode: 'master_key' });
+    if (url.pathname === `${BASE}/quality`) {
+      return json({
+        group_key: 'support', source: 'cluster', window_seconds: 900, deprioritize: true, sensitivity: 'balanced',
+        members: [{ deployment_id: 'dep-b', calls: 40, failed_calls: 12, provider_errors: 2, empty_answers: 0, bad_tool_calls: 10, bad_json: 0,
+          failure_rate: 0.3, avg_first_token_ms: 500, output_tokens_per_second: 40, sent_last_reason: 'failed_calls' }],
+      });
+    }
     if (url.pathname === `${BASE}/policies`) {
       if (server.failLists) { server.failLists -= 1; return json({ detail: 'Unavailable' }, 503); }
       return json({ group_key: 'support', policies: server.policies });
@@ -255,5 +262,35 @@ test('a failed reload after a change shows a warning, never the versions from be
     await click(button('Retry'));
     await settle();
     assert.match(document.body.textContent ?? '', /No draft/);
+  } finally { await env.close(); }
+});
+
+test('simple routing shows the quality option, the models sent last now, and saves a new sensitivity', async () => {
+  const live = { strategy: 'simple-shuffle', quality: { deprioritize: true, sensitivity: 'balanced' } };
+  const server: Server = { policies: [policy(1, 'published', live)], requests: [] };
+  const env = setup(server);
+  try {
+    await act(async () => env.root.render(<Harness />));
+    const text = () => document.body.textContent ?? '';
+    assert.match(text(), /Send traffic away from low-quality models/);
+    assert.match(text(), /Right now: claude\./);
+    assert.equal(choice('Balanced').getAttribute('aria-checked'), 'true');
+
+    await click(choice('Strict'));
+    assert.match(text(), /Send low-quality models last: Strict/);
+    assert.doesNotMatch(text(), /Right now:/, 'live results belong to the live setting only');
+    await click(button('Save changes'));
+    const saved = server.requests.find((request) => request.path === `${BASE}/policy/publish`);
+    assert.deepEqual(saved?.body, { strategy: 'simple-shuffle', quality: { deprioritize: true, sensitivity: 'strict' } });
+  } finally { await env.close(); }
+});
+
+test('the quality option stays hidden for groups that are not chat', async () => {
+  const server: Server = { policies: [], requests: [] };
+  const env = setup(server);
+  try {
+    await act(async () => env.root.render(<Harness group={{ ...GROUP, mode: 'embedding' }} />));
+    assert.doesNotMatch(document.body.textContent ?? '', /low-quality models/);
+    assert.equal(server.requests.some((request) => request.path === `${BASE}/quality`), false);
   } finally { await env.close(); }
 });
