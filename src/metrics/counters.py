@@ -195,6 +195,20 @@ deltallm_response_json_healed_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_router_quality_demotions_metric = Counter(
+    "deltallm_router_quality_demotions_total",
+    "Route plans that sent a low-quality deployment to the end of its lane",
+    ["deployment_id"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_router_quality_syncs_metric = Counter(
+    "deltallm_router_quality_syncs_total",
+    "Quality stats sync rounds by outcome (cluster, local_only, failed)",
+    ["outcome"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_tier_capacity_fair_share_decisions_metric = Counter(
     "deltallm_tier_capacity_fair_share_decisions_total",
     "Tier capacity fair-share decisions",
@@ -265,6 +279,18 @@ def increment_response_json_healed(*, deployment_id: str) -> None:
 
 def increment_response_validation_exhausted(*, reason: str, outcome: str) -> None:
     deltallm_response_validation_exhausted_metric.labels(reason=reason, outcome=outcome).inc()
+
+
+def increment_router_quality_demotion(*, deployment_id: str) -> None:
+    deltallm_router_quality_demotions_metric.labels(
+        deployment_id=sanitize_label(deployment_id)
+    ).inc()
+
+
+def increment_router_quality_sync(*, outcome: str) -> None:
+    if outcome not in {"cluster", "local_only", "failed"}:
+        raise ValueError("unsupported router quality sync outcome")
+    deltallm_router_quality_syncs_metric.labels(outcome=outcome).inc()
 
 
 def increment_provider_stream_validation_failure(

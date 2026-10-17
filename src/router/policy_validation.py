@@ -10,6 +10,13 @@ from pydantic import ValidationError
 
 from src.route_group_config import validate_context_routing_workload_mode
 from src.route_policy_contract import SelectorDeploymentInventory, validate_selector_reference
+from src.router.policy_blocks import (
+    ALLOWED_CONTEXT_KEYS,
+    merge_context_policy_block,
+    merge_optional_policy_block,
+    merge_selector_policy_block,
+)
+from src.router.quality.policy import QUALITY_POLICY_KEY, validate_quality_policy_block
 from src.router.router import RoutingStrategy
 from src.router.selection.policy import (
     CONTEXT_POLICY_SEMANTICS_VERSION,
@@ -26,15 +33,9 @@ POLICY_MODE_STRATEGY_ALIASES = {
 }
 LEGACY_POLICY_KEYS = {"mode", "strategy", "members", "timeouts", "retry"}
 CONTEXT_POLICY_KEYS = {*LEGACY_POLICY_KEYS, "context"}
-ALLOWED_POLICY_KEYS = {*CONTEXT_POLICY_KEYS, "selector"}
+ALLOWED_POLICY_KEYS = {*CONTEXT_POLICY_KEYS, "selector", QUALITY_POLICY_KEY}
 ALLOWED_TIMEOUT_KEYS = {"global_ms", "global_seconds"}
 ALLOWED_RETRY_KEYS = {"max_attempts", "retryable_error_classes"}
-ALLOWED_CONTEXT_KEYS = {
-    "mode",
-    "unknown_capacity",
-    "default_output_tokens",
-    "safety_margin_tokens",
-}
 ALLOWED_RETRYABLE_ERROR_CLASSES = {
     "timeout",
     "rate_limit",
@@ -237,6 +238,14 @@ def merge_policy_document_for_write(
         if existing_semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
         else None
     )
+    quality = merge_optional_policy_block(
+        current.get(QUALITY_POLICY_KEY), replacement, QUALITY_POLICY_KEY
+    )
+    if quality is None:
+        merged.pop(QUALITY_POLICY_KEY, None)
+    else:
+        merged[QUALITY_POLICY_KEY] = quality
+
     selector_write_intent = _selector_write_intent(replacement)
     selector = merge_selector_policy_block(existing_selector, replacement)
     if selector is None:
@@ -316,46 +325,6 @@ def _merge_policy_members_for_write(
             member.pop("lane", None)
         preserved_members.append(member)
     merged["members"] = preserved_members
-
-
-def merge_context_policy_block(
-    existing: object,
-    replacement: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    """Preserve omitted context, while treating explicit null as a deletion tombstone."""
-
-    current = existing if isinstance(existing, dict) else None
-    if "context" not in replacement:
-        return deepcopy(current) if current is not None else None
-    replacement_context = replacement.get("context")
-    if replacement_context is None:
-        return None
-    if not isinstance(replacement_context, dict):
-        raise ValueError("context must be an object or null")
-    merged = {
-        key: deepcopy(value)
-        for key, value in (current or {}).items()
-        if key not in ALLOWED_CONTEXT_KEYS
-    }
-    merged.update(deepcopy(replacement_context))
-    return merged
-
-
-def merge_selector_policy_block(
-    existing: object,
-    replacement: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    """Preserve a v3 selector when omitted and remove it only through explicit null."""
-
-    current = existing if isinstance(existing, dict) else None
-    if "selector" not in replacement:
-        return deepcopy(current) if current is not None else None
-    replacement_selector = replacement.get("selector")
-    if replacement_selector is None:
-        return None
-    if not isinstance(replacement_selector, dict):
-        raise ValueError("selector must be an object or null")
-    return deepcopy(replacement_selector)
 
 
 def _validate_policy_mode(normalized: dict[str, Any]) -> str | None:
@@ -715,6 +684,10 @@ def _validate_route_policy_document(
     _validate_policy_timeouts(normalized, warnings)
     _validate_policy_retry(normalized, warnings)
     _validate_context_policy(normalized, warnings, workload_mode=workload_mode)
+    if QUALITY_POLICY_KEY in normalized:
+        normalized[QUALITY_POLICY_KEY] = validate_quality_policy_block(
+            normalized[QUALITY_POLICY_KEY]
+        )
     if validation_kind in {
         PolicyValidationKind.SELECTOR_WRITE_FIELDS,
         PolicyValidationKind.LEGACY_WRITE_FIELDS,

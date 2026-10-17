@@ -6,6 +6,7 @@ from enum import Enum
 
 from src.route_group_config import ModelMode, validate_context_routing_workload_mode
 from src.router.context_policy import ContextRoutingPolicy, parse_context_routing_policy
+from src.router.quality.policy import QualityRoutingPolicy, parse_quality_routing_policy
 from src.router.route_group_validation import normalize_route_group_mode
 from src.router.selection.lanes import SelectorLaneRouting, parse_selector_lane_routing
 
@@ -32,6 +33,7 @@ class RouteGroupPolicy:
     retryable_error_classes: frozenset[str] | None = None
     context: ContextRoutingPolicy | None = None
     selector: SelectorLaneRouting | None = None
+    quality: QualityRoutingPolicy | None = None
 
     def failover_overrides(self) -> dict[str, object]:
         overrides: dict[str, object] = {}
@@ -71,6 +73,7 @@ def build_route_group_policies(
             retryable_error_classes=_extract_retryable_error_classes(group.get("retry")),
             context=context,
             selector=parse_selector_lane_routing(group),
+            quality=parse_quality_routing_policy(group.get("quality")),
         )
     return policies
 

@@ -536,6 +536,7 @@ Use these settings when routing needs a little more control:
 
 - `router_settings.enable_pre_call_checks` filters out deployments already above configured RPM or TPM limits before the provider call
 - `router_settings.model_group_alias` lets clients call a friendly alias instead of the real group name
+- the route-group policy block `quality` sends a model with too many failed calls to the end of the order; see [Quality-based routing](../configuration/router.md#quality-based-routing)
 
 ## Monitor Routing
 

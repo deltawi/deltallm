@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.chat.quality_recording import AttemptQualityRecorder
 from src.chat.response_validation import ResponseValidationScope
 from src.guardrails.middleware import GuardrailMiddleware
 from src.mcp.orchestrator import MCPChatOrchestrator, MCPRequestContext
@@ -89,6 +90,7 @@ class MCPChatExecutionService:
         routing: MCPModelRouting,
         on_attempt: DeploymentAttemptObserver | None = None,
         response_validation: ResponseValidationSettings | None = None,
+        quality: AttemptQualityRecorder | None = None,
     ) -> MCPChatExecutionResult:
         deadline = routing.request_deadline or self.failover_manager.create_request_deadline(
             routing.timeout_seconds
@@ -98,6 +100,7 @@ class MCPChatExecutionService:
         fallback_used = False
         validation_settings = response_validation or ResponseValidationSettings(enabled=False)
         validation_headers: dict[str, str] = {}
+        recorder = quality or AttemptQualityRecorder(None)
 
         async def execute_model_phase(
             phase_payload: ChatCompletionRequest,
@@ -107,21 +110,26 @@ class MCPChatExecutionService:
             attempted_primary = phase_primary
             phase_validation = ResponseValidationScope(phase_payload, validation_settings)
             result, phase_served_deployment = await phase_validation.run(
-                self.failover_manager.execute_with_failover(
-                    primary_deployment=attempted_primary,
-                    model_group=routing.model_group,
-                    execute=lambda deployment: phase_validation.checked(
-                        deployment, self.execute_chat_call(phase_payload, deployment)
-                    ),
-                    return_deployment=True,
-                    on_attempt=on_attempt,
-                    timeout_seconds=routing.timeout_seconds,
-                    retry_max_attempts=routing.retry_max_attempts,
-                    retryable_error_classes=list(routing.retryable_error_classes)
-                    if routing.retryable_error_classes is not None
-                    else None,
-                    routing_context=routing.routing_context,
-                    request_deadline=deadline,
+                recorder.run(
+                    self.failover_manager.execute_with_failover(
+                        primary_deployment=attempted_primary,
+                        model_group=routing.model_group,
+                        execute=lambda deployment: recorder.attempt(
+                            deployment,
+                            phase_validation.checked(
+                                deployment, self.execute_chat_call(phase_payload, deployment)
+                            ),
+                        ),
+                        return_deployment=True,
+                        on_attempt=on_attempt,
+                        timeout_seconds=routing.timeout_seconds,
+                        retry_max_attempts=routing.retry_max_attempts,
+                        retryable_error_classes=list(routing.retryable_error_classes)
+                        if routing.retryable_error_classes is not None
+                        else None,
+                        routing_context=routing.routing_context,
+                        request_deadline=deadline,
+                    )
                 )
             )
             # The client sees the final answer; earlier phases only feed tool execution.

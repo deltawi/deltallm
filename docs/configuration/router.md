@@ -145,6 +145,7 @@ Route-group policies currently support:
 - `context.default_output_tokens`
 - `context.safety_margin_tokens`
 - optional version 3 `selector` and member `lane` fields for the model-router contract
+- `quality.deprioritize` and `quality.sensitivity`; see [Quality-based routing](#quality-based-routing)
 
 Legacy mode aliases accepted on input:
 
@@ -498,6 +499,64 @@ Monitor validation with these Prometheus counters:
 - `deltallm_response_validation_failures_total{deployment_id, reason}`: answers rejected per deployment and check.
 - `deltallm_response_validation_exhausted_total{reason, outcome}`: requests that ended on a rejected answer, with outcome `returned_response` or `returned_error`.
 - `deltallm_response_json_healed_total{deployment_id}`: JSON-mode answers repaired by JSON healing.
+
+## Quality-based routing
+
+DeltaLLM counts the result of each chat call per deployment for the last 15 minutes.
+A route group can use these counts to send low-quality deployments last.
+This option is off by default.
+
+```yaml
+router_settings:
+  route_groups:
+    - key: support-chat
+      mode: chat
+      quality:
+        deprioritize: true
+        sensitivity: balanced   # relaxed, balanced, or strict
+      members:
+        - deployment_id: gpt-4o-eu
+        - deployment_id: glm-4-6
+```
+
+In the Admin UI, use **Routing > Send traffic away from low-quality models**.
+In a route policy document, use the same `quality` block. An omitted block keeps the stored setting. `quality: null` removes it.
+
+A call fails when the provider returns an error that affects deployment health (for example a `5xx` status or a timeout), or when [response validation](#response-validation) rejects the answer.
+Errors that the request causes (for example an invalid request) do not count.
+
+| Sensitivity | A deployment goes last when |
+| --- | --- |
+| `relaxed` | More than 40% of its calls failed |
+| `balanced` | More than 20% of its calls failed |
+| `strict` | More than 10% of its calls failed, or its average time to first token is more than 2 times the median of the other deployments in the same lane |
+
+Each rule needs at least 20 calls in the window. A deployment with fewer calls keeps its place.
+
+How the router applies the option:
+
+- It moves flagged deployments to the end of the order that the strategy, context routing, and model selector made. The other deployments keep their order.
+- It applies the rule in each model-selector lane. A flagged economy deployment stays in the economy lane.
+- It never removes a deployment. A flagged deployment still answers when the other deployments are busy, cooling down, or fail.
+- When all deployments in a lane are flagged, the order does not change.
+- A flagged deployment gets its place back when its failure rate drops below the limit, or when it has fewer than 20 calls in the window. It gets less traffic while it is flagged, so its old calls leave the window within 15 minutes.
+
+DeltaLLM records the counts in process memory on the request path. It adds no SQL, Redis, or network call to a request.
+A background task in each gateway process sends new counts to Redis every 15 seconds (one pipeline) and reads the cluster totals back in the same pipeline.
+The router and the Admin UI use these totals.
+If Redis is not available, each process uses its own counts. The admin API then reports `source: local`.
+The counts are telemetry: when a Redis write fails, DeltaLLM drops the counts of that interval and does not try again.
+
+Streaming calls count when the stream ends. The time to first token comes from streaming calls only.
+Output speed is completion tokens divided by the full call time.
+
+Read the counts for one group with `GET /ui/api/route-groups/by-id/{route_group_id}/quality`.
+The Models tab of a chat route group shows them in the **Quality** column.
+
+Monitor the option with these Prometheus counters:
+
+- `deltallm_router_quality_demotions_total{deployment_id}`: route plans that sent a deployment last.
+- `deltallm_router_quality_syncs_total{outcome}`: sync rounds with outcome `cluster`, `local_only` (no Redis), or `failed`.
 
 ## Model Aliases
 

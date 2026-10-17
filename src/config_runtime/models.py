@@ -505,6 +505,7 @@ class ModelHotReloadManager:
             state_backend=state_backend,
             config=router_config,
             deployment_registry=deployment_registry,
+            quality=getattr(self.app.state, "deployment_quality", None),
         )
         failover_manager = FailoverManager(
             config=failover_config,

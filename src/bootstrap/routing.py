@@ -33,6 +33,8 @@ from src.router import (
     build_deployment_registry,
     build_route_group_policies,
 )
+from src.router.quality import DeploymentQualityTracker
+from src.router.quality.sync import QualityStatsSync
 from src.services.access.callable_targets import build_callable_target_catalog
 from src.services.models.model_deployments import (
     bootstrap_model_deployments_from_config,
@@ -51,6 +53,7 @@ logger = logging.getLogger(__name__)
 class RoutingRuntime:
     health_checker: BackgroundHealthChecker
     health_task: Task[None] | None = None
+    quality_sync: QualityStatsSync | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -148,6 +151,15 @@ async def init_routing_runtime(
         degraded_mode=degraded_mode,
         keyspace=RouterRedisKeyspace(environment=getattr(settings, "app_env", "dev")),
     )
+    # One tracker per process outlives every routing generation, so a reload keeps
+    # the quality window.
+    deployment_quality = DeploymentQualityTracker()
+    app.state.deployment_quality = deployment_quality
+    quality_sync = QualityStatsSync(
+        deployment_quality,
+        getattr(app.state, "bulk_redis", None),
+        environment=getattr(settings, "app_env", "dev"),
+    )
     route_groups = list(getattr(app.state, "route_groups", []))
     deployment_registry = build_deployment_registry(
         app.state.model_registry, route_groups=route_groups
@@ -162,6 +174,7 @@ async def init_routing_runtime(
         state_backend=state_backend,
         config=router_config,
         deployment_registry=deployment_registry,
+        quality=deployment_quality,
     )
     app.state.router_state_backend = state_backend
     app.state.cooldown_manager = CooldownManager(
@@ -270,10 +283,12 @@ async def init_routing_runtime(
     health_task: Task[None] | None = None
     if cfg.general_settings.background_health_checks:
         health_task = create_task(health_checker.start())
+    quality_sync.start()
 
     return RoutingRuntime(
         health_checker=health_checker,
         health_task=health_task,
+        quality_sync=quality_sync,
         statuses=(
             BootstrapStatus(
                 "routing",
@@ -288,6 +303,8 @@ async def init_routing_runtime(
 
 
 async def shutdown_routing_runtime(runtime: RoutingRuntime) -> None:
+    if runtime.quality_sync is not None:
+        await runtime.quality_sync.close()
     runtime.health_checker.stop()
     if runtime.health_task is not None:
         await stop_tasks_before_deadline(

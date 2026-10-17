@@ -838,6 +838,7 @@ class RouteGroupRepository(RoutePolicyDraftMixin):
             timeouts = policy_json.get("timeouts")
             retry = policy_json.get("retry")
             context = policy_json.get("context")
+            quality = policy_json.get("quality")
             raw_members = row.get("members")
             if isinstance(raw_members, str):
                 try:
@@ -881,6 +882,7 @@ class RouteGroupRepository(RoutePolicyDraftMixin):
                     "timeouts": timeouts if isinstance(timeouts, dict) else None,
                     "retry": retry if isinstance(retry, dict) else None,
                     "context": context if isinstance(context, dict) else None,
+                    "quality": quality if isinstance(quality, dict) else None,
                     **(
                         {"selector": policy_json["selector"]}
                         if semantics_version >= 3 and policy_json.get("selector") is not None

@@ -38,6 +38,8 @@ from src.router.context_policy import (
     get_request_token_demand,
     set_request_context_routing_policy,
 )
+from src.router.quality.policy import demote_low_quality
+from src.router.quality.stats import DeploymentQualityTracker
 from src.router.registry import DeploymentRegistryStore
 from src.router.group_policy import (
     RouteGroupPolicy as RouteGroupPolicy,
@@ -129,8 +131,10 @@ class Router:
         state_backend: DeploymentStateBackend,
         config: RouterConfig,
         deployment_registry: Mapping[str, Sequence[Deployment]] | DeploymentRegistryStore,
+        quality: DeploymentQualityTracker | None = None,
     ):
         self.strategy = strategy
+        self.quality = quality
         self.state = state_backend
         self.config = config
         self.deployment_registry = (
@@ -284,6 +288,8 @@ class Router:
             selector=policy.selector if policy is not None else None,
             decision=selector_decision,
         )
+        if policy is not None and policy.quality is not None and self.quality is not None:
+            ordered = demote_low_quality(ordered, policy.quality, self.quality.snapshot())
         return RouteCandidatePlan(
             model_group=group.model_group,
             strategy=group.strategy.value,
