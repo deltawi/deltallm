@@ -73,9 +73,18 @@ Guardrails and pre-call hooks read the text of the request. If a guardrail chang
 (for example, PII redaction), DeltaLLM writes the new text back into the text blocks of
 that message. The changed message keeps one text block that holds all of its text.
 
-If a hook adds or removes messages (for example, a prompt from the prompt registry),
-DeltaLLM uses the translation hop for that request. If that request also has content that
-only the native hop supports, DeltaLLM rejects it with a `400 invalid_request_error`.
+Guardrails also read the text of `document` and `search_result` blocks. DeltaLLM cannot
+write changed text back into these blocks.
+
+DeltaLLM uses the translation hop for the request when a hook does one of these:
+
+- Adds or removes messages (for example, a prompt from the prompt registry).
+- Changes tool call arguments, tools, `tool_choice`, `temperature`, `top_p`, or stop
+  sequences.
+- Changes the text of a message that has a `document` or `search_result` block.
+
+If that request also has content that only the native hop supports, DeltaLLM rejects it
+with a `400 invalid_request_error`.
 
 ### Usage and cost
 
@@ -87,6 +96,10 @@ Anthropic reports `input_tokens`, `cache_creation_input_tokens`, and
 
 Cache reads use the model's `input_cost_per_token_cache_hit` price when it is set.
 Other prompt tokens, which include cache writes, use `input_cost_per_token`.
+
+DeltaLLM does not apply Anthropic price changes that its pricing cannot show. These include
+the cache-write price, the long-context price of the `context-1m` beta, and the priority
+tier price.
 
 ## Translation hop (other providers)
 
@@ -134,7 +147,8 @@ On the native hop, an Anthropic `invalid_request_error` with status `400`, `413`
 keeps the Anthropic message text. The text describes the client's own request, and
 Anthropic clients use it to recover automatically (for example, Claude Code turns off a
 capability that the model rejects). DeltaLLM never forwards other provider messages or
-response bodies.
+response bodies. Messages about the Anthropic account (for example, credit balance or
+workspace limits) are not forwarded.
 
 For rate limits, DeltaLLM keeps a valid `Retry-After` header.
 
@@ -161,9 +175,12 @@ in that mode does not prove that billing was persisted. See the shared
 
 ## Limits
 
-- DeltaLLM rejects `mcp_servers`, `container`, and content with a `file` source
-  (`file_id`). These refer to objects in the deployment's Anthropic account, which all
-  DeltaLLM tenants share. Send file content inline instead.
+- DeltaLLM rejects `mcp_servers`, `container`, `container_upload` blocks, and content
+  with a `file_id` (for example, a `file` source). These refer to objects in the
+  deployment's Anthropic account, which all DeltaLLM tenants share. Send file content
+  inline instead.
+- The native hop does not send `speed` or `inference_geo` to Anthropic. These options
+  change the token price, and DeltaLLM pricing has no field for them.
 - DeltaLLM does not bill Anthropic server tools such as `web_search`. Anthropic charges
   the deployment's account for them.
 - `/v1/messages/count_tokens` is not available. Claude Code then estimates context size.

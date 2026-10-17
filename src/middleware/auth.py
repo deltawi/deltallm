@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from starlette.requests import HTTPConnection
+from starlette._utils import get_route_path
 
 from src.config import Settings
 from src.models.errors import AuthenticationError
@@ -33,7 +34,7 @@ def request_authorization(request: HTTPConnection) -> str | None:
     authorization = request.headers.get("authorization")
     if authorization:
         return authorization
-    if request.url.path.rstrip("/") not in _X_API_KEY_PATHS:
+    if get_route_path(request.scope).rstrip("/") not in _X_API_KEY_PATHS:
         return None
     api_key = (request.headers.get("x-api-key") or "").strip()
     return f"Bearer {api_key}" if api_key else None

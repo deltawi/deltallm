@@ -38,6 +38,9 @@ class _ViewMessage:
 
     paths: tuple[TextPath, ...]
     error_prefix: str = ""
+    # False when the message also holds text from blocks the view cannot write back
+    # (documents, search results). A policy change to it cannot reach the native body.
+    writable: bool = True
 
 
 @dataclass(slots=True)
@@ -54,10 +57,17 @@ class _ViewBuilder:
             )
 
     def add(
-        self, message: dict[str, Any], paths: list[TextPath], *, error_prefix: str = ""
+        self,
+        message: dict[str, Any],
+        paths: list[TextPath],
+        *,
+        error_prefix: str = "",
+        writable: bool = True,
     ) -> None:
         self.messages.append(message)
-        self.sources.append(_ViewMessage(paths=tuple(paths), error_prefix=error_prefix))
+        self.sources.append(
+            _ViewMessage(paths=tuple(paths), error_prefix=error_prefix, writable=writable)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +87,9 @@ class MessagesPolicyView:
             if self.translation_blocker is not None:
                 raise InvalidRequestError(
                     message=(
-                        "A pre-call hook changed the message structure, and this request has "
-                        "content that only the native Messages path supports"
+                        "A pre-call policy changed this request in a way the native Messages "
+                        "path cannot carry, and the request has content that only that path "
+                        "supports"
                     )
                 )
             return None
@@ -104,11 +115,11 @@ def build_messages_policy_view(
     elif isinstance(payload.system, list):
         paths: list[TextPath] = []
         texts: list[str] = []
-        _collect_text_blocks(
+        writable = _collect_text_blocks(
             builder, payload.system, context="system", path=("system",), paths=paths, texts=texts
         )
         if texts:
-            builder.add({"role": "system", "content": "\n".join(texts)}, paths)
+            builder.add({"role": "system", "content": "\n".join(texts)}, paths, writable=writable)
     for index, message in enumerate(payload.messages):
         _add_message(builder, message, index)
     if not builder.messages:
@@ -150,6 +161,10 @@ def anthropic_messages_to_chat_request(payload: AnthropicMessagesRequest) -> Cha
 # account (uploaded files, code containers) or call outside servers with its credentials.
 # One DeltaLLM tenant must not reach another tenant's objects through a shared key.
 _PROVIDER_ACCOUNT_FIELDS = ("container", "mcp_servers")
+_FILE_REFERENCE_MESSAGE = (
+    "file references are not supported by this gateway; send the content inline "
+    "(base64, text, or url)"
+)
 
 
 def _reject_provider_account_references(body: dict[str, Any]) -> None:
@@ -167,13 +182,9 @@ def _reject_provider_account_references(body: dict[str, Any]) -> None:
         elif isinstance(value, dict):
             source = value.get("source")
             if isinstance(source, dict) and source.get("type") == "file":
-                raise InvalidRequestError(
-                    message=(
-                        "file sources are not supported by this gateway; send the content "
-                        "inline (base64, text, or url)"
-                    ),
-                    param="source",
-                )
+                raise InvalidRequestError(message=_FILE_REFERENCE_MESSAGE, param="source")
+            if "file_id" in value or value.get("type") == "container_upload":
+                raise InvalidRequestError(message=_FILE_REFERENCE_MESSAGE, param="file_id")
             stack.extend(item for item in value.values() if isinstance(item, (list, dict)))
 
 
@@ -185,7 +196,10 @@ def _collect_text_blocks(
     path: TextPath,
     paths: list[TextPath],
     texts: list[str],
-) -> None:
+) -> bool:
+    """Collect text blocks; return False when other blocks added text the view cannot write."""
+
+    writable = True
     for index, block in enumerate(content):
         block_type = block.get("type") if isinstance(block, dict) else type(block).__name__
         if block_type == "text" and isinstance(block.get("text"), str):
@@ -193,6 +207,53 @@ def _collect_text_blocks(
             texts.append(block["text"])
         elif block_type not in _POLICY_IGNORED_BLOCK_TYPES:
             builder.block(f"{context}[{index}]", str(block_type))
+            writable = _add_untracked_text(block, texts) and writable
+    return writable
+
+
+# Keys that hold identifiers or provider state, not text the model reads.
+_NON_TEXT_KEYS = frozenset(
+    {
+        "type",
+        "id",
+        "tool_use_id",
+        "media_type",
+        "cache_control",
+        "signature",
+        "is_error",
+        "encrypted_content",
+        "encrypted_index",
+    }
+)
+# Inline binary or fetched sources: their payload is not text for policy to read.
+_BINARY_SOURCE_TYPES = frozenset({"base64", "url"})
+
+
+def _add_untracked_text(block: Any, texts: list[str]) -> bool:
+    """Add the text of a native-only block (document, search result) to the policy view.
+
+    Guardrails must see every text the native hop sends. The view cannot write these
+    texts back, so it returns False when it found any.
+    """
+
+    found: list[str] = []
+    stack: list[Any] = [block]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            if value:
+                found.append(value)
+        elif isinstance(value, list):
+            stack.extend(reversed(value))
+        elif isinstance(value, dict):
+            binary = value.get("type") in _BINARY_SOURCE_TYPES
+            stack.extend(
+                item
+                for key, item in reversed(value.items())
+                if key not in _NON_TEXT_KEYS and not (binary and key in {"data", "url"})
+            )
+    texts.extend(found)
+    return not found
 
 
 def _add_message(builder: _ViewBuilder, message: AnthropicMessage, index: int) -> None:
@@ -204,6 +265,7 @@ def _add_message(builder: _ViewBuilder, message: AnthropicMessage, index: int) -
 
     paths: list[TextPath] = []
     texts: list[str] = []
+    writable = True
     tool_calls: list[dict[str, Any]] = []
     tool_results = 0
     for block_index, block in enumerate(content):
@@ -231,12 +293,13 @@ def _add_message(builder: _ViewBuilder, message: AnthropicMessage, index: int) -
             tool_results += 1
         elif block_type not in _POLICY_IGNORED_BLOCK_TYPES:
             builder.block(context, block_type)
+            writable = _add_untracked_text(block, texts) and writable
 
-    if paths or tool_calls or not tool_results:
+    if texts or tool_calls or not tool_results:
         entry: dict[str, Any] = {"role": role, "content": "\n".join(texts)}
         if tool_calls:
             entry["tool_calls"] = tool_calls
-        builder.add(entry, paths)
+        builder.add(entry, paths, writable=writable)
 
 
 def _add_tool_result(
@@ -245,11 +308,12 @@ def _add_tool_result(
     result = block.get("content")
     paths: list[TextPath] = []
     texts: list[str] = []
+    writable = True
     if isinstance(result, str):
         paths.append((*path, "content"))
         texts.append(result)
     elif isinstance(result, list):
-        _collect_text_blocks(
+        writable = _collect_text_blocks(
             builder,
             result,
             context=f"{context}.content",
@@ -265,6 +329,7 @@ def _add_tool_result(
         {"role": "tool", "tool_call_id": str(block.get("tool_use_id") or ""), "content": text},
         paths,
         error_prefix=prefix,
+        writable=writable,
     )
 
 
@@ -309,13 +374,18 @@ def _anthropic_tool_choice_to_chat(tool_choice: dict[str, Any]) -> Any:
     )
 
 
+# Anthropic charges a different token price for these options, and DeltaLLM pricing has
+# no matching field. The native hop sends the request without them.
+_PRICE_CHANGING_FIELDS = ("speed", "inference_geo")
+
+
 def _upstream_safe_body(body: dict[str, Any]) -> dict[str, Any]:
+    metadata = body.get("metadata")
+    if metadata is None and not any(name in body for name in _PRICE_CHANGING_FIELDS):
+        return body
+    result = {key: value for key, value in body.items() if key not in _PRICE_CHANGING_FIELDS}
     # DeltaLLM reads its own controls (prompt_ref, cache, tags) from metadata; the
     # Messages API accepts only user_id there.
-    metadata = body.get("metadata")
-    if metadata is None:
-        return body
-    result = dict(body)
     if isinstance(metadata, dict) and "user_id" in metadata:
         result["metadata"] = {"user_id": metadata["user_id"]}
     else:
@@ -323,19 +393,31 @@ def _upstream_safe_body(body: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+# Request fields that the native hop reads from the raw body. A policy change to one of
+# them cannot be written back, so the request uses the translation hop.
+_POLICY_COMPARED_FIELDS = frozenset({"tools", "tool_choice", "temperature", "top_p", "stop"})
+_MESSAGE_STRUCTURE_FIELDS = frozenset({"role", "name", "tool_calls", "tool_call_id"})
+
+
 def _apply_policy_text(
     view: MessagesPolicyView, transformed: ChatCompletionRequest
 ) -> dict[str, Any] | None:
     original = view.canonical.messages
     if len(transformed.messages) != len(original) or any(
-        after.role != before.role for after, before in zip(transformed.messages, original)
+        after.model_dump(include=_MESSAGE_STRUCTURE_FIELDS)
+        != before.model_dump(include=_MESSAGE_STRUCTURE_FIELDS)
+        for after, before in zip(transformed.messages, original)
+    ):
+        return None
+    if transformed.model_dump(include=_POLICY_COMPARED_FIELDS) != view.canonical.model_dump(
+        include=_POLICY_COMPARED_FIELDS
     ):
         return None
     changes: list[tuple[_ViewMessage, str]] = []
     for after, before, source in zip(transformed.messages, original, view.sources):
         if after.content == before.content:
             continue
-        if not isinstance(after.content, str) or not source.paths:
+        if not isinstance(after.content, str) or not source.paths or not source.writable:
             return None
         text = after.content
         if source.error_prefix and text.startswith(source.error_prefix):

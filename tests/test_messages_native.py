@@ -560,6 +560,14 @@ async def test_x_api_key_lists_models(client, test_app):
                 }
             ]
         },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "container_upload", "file_id": "file_2"}],
+                }
+            ]
+        },
     ],
 )
 def test_policy_view_rejects_provider_account_references(extra: dict[str, Any]) -> None:
@@ -572,3 +580,155 @@ def test_policy_view_rejects_provider_account_references(extra: dict[str, Any]) 
 
     with pytest.raises(InvalidRequestError):
         _view(body)
+
+
+DOCUMENT_BODY = {
+    "model": "gpt-4o-mini",
+    "max_tokens": 10,
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "document", "source": {"type": "text", "data": "doc secret"}},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "t",
+                    "content": [
+                        {
+                            "type": "search_result",
+                            "title": "result title",
+                            "source": "https://example.com",
+                            "content": [{"type": "text", "text": "search secret"}],
+                        },
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"},
+                        },
+                    ],
+                },
+                {"type": "text", "text": "summarize"},
+            ],
+        }
+    ],
+}
+
+
+def test_policy_view_shows_document_and_search_result_text_to_policy() -> None:
+    view = _view(DOCUMENT_BODY)
+
+    tool, user = view.canonical.messages
+    assert "doc secret" in user.content
+    assert "summarize" in user.content
+    assert "search secret" in tool.content
+    assert "result title" in tool.content
+    # Image payloads are not text.
+    assert "QUJD" not in tool.content
+    assert view.translation_blocker is not None
+
+
+def test_native_request_rejects_policy_change_to_document_text() -> None:
+    view = _view(DOCUMENT_BODY)
+    redacted = _with_messages(view, [None, "doc [REDACTED]\nsummarize"])
+
+    with pytest.raises(InvalidRequestError):
+        view.native_request(redacted)
+
+
+def test_native_request_translates_when_policy_changes_tool_arguments() -> None:
+    body = {
+        "model": "gpt-4o-mini",
+        "max_tokens": 10,
+        "messages": [
+            {"role": "user", "content": "email me"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "send",
+                        "input": {"email": "john@example.com"},
+                    }
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]},
+        ],
+    }
+    view = _view(body)
+    data = view.canonical.model_dump(mode="json", exclude_unset=True)
+    data["messages"][1]["tool_calls"][0]["function"]["arguments"] = '{"email": "<EMAIL>"}'
+
+    assert view.native_request(ChatCompletionRequest.model_validate(data)) is None
+
+
+def test_native_request_translates_when_policy_changes_request_fields() -> None:
+    body = {
+        "model": "gpt-4o-mini",
+        "max_tokens": 10,
+        "temperature": 1.0,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    view = _view(body)
+    data = view.canonical.model_dump(mode="json", exclude_unset=True)
+    data["temperature"] = 0.2
+
+    assert view.native_request(ChatCompletionRequest.model_validate(data)) is None
+
+
+def test_native_request_drops_price_changing_fields() -> None:
+    body = {
+        "model": "gpt-4o-mini",
+        "max_tokens": 10,
+        "speed": "fast",
+        "inference_geo": "us",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    view = _view(body)
+
+    native = view.native_request(view.canonical)
+
+    assert native is not None
+    assert "speed" not in native.body
+    assert "inference_geo" not in native.body
+
+
+def test_translation_blocker_moves_to_next_deployment() -> None:
+    from src.models.errors import RoutingFailureAction
+    from src.providers.anthropic_messages import bind_native_messages_upstream
+
+    native = _view(DOCUMENT_BODY).native_request(_view(DOCUMENT_BODY).canonical)
+
+    class _Adapter:
+        def native_messages_adapter(self, native):  # noqa: ANN001, ANN201
+            del native
+            return None
+
+    class _Upstream:
+        adapter = _Adapter()
+
+    with pytest.raises(InvalidRequestError) as error:
+        bind_native_messages_upstream(_Upstream(), native)  # type: ignore[arg-type]
+    assert error.value.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
+    assert error.value.affects_deployment_health is False
+
+
+@pytest.mark.asyncio
+async def test_messages_native_hop_hides_provider_account_errors(client, test_app):
+    _use_anthropic_deployment(test_app)
+    message = "Your credit balance is too low to access the Anthropic API."
+
+    async def post(url, headers, json=None, content=None, timeout=0):  # noqa: ANN001, ANN201
+        del url, headers, json, content, timeout
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": message}},
+        )
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/messages",
+        headers={"x-api-key": test_app.state._test_key},
+        json=CLAUDE_CODE_BODY,
+    )
+
+    assert "credit balance" not in response.text

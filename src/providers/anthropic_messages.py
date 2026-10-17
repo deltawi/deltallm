@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from src.models.errors import InvalidRequestError, ProxyError
+from src.models.errors import InvalidRequestError, ProxyError, RoutingFailureAction
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic import map_anthropic_stream_error
 from src.providers.base import (
@@ -42,6 +42,9 @@ NATIVE_MESSAGES_RESPONSE_KEY = "__native_messages_response__"
 _MAX_HEADER_VALUE_CHARS = 4096
 _FORWARDED_CLIENT_ERROR_STATUSES = frozenset({400, 413, 422})
 _FORWARDED_CLIENT_ERROR_TYPES = frozenset({"invalid_request_error", "request_too_large"})
+# Anthropic sends account state (credit, billing, workspace limits) as invalid_request_error
+# too. That text is about the shared provider account and stays out of client errors.
+_ACCOUNT_ERROR_MARKERS = ("credit balance", "billing", "workspace", "organization", "api key")
 _STOP_TO_FINISH = {
     "end_turn": "stop",
     "stop_sequence": "stop",
@@ -125,7 +128,12 @@ def bind_native_messages_upstream(
     adapter = upstream.adapter.native_messages_adapter(native)
     if adapter is None:
         if native.translation_blocker is not None:
-            raise InvalidRequestError(message=native.translation_blocker)
+            # Another deployment of the group may be an Anthropic one that can serve it.
+            raise InvalidRequestError(
+                message=native.translation_blocker,
+                affects_deployment_health=False,
+                routing_failure_action=RoutingFailureAction.NEXT_DEPLOYMENT,
+            )
         return upstream
     return replace(upstream, adapter=adapter, headers=native.upstream_headers(upstream.headers))
 
@@ -340,6 +348,10 @@ def _forwardable_client_error_message(details: ProviderErrorDetails) -> str | No
     if details.status_code not in _FORWARDED_CLIENT_ERROR_STATUSES or not details.message:
         return None
     if not details.identifiers & _FORWARDED_CLIENT_ERROR_TYPES:
+        return None
+    lowered = details.message.lower()
+    if any(marker in lowered for marker in _ACCOUNT_ERROR_MARKERS):
+        # This text is about the deployment's Anthropic account, not the client request.
         return None
     return "".join(char if char.isprintable() else " " for char in details.message)
 
