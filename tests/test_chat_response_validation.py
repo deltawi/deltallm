@@ -193,3 +193,36 @@ async def test_disabled_validation_returns_answer_unchanged(client, test_app):
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == ""
     assert "x-deltallm-response-validation" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_json_healing_repairs_answer_and_sets_header(client, test_app):
+    _set_validation(test_app, ResponseValidationSettings(json_healing=True))
+    calls = {"count": 0}
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN202
+        del headers, timeout
+        calls["count"] += 1
+        content = 'Here you go:\n```json\n{"city": "Rabat",}\n```'
+        return httpx.Response(
+            200,
+            json=_completion(json["model"], {"content": content}),
+            request=httpx.Request("POST", url),
+        )
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=_headers(test_app),
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == '{"city": "Rabat"}'
+    assert response.headers["x-deltallm-response-healed"] == "json"
+    assert "x-deltallm-response-validation" not in response.headers
+    assert calls["count"] == 1

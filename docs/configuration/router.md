@@ -452,6 +452,7 @@ router_settings:
     unknown_tool_name: true
     invalid_json_output: true
     on_exhausted: return_response   # or: error
+    json_healing: false
 ```
 
 | Check | The answer fails when |
@@ -478,10 +479,25 @@ The provider can charge for a rejected attempt. DeltaLLM bills the caller only f
 Streaming responses keep the existing pre-commit checks: an empty or terminal-only stream fails before the first frame and can use a fallback.
 Tool calls and JSON in a stream arrive after DeltaLLM sends response bytes, so they are not checked.
 
+### JSON healing
+
+Set `json_healing: true` to repair JSON-mode answers before the `invalid_json_output` check.
+It is off by default. It applies only when the request sets `response_format` to `json_object` or `json_schema`, and only to non-streaming answers.
+
+The repair keeps only what the model wrote:
+
+- It removes a Markdown code fence around the answer.
+- It removes text before the first `{` (or `[` for `json_schema`) and after the matching closing bracket.
+- It removes a comma before a closing `}` or `]`.
+
+It does not add values and does not close a truncated document. If the result is not valid JSON (an object for `json_object`), DeltaLLM keeps the original answer, and the `invalid_json_output` check applies.
+A repaired response has the header `x-deltallm-response-healed: json`. Token usage and cost do not change.
+
 Monitor validation with these Prometheus counters:
 
 - `deltallm_response_validation_failures_total{deployment_id, reason}`: answers rejected per deployment and check.
 - `deltallm_response_validation_exhausted_total{reason, outcome}`: requests that ended on a rejected answer, with outcome `returned_response` or `returned_error`.
+- `deltallm_response_json_healed_total{deployment_id}`: JSON-mode answers repaired by JSON healing.
 
 ## Model Aliases
 

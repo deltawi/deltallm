@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from src.chat.json_healing import heal_json_text
 from src.chat.response_validation import (
     ResponseValidationError,
     ResponseValidationReason,
@@ -226,3 +227,50 @@ async def test_scope_passes_valid_answers_through() -> None:
     ok = _response({"content": "ok"})
     assert await scope.checked(_deployment(), _result(ok)) == (ok, 12.0)
     assert scope.response_headers() == {}
+
+
+@pytest.mark.parametrize(
+    ("raw", "healed"),
+    [
+        ('```json\n{"a": 1}\n```', '{"a": 1}'),
+        (
+            'Here is the JSON: {"a": [1, 2,], "b": "x}"} Hope this helps!',
+            '{"a": [1, 2], "b": "x}"}',
+        ),
+        ('{"a": 1,\n}', '{"a": 1}'),
+        ('Sure {"q": "say \\"hi\\""}', '{"q": "say \\"hi\\""}'),
+    ],
+)
+def test_heal_json_text_repairs_wrapping_and_trailing_commas(raw: str, healed: str) -> None:
+    assert heal_json_text(raw, require_object=True) == healed
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['{"a": 1', "no json here", '{"a": 1,, "b": 2}', '{"a": ]', "[1, 2]"],
+)
+def test_heal_json_text_refuses_unsafe_repairs(raw: str) -> None:
+    assert heal_json_text(raw, require_object=True) is None
+
+
+def test_heal_json_text_accepts_arrays_for_json_schema() -> None:
+    assert heal_json_text("Result: [1, 2,]", require_object=False) == "[1, 2]"
+
+
+@pytest.mark.asyncio
+async def test_scope_heals_json_answers_when_enabled() -> None:
+    settings = ResponseValidationSettings(json_healing=True)
+    scope = ResponseValidationScope(_request(response_format={"type": "json_object"}), settings)
+    fenced = _response({"content": '```json\n{"ok": true}\n```'})
+
+    payload, _ = await scope.checked(_deployment(), _result(fenced))
+
+    assert payload["choices"][0]["message"]["content"] == '{"ok": true}'
+    assert scope.response_headers() == {"x-deltallm-response-healed": "json"}
+
+
+@pytest.mark.asyncio
+async def test_scope_does_not_heal_by_default() -> None:
+    scope = ResponseValidationScope(_request(response_format={"type": "json_object"}), SETTINGS)
+    with pytest.raises(ResponseValidationError):
+        await scope.checked(_deployment(), _result(_response({"content": "```json\n{}\n```"})))
