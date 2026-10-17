@@ -53,6 +53,13 @@ deltallm_mcp_tools_list_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_mcp_tool_search_metric = Counter(
+    "deltallm_mcp_tool_search_total",
+    "MCP tool searches run inside chat and responses requests",
+    ["result"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_mcp_tools_list_latency_metric = Histogram(
     "deltallm_mcp_tools_list_latency_seconds",
     "MCP tools/list latency",
@@ -121,6 +128,10 @@ def record_mcp_tools_list(*, server_count: int, tool_count: int, success: bool, 
     deltallm_mcp_tools_list_metric.labels(**labels).inc()
     if latency_ms is not None:
         deltallm_mcp_tools_list_latency_metric.labels(**labels).observe(max(0.0, float(latency_ms) / 1000.0))
+
+
+def record_mcp_tool_search(*, result_count: int) -> None:
+    deltallm_mcp_tool_search_metric.labels(result="hit" if result_count > 0 else "empty").inc()
 
 
 def record_mcp_tool_call(

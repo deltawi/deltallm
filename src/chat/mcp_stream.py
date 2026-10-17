@@ -32,7 +32,7 @@ from src.chat.stream_response import (
 from src.chat.stream_usage import StreamUsage, StreamUsageTracker
 from src.chat.telemetry import emit_stream_failure, emit_stream_success
 from src.mcp.hop_usage import add_hop_usage
-from src.mcp.orchestrator import MCPChatOrchestrator, MCPRequestContext, ResolvedMCPTool
+from src.mcp.orchestrator import MCPChatOrchestrator, MCPRequestContext, MCPToolSet
 from src.middleware.errors import serialize_proxy_error
 from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
@@ -165,14 +165,12 @@ class MCPStreamSession:
         payload = self.telemetry.payload
         if (payload.n or 1) > 1:
             raise InvalidRequestError(message="MCP tools on streaming requests support only n=1")
-        translated, resolved_tools = await self.orchestrator.prepare_payload(
-            self.telemetry.auth, payload
-        )
+        translated, tool_set = await self.orchestrator.prepare_payload(self.telemetry.auth, payload)
         hop = await self._open_hop(translated)
         try:
             on_first_hop(hop.managed.deployment)
             return DeadlineStreamingResponse(
-                self._events(hop, resolved_tools),
+                self._events(hop, tool_set),
                 deadline=self.deadline,
                 close=self._close_current,
                 media_type="text/event-stream",
@@ -217,9 +215,7 @@ class MCPStreamSession:
         if self._current is not None:
             await self._current.lifecycle.close(exc)
 
-    async def _events(
-        self, hop: _Hop, resolved_tools: dict[str, ResolvedMCPTool]
-    ) -> AsyncIterator[str]:
+    async def _events(self, hop: _Hop, tool_set: MCPToolSet) -> AsyncIterator[str]:
         totals = _StreamTotals()
         result: _HopResult | None = None
         stream_error: ProxyError | None = None
@@ -241,7 +237,7 @@ class MCPStreamSession:
                         usage=result.usage.usage,
                     )
                 tool_calls = result.buffer.tool_calls()
-                if not self.orchestrator.gateway_owns_tool_calls(tool_calls, resolved_tools):
+                if not self.orchestrator.gateway_owns_tool_calls(tool_calls, tool_set):
                     break
                 if hop_count > self.orchestrator.max_mcp_tool_hops:
                     raise InvalidRequestError(
@@ -252,18 +248,14 @@ class MCPStreamSession:
                 for tool_call in tool_calls:
                     # An SSE comment keeps idle proxies from closing the response.
                     yield f": mcp_tool_call {tool_call['function']['name']}\n\n"
-                next_messages = list(hop.payload.messages)
-                next_messages.append(
-                    self.orchestrator.assistant_message_from_response(
-                        result.buffer.assistant_response()
-                    )
-                )
                 tool_run = asyncio.ensure_future(
-                    self.orchestrator.run_tool_calls(
+                    self.orchestrator.next_hop_payload(
+                        hop.payload,
+                        assistant_response=result.buffer.assistant_response(),
                         request_context=self.request_context,
                         auth=self.telemetry.auth,
                         guardrail_middleware=self.telemetry.guardrail_middleware,
-                        resolved_tools=resolved_tools,
+                        tool_set=tool_set,
                         tool_calls=tool_calls,
                     )
                 )
@@ -273,15 +265,13 @@ class MCPStreamSession:
                         await asyncio.wait({tool_run}, timeout=TOOL_HEARTBEAT_SECONDS)
                         if not tool_run.done():
                             yield ": mcp_tool_running\n\n"
-                    next_messages.extend(tool_run.result())
+                    next_payload = tool_run.result()
                 finally:
                     if not tool_run.done():
                         tool_run.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await tool_run
-                hop = await self._open_hop(
-                    hop.payload.model_copy(update={"messages": next_messages})
-                )
+                hop = await self._open_hop(next_payload)
                 hop_count += 1
         except asyncio.CancelledError as exc:
             failure = exc

@@ -198,6 +198,42 @@ curl http://localhost:8000/v1/responses \
 | `server` | The DeltaLLM `server_key`, such as `docs` |
 | `allowed_tools` | Optional subset of visible tool names from that server |
 | `require_approval` | Currently `never` in the request contract |
+| `tool_search` | Optional, default `false`. When `true`, the model gets a search tool instead of the tools of this entry. See [Tool search](#tool-search) |
+
+`server` can be `"*"` (all servers that the caller can see) only together with `"tool_search": true`.
+
+### Tool search
+
+A caller can see many MCP tools. If all tool definitions go into the prompt, the prompt is long
+and the model can choose the wrong tool. With `"tool_search": true`, DeltaLLM gives the model one
+tool, `mcp_tool_search`, instead of the tools of that entry.
+
+1. The model calls `mcp_tool_search` with a `query`, for example `"create github issue"`, and an
+   optional `limit` (1 to 10, default 5).
+2. DeltaLLM searches the names, descriptions, and parameter names of the tools of that entry. The
+   tool result lists the tools that match.
+3. DeltaLLM adds the matching tools to the next model call. The model then calls them as usual.
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "messages": [{"role": "user", "content": "File a bug for the login error."}],
+  "tools": [{"type": "mcp", "server": "*", "tool_search": true}]
+}
+```
+
+Rules:
+
+- The search uses only tools that the caller can already see. A search does not give access to a tool.
+- Tools that require manual approval are not in the search results. Call them through `/mcp`.
+- Searches can add a maximum of 32 tools to one request.
+- Each search is one model call, so it counts against the tool hop limit.
+- The search is a word match (BM25). It runs in the gateway process and adds no network calls.
+- You can use a normal entry and a search entry together, for example
+  `[{"type": "mcp", "server": "docs"}, {"type": "mcp", "server": "*", "tool_search": true}]`.
+  The `docs` tools are always present, and the model searches for the other tools.
+- If your own function tool has the name `mcp_tool_search`, DeltaLLM rejects the request.
+- The metric `deltallm_mcp_tool_search_total{result="hit|empty"}` counts searches.
 
 ### Streaming
 
