@@ -1,0 +1,16 @@
+# Keeps the SHA-pinned GitHub Actions current. Dependabot rewrites both the
+# commit SHA and the trailing "# vX.Y.Z" comment in one pull request.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

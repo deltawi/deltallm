@@ -67,10 +67,12 @@ Expose only routes required by each listener:
 ## Workload and supply chain
 
 - Pin the DeltaLLM image by immutable digest and record the matching application/chart versions.
-- Scan application and dependency images, verify provenance available from your release process,
-  and apply security updates through the tested upgrade workflow.
-- The current runtime image runs as root.
-    Until a supported non-root image is available, apply these pod and container controls:
+- Verify the image signature and provenance before you pin it. See
+  [Verify release images](release-verification.md).
+- Scan application and dependency images (the release SBOM works as scanner input) and apply
+  security updates through the tested upgrade workflow.
+- The runtime image runs as the non-root user `10001`. Also apply these pod and container
+  controls:
 
     1. Drop all capabilities.
     2. Deny privilege escalation.
