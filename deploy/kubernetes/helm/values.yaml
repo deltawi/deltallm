@@ -313,6 +313,9 @@ config:
     allowed_fails: 0
     enable_pre_call_checks: false
     model_group_alias: {}
+    response_validation:
+      enabled: true
+      on_exhausted: return_response
   deltallm_settings:
     fallbacks: []
     context_window_fallbacks: []

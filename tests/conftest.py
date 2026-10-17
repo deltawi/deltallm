@@ -21,6 +21,7 @@ from fastapi.routing import (
 )
 from starlette.routing import BaseRoute
 
+from src.route_group_config import ResponseValidationSettings
 from src.db.routing.callable_targets import CallableTargetBindingRecord
 from src.db.identity.key_repository import KeyRecord
 from src.router.runtime_generation import (
@@ -1643,7 +1644,11 @@ async def test_app() -> FastAPI:
         "Cfg",
         (),
         {
-            "router_settings": type("RouterCfg", (), {"num_retries": 0})(),
+            "router_settings": type(
+                "RouterCfg",
+                (),
+                {"num_retries": 0, "response_validation": ResponseValidationSettings()},
+            )(),
             "general_settings": type(
                 "GeneralCfg",
                 (),

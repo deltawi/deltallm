@@ -56,6 +56,11 @@ router_settings:
   timeout: 600
   cooldown_time: 60
   allowed_fails: 0
+  # Treat unusable 200 answers (empty, bad tool-call JSON, unknown tool, non-JSON in JSON mode)
+  # as failures that can retry or fall back. See docs/configuration/router.md.
+  response_validation:
+    enabled: true
+    on_exhausted: return_response
   # Set route-group workload mode explicitly. Older files that omit it infer one common
   # enabled-member mode (or chat when no member mode can be resolved) and log a warning.
   # route_groups:

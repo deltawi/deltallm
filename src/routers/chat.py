@@ -30,6 +30,7 @@ from src.chat.mcp_execution import (
     MCPChatExecutionService,
     MCPModelRouting,
 )
+from src.chat.response_validation import ResponseValidationScope
 from src.chat.stream_usage import StreamUsageTracker
 from src.chat.stream_response import (
     DeadlineStreamingResponse,
@@ -497,6 +498,10 @@ async def handle_chat_like_request(
             return response
 
         route_fallback_used: bool | None = None
+        response_validation_settings = (
+            routing_runtime.app_config.router_settings.response_validation
+        )
+        response_validation_headers: dict[str, str] = {}
         if has_mcp_tools:
             gateway = getattr(request.app.state, "mcp_gateway_service", None)
             if gateway is None:
@@ -537,26 +542,32 @@ async def handle_chat_like_request(
                     or None,
                 ),
                 on_attempt=track_attempt,
+                response_validation=response_validation_settings,
             )
+            response_validation_headers = mcp_result.response_validation_headers
             payload_data = mcp_result.payload
             api_latency_ms = mcp_result.api_latency_ms
             served_deployment = mcp_result.served_deployment
             route_fallback_used = mcp_result.fallback_used
         else:
+            response_validation = ResponseValidationScope(payload, response_validation_settings)
             (
                 (payload_data, api_latency_ms),
                 served_deployment,
-            ) = await routing_runtime.failover_manager.execute_with_failover(
-                primary_deployment=primary,
-                model_group=model_group,
-                execute=lambda deployment: execute_chat(
-                    request, payload, deployment, native=native
-                ),
-                return_deployment=True,
-                on_attempt=track_attempt,
-                routing_context=request_context,
-                **failover_kwargs,
+            ) = await response_validation.run(
+                routing_runtime.failover_manager.execute_with_failover(
+                    primary_deployment=primary,
+                    model_group=model_group,
+                    execute=lambda deployment: response_validation.checked(
+                        deployment, execute_chat(request, payload, deployment, native=native)
+                    ),
+                    return_deployment=True,
+                    on_attempt=track_attempt,
+                    routing_context=request_context,
+                    **failover_kwargs,
+                )
             )
+            response_validation_headers = response_validation.response_headers()
         update_served_route_decision(
             request,
             primary_deployment_id=primary.deployment_id,
@@ -605,7 +616,9 @@ async def handle_chat_like_request(
             audit_action=audit_action,
         )
         return JSONResponse(
-            status_code=200, content=response_payload, headers=route_decision_headers(request)
+            status_code=200,
+            content=response_payload,
+            headers={**route_decision_headers(request), **response_validation_headers},
         )
     except httpx.HTTPError as exc:
         provider_registry = request.app.state.provider_error_mapper_registry

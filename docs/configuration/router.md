@@ -33,6 +33,7 @@ Tip: check the effective `allowed_fails` value in the config your deployment act
 | `enable_pre_call_checks` | `false` | Skip deployments already over configured RPM or TPM metadata |
 | `model_group_alias` | `{}` | Friendly names that map to real model groups |
 | `route_groups` | `[]` | File-defined route groups and membership |
+| `response_validation` | all checks on | Chat answers that count as failures, so that a retry or fallback can answer; see [Response Validation](#response-validation) |
 
 Each file-defined route group should declare one workload mode.
 For compatibility, DeltaLLM can infer an omitted mode from enabled, resolvable members with the same deployment mode.
@@ -435,6 +436,52 @@ Each replica serializes durable config loads, subscriber application, publicatio
 Runtime reloads publish all three immutable maps as one generation, and publication is fenced by
 the complete generation identity rather than only the route revision. A failed or superseded reload
 therefore cannot expose mixed fallback configuration or overwrite a newer authorization snapshot.
+
+## Response Validation
+
+Some providers return HTTP `200` with an answer that the client cannot use.
+Response validation makes these answers failures, so that a retry or fallback can answer.
+It applies to non-streaming `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, and `/v1/messages` requests, and to each model step of an MCP tool loop.
+
+```yaml
+router_settings:
+  response_validation:
+    enabled: true
+    empty_response: true
+    invalid_tool_arguments: true
+    unknown_tool_name: true
+    invalid_json_output: true
+    on_exhausted: return_response   # or: error
+```
+
+| Check | The answer fails when |
+| --- | --- |
+| `empty_response` | No choice has text, reasoning, or a tool call. A `length` stop is not empty. |
+| `invalid_tool_arguments` | A tool call `function.arguments` value is not a JSON object. An empty string is accepted as `{}`. |
+| `unknown_tool_name` | A tool call names a function that is not in the request `tools`. The check is skipped when the request has MCP tools. |
+| `invalid_json_output` | The request sets `response_format` to `json_object` or `json_schema`, and the content is not valid JSON. The JSON schema is not checked. A `length` stop is not checked. |
+
+A failed check returns a sanitized `503` with code `invalid_provider_response` to the router.
+The router then retries the same deployment (as `num_retries` and the route-group retry policy allow) and tries the remaining deployments and the general `fallbacks` chain.
+A failed check does not affect deployment health and does not start a cooldown.
+A model that sometimes writes bad tool JSON therefore stays in rotation.
+
+When no other attempt gives an answer, `on_exhausted` controls the result:
+
+- `return_response` (default): DeltaLLM returns the last rejected answer, as it did before validation existed. The response has the header `x-deltallm-response-validation` with the check name, for example `invalid_tool_arguments`. DeltaLLM does not write this answer to the response cache.
+- `error`: DeltaLLM returns the `503` error.
+
+Validation adds no SQL, Redis, or network calls.
+It parses each tool-call argument string and each JSON-mode answer one time. Text longer than 1 MiB is not checked.
+The provider can charge for a rejected attempt. DeltaLLM bills the caller only for the answer that it returns.
+
+Streaming responses keep the existing pre-commit checks: an empty or terminal-only stream fails before the first frame and can use a fallback.
+Tool calls and JSON in a stream arrive after DeltaLLM sends response bytes, so they are not checked.
+
+Monitor validation with these Prometheus counters:
+
+- `deltallm_response_validation_failures_total{deployment_id, reason}`: answers rejected per deployment and check.
+- `deltallm_response_validation_exhausted_total{reason, outcome}`: requests that ended on a rejected answer, with outcome `returned_response` or `returned_error`.
 
 ## Model Aliases
 

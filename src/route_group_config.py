@@ -169,6 +169,19 @@ class RouteGroupConfig(BaseModel):
         return self
 
 
+class ResponseValidationSettings(BaseModel):
+    """Checks that turn a nominal chat success into a retry/fallback-eligible failure."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    empty_response: bool = True
+    invalid_tool_arguments: bool = True
+    unknown_tool_name: bool = True
+    invalid_json_output: bool = True
+    on_exhausted: Literal["return_response", "error"] = "return_response"
+
+
 class RouterSettings(BaseModel):
     routing_strategy: RoutingStrategyName = "simple-shuffle"
     num_retries: int = 0
@@ -179,3 +192,6 @@ class RouterSettings(BaseModel):
     enable_pre_call_checks: bool = False
     model_group_alias: dict[str, str] = Field(default_factory=dict)
     route_groups: list[RouteGroupConfig] = Field(default_factory=list)
+    response_validation: ResponseValidationSettings = Field(
+        default_factory=ResponseValidationSettings
+    )
