@@ -174,6 +174,20 @@ deltallm_provider_stream_validation_failures_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_response_validation_failures_metric = Counter(
+    "deltallm_response_validation_failures_total",
+    "Nominal chat successes rejected by response validation, by deployment and reason",
+    ["deployment_id", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_response_validation_exhausted_metric = Counter(
+    "deltallm_response_validation_exhausted_total",
+    "Requests whose attempts ended on a rejected response, by reason and outcome",
+    ["reason", "outcome"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_tier_capacity_fair_share_decisions_metric = Counter(
     "deltallm_tier_capacity_fair_share_decisions_total",
     "Tier capacity fair-share decisions",
@@ -230,6 +244,16 @@ def increment_provider_error_body_discard(*, reason: str) -> None:
     if reason not in {"encoded", "oversized"}:
         raise ValueError("unsupported provider error body discard reason")
     deltallm_provider_error_body_discards_metric.labels(reason=reason).inc()
+
+
+def increment_response_validation_failure(*, deployment_id: str, reason: str) -> None:
+    deltallm_response_validation_failures_metric.labels(
+        deployment_id=sanitize_label(deployment_id), reason=reason
+    ).inc()
+
+
+def increment_response_validation_exhausted(*, reason: str, outcome: str) -> None:
+    deltallm_response_validation_exhausted_metric.labels(reason=reason, outcome=outcome).inc()
 
 
 def increment_provider_stream_validation_failure(

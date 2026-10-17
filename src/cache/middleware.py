@@ -21,6 +21,7 @@ from src.billing.pricing.tier_pricing import (
     resolve_token_billing_result,
 )
 from src.chat.preflight import run_text_preflight
+from src.chat.response_validation import RESPONSE_VALIDATION_HEADER
 from src.embedding_preflight import run_embedding_preflight
 from src.middleware.auth import authenticate_request
 from src.middleware.errors import proxy_error_response
@@ -566,6 +567,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
         if response.status_code != 200:
             return
         if isinstance(response, StreamingResponse):
+            return
+        # A response served after validation rejected it must not be replayed from cache.
+        if RESPONSE_VALIDATION_HEADER in response.headers:
             return
 
         if response_data is None or "error" in response_data:

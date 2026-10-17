@@ -446,6 +446,11 @@ Tip: verify the effective `allowed_fails` value in the config your environment a
 
 When you publish a route-group policy, that group can override timeout and retry behavior without changing the global config.
 
+Retries and fallbacks also start when a provider returns a `200` answer that the client cannot use.
+Examples are an empty answer, tool-call arguments that are not JSON, a tool name that the request did not offer, and a JSON-mode answer that is not JSON.
+These failures do not start a cooldown.
+See [Response Validation](../configuration/router.md#response-validation).
+
 ## Fallback Chains
 
 Use fallback chains when one model group should hand work to another.
