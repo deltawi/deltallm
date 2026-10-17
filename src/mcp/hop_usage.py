@@ -32,8 +32,11 @@ def _sum_counts(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, 
             merged[key] = (
                 _sum_counts(current, value) if isinstance(current, Mapping) else _copy_usage(value)
             )
+        elif value is None:
+            # A hop without this field must not erase the earlier hops' values.
+            continue
         elif _is_count(value) and (current is None or _is_count(current)):
-            merged[key] = int(current or 0) + int(value)
+            merged[key] = (current or 0) + value
         else:
             # Non-count fields (for example a provider tier name) keep the latest value.
             merged[key] = value
@@ -41,4 +44,5 @@ def _sum_counts(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, 
 
 
 def _is_count(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    # Token counts are ints; some providers also report a float cost.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)

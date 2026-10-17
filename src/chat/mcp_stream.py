@@ -9,10 +9,10 @@ downstream response. Bytes already sent are never replaced.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -42,6 +42,8 @@ from src.router.execution import ManagedFailoverResult, RequestDeadline
 from src.router.usage import record_router_usage
 
 logger = logging.getLogger(__name__)
+# Seconds between SSE comments while MCP tools run.
+TOOL_HEARTBEAT_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +228,7 @@ class MCPStreamSession:
         try:
             while True:
                 result = _HopResult(buffer=MCPStreamHopBuffer(completion_id=totals.completion_id))
-                async with aclosing(self._relay_hop(hop, result)) as lines:
+                async with contextlib.aclosing(self._relay_hop(hop, result)) as lines:
                     async for line in lines:
                         yield line
                 totals.completion_id = totals.completion_id or result.buffer.completion_id
@@ -256,8 +258,8 @@ class MCPStreamSession:
                         result.buffer.assistant_response()
                     )
                 )
-                next_messages.extend(
-                    await self.orchestrator.run_tool_calls(
+                tool_run = asyncio.ensure_future(
+                    self.orchestrator.run_tool_calls(
                         request_context=self.request_context,
                         auth=self.telemetry.auth,
                         guardrail_middleware=self.telemetry.guardrail_middleware,
@@ -265,6 +267,18 @@ class MCPStreamSession:
                         tool_calls=tool_calls,
                     )
                 )
+                try:
+                    # Repeat the comment while slow tools run, so idle proxies keep the stream.
+                    while not tool_run.done():
+                        await asyncio.wait({tool_run}, timeout=TOOL_HEARTBEAT_SECONDS)
+                        if not tool_run.done():
+                            yield ": mcp_tool_running\n\n"
+                    next_messages.extend(tool_run.result())
+                finally:
+                    if not tool_run.done():
+                        tool_run.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await tool_run
                 hop = await self._open_hop(
                     hop.payload.model_copy(update={"messages": next_messages})
                 )

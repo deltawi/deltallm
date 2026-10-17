@@ -373,3 +373,38 @@ async def test_chat_stream_stops_at_hop_limit(client, test_app) -> None:
     assert "hop limit" in json.loads(events[-1][len("data: ") :])["error"]["message"]
     assert len(upstream) == 5
     assert len(gateway.tool_calls) == 4
+
+
+async def test_chat_stream_sends_heartbeats_while_a_slow_tool_runs(
+    client, test_app, monkeypatch
+) -> None:
+    import asyncio
+
+    from src.chat import mcp_stream
+
+    monkeypatch.setattr(mcp_stream, "TOOL_HEARTBEAT_SECONDS", 0.01)
+
+    class _SlowGateway(_Gateway):
+        async def call_tool(self, auth, **kwargs):  # noqa: ANN001, ANN003, ANN201
+            await asyncio.sleep(0.05)
+            return await super().call_tool(auth, **kwargs)
+
+    test_app.state.mcp_gateway_service = _SlowGateway()
+    test_app.state.audit_service = _RecordingAuditService()
+    _script(test_app, [_tool_call_hop(), _answer_hop()])
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=_headers(test_app),
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is DeltaLLM?"}],
+            "stream": True,
+            "tools": [MCP_TOOL],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    events = _events(response.text)
+    assert ": mcp_tool_running" in events
+    assert events[-1] == "data: [DONE]"

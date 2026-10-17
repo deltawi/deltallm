@@ -78,7 +78,8 @@ class MCPStreamHopBuffer:
                     "type": entry["type"] or "function",
                     "function": {
                         "name": entry["name"],
-                        "arguments": entry["arguments"],
+                        # Some adapters stream "" for a tool without input.
+                        "arguments": entry["arguments"] or "{}",
                     },
                 }
             )

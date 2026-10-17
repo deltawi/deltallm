@@ -207,8 +207,9 @@ Set `"stream": true` to stream a request that uses MCP tools. This works on
 - DeltaLLM sends the model text to the client as it arrives.
 - DeltaLLM does not send the tool call chunks of an MCP tool to the client. It runs the tool and then
   streams the next model answer in the same response.
-- While a tool runs, the stream sends an SSE comment line, for example `: mcp_tool_call docs.search`.
-  SSE clients ignore comment lines. The line prevents idle proxies from closing the connection.
+- Before a tool runs, the stream sends an SSE comment line, for example `: mcp_tool_call docs.search`.
+  While the tools run, the stream sends `: mcp_tool_running` every 15 seconds.
+  SSE clients ignore comment lines. The lines prevent idle proxies from closing the connection.
 - If the model calls one of your own `function` tools, the client gets the tool call chunks and
   `finish_reason: "tool_calls"`, the same as in a stream without MCP tools.
 - All chunks have the `id` of the first model answer.

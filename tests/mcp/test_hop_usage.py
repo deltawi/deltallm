@@ -41,3 +41,17 @@ def test_add_hop_usage_skips_missing_usage_and_does_not_alias_input() -> None:
     assert first == {"prompt_tokens": 1, "prompt_tokens_details": {"cached_tokens": 1}}
     assert total == {"prompt_tokens": 3, "prompt_tokens_details": {"cached_tokens": 2}}
     assert add_hop_usage(None, None) is None
+
+
+def test_add_hop_usage_keeps_earlier_values_when_a_hop_reports_none() -> None:
+    total = add_hop_usage(
+        None,
+        {"prompt_tokens": 10, "prompt_tokens_details": {"cached_tokens": 5}, "cost": 0.25},
+    )
+    total = add_hop_usage(total, {"prompt_tokens": 20, "prompt_tokens_details": None, "cost": 0.5})
+
+    assert total == {
+        "prompt_tokens": 30,
+        "prompt_tokens_details": {"cached_tokens": 5},
+        "cost": 0.75,
+    }

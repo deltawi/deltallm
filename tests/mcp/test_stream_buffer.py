@@ -90,3 +90,18 @@ def test_reasoning_details_merge_by_index() -> None:
     assert message["reasoning_details"] == [
         {"index": 0, "type": "reasoning.text", "text": "ab", "signature": "sig"}
     ]
+
+
+def test_tool_call_without_argument_text_gets_empty_object() -> None:
+    buffer = MCPStreamHopBuffer(completion_id=None)
+    buffer.filter(
+        _line(
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "call_1", "function": {"name": "docs.list", "arguments": ""}}
+                ]
+            }
+        )
+    )
+
+    assert buffer.tool_calls()[0]["function"] == {"name": "docs.list", "arguments": "{}"}
