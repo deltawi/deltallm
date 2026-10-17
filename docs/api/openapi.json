@@ -2427,6 +2427,16 @@
             "title": "Max Input Chars",
             "type": "integer"
           },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectorSessionPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "timeout_ms": {
             "default": 750,
             "maximum": 5000.0,
@@ -8007,6 +8017,26 @@
           "has_more"
         ],
         "title": "SelectorOptionsPage",
+        "type": "object"
+      },
+      "SelectorSessionPolicy": {
+        "additionalProperties": false,
+        "description": "Session affinity for one selector. An omitted block means these defaults.",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "ttl_seconds": {
+            "default": 3600,
+            "maximum": 86400.0,
+            "minimum": 60.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "SelectorSessionPolicy",
         "type": "object"
       },
       "SignInSettingsResponse": {

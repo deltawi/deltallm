@@ -72,7 +72,8 @@ class RequestSelectorState:
         self._usage = usage
 
     def restore(self, decision: SelectorDecision) -> None:
-        """Rehydrate an externally validated durable Batch decision, never rerun it."""
+        """Adopt a decision made without this operation: a durable Batch decision or a
+        reused session lane. It never reruns the selector."""
         if self._state is not SelectorState.NEW:
             raise SelectorInvariantError()
         self._deadline.require_remaining()

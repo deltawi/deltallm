@@ -90,8 +90,10 @@ def capture_initial_route_decision(
         return None
     stored = deepcopy(decision)
     previous = getattr(request.state, "route_decision", None)
-    if isinstance(previous, dict) and "selector" in previous:
-        stored["selector"] = deepcopy(previous["selector"])
+    if isinstance(previous, dict):
+        for key in ("selector", "selector_session"):
+            if key in previous:
+                stored[key] = deepcopy(previous[key])
     request.state.route_decision = stored
     _refresh_request_resolution(request)
     return stored
@@ -129,6 +131,14 @@ def attach_selector_decision(request: Request, decision: ProtectedSelectorDecisi
     """Protected metadata only; public route-decision headers remain unchanged."""
     current = route_decision_metadata(request) or {}
     current["selector"] = decision.model_dump(mode="json")
+    request.state.route_decision = current
+    _refresh_request_resolution(request)
+
+
+def attach_selector_session(request: Request, *, lane: str, rank: int) -> None:
+    """Protected metadata for a lane reused from the session, without a selector call."""
+    current = route_decision_metadata(request) or {}
+    current["selector_session"] = {"lane": lane, "minimum_rank": rank, "reused": True}
     request.state.route_decision = current
     _refresh_request_resolution(request)
 

@@ -18,6 +18,22 @@ MAX_DEPLOYMENT_ID_LENGTH = 256
 MAX_LANE_ID_LENGTH = 32
 MAX_LANE_DESCRIPTION_LENGTH = 512
 LANE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+MIN_SELECTOR_SESSION_TTL_SECONDS = 60
+MAX_SELECTOR_SESSION_TTL_SECONDS = 86_400
+DEFAULT_SELECTOR_SESSION_TTL_SECONDS = 3_600
+
+
+class SelectorSessionPolicy(BaseModel):
+    """Session affinity for one selector. An omitted block means these defaults."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = True
+    ttl_seconds: int = Field(
+        default=DEFAULT_SELECTOR_SESSION_TTL_SECONDS,
+        ge=MIN_SELECTOR_SESSION_TTL_SECONDS,
+        le=MAX_SELECTOR_SESSION_TTL_SECONDS,
+    )
 
 
 class SelectorLane(BaseModel):
@@ -83,6 +99,15 @@ class LLMTierSelectorPolicy(BaseModel):
         min_length=MIN_SELECTOR_LANES,
         max_length=MAX_SELECTOR_LANES,
     )
+    # Omitted when unset: policies written before session affinity keep their stored
+    # shape and routing fingerprint, and older pods reject unknown selector fields.
+    session: SelectorSessionPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @property
+    def effective_session(self) -> SelectorSessionPolicy:
+        return self.session or SelectorSessionPolicy()
 
     @field_validator("classifier_deployment_id", "default_lane", mode="before")
     @classmethod

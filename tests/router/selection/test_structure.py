@@ -26,6 +26,8 @@ NEW_MODULES = (
     "router/selection/reachability.py",
     "router/selection/runtime.py",
     "router/selection/target_validation.py",
+    "router/selection/session.py",
+    "router/selection/session_identity.py",
     "chat_capabilities.py",
     "providers/chat_hop.py",
     "providers/chat_upstream.py",
