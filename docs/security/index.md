@@ -36,9 +36,8 @@ The documentation describes the current implementation, including these boundari
   health, diagnostics, and metrics.
 - The default Docker image command runs database migration bootstrap before Uvicorn. Production
   replicas must use a coordinated pre-rollout migration and an explicit application command.
-- The current Dockerfile runtime runs as root, and base Helm values use mutable image tags in some
-  evaluation defaults. Production operators must pin images and compensate with workload
-  isolation while a non-root image contract is not available.
+- Base Helm values use mutable image tags in some evaluation defaults. Production operators must
+  pin images by digest. [Verify release images](release-verification.md) before pinning them.
 - The application does not install CORS or trusted-host middleware by default. Enforce allowed
   hosts, origins, TLS, request-size limits, and proxy-header trust at the edge.
 
@@ -50,4 +49,5 @@ These are deployment constraints, not controls supplied by the documentation sit
 2. Complete the [production checklist](../deployment/production-checklist.md).
 3. Exercise [backup and restore](../deployment/backup-and-restore.md) and the [incident
    runbooks](../deployment/incident-runbooks.md).
-4. Report suspected vulnerabilities through the [private reporting process](vulnerability-reporting.md).
+4. [Verify release images](release-verification.md) and pin them by digest.
+5. Report suspected vulnerabilities through the [private reporting process](vulnerability-reporting.md).

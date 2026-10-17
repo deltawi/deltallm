@@ -19,3 +19,10 @@ SLA is currently published.
 
 Deployment hardening and trust-boundary guidance is published at
 https://docs.deltallm.io/security/.
+
+## Verifying releases
+
+Release images are signed with keyless cosign and carry an SBOM and SLSA build provenance. The
+Helm chart package has a GitHub build provenance attestation. See
+[How DeltaLLM releases are built and verified](docs/security/release-verification.md)
+(https://docs.deltallm.io/security/release-verification/) for the verify commands.
