@@ -92,6 +92,7 @@ nav:
           - Connect your first MCP server: getting-started/mcp-quickstart.md
           - Add your first guardrail: guides/guardrails.md
       - Build complete workflows: guides/build-workflows.md
+      - Use coding agents: guides/coding-agents.md
   - Administer DeltaLLM:
       - admin-ui/index.md
       - Start administering:

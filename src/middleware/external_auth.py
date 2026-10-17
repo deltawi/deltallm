@@ -27,7 +27,9 @@ def require_unmixed_external_auth(
         return
     from src.middleware.platform_auth import get_configured_master_key
 
-    authorization = authorization or request.headers.get("authorization")
+    from src.middleware.auth import request_authorization
+
+    authorization = authorization or request_authorization(request)
     x_master_key = x_master_key or request.headers.get("x-master-key")
     configured = get_configured_master_key(request)
     bearer = ""

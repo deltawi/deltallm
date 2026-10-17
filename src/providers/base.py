@@ -5,7 +5,7 @@ import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import httpx
 
@@ -30,6 +30,9 @@ from src.providers.error_body import (
     provider_error_body_is_unavailable,
 )
 from src.providers.token_receipt import ProviderTokenReceipt, TokenReceiptObserver
+
+if TYPE_CHECKING:
+    from src.providers.anthropic_messages import NativeMessagesRequest
 
 _MAX_CLASSIFICATION_MESSAGE_CHARS = 2048
 _PROVIDER_ERROR_READ_CHUNK_BYTES = 8192
@@ -471,6 +474,10 @@ class ProviderAdapter(ABC):
 
     def validate_single_result_payload(self, payload: object) -> None:
         """Adapters that collapse results or finish states validate before translation."""
+
+    def native_messages_adapter(self, native: NativeMessagesRequest) -> ProviderAdapter | None:
+        """Return a per-attempt adapter that sends `/v1/messages` bodies natively."""
+        return None
 
     @abstractmethod
     async def translate_stream(

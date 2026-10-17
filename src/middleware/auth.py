@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from starlette.requests import HTTPConnection
+from starlette._utils import get_route_path
 
 from src.config import Settings
 from src.models.errors import AuthenticationError
@@ -21,6 +22,22 @@ from src.telemetry.event_identity import get_or_create_billing_event_id
 
 if TYPE_CHECKING:
     from src.config_runtime.dynamic import DynamicConfigManager
+
+# Anthropic SDKs and Claude Code send the key as `x-api-key`. Accept it only on the
+# Anthropic-compatible routes, and only when `Authorization` is absent.
+_X_API_KEY_PATHS = frozenset({"/v1/messages", "/v1/models"})
+
+
+def request_authorization(request: HTTPConnection) -> str | None:
+    """Return the request credential in `Authorization` form; the one resolver for auth."""
+
+    authorization = request.headers.get("authorization")
+    if authorization:
+        return authorization
+    if get_route_path(request.scope).rstrip("/") not in _X_API_KEY_PATHS:
+        return None
+    api_key = (request.headers.get("x-api-key") or "").strip()
+    return f"Bearer {api_key}" if api_key else None
 
 
 async def authenticate_request(
@@ -46,7 +63,7 @@ async def _authenticate_request(
         return existing
 
     if authorization is None:
-        authorization = request.headers.get("authorization")
+        authorization = request_authorization(request)
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable, Mapping
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import httpx
 
@@ -29,6 +29,9 @@ from src.providers.resolution import (
     resolve_provider_required_chat_output_tokens,
     resolve_upstream_model,
 )
+
+if TYPE_CHECKING:
+    from src.providers.anthropic_messages import NativeMessagesRequest
 
 _CONTEXT_IDENTIFIERS = frozenset(
     {
@@ -76,7 +79,7 @@ def _classify_anthropic_failure(
     )
 
 
-def _map_anthropic_stream_error(event: object) -> ProxyError:
+def map_anthropic_stream_error(event: object) -> ProxyError:
     details = provider_error_details_from_payload(event, status_code=None)
     error = event.get("error") if isinstance(event, dict) else None
     error_type = str(error.get("type") or "") if isinstance(error, dict) else ""
@@ -194,6 +197,11 @@ class AnthropicAdapter(ProviderAdapter):
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
+
+    def native_messages_adapter(self, native: NativeMessagesRequest) -> ProviderAdapter:
+        from src.providers.anthropic_messages import AnthropicNativeMessagesAdapter
+
+        return AnthropicNativeMessagesAdapter(self, native)
 
     def complete_output_count(self, payload: object) -> int | None:
         usage = payload.get("usage") if isinstance(payload, Mapping) else None
@@ -410,7 +418,7 @@ class AnthropicAdapter(ProviderAdapter):
             if event_type not in {"ping", "message_stop"}:
                 invalidate_output()
             if event_type == "error":
-                raise _map_anthropic_stream_error(event)
+                raise map_anthropic_stream_error(event)
             if event_type == "ping":
                 continue
             if event_type == "message_start":

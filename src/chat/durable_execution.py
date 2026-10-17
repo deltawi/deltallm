@@ -6,6 +6,7 @@ from fastapi import Request
 
 from src.chat.executor import OpenedStream, execute_chat, open_stream_with_first_chunk
 from src.models.requests import ChatCompletionRequest
+from src.providers.anthropic_messages import NativeMessagesRequest
 from src.router.router import Deployment
 from src.router.execution import ProviderAttemptSuccess
 from src.router.usage import normalize_router_usage
@@ -14,7 +15,11 @@ from src.telemetry.spend_operation import durable_provider_call
 
 
 async def execute_durable_chat(
-    request: Request, payload: ChatCompletionRequest, deployment: Deployment
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    *,
+    native: NativeMessagesRequest | None = None,
 ) -> ProviderAttemptSuccess[tuple[dict[str, Any], float]]:
     result = await durable_provider_call(
         request,
@@ -22,7 +27,9 @@ async def execute_durable_chat(
         bounds=validated_provider_request_bounds(payload),
         call_type="completion",
         deployment=deployment,
-        execute=lambda: execute_chat(request, payload, deployment, record_usage=False),
+        execute=lambda: execute_chat(
+            request, payload, deployment, record_usage=False, native=native
+        ),
     )
     return ProviderAttemptSuccess(
         value=result,
@@ -31,7 +38,11 @@ async def execute_durable_chat(
 
 
 async def open_durable_stream(
-    request: Request, payload: ChatCompletionRequest, deployment: Deployment
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    *,
+    native: NativeMessagesRequest | None = None,
 ) -> OpenedStream:
     return await durable_provider_call(
         request,
@@ -39,5 +50,5 @@ async def open_durable_stream(
         bounds=validated_provider_request_bounds(payload),
         call_type="completion",
         deployment=deployment,
-        execute=lambda: open_stream_with_first_chunk(request, payload, deployment),
+        execute=lambda: open_stream_with_first_chunk(request, payload, deployment, native=native),
     )
