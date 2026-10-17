@@ -222,7 +222,7 @@ def _all_choices_empty(choices: Sequence[object], messages: Sequence[Mapping[str
 
 def _has_text(content: object) -> bool:
     if isinstance(content, str):
-        return bool(content.strip())
+        return bool(content) and not content.isspace()
     if isinstance(content, list):
         for part in content:
             if not isinstance(part, Mapping):

@@ -4,6 +4,9 @@ import json
 from typing import Final
 
 MAX_HEALED_JSON_CHARS: Final = 1_048_576
+# The trailing-comma scan is a Python loop on the event loop (about 6 ms per 32 KiB),
+# so it runs only on small answers. Larger answers get the C-speed slice repair only.
+MAX_SCANNED_JSON_CHARS: Final = 32_768
 _OPENERS: Final = {"{": "}", "[": "]"}
 
 
@@ -21,16 +24,24 @@ def heal_json_text(text: str, *, require_object: bool) -> str | None:
     start = _first_opener(candidate, require_object=require_object)
     if start < 0:
         return None
+    end = candidate.rfind(_OPENERS[candidate[start]])
+    sliced = candidate[start : end + 1] if end > start else None
+    if sliced is not None and _parses(sliced, require_object=require_object):
+        return sliced
+    if len(candidate) - start > MAX_SCANNED_JSON_CHARS:
+        return None
     document = _balanced_document(candidate, start)
-    if document is None:
-        return None
-    try:
-        parsed = json.loads(document)
-    except (RecursionError, ValueError):
-        return None
-    if require_object and not isinstance(parsed, dict):
+    if document is None or not _parses(document, require_object=require_object):
         return None
     return document
+
+
+def _parses(text: str, *, require_object: bool) -> bool:
+    try:
+        parsed = json.loads(text)
+    except (RecursionError, ValueError):
+        return False
+    return isinstance(parsed, dict) or not require_object
 
 
 def _strip_code_fence(text: str) -> str:
