@@ -44,8 +44,9 @@ def test_every_third_party_action_is_pinned_by_commit_sha() -> None:
 def test_dependabot_keeps_action_pins_current() -> None:
     config = yaml.safe_load((REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
 
-    ecosystems = {update["package-ecosystem"] for update in config["updates"]}
-    assert "github-actions" in ecosystems
+    (actions,) = [update for update in config["updates"] if update["package-ecosystem"] == "github-actions"]
+    assert actions["cooldown"]["default-days"] >= 7
+    assert {"dependency-name": "*", "update-types": ["version-update:semver-major"]} in actions["ignore"]
 
 
 def test_release_build_attaches_sbom_and_provenance() -> None:
