@@ -5483,6 +5483,100 @@
         "title": "RouteGroupMemberMutationResponse",
         "type": "object"
       },
+      "RouteGroupMemberQualityResponse": {
+        "properties": {
+          "avg_first_token_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg First Token Ms"
+          },
+          "bad_json": {
+            "title": "Bad Json",
+            "type": "integer"
+          },
+          "bad_tool_calls": {
+            "title": "Bad Tool Calls",
+            "type": "integer"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "empty_answers": {
+            "title": "Empty Answers",
+            "type": "integer"
+          },
+          "failed_calls": {
+            "title": "Failed Calls",
+            "type": "integer"
+          },
+          "failure_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Rate"
+          },
+          "output_tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens Per Second"
+          },
+          "provider_errors": {
+            "title": "Provider Errors",
+            "type": "integer"
+          },
+          "sent_last_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "failed_calls",
+                  "slow_first_token"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent Last Reason"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "calls",
+          "failed_calls",
+          "provider_errors",
+          "empty_answers",
+          "bad_tool_calls",
+          "bad_json",
+          "failure_rate",
+          "avg_first_token_ms",
+          "output_tokens_per_second"
+        ],
+        "title": "RouteGroupMemberQualityResponse",
+        "type": "object"
+      },
       "RouteGroupMemberWriteRequest": {
         "properties": {
           "deployment_id": {
@@ -5665,6 +5759,64 @@
           "metadata"
         ],
         "title": "RouteGroupMutationResponse",
+        "type": "object"
+      },
+      "RouteGroupQualityResponse": {
+        "properties": {
+          "deprioritize": {
+            "title": "Deprioritize",
+            "type": "boolean"
+          },
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/RouteGroupMemberQualityResponse"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "sensitivity": {
+            "anyOf": [
+              {
+                "enum": [
+                  "relaxed",
+                  "balanced",
+                  "strict"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sensitivity"
+          },
+          "source": {
+            "enum": [
+              "cluster",
+              "local",
+              "unavailable"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "window_seconds": {
+            "title": "Window Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group_key",
+          "source",
+          "window_seconds",
+          "deprioritize",
+          "sensitivity",
+          "members"
+        ],
+        "title": "RouteGroupQualityResponse",
         "type": "object"
       },
       "RouteGroupResolutionResponse": {
@@ -34458,6 +34610,121 @@
           }
         },
         "summary": "Validate Route Group Policy By Id",
+        "tags": [
+          "Admin Route Groups"
+        ]
+      }
+    },
+    "/ui/api/route-groups/by-id/{route_group_id}/quality": {
+      "get": {
+        "description": "Live answer quality per member for the last window; no database work.",
+        "operationId": "get_route_group_quality_by_id_ui_api_route_groups_by_id__route_group_id__quality_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "route_group_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Route Group Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteGroupQualityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteGroupErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteGroupErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteGroupErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Route Group Quality By Id",
         "tags": [
           "Admin Route Groups"
         ]

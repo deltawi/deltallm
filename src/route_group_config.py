@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 from src.governance.access_groups import normalize_access_group_list
 from src.route_policy_contract import (
@@ -92,6 +99,18 @@ class ContextRoutingConfig(BaseModel):
         return value
 
 
+QualitySensitivity = Literal["relaxed", "balanced", "strict"]
+
+
+class QualityRoutingConfig(BaseModel):
+    """Route-group option that sends low-quality deployments last; off by default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deprioritize: StrictBool = False
+    sensitivity: QualitySensitivity = "balanced"
+
+
 class RouteGroupConfig(BaseModel):
     key: str
     # Omitted mode is retained for compatibility with pre-mode file configs and
@@ -103,6 +122,7 @@ class RouteGroupConfig(BaseModel):
     members: list[RouteGroupMember] = Field(default_factory=list)
     context: ContextRoutingConfig | None = None
     selector: LLMTierSelectorPolicy | None = None
+    quality: QualityRoutingConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -119,6 +139,7 @@ class RouteGroupConfig(BaseModel):
             "members",
             "context",
             "selector",
+            "quality",
         }
         unknown_group_keys = sorted(set(value) - allowed_group_keys)
         if unknown_group_keys:

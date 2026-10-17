@@ -31,6 +31,7 @@ from src.chat.mcp_execution import (
     MCPModelRouting,
 )
 from src.chat.mcp_stream import MCPStreamFraming, MCPStreamSession, MCPStreamTelemetry
+from src.chat.quality_recording import AttemptQualityRecorder
 from src.chat.response_validation import ResponseValidationScope
 from src.chat.stream_usage import StreamUsageTracker
 from src.chat.stream_response import (
@@ -163,6 +164,7 @@ async def handle_chat_like_request(
                 deployment.route_group_key or deployment.model_name, deployment.deployment_id
             )
 
+    quality = AttemptQualityRecorder(getattr(router, "quality", None))
     cache_context = getattr(request.state, "cache_context", None)
     cache_hit = bool(getattr(cache_context, "hit", False)) if cache_context is not None else False
     cache_key = getattr(cache_context, "cache_key", None) if cache_context is not None else None
@@ -204,15 +206,17 @@ async def handle_chat_like_request(
                     on_attempt=track_attempt,
                 )
 
-            managed_stream = await routing_runtime.failover_manager.execute_managed_with_failover(
-                primary_deployment=primary,
-                model_group=model_group,
-                execute=lambda dep: open_stream_with_first_chunk(
-                    request, payload, dep, native=native
-                ),
-                on_attempt=track_attempt,
-                routing_context=request_context,
-                **failover_kwargs,
+            managed_stream = await quality.run(
+                routing_runtime.failover_manager.execute_managed_with_failover(
+                    primary_deployment=primary,
+                    model_group=model_group,
+                    execute=lambda dep: quality.opened(
+                        dep, open_stream_with_first_chunk(request, payload, dep, native=native)
+                    ),
+                    on_attempt=track_attempt,
+                    routing_context=request_context,
+                    **failover_kwargs,
+                )
             )
             opened_stream = managed_stream.value
             stream_lifecycle = ManagedStreamLifecycle(opened_stream, managed_stream)
@@ -379,6 +383,12 @@ async def handle_chat_like_request(
                         and (failure_exc is not None or not stream_cache_complete)
                     ):
                         stream_handler.discard_stream(stream_id)
+                    if not isinstance(failure_exc, asyncio.CancelledError):
+                        quality.finished(
+                            served_deployment,
+                            provider_failed=health_error is not None,
+                            usage=resolved_usage.usage if resolved_usage is not None else None,
+                        )
                     try:
                         await record_stream_health_outcome(
                             cooldown_manager=routing_runtime.cooldown_manager,
@@ -525,6 +535,7 @@ async def handle_chat_like_request(
                 ),
                 on_attempt=track_attempt,
                 response_validation=response_validation_settings,
+                quality=quality,
             )
             response_validation_headers = mcp_result.response_validation_headers
             payload_data = mcp_result.payload
@@ -537,16 +548,22 @@ async def handle_chat_like_request(
                 (payload_data, api_latency_ms),
                 served_deployment,
             ) = await response_validation.run(
-                routing_runtime.failover_manager.execute_with_failover(
-                    primary_deployment=primary,
-                    model_group=model_group,
-                    execute=lambda deployment: response_validation.checked(
-                        deployment, execute_chat(request, payload, deployment, native=native)
-                    ),
-                    return_deployment=True,
-                    on_attempt=track_attempt,
-                    routing_context=request_context,
-                    **failover_kwargs,
+                quality.run(
+                    routing_runtime.failover_manager.execute_with_failover(
+                        primary_deployment=primary,
+                        model_group=model_group,
+                        execute=lambda deployment: quality.attempt(
+                            deployment,
+                            response_validation.checked(
+                                deployment,
+                                execute_chat(request, payload, deployment, native=native),
+                            ),
+                        ),
+                        return_deployment=True,
+                        on_attempt=track_attempt,
+                        routing_context=request_context,
+                        **failover_kwargs,
+                    )
                 )
             )
             response_validation_headers = response_validation.response_headers()

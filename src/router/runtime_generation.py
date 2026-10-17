@@ -275,6 +275,7 @@ def rebuild_routing_runtime_generation(
         state_backend=current.router.state,
         config=current.router_config,
         deployment_registry=deployment_registry,
+        quality=current.router.quality,
     )
     failover_manager = FailoverManager(
         config=current.failover_config,

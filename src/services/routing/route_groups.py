@@ -275,6 +275,8 @@ def route_groups_from_config(
         )
         if policy.get("context") is None:
             policy.pop("context", None)
+        if policy.get("quality") is None:
+            policy.pop("quality", None)
         if item.selector is None:
             policy.pop("selector", None)
             for member in policy["members"]:

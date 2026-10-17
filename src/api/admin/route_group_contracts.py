@@ -17,6 +17,10 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
+from src.models.route_group_quality import (
+    RouteGroupMemberQualityResponse as RouteGroupMemberQualityResponse,
+    RouteGroupQualityResponse as RouteGroupQualityResponse,
+)
 from src.models.route_policy_simulation import (
     RoutePolicySimulationAttempt as RoutePolicySimulationAttempt,
     RoutePolicySimulationDeploymentOutcome as RoutePolicySimulationDeploymentOutcome,

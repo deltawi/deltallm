@@ -254,6 +254,7 @@ Keep the legacy identifier during a staged rollout when older clients still depe
 | `GET` | `/ui/api/route-groups/by-id/{route_group_id}/members` | List group members |
 | `POST` | `/ui/api/route-groups/by-id/{route_group_id}/members` | Add a member |
 | `DELETE` | `/ui/api/route-groups/by-id/{route_group_id}/members/{deployment_id}` | Remove a member |
+| `GET` | `/ui/api/route-groups/by-id/{route_group_id}/quality` | Read member quality for the last 15 minutes |
 
 Member `weight` and `priority` accept integers or null. Integer strings remain accepted
 for compatibility. Boolean values are rejected with 400 before any member is changed.

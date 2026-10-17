@@ -17,6 +17,7 @@ from src.api.admin.route_group_contracts import (
     RouteGroupMemberMutationResponse,
     RouteGroupMemberWriteRequest,
     RouteGroupMutationResponse,
+    RouteGroupQualityResponse,
     RouteGroupResolutionResponse,
     RouteGroupUpdateRequest,
     RoutePolicyCurrentResponse,
@@ -32,6 +33,8 @@ from src.api.admin.route_group_contracts import (
 )
 from src.api.admin.route_group_dependencies import resolve_route_group_id, route_group_repository
 from src.middleware.admin import require_authenticated
+from src.router.runtime_generation import require_routing_runtime_generation
+from src.services.routing.route_group_quality import build_route_group_quality
 
 router = APIRouter(
     tags=["Admin Route Groups"],
@@ -135,6 +138,28 @@ async def remove_route_group_member_by_id(
 ) -> RouteGroupDeleteResponse:
     return RouteGroupDeleteResponse.model_validate(
         await operations.delete_route_group_member(request, group_key, deployment_id)
+    )
+
+
+@router.get(_BASE + "/quality", response_model=RouteGroupQualityResponse, dependencies=_READ)
+async def get_route_group_quality_by_id(
+    request: Request, group_key: GroupKey
+) -> RouteGroupQualityResponse:
+    """Live answer quality per member for the last window; no database work."""
+
+    group = await route_group_repository(request).get_group(group_key)
+    if group is None:
+        raise HTTPException(status_code=404, detail="Route group not found")
+    await operations.authorize_route_group_for_request(request, group)
+    generation = require_routing_runtime_generation(request.app.state)
+    tracker = getattr(generation.router, "quality", None)
+    return build_route_group_quality(
+        group_key=group_key,
+        runtime_group=next(
+            (item for item in generation.route_groups if item.get("key") == group_key), None
+        ),
+        policy=generation.router_config.route_group_policies.get(group_key),
+        snapshot=tracker.snapshot() if tracker is not None else None,
     )
 
 
