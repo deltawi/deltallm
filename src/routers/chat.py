@@ -30,31 +30,32 @@ from src.chat.mcp_execution import (
     MCPChatExecutionService,
     MCPModelRouting,
 )
+from src.chat.mcp_stream import MCPStreamFraming, MCPStreamSession, MCPStreamTelemetry
 from src.chat.response_validation import ResponseValidationScope
 from src.chat.stream_usage import StreamUsageTracker
 from src.chat.stream_response import (
     DeadlineStreamingResponse,
     ManagedStreamLifecycle,
     close_stream_resources,
+    record_stream_health_outcome,
 )
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
-from src.metrics import increment_router_health_update_failure
 from src.mcp.orchestrator import (
     MCPChatOrchestrator,
     MCPRequestContext,
     chat_request_has_mcp_tools,
 )
-from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailableError
+from src.models.errors import ProxyError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic_messages import NATIVE_MESSAGES_RESPONSE_KEY, NativeMessagesRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
-from src.router import ROUTING_MODE_CONTEXT_KEY, require_initial_deployment
+from src.router import ROUTING_MODE_CONTEXT_KEY, Deployment, require_initial_deployment
+from src.router.execution import RequestDeadline
 from src.routers.selector_edge import bind_selector_operation
 from src.router.selection.operation import selector_answer_observation
 from src.router.context_policy import RequestTokenDemand, set_request_token_demand
-from src.router.health_state import DeploymentHealthRef
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import seed_request_failure_context
 from src.routers.routing_decision import (
@@ -67,36 +68,6 @@ from src.routers.routing_decision import (
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 logger = logging.getLogger(__name__)
-
-
-async def _record_stream_health_outcome(
-    *,
-    cooldown_manager: Any,
-    health_ref: DeploymentHealthRef,
-    health_error: Exception | None,
-    succeeded: bool,
-    recovery_token: str | None,
-) -> None:
-    try:
-        if health_error is not None:
-            await cooldown_manager.record_failure(
-                health_ref,
-                str(health_error),
-                exc=health_error,
-                recovery_token=recovery_token,
-            )
-        elif succeeded:
-            await cooldown_manager.record_success(
-                health_ref,
-                recovery_token=recovery_token,
-            )
-    except Exception:
-        increment_router_health_update_failure()
-        logger.warning(
-            "post-stream router health update failed deployment_id=%s",
-            health_ref.deployment_id,
-            exc_info=True,
-        )
 
 
 @router.post("/chat/completions", dependencies=[Depends(require_api_key)])
@@ -141,10 +112,6 @@ async def handle_chat_like_request(
     # Built after hooks and guardrails so the native body carries their changes.
     native = native_messages(payload) if native_messages is not None else None
     has_mcp_tools = chat_request_has_mcp_tools(payload)
-    if payload.stream and has_mcp_tools:
-        raise InvalidRequestError(
-            message="MCP tools are not supported on streaming chat requests yet"
-        )
 
     router = routing_runtime.router
     model_group = router.resolve_model_group(payload.model)
@@ -204,6 +171,38 @@ async def handle_chat_like_request(
             # Validate provider+mode before starting the streaming response,
             # so unsupported stream providers fail as a normal HTTP error.
             resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
+            if has_mcp_tools:
+                return await _open_mcp_stream(
+                    request,
+                    MCPStreamTelemetry(
+                        request=request,
+                        auth=auth,
+                        payload=payload,
+                        request_data=request_data,
+                        callback_manager=callback_manager,
+                        guardrail_middleware=guardrail_middleware,
+                        callback_start=callback_start,
+                        request_start=request_start,
+                        request_id=request_id,
+                        cache_hit=cache_hit,
+                        cache_key=cache_key,
+                        audit_action=audit_action,
+                    ),
+                    MCPStreamFraming(
+                        response_object=stream_response_object,
+                        line_transform=stream_line_transform,
+                        error_transform=stream_error_transform,
+                    ),
+                    routing_runtime=routing_runtime,
+                    routing=_mcp_model_routing(
+                        primary=primary,
+                        model_group=model_group,
+                        request_context=request_context,
+                        selector_deadline=selector_deadline,
+                        failover_kwargs=failover_kwargs,
+                    ),
+                    on_attempt=track_attempt,
+                )
 
             managed_stream = await routing_runtime.failover_manager.execute_managed_with_failover(
                 primary_deployment=primary,
@@ -381,7 +380,7 @@ async def handle_chat_like_request(
                     ):
                         stream_handler.discard_stream(stream_id)
                     try:
-                        await _record_stream_health_outcome(
+                        await record_stream_health_outcome(
                             cooldown_manager=routing_runtime.cooldown_manager,
                             health_ref=served_deployment.health_ref,
                             health_error=health_error,
@@ -503,13 +502,7 @@ async def handle_chat_like_request(
         )
         response_validation_headers: dict[str, str] = {}
         if has_mcp_tools:
-            gateway = getattr(request.app.state, "mcp_gateway_service", None)
-            if gateway is None:
-                raise ServiceUnavailableError(message="MCP gateway service is not available")
-            orchestrator = MCPChatOrchestrator(
-                gateway,
-                audit_service=getattr(request.app.state, "audit_service", None),
-            )
+            orchestrator = _mcp_orchestrator(request)
             mcp_result = await MCPChatExecutionService(
                 failover_manager=routing_runtime.failover_manager,
                 orchestrator=orchestrator,
@@ -519,27 +512,16 @@ async def handle_chat_like_request(
                     deployment,
                 ),
             ).execute(
-                request_context=MCPRequestContext(
-                    request_headers=dict(request.headers),
-                    request_id=request_id,
-                    correlation_id=request_id,
-                    client_ip=request_client_ip(request),
-                    user_agent=request.headers.get("user-agent"),
-                ),
+                request_context=_mcp_request_context(request, request_id),
                 auth=auth,
                 payload=payload,
                 guardrail_middleware=guardrail_middleware,
-                routing=MCPModelRouting(
-                    primary_deployment=primary,
+                routing=_mcp_model_routing(
+                    primary=primary,
                     model_group=model_group,
-                    routing_context=request_context,
-                    request_deadline=selector_deadline,
-                    timeout_seconds=failover_kwargs.get("timeout_seconds"),
-                    retry_max_attempts=failover_kwargs.get("retry_max_attempts"),
-                    retryable_error_classes=tuple(
-                        failover_kwargs.get("retryable_error_classes", [])
-                    )
-                    or None,
+                    request_context=request_context,
+                    selector_deadline=selector_deadline,
+                    failover_kwargs=failover_kwargs,
                 ),
                 on_attempt=track_attempt,
                 response_validation=response_validation_settings,
@@ -667,3 +649,83 @@ async def handle_chat_like_request(
             stream=bool(payload.stream),
         )
         raise
+
+
+def _mcp_orchestrator(request: Request) -> MCPChatOrchestrator:
+    gateway = getattr(request.app.state, "mcp_gateway_service", None)
+    if gateway is None:
+        raise ServiceUnavailableError(message="MCP gateway service is not available")
+    return MCPChatOrchestrator(
+        gateway,
+        audit_service=getattr(request.app.state, "audit_service", None),
+    )
+
+
+def _mcp_request_context(request: Request, request_id: str | None) -> MCPRequestContext:
+    return MCPRequestContext(
+        request_headers=dict(request.headers),
+        request_id=request_id,
+        correlation_id=request_id,
+        client_ip=request_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+
+
+def _mcp_model_routing(
+    *,
+    primary: Deployment,
+    model_group: str,
+    request_context: dict[str, Any],
+    selector_deadline: RequestDeadline | None,
+    failover_kwargs: dict[str, Any],
+) -> MCPModelRouting:
+    return MCPModelRouting(
+        primary_deployment=primary,
+        model_group=model_group,
+        routing_context=request_context,
+        request_deadline=selector_deadline,
+        timeout_seconds=failover_kwargs.get("timeout_seconds"),
+        retry_max_attempts=failover_kwargs.get("retry_max_attempts"),
+        retryable_error_classes=tuple(failover_kwargs.get("retryable_error_classes", [])) or None,
+    )
+
+
+async def _open_mcp_stream(
+    request: Request,
+    telemetry: MCPStreamTelemetry,
+    framing: MCPStreamFraming,
+    *,
+    routing_runtime: Any,
+    routing: MCPModelRouting,
+    on_attempt: Callable[[Deployment], None],
+) -> DeadlineStreamingResponse:
+    session = MCPStreamSession(
+        telemetry=telemetry,
+        framing=framing,
+        failover_manager=routing_runtime.failover_manager,
+        cooldown_manager=routing_runtime.cooldown_manager,
+        router_state_backend=request.app.state.router_state_backend,
+        orchestrator=_mcp_orchestrator(request),
+        request_context=_mcp_request_context(request, telemetry.request_id),
+        routing=routing,
+        on_attempt=on_attempt,
+    )
+
+    def on_first_hop(served: Deployment) -> None:
+        observation = selector_answer_observation(routing.routing_context)
+        if observation is not None:
+            observation.answered(
+                served.route_group_key or served.model_name,
+                served.deployment_id,
+                streaming=True,
+            )
+        update_served_route_decision(
+            request,
+            primary_deployment_id=routing.primary_deployment.deployment_id,
+            served_deployment_id=served.deployment_id,
+        )
+
+    return await session.open(
+        on_first_hop=on_first_hop,
+        headers=lambda: route_decision_headers(request),
+    )

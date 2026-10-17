@@ -8,6 +8,8 @@ import anyio
 from fastapi.responses import StreamingResponse
 
 from src.chat.executor import OpenedStream
+from src.metrics import increment_router_health_update_failure
+from src.router.health_state import DeploymentHealthRef
 from src.router.execution import ManagedFailoverResult, RequestDeadline
 
 
@@ -45,6 +47,36 @@ class ManagedStreamLifecycle:
             finally:
                 await self.managed_stream.release()
             self._closed = True
+
+
+async def record_stream_health_outcome(
+    *,
+    cooldown_manager: Any,
+    health_ref: DeploymentHealthRef,
+    health_error: Exception | None,
+    succeeded: bool,
+    recovery_token: str | None,
+) -> None:
+    try:
+        if health_error is not None:
+            await cooldown_manager.record_failure(
+                health_ref,
+                str(health_error),
+                exc=health_error,
+                recovery_token=recovery_token,
+            )
+        elif succeeded:
+            await cooldown_manager.record_success(
+                health_ref,
+                recovery_token=recovery_token,
+            )
+    except Exception:
+        increment_router_health_update_failure()
+        logger.warning(
+            "post-stream router health update failed deployment_id=%s",
+            health_ref.deployment_id,
+            exc_info=True,
+        )
 
 
 async def close_stream_resources(

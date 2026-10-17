@@ -46,6 +46,7 @@ from .exceptions import (
     MCPTransportError,
 )
 from .gateway import MCPGatewayService
+from .hop_usage import add_hop_usage
 
 
 @dataclass(frozen=True)
@@ -181,170 +182,204 @@ class MCPChatOrchestrator:
 
         current_payload = translated_payload
         total_api_latency_ms = 0.0
+        total_usage: dict[str, Any] | None = None
 
         for _ in range(self.max_mcp_tool_hops + 1):
             response_payload, api_latency_ms = await execute_chat_call(current_payload)
             total_api_latency_ms += api_latency_ms
+            total_usage = add_hop_usage(total_usage, response_payload.get("usage"))
             tool_calls = self._extract_tool_calls(response_payload)
-            if not tool_calls:
-                return response_payload, total_api_latency_ms
-
-            if len(tool_calls) > self.max_mcp_tools_per_turn:
-                raise InvalidRequestError(
-                    message=f"MCP tool execution limit exceeded: received {len(tool_calls)} tool calls, limit is {self.max_mcp_tools_per_turn}"
-                )
-
-            if any(
-                self._tool_name_from_call(tool_call) not in resolved_tools
-                for tool_call in tool_calls
-            ):
+            if not self.gateway_owns_tool_calls(tool_calls, resolved_tools):
+                if total_usage is not None:
+                    response_payload = {**response_payload, "usage": total_usage}
                 return response_payload, total_api_latency_ms
 
             next_messages = list(current_payload.messages)
-            next_messages.append(self._assistant_message_from_response(response_payload))
-            for tool_call in tool_calls:
-                tool_name = self._tool_name_from_call(tool_call)
-                resolved = resolved_tools[tool_name]
-                arguments = self._arguments_from_tool_call(tool_call)
-                guarded_arguments = await self._run_tool_input_guardrails(
-                    guardrail_middleware=guardrail_middleware,
-                    auth=auth,
-                    server_key=resolved.server_key,
-                    tool_name=resolved.original_name,
-                    arguments=arguments,
-                )
-                tool_started = perf_counter()
-                tool_operation_id = str(uuid4())
-                await self._emit_tool_audit_attempt_event(
+            next_messages.append(self.assistant_message_from_response(response_payload))
+            next_messages.extend(
+                await self.run_tool_calls(
                     request_context=request_context,
                     auth=auth,
-                    namespaced_tool_name=tool_name,
-                    server_key=resolved.server_key,
-                    scope_type=resolved.scope_type,
-                    scope_id=resolved.scope_id,
-                    arguments=guarded_arguments,
-                    operation_id=tool_operation_id,
-                )
-                try:
-                    result = await self.gateway.call_tool(
-                        auth,
-                        namespaced_tool_name=tool_name,
-                        arguments=guarded_arguments,
-                        request_headers=dict(request_context.request_headers),
-                        request_id=request_context.request_id,
-                        correlation_id=request_context.correlation_id,
-                    )
-                except MCPToolNotFoundError as exc:
-                    await self._emit_tool_audit_failure_event(
-                        request_context=request_context,
-                        auth=auth,
-                        namespaced_tool_name=tool_name,
-                        server_key=resolved.server_key,
-                        scope_type=resolved.scope_type,
-                        scope_id=resolved.scope_id,
-                        arguments=guarded_arguments,
-                        request_start=tool_started,
-                        error=exc,
-                        operation_id=tool_operation_id,
-                    )
-                    raise InvalidRequestError(message=str(exc)) from exc
-                except MCPApprovalRequiredError as exc:
-                    await self._emit_tool_audit_failure_event(
-                        request_context=request_context,
-                        auth=auth,
-                        namespaced_tool_name=tool_name,
-                        server_key=resolved.server_key,
-                        scope_type=resolved.scope_type,
-                        scope_id=resolved.scope_id,
-                        arguments=guarded_arguments,
-                        request_start=tool_started,
-                        error=exc,
-                        operation_id=tool_operation_id,
-                    )
-                    raise InvalidRequestError(
-                        message=(
-                            "MCP tools that require manual approval are not supported on chat/responses yet. "
-                            "Use the /mcp tools/call flow and retry after approval."
-                        ),
-                    ) from exc
-                except (MCPAccessDeniedError, MCPPolicyDeniedError) as exc:
-                    await self._emit_tool_audit_failure_event(
-                        request_context=request_context,
-                        auth=auth,
-                        namespaced_tool_name=tool_name,
-                        server_key=resolved.server_key,
-                        scope_type=resolved.scope_type,
-                        scope_id=resolved.scope_id,
-                        arguments=guarded_arguments,
-                        request_start=tool_started,
-                        error=exc,
-                        operation_id=tool_operation_id,
-                    )
-                    raise PermissionDeniedError(message=str(exc)) from exc
-                except MCPRateLimitError as exc:
-                    await self._emit_tool_audit_failure_event(
-                        request_context=request_context,
-                        auth=auth,
-                        namespaced_tool_name=tool_name,
-                        server_key=resolved.server_key,
-                        scope_type=resolved.scope_type,
-                        scope_id=resolved.scope_id,
-                        arguments=guarded_arguments,
-                        request_start=tool_started,
-                        error=exc,
-                        operation_id=tool_operation_id,
-                    )
-                    raise RateLimitError(message=str(exc), retry_after=exc.retry_after) from exc
-                except (
-                    MCPTransportError,
-                    MCPInvalidResponseError,
-                    MCPToolTimeoutError,
-                    MCPError,
-                ) as exc:
-                    await self._emit_tool_audit_failure_event(
-                        request_context=request_context,
-                        auth=auth,
-                        namespaced_tool_name=tool_name,
-                        server_key=resolved.server_key,
-                        scope_type=resolved.scope_type,
-                        scope_id=resolved.scope_id,
-                        arguments=guarded_arguments,
-                        request_start=tool_started,
-                        error=exc,
-                        operation_id=tool_operation_id,
-                    )
-                    raise ServiceUnavailableError(message=str(exc)) from exc
-
-                guarded_result = await self._run_tool_output_guardrails(
                     guardrail_middleware=guardrail_middleware,
-                    auth=auth,
-                    server_key=resolved.server_key,
-                    tool_name=resolved.original_name,
-                    result=result,
+                    resolved_tools=resolved_tools,
+                    tool_calls=tool_calls,
                 )
-                await self._emit_tool_audit_event(
-                    request_context=request_context,
-                    auth=auth,
-                    namespaced_tool_name=tool_name,
-                    server_key=resolved.server_key,
-                    scope_type=resolved.scope_type,
-                    scope_id=resolved.scope_id,
-                    arguments=guarded_arguments,
-                    result_payload=guarded_result,
-                    request_start=tool_started,
-                    operation_id=tool_operation_id,
-                )
-                next_messages.append(
-                    ToolChatMessage(
-                        role="tool",
-                        content=self._tool_message_content(guarded_result),
-                        tool_call_id=str(tool_call.get("id") or tool_name),
-                    )
-                )
-
+            )
             current_payload = current_payload.model_copy(update={"messages": next_messages})
 
         raise InvalidRequestError(message="MCP tool execution exceeded the configured hop limit")
+
+    def gateway_owns_tool_calls(
+        self,
+        tool_calls: list[dict[str, Any]],
+        resolved_tools: Mapping[str, ResolvedMCPTool],
+    ) -> bool:
+        """Return True when every call is an MCP tool that the gateway must run.
+
+        A turn without tool calls, or with a client function tool, goes back to
+        the client unchanged.
+        """
+        if not tool_calls:
+            return False
+        if len(tool_calls) > self.max_mcp_tools_per_turn:
+            raise InvalidRequestError(
+                message=f"MCP tool execution limit exceeded: received {len(tool_calls)} tool calls, limit is {self.max_mcp_tools_per_turn}"
+            )
+        return all(
+            self._tool_name_from_call(tool_call) in resolved_tools for tool_call in tool_calls
+        )
+
+    async def run_tool_calls(
+        self,
+        *,
+        request_context: MCPRequestContext,
+        auth: UserAPIKeyAuth,
+        guardrail_middleware: GuardrailMiddleware,
+        resolved_tools: Mapping[str, ResolvedMCPTool],
+        tool_calls: list[dict[str, Any]],
+    ) -> list[ToolChatMessage]:
+        tool_messages: list[ToolChatMessage] = []
+        for tool_call in tool_calls:
+            tool_name = self._tool_name_from_call(tool_call)
+            resolved = resolved_tools[tool_name]
+            arguments = self._arguments_from_tool_call(tool_call)
+            guarded_arguments = await self._run_tool_input_guardrails(
+                guardrail_middleware=guardrail_middleware,
+                auth=auth,
+                server_key=resolved.server_key,
+                tool_name=resolved.original_name,
+                arguments=arguments,
+            )
+            tool_started = perf_counter()
+            tool_operation_id = str(uuid4())
+            await self._emit_tool_audit_attempt_event(
+                request_context=request_context,
+                auth=auth,
+                namespaced_tool_name=tool_name,
+                server_key=resolved.server_key,
+                scope_type=resolved.scope_type,
+                scope_id=resolved.scope_id,
+                arguments=guarded_arguments,
+                operation_id=tool_operation_id,
+            )
+            try:
+                result = await self.gateway.call_tool(
+                    auth,
+                    namespaced_tool_name=tool_name,
+                    arguments=guarded_arguments,
+                    request_headers=dict(request_context.request_headers),
+                    request_id=request_context.request_id,
+                    correlation_id=request_context.correlation_id,
+                )
+            except MCPToolNotFoundError as exc:
+                await self._emit_tool_audit_failure_event(
+                    request_context=request_context,
+                    auth=auth,
+                    namespaced_tool_name=tool_name,
+                    server_key=resolved.server_key,
+                    scope_type=resolved.scope_type,
+                    scope_id=resolved.scope_id,
+                    arguments=guarded_arguments,
+                    request_start=tool_started,
+                    error=exc,
+                    operation_id=tool_operation_id,
+                )
+                raise InvalidRequestError(message=str(exc)) from exc
+            except MCPApprovalRequiredError as exc:
+                await self._emit_tool_audit_failure_event(
+                    request_context=request_context,
+                    auth=auth,
+                    namespaced_tool_name=tool_name,
+                    server_key=resolved.server_key,
+                    scope_type=resolved.scope_type,
+                    scope_id=resolved.scope_id,
+                    arguments=guarded_arguments,
+                    request_start=tool_started,
+                    error=exc,
+                    operation_id=tool_operation_id,
+                )
+                raise InvalidRequestError(
+                    message=(
+                        "MCP tools that require manual approval are not supported on chat/responses yet. "
+                        "Use the /mcp tools/call flow and retry after approval."
+                    ),
+                ) from exc
+            except (MCPAccessDeniedError, MCPPolicyDeniedError) as exc:
+                await self._emit_tool_audit_failure_event(
+                    request_context=request_context,
+                    auth=auth,
+                    namespaced_tool_name=tool_name,
+                    server_key=resolved.server_key,
+                    scope_type=resolved.scope_type,
+                    scope_id=resolved.scope_id,
+                    arguments=guarded_arguments,
+                    request_start=tool_started,
+                    error=exc,
+                    operation_id=tool_operation_id,
+                )
+                raise PermissionDeniedError(message=str(exc)) from exc
+            except MCPRateLimitError as exc:
+                await self._emit_tool_audit_failure_event(
+                    request_context=request_context,
+                    auth=auth,
+                    namespaced_tool_name=tool_name,
+                    server_key=resolved.server_key,
+                    scope_type=resolved.scope_type,
+                    scope_id=resolved.scope_id,
+                    arguments=guarded_arguments,
+                    request_start=tool_started,
+                    error=exc,
+                    operation_id=tool_operation_id,
+                )
+                raise RateLimitError(message=str(exc), retry_after=exc.retry_after) from exc
+            except (
+                MCPTransportError,
+                MCPInvalidResponseError,
+                MCPToolTimeoutError,
+                MCPError,
+            ) as exc:
+                await self._emit_tool_audit_failure_event(
+                    request_context=request_context,
+                    auth=auth,
+                    namespaced_tool_name=tool_name,
+                    server_key=resolved.server_key,
+                    scope_type=resolved.scope_type,
+                    scope_id=resolved.scope_id,
+                    arguments=guarded_arguments,
+                    request_start=tool_started,
+                    error=exc,
+                    operation_id=tool_operation_id,
+                )
+                raise ServiceUnavailableError(message=str(exc)) from exc
+
+            guarded_result = await self._run_tool_output_guardrails(
+                guardrail_middleware=guardrail_middleware,
+                auth=auth,
+                server_key=resolved.server_key,
+                tool_name=resolved.original_name,
+                result=result,
+            )
+            await self._emit_tool_audit_event(
+                request_context=request_context,
+                auth=auth,
+                namespaced_tool_name=tool_name,
+                server_key=resolved.server_key,
+                scope_type=resolved.scope_type,
+                scope_id=resolved.scope_id,
+                arguments=guarded_arguments,
+                result_payload=guarded_result,
+                request_start=tool_started,
+                operation_id=tool_operation_id,
+            )
+            tool_messages.append(
+                ToolChatMessage(
+                    role="tool",
+                    content=self._tool_message_content(guarded_result),
+                    tool_call_id=str(tool_call.get("id") or tool_name),
+                )
+            )
+
+        return tool_messages
 
     @staticmethod
     def _extract_tool_calls(response_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -361,7 +396,7 @@ class MCPChatOrchestrator:
         return [item for item in tool_calls if isinstance(item, dict)]
 
     @staticmethod
-    def _assistant_message_from_response(
+    def assistant_message_from_response(
         response_payload: dict[str, Any],
     ) -> AssistantChatMessage:
         choice = (
