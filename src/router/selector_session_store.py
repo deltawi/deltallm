@@ -24,10 +24,27 @@ DEFAULT_MAX_PENDING_WRITES = 256
 DEFAULT_MEMORY_ENTRIES = 10_000
 
 
+# A session never moves down a lane, even when two requests of one session answer
+# at the same time: a lower-rank write only refreshes the TTL of the higher pin.
+_RAISE_ONLY_WRITE = """
+local current = redis.call('GET', KEYS[1])
+if current then
+  local ok, entry = pcall(cjson.decode, current)
+  if ok and type(entry) == 'table' and entry.v == 1 and type(entry.r) == 'number'
+      and entry.r > tonumber(ARGV[2]) then
+    redis.call('EXPIRE', KEYS[1], ARGV[3])
+    return 0
+  end
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
+return 1
+"""
+
+
 class _SessionRedis(Protocol):
     async def get(self, name: str) -> str | bytes | None: ...
 
-    async def set(self, name: str, value: str, *, ex: int) -> object: ...
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str | int) -> object: ...
 
 
 def encode_session_pin(pin: SelectorSessionPin) -> str:
@@ -58,12 +75,12 @@ def decode_session_pin(raw: str | bytes) -> SelectorSessionPin | None:
 
 
 class RedisSelectorSessionStore:
-    """Shared session pins: one bounded GET per selector request, one deferred SET.
+    """Shared session pins: one bounded GET per selector request, one deferred write.
 
     Redis failure is a miss, so the request classifies again. Writes run after the
     answer starts, in a bounded set of owned tasks that shutdown drains or cancels.
-    Concurrent writes for one session keep the last value; a pin is a routing hint,
-    not an economic or security record.
+    The write is one raise-only script, so concurrent answers of one session cannot
+    move its pin down a lane. At the same rank the last answer wins.
     """
 
     def __init__(
@@ -102,15 +119,17 @@ class RedisSelectorSessionStore:
             observe_selector_session_store_failure(SelectorSessionStoreFailure.WRITE_DROPPED)
             return
         task = asyncio.get_running_loop().create_task(
-            self._write(self._keyspace.selector_session(key), encode_session_pin(pin), ttl_seconds)
+            self._write(self._keyspace.selector_session(key), pin, ttl_seconds)
         )
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
 
-    async def _write(self, name: str, value: str, ttl_seconds: int) -> None:
+    async def _write(self, name: str, pin: SelectorSessionPin, ttl_seconds: int) -> None:
         try:
             async with asyncio.timeout(self._write_timeout):
-                await self._redis.set(name, value, ex=ttl_seconds)
+                await self._redis.eval(
+                    _RAISE_ONLY_WRITE, 1, name, encode_session_pin(pin), pin.rank, ttl_seconds
+                )
         except asyncio.CancelledError:
             raise
         except Exception:  # Integration boundary: a lost pin only costs one classification.
@@ -150,7 +169,11 @@ class MemorySelectorSessionStore:
         return pin
 
     def remember(self, key: str, pin: SelectorSessionPin, *, ttl_seconds: int) -> None:
-        self._entries[key] = (time.monotonic() + ttl_seconds, pin)
+        now = time.monotonic()
+        current = self._entries.get(key)
+        if current is not None and current[0] > now and current[1].rank > pin.rank:
+            pin = current[1]
+        self._entries[key] = (now + ttl_seconds, pin)
         self._entries.move_to_end(key)
         while len(self._entries) > self._max_entries:
             self._entries.popitem(last=False)

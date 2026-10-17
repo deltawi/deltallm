@@ -133,8 +133,10 @@ def test_invalid_or_disabled_session_ids_never_fall_back(headers):
     assert selector_session_identity(headers=headers, payload=_payload(USER), api_key="k") is None
 
 
-def test_fingerprint_is_stable_across_turns_and_separates_end_users():
-    first = selector_session_identity(headers={}, payload=_payload(SYSTEM, USER), api_key="k")
+def test_fingerprint_is_stable_across_turns_and_separates_conversations():
+    first = selector_session_identity(
+        headers={}, payload=_payload(SYSTEM, USER, ASSISTANT_TOOL_CALL), api_key="k"
+    )
     later = selector_session_identity(
         headers={},
         payload=_payload(SYSTEM, USER, ASSISTANT_TOOL_CALL, TOOL_RESULT),
@@ -143,9 +145,23 @@ def test_fingerprint_is_stable_across_turns_and_separates_end_users():
     assert first.source is SelectorSessionSource.FINGERPRINT
     assert first == later
     other_user = selector_session_identity(
-        headers={}, payload=_payload(SYSTEM, USER, user="someone-else"), api_key="k"
+        headers={},
+        payload=_payload(SYSTEM, USER, ASSISTANT_TOOL_CALL, user="someone-else"),
+        api_key="k",
     )
     assert other_user != first
+    other_answer = {
+        **ASSISTANT_TOOL_CALL,
+        "tool_calls": [{**ASSISTANT_TOOL_CALL["tool_calls"][0], "id": "call_other"}],
+    }
+    same_opening = selector_session_identity(
+        headers={}, payload=_payload(SYSTEM, USER, other_answer), api_key="k"
+    )
+    assert same_opening != first
+    # A first turn has no answer yet, so it has no fingerprint session.
+    assert (
+        selector_session_identity(headers={}, payload=_payload(SYSTEM, USER), api_key="k") is None
+    )
     assert selector_session_identity(headers={}, payload=_payload(SYSTEM), api_key="k") is None
 
 
@@ -324,6 +340,15 @@ async def test_memory_store_expires_and_bounds_entries(monkeypatch):
     assert await store.lookup("a") is None
 
 
+async def test_memory_store_never_lowers_a_live_pin():
+    store = MemorySelectorSessionStore()
+    store.remember("s", SelectorSessionPin(rank=1, deployment_id="quality"), ttl_seconds=60)
+    store.remember("s", SelectorSessionPin(rank=0, deployment_id="economy"), ttl_seconds=60)
+    assert await store.lookup("s") == SelectorSessionPin(rank=1, deployment_id="quality")
+    store.remember("s", SelectorSessionPin(rank=1, deployment_id="other"), ttl_seconds=60)
+    assert await store.lookup("s") == SelectorSessionPin(rank=1, deployment_id="other")
+
+
 class _FakeRedis:
     def __init__(self):
         self.values: dict[str, str] = {}
@@ -340,12 +365,16 @@ class _FakeRedis:
             raise ConnectionError("down")
         return self.values.get(name)
 
-    async def set(self, name, value, *, ex):
+    async def eval(self, script, numkeys, name, value, rank, ttl):
+        # Mirrors the raise-only script; real Lua runs in tests/test_selector_session_redis.py.
         if self.block_writes:
             await self.release.wait()
         if self.fail:
             raise ConnectionError("down")
-        self.values[name], self.ttls[name] = value, ex
+        current = decode_session_pin(self.values[name]) if name in self.values else None
+        if current is None or current.rank <= rank:
+            self.values[name] = value
+        self.ttls[name] = ttl
 
 
 async def test_redis_store_round_trip_uses_namespaced_keys_and_ttl():
