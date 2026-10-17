@@ -660,9 +660,7 @@ class GeneralSettings(
     failover_event_history_size: int = Field(default=1_000, gt=0)
     background_health_checks: bool = False
     health_check_interval: int = 300
-    health_check_model: str = "gpt-3.5-turbo"
     prometheus_endpoint: str = "/metrics"
-    metrics_retention_days: int = 30
     enable_sso: bool = False
     sso_provider: Literal["microsoft", "google", "okta", "oidc", "saml"] = "oidc"
     sso_client_id: str | None = None

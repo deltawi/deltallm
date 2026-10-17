@@ -293,7 +293,8 @@ async def test_limits_config_defaults_environment_and_restart(name, monkeypatch)
         data = yaml.safe_load(Path(path).read_text())
         for key in keys:
             data = data[key]
-        assert data[field] == default
+        # Example files may omit a default; a value they do show must match it.
+        assert data.get(field, default) == default
     override = default * 2 if default else 1
     monkeypatch.setenv("DELTALLM_" + field.upper(), str(override))
     assert getattr(RedisLimits.from_settings(GeneralSettings(), Settings()), name) == override

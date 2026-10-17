@@ -17,6 +17,7 @@ from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
 )
 from src.providers.healthcheck import probe_provider_health
+from src.runtime_settings import resolve_redis_degraded_mode
 from src.router import (
     BackgroundHealthChecker,
     CooldownManager,
@@ -142,10 +143,7 @@ async def init_routing_runtime(
         app.state.route_groups,
     )
 
-    degraded_mode = str(
-        getattr(cfg.general_settings, "redis_degraded_mode", None)
-        or getattr(settings, "redis_degraded_mode", "fail_open")
-    )
+    degraded_mode = resolve_redis_degraded_mode(cfg.general_settings, settings)
     state_backend = RedisStateBackend(
         redis_client,
         degraded_mode=degraded_mode,

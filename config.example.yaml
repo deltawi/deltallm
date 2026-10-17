@@ -1,9 +1,17 @@
 # DeltaLLM starter configuration
 #
-# This file is intentionally opinionated:
-# - the active settings are the minimum recommended local/dev setup
-# - advanced features stay commented until you need them
-# - secrets should come from environment variables, not hardcoded values
+# This file is intentionally short:
+# - the active settings are what a local, trial, or single-server instance needs
+# - every setting you leave out uses its built-in default
+# - optional features are listed, commented, under "Features" below
+# - secrets come from environment variables, not hardcoded values
+#
+# Which features to turn on, what each needs, and ready-made profiles:
+#   docs/deployment/feature-switches.md ("Choose what to turn on")
+# Every general setting with its default:
+#   docs/configuration/general-settings-reference.md
+# A fuller single-server example (spend outbox for the Model Selector and Realtime, Batch API):
+#   config.small-team.example.yaml
 #
 # Quick path:
 # 1. Copy this file to config.yaml
@@ -49,13 +57,16 @@ model_list:
   #     # Configure verified token prices before enabling spend-based limits.
 
 router_settings:
-  # Simple defaults are best for a first setup.
   routing_strategy: simple-shuffle
-  num_retries: 0
+  # One retry on the same deployment, then fail over to the next one.
+  num_retries: 1
   retry_after: 1
   timeout: 600
+  # A deployment rests for cooldown_time seconds after more than allowed_fails
+  # rate-limit, server, or timeout errors within five minutes. 0 would bench a
+  # deployment on its first 429.
   cooldown_time: 60
-  allowed_fails: 0
+  allowed_fails: 2
   # Treat unusable 200 answers (empty, bad tool-call JSON, unknown tool, non-JSON in JSON mode)
   # as failures that can retry or fall back. See docs/configuration/router.md.
   response_validation:
@@ -112,40 +123,7 @@ router_settings:
   #         lane: quality
 
 general_settings:
-  # Startup-only Helm capacity contract; null for standalone development.
-  deployment_capacity_path: null
-  deployment_capacity_role: api
-  # Startup-only managed process budgets. Production uses migration_mode: external.
-  readiness_probe_timeout_seconds: 1
-  readiness_cache_seconds: 1
-  lifecycle_withdrawal_seconds: 5
-  lifecycle_request_drain_seconds: 45
-  lifecycle_cancellation_seconds: 5
-  lifecycle_worker_drain_seconds: 20
-  lifecycle_close_seconds: 5
-  lifecycle_shutdown_seconds: 80
-  migration_mode: startup
-  migration_verify_timeout_seconds: 10
-  # External customer sign-in is off until the coordinated Console rollout is ready.
-  # Configure the Console signing public keys here; keep its private keys in Console.
-  external_auth:
-    enabled: false
-    deployment_protocol: null
-    integrations: []
-    allowed_origins: []
-    trusted_proxy_cidrs: []
-    cleanup_batch_size: 1000
-    cleanup_interval_seconds: 5
-  # Set /gateway and true on the UI served through the Console proxy.
-  ui_mount:
-    mount_path: ""
-    external_console: false
   instance_name: DeltaLLM
-  # Installation-wide UI branding. Logo and favicon BLOBs are managed from Settings > Theme.
-  ui_branding:
-    primary_color: "#5B50D6"
-    secondary_color: "#8B7CFF"
-    menu_hover_color: "#F7F5FF"
 
   # Required secrets
   master_key: os.environ/DELTALLM_MASTER_KEY
@@ -155,170 +133,11 @@ general_settings:
   # In Docker Compose, DATABASE_URL and REDIS_URL are wired automatically.
   database_url: os.environ/DATABASE_URL
   redis_url: os.environ/REDIS_URL
-  # Finite Redis allocations (restart required). Separate bulk endpoint isolates server memory.
-  redis_bulk_url: null
-  redis_critical_max_connections: 64
-  redis_critical_max_waiters: 64
-  redis_bulk_max_connections: 16
-  redis_bulk_max_waiters: 0
-  redis_acquisition_timeout_seconds: 0.2
-  redis_socket_timeout_seconds: 1.0
-  redis_connect_timeout_seconds: 1.0
-  db_pool_size: 20
-  db_foreground_pool_size: 8
-  telemetry_worker_db_pool_size: 5
-  db_acquisition_timeout_seconds: 0.2
-  db_statement_timeout_seconds: 1.0
-  db_lock_timeout_seconds: 0.2
-  db_transaction_timeout_seconds: 2.0
-  db_background_statement_timeout_seconds: 5.0
-  db_background_lock_timeout_seconds: 1.0
-  db_background_transaction_timeout_seconds: 10.0
-  redis_cache_max_connections: 16
-  redis_cache_max_waiters: 0
-  db_pool_timeout: 30
-  # Reject overload before prompt, guardrail, and budget work. Enable after sizing
-  # these limits below the measured safe database/upstream concurrency envelope.
-  # Per-process ingress admission (restart required; enable after workload validation).
-  gateway_ingress_control_max_active: 16
-  gateway_ingress_control_max_buffered_bytes: 67108864
-  auth_fallback_max_active: 8
-  auth_fallback_max_waiters: 32
-  auth_fallback_queue_timeout_ms: 10
-  auth_fallback_timeout_seconds: 0.5
-  auth_fallback_cache_timeout_seconds: 0.1
-  auth_fallback_cache_max_bytes: 131072
-  # Startup-only callback delivery and guardrail execution bounds.
-  callback_max_pending: 128
-  callback_max_concurrency: 4
-  callback_max_payload_bytes: 262144
-  callback_max_bytes: 8388608
-  callback_timeout_seconds: 5
-  callback_shutdown_seconds: 5
-  guardrail_max_concurrency: 2
-  guardrail_max_pending: 8
-  guardrail_max_bytes: 33554432
-  guardrail_timeout_seconds: 5
-  guardrail_shutdown_seconds: 5
-  gateway_ingress_enabled: false
-  gateway_ingress_max_active: 100
-  gateway_ingress_max_waiters: 0
-  gateway_ingress_queue_timeout_ms: 10
-  gateway_ingress_max_body_bytes: 33554432
-  gateway_ingress_max_buffered_bytes: 67108864
-  gateway_ingress_body_timeout_seconds: 10.0
-  gateway_ingress_health_max_active: 4
-  gateway_preflight_capacity_enabled: false
-  gateway_preflight_global_max_parallel: 300
-  gateway_preflight_org_max_parallel: 100
-  gateway_preflight_lease_ttl_seconds: 30
-  # The outbox mode durably accepts one small event on the request path and
-  # applies idempotent spend/ledger updates in a bounded background worker.
-  spend_ingestion_mode: legacy # Use outbox before activating a model-router selector.
-  spend_operation_intents_enabled: false
-  spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
-  spend_ingestion_batch_size: 100
-  spend_ingestion_flush_interval_ms: 100
-  spend_ingestion_lease_seconds: 30
-  spend_ingestion_max_attempts: 10
-  spend_ingestion_worker_enabled: true
-  spend_ingestion_max_pending_events: 100000
-  spend_ingestion_overload_policy: sync_fallback
-  spend_ingestion_fallback_max_concurrency: 1
-  spend_ingestion_fallback_max_waiters: 8
-  spend_ingestion_fallback_queue_timeout_ms: 100
-  spend_ingestion_fallback_execution_timeout_seconds: 2
-  spend_ingestion_completed_retention_hours: 1
-  spend_ingestion_failed_retention_days: 30
-  spend_ingestion_cleanup_interval_seconds: 60
-  spend_ingestion_cleanup_batch_size: 1000
-  spend_ingestion_cleanup_max_batches_per_run: 10
-  spend_ingestion_cleanup_time_budget_seconds: 2
-  telemetry_db_pool_size: 5
-  telemetry_db_pool_timeout_seconds: 2
-  telemetry_worker_startup_timeout_seconds: 5
-  telemetry_shutdown_drain_timeout_seconds: 20
-  # Accounting v2 replaces lifecycle write amplification with one batched
-  # reservation ACK before dispatch and one batched terminal ACK.
-  accounting_protocol_enabled: false
-  accounting_execution_mode: assigned # local_journal requires the complete native role bundle.
-  accounting_request_url: null
-  accounting_rpc_signing_secret: os.environ/DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET
-  accounting_rpc_allow_http: false
-  accounting_rpc_allowed_ports: [443]
-  accounting_rpc_allowed_private_cidrs: []
-  accounting_rpc_max_connections: 16
-  accounting_local_max_subjects: 1024
-  accounting_protocol_generation: 1
-  accounting_microbatch_max_size: 8
-  accounting_microbatch_dwell_ms: 2
-  accounting_reservation_max_pending: 4096
-  accounting_finalization_max_pending: 8192
-  accounting_reservation_max_pending_bytes: 8388608
-  accounting_finalization_max_pending_bytes: 8388608
-  accounting_statement_timeout_ms: 250
-  accounting_finalization_ack_timeout_ms: 2000
-  accounting_max_provider_attempts: 3
-  accounting_grants_enabled: true
-  accounting_grant_target_operations: 32
-  accounting_grant_ttl_seconds: 30
-  # Run this only in the dedicated accounting worker process/Deployment.
-  accounting_projection_worker_enabled: false
-  accounting_projection_batch_size: 64
-  accounting_projection_max_concurrent_partitions: 4
-  accounting_projection_lease_seconds: 30
-  accounting_projection_poll_interval_ms: 50
-  accounting_projection_maintenance_interval_ms: 1000
-  audit_ingestion_mode: legacy
-  audit_ingestion_worker_enabled: true
-  audit_ingestion_batch_size: 100
-  audit_ingestion_flush_interval_ms: 100
-  audit_ingestion_lease_seconds: 30
-  audit_ingestion_max_attempts: 10
-  audit_ingestion_max_pending_events: 100000
-  audit_ingestion_required_reserve: 10000
-  audit_ingestion_completed_retention_hours: 1
-  audit_ingestion_failed_retention_days: 30
-  audit_ingestion_cleanup_interval_seconds: 60
-  audit_ingestion_cleanup_batch_size: 1000
-  audit_ingestion_cleanup_max_batches_per_run: 10
-  audit_ingestion_cleanup_time_budget_seconds: 2
-  budget_enforcement_query_timeout_seconds: 2
-  # Reserve database capacity for gateway traffic by bounding expensive UI reports locally
-  # and across every API worker connected to the same PostgreSQL database.
-  spend_reporting_max_concurrency: 2
-  spend_reporting_global_max_concurrency: 2
-  spend_reporting_queue_timeout_seconds: 10
-  spend_reporting_execution_timeout_seconds: 60
-  spend_reporting_redis_timeout_seconds: 0.5
-  # Team and personal usage views. Set to false during a rolling upgrade from a
-  # release without key-owner snapshots, until the reporting-v2 database check
-  # passes and every gateway and batch worker runs the new writer.
-  spend_reporting_v2_enabled: true
-
-  # Upstream provider HTTP pool tuning. These are startup-time settings;
-  # restart the process or roll the Kubernetes deployment after changing them.
-  # For Kubernetes, multiply upstream_http_max_connections by workers per pod and pod count
-  # when checking provider, NAT gateway, and file descriptor limits.
-  # Startup-only provider discovery egress; independent of batch webhook policy.
-  provider_discovery_allow_http: false
-  provider_discovery_allowed_ports: [443]
-  provider_discovery_allowed_private_cidrs: []
-  upstream_http_connect_timeout_seconds: 10
-  upstream_http_read_timeout_seconds: 300
-  upstream_http_write_timeout_seconds: 30
-  upstream_http_pool_timeout_seconds: 10
-  upstream_http_max_connections: 500
-  upstream_http_max_keepalive_connections: 100
-  upstream_http_keepalive_expiry_seconds: 60
 
   # Admin session login
   # Set these only if you want an initial browser-login admin account created on boot.
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
   platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
-  # Browser sessions end after 60 idle minutes or 12 hours from sign-in.
-  auth_session_ttl_hours: 12
-  auth_session_idle_timeout_minutes: 60
 
   # Recommended startup path:
   # - db_only: manage deployments from the Admin UI or API
@@ -327,73 +146,64 @@ general_settings:
   model_deployment_source: db_only
   model_deployment_bootstrap_from_config: true
 
-  # Optional performance and auth-cache tuning
-  api_key_auth_cache_ttl_seconds: 300
-  # Organization deletion immediately revokes tenant access, cancels pending
-  # work, waits through a recovery window, then purges bounded pages. A platform
-  # administrator or an owner/admin of the target organization can explicitly
-  # waive the remaining window for one deletion job.
-  organization_lifecycle_auth_max_staleness_seconds: 3
-  organization_lifecycle_auth_cache_max_entries: 10000
-  organization_deletion_recovery_window_hours: 168
-  organization_deletion_max_attempts: 20
-  # Enable only after every API and worker replica reports the backend's current
-  # lifecycle protocol version (v2 for this rollout).
+  # Check each deployment's provider every 5 minutes (a free model-list call, no tokens)
+  # and rest unhealthy deployments before customer traffic finds them.
+  background_health_checks: true
+  health_check_interval: 300
+
+  # Organization deletion requests. Startup fails while the deletion readiness check
+  # finds missing migrations or unowned records, so enable only after it passes and
+  # every API and worker replica reports the backend's current lifecycle
+  # protocol version (v2 for this rollout).
   organization_deletion_requests_enabled: false
-  organization_deletion_worker_enabled: true
-  organization_deletion_worker_poll_interval_seconds: 5
-  organization_deletion_worker_batch_size: 5
-  organization_deletion_worker_max_concurrency: 2
-  organization_deletion_worker_lease_seconds: 60
-  organization_deletion_worker_record_timeout_seconds: 45
-  organization_deletion_worker_page_size: 100
-  organization_deletion_worker_max_pages_per_claim: 10
-  organization_deletion_waiting_poll_seconds: 10
-  organization_deletion_retry_initial_seconds: 5
-  organization_deletion_retry_max_seconds: 300
-  cache_enabled: false
-  cache_backend: memory
-  cache_ttl: 3600
-  cache_max_size: 10000
-  # Organization tier policy compiles into an in-memory snapshot. Enforcement is staged.
-  tier_policy_mode: disabled
-  tier_policy_missing_service_mode: fail_open
-  tier_policy_refresh_interval_seconds: 300
-  tier_policy_refresh_jitter_seconds: 1
-  tier_policy_transition_grace_seconds: 0.05
-  tier_policy_refresh_retry_delay_seconds: 5
-  tier_capacity_fair_share_enabled: false
-  tier_capacity_fair_share_active_ttl_seconds: 10
 
-  # Governance notifications are opt-in and disabled by default.
-  governance_notifications_enabled: false
-  # Startup-only: restart after enabling the durable budget-notification worker.
-  budget_notifications_enabled: false
-  key_lifecycle_notifications_enabled: false
-  budget_alert_ttl_seconds: 3600  # Startup-only; shared durable deduplication window
-
-  # Optional terminal Batch API webhooks. The feature remains inert until enabled.
-  # Generate the encryption key with:
+  # ---------------------------------------------------------------------------
+  # Features. Off unless noted. Uncomment what you need; each line says what it
+  # needs. Full table: docs/deployment/feature-switches.md
+  # ---------------------------------------------------------------------------
+  #
+  # Durable spend and audit writes through a background worker (on by default once a
+  # mode is outbox). Adds 10 PostgreSQL connections per process (telemetry pools of 5 + 5).
+  # Required by the Model Selector and Realtime. Restart after changing.
+  # spend_ingestion_mode: outbox
+  # audit_ingestion_mode: outbox
+  #
+  # Response cache. Off by default: a hit is served without calling the provider and
+  # is currently charged like a miss. Use redis when you run more than one process.
+  # cache_enabled: true
+  # cache_backend: redis
+  # cache_ttl: 3600
+  #
+  # Batch API (/v1/batches). local storage works for one server only; use s3 when
+  # more than one process or pod serves the API.
+  # embeddings_batch_enabled: true
+  # embeddings_batch_storage_backend: local
+  #
+  # Batch completion webhooks. The key encrypts callback URLs and signing secrets at
+  # rest; it is read from the environment and unused until webhooks are on. Generate:
   #   python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
-  # Keep the key in an environment secret; it encrypts callback URLs and signing secrets at rest.
-  batch_webhook_enabled: false
-  batch_webhook_worker_enabled: true
-  batch_webhook_observability_enabled: true
+  # batch_webhook_enabled: true
   batch_webhook_encryption_key: os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY
-  batch_webhook_poll_interval_seconds: 1
-  batch_webhook_observability_refresh_interval_seconds: 15
-  batch_webhook_max_concurrency: 4
-  batch_webhook_lease_seconds: 30
-  batch_webhook_timeout_seconds: 10
-  batch_webhook_max_attempts: 8
-  batch_webhook_retry_initial_seconds: 5
-  batch_webhook_retry_max_seconds: 3600
-  batch_webhook_allowed_ports:
-    - 443
-  batch_webhook_allowed_private_cidrs: []
-  batch_webhook_allow_http: false
-  batch_webhook_delivery_retention_days: 30
-  batch_webhook_cleanup_max_rows_per_run: 10000
+  #
+  # Accounting v2 signing secret, read from the environment; used only with
+  # accounting_execution_mode: local_journal (docs/deployment/accounting-v2.md).
+  accounting_rpc_signing_secret: os.environ/DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET
+  #
+  # OpenAI Realtime sessions. Needs Redis and spend_ingestion_mode: outbox. Restart.
+  # realtime:
+  #   enabled: true
+  #
+  # Reject overload before prompt, guardrail, and budget work. Size the limits from
+  # docs/deployment/ingress-admission.md first. Restart.
+  # gateway_ingress_enabled: true
+  #
+  # Refuse requests that need Redis-backed limits while Redis is down (default
+  # fail_open lets them through). Production uses fail_closed.
+  # redis_degraded_mode: fail_closed
+  #
+  # Browser sessions end after 60 idle minutes or 12 hours from sign-in (defaults).
+  # auth_session_ttl_hours: 12
+  # auth_session_idle_timeout_minutes: 60
 
   # Email delivery is optional.
   # Enable this when you want invitations, password reset, test email, or governance notifications.
@@ -530,28 +340,6 @@ general_settings:
   # jwt_public_key_url: https://idp.example.com/.well-known/jwks.json
   # jwt_audience: deltallm
   # jwt_issuer: https://idp.example.com/
-
-  # Optional health checks and observability
-  #
-  # background_health_checks: true
-  # health_check_interval: 300
-  # health_check_model: gpt-4o-mini
-  # prometheus_endpoint: /metrics
-  # metrics_retention_days: 30
-  # Prompt resolution caches both hits and misses to keep the request path off SQL.
-  # prompt_negative_cache_enabled: false
-  # prompt_cache_l1_ttl_seconds: 30
-  # prompt_cache_l2_ttl_seconds: 300
-  # prompt_negative_l1_ttl_seconds: 5
-  # prompt_negative_l2_ttl_seconds: 30
-  # prompt_cache_l1_max_entries: 10000
-  # prompt_singleflight_max_keys: 256
-  # prompt_singleflight_timeout_seconds: 2
-  # Prompt render metadata uses the policy-aware audit ingress. Outbox mode
-  # accepts the required record through the isolated telemetry pool.
-  # Start with shadow, verify zero mismatches, then switch to combined.
-  # budget_enforcement_query_mode: legacy
-  # budget_enforcement_shadow_sample_rate: 0.01
 
 deltallm_settings:
   # Keep callback and guardrail config minimal in the starter file.

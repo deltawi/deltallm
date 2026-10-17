@@ -1,0 +1,183 @@
+# Source for the feature table in docs/deployment/feature-switches.md.
+#
+# Each entry names one setting by its path in the gateway config. Restart is "Yes" for
+# the gateway's own startup-only settings and for entries marked "restart: true"
+# (read once when the process starts). "profiles" holds
+# the value each ready-made profile file must produce. Leave a profile out when the
+# profile keeps the built-in default. The generator fails when a profile file or the
+# built-in default disagrees with this list, so the published table cannot drift.
+#
+# Run: uv run python scripts/docs/generate_feature_switches.py [--check]
+
+profiles:
+  starter:
+    title: Starter
+    file: config.example.yaml
+  small_team:
+    title: Small team
+    file: config.small-team.example.yaml
+  production:
+    title: Production (Helm)
+    helm_overlay: deploy/kubernetes/helm/values-production.yaml
+
+features:
+  - feature: Provider health checks
+    setting: general_settings.background_health_checks
+    restart: true  # read once when the process starts
+    needs: Nothing. Calls each provider's model list, no tokens.
+    billing: "No"
+    profiles: {starter: true, small_team: true, production: true}
+
+  - feature: Where models come from
+    setting: general_settings.model_deployment_source
+    needs: "`db_only` manages models in the Admin UI; production requires it with `model_deployment_bootstrap_from_config: false`."
+    billing: "No"
+    profiles: {starter: db_only, small_team: db_only, production: db_only}
+    link: ../configuration/models.md
+
+  - feature: Durable spend writes (outbox)
+    setting: general_settings.spend_ingestion_mode
+    needs: 10 more PostgreSQL connections per process and its worker. Required by the Model Selector and Realtime.
+    billing: Changes how charges are written, not amounts
+    profiles: {small_team: outbox, production: outbox}
+    link: telemetry-ingestion-rollout.md
+
+  - feature: Durable audit writes (outbox)
+    setting: general_settings.audit_ingestion_mode
+    needs: Same telemetry pools as spend outbox. Required by external customer sign-in.
+    billing: "No"
+    profiles: {small_team: outbox, production: outbox}
+    link: telemetry-ingestion-rollout.md
+
+  - feature: Spend operation intents
+    setting: general_settings.spend_operation_intents_enabled
+    needs: Spend outbox and its worker.
+    billing: Changes how charges are written, not amounts
+    profiles: {production: true}
+    link: spend-recovery.md
+
+  - feature: Accounting v2
+    setting: general_settings.accounting_protocol_enabled
+    needs: Accounting worker role in Helm.
+    billing: Replaces how charges are written
+    link: accounting-v2.md
+
+  - feature: Response cache
+    setting: general_settings.cache_enabled
+    needs: "`cache_backend: redis` with more than one process."
+    billing: Yes, a hit is charged like a miss today
+    link: ../features/caching.md
+
+  - feature: Response validation
+    setting: router_settings.response_validation.enabled
+    needs: Nothing. Retries empty or broken answers.
+    billing: No, callers pay only for the answer they get
+    profiles: {starter: true, small_team: true, production: true}
+    link: ../configuration/router.md#response-validation
+
+  - feature: JSON healing
+    setting: router_settings.response_validation.json_healing
+    needs: Response validation. Rewrites JSON-mode answers.
+    billing: "No"
+    link: ../configuration/router.md#response-validation
+
+  - feature: Batch API
+    setting: general_settings.embeddings_batch_enabled
+    restart: true  # read once when the process starts
+    needs: "`embeddings_batch_storage_backend: s3` with more than one process or pod."
+    billing: Batch usage is billed like other requests
+    profiles: {small_team: true}
+    link: ../features/batching.md
+
+  - feature: Batch webhooks
+    setting: general_settings.batch_webhook_enabled
+    restart: true  # read once when the process starts
+    needs: "`batch_webhook_encryption_key`."
+    billing: "No"
+    link: batch-webhook-rollout.md
+
+  - feature: Realtime sessions
+    setting: general_settings.realtime.enabled
+    needs: Redis and spend outbox (or accounting v2).
+    billing: Realtime sessions are billed
+    link: ../guides/realtime.md
+
+  - feature: Email
+    setting: general_settings.email_enabled
+    needs: An SMTP, Resend, or SendGrid account and `email_base_url`.
+    billing: "No"
+    link: ../configuration/general.md#email-settings
+
+  - feature: Budget and key notifications
+    setting: general_settings.governance_notifications_enabled
+    needs: Email.
+    billing: "No"
+    link: governance.md
+
+  - feature: Single sign-on
+    setting: general_settings.enable_sso
+    restart: true  # read once when the process starts
+    needs: An OIDC or SAML identity provider and Redis.
+    billing: "No"
+    link: ../features/authentication.md
+
+  - feature: Password sign-in
+    setting: general_settings.password_login_enabled
+    needs: "`false` (SSO-only) requires SSO. The master key always works."
+    billing: "No"
+    profiles: {starter: true, small_team: true, production: true}
+    link: ../features/authentication.md
+
+  - feature: External customer sign-in
+    setting: general_settings.external_auth.enabled
+    needs: Audit outbox, cache invalidation worker, `api_key_auth_cache_ttl_seconds` ≤ 60.
+    billing: "No"
+    link: ../configuration/external-customer-auth.md
+
+  - feature: Organization deletion requests
+    setting: general_settings.organization_deletion_requests_enabled
+    restart: true  # read once when the process starts
+    needs: The deletion readiness check must pass (startup fails otherwise) and every replica must run lifecycle protocol v2.
+    billing: "No"
+    link: ../features/organization-deletion.md
+
+  - feature: Ingress admission
+    setting: general_settings.gateway_ingress_enabled
+    needs: Limits sized from a load test.
+    billing: "No"
+    profiles: {production: true}
+    link: ingress-admission.md
+
+  - feature: Preflight capacity
+    setting: general_settings.gateway_preflight_capacity_enabled
+    needs: Redis.
+    billing: "No"
+    profiles: {production: true}
+    link: ingress-admission.md
+
+  - feature: Behavior when Redis is down
+    setting: general_settings.redis_degraded_mode
+    restart: true  # read once when the process starts
+    needs: "`fail_closed` refuses requests whose limits need Redis."
+    billing: Changes limits, not prices
+    profiles: {production: fail_closed}
+
+  - feature: Budget checks
+    setting: general_settings.budget_enforcement_query_mode
+    needs: Run `shadow` first and check for mismatches.
+    billing: Changes how budgets are enforced
+    profiles: {production: combined}
+    link: budget-prompt-performance.md
+
+  - feature: Organization tiers
+    setting: general_settings.tier_policy_mode
+    needs: Tiers defined in the Admin UI; start with `shadow`.
+    billing: Changes limits, not prices
+    link: organization-tiers-rollout.md
+
+  - feature: Database migrations
+    setting: general_settings.migration_mode
+    needs: "`external` needs a migration Job before each rollout."
+    billing: "No"
+    profiles: {production: external}
+    link: database-migrations.md

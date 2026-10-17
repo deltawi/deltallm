@@ -52,6 +52,13 @@ curl http://localhost:4002/health/liveliness
 Detailed health and `/metrics` are unauthenticated in the application. Keep the evaluation
 stack on a trusted machine and do not bind it directly to an untrusted network.
 
+Compose publishes PostgreSQL (5432) and Redis (6379) on `127.0.0.1` only, so tools on the same
+machine can reach them but the network cannot. Compose passes no salt key unless you set
+`DELTALLM_SALT_KEY`; DeltaLLM then refuses to start and says so.
+
+To run the [Small team](feature-switches.md) profile instead of the starter, copy
+`config.small-team.example.yaml` to `config.yaml` before `docker compose up`.
+
 ## Using the image outside Compose
 
 The image command is `python -m src.server`. It uses `migration_mode: startup`

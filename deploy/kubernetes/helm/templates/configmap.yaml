@@ -84,7 +84,7 @@ general_settings:
 {{ toYaml $generalSettings | indent 2 }}
 {{- end -}}
 {{- define "deltallm.apiConfigYaml" -}}
-{{- $apiConfig := deepCopy .Values.config -}}
+{{- $apiConfig := include "deltallm.chartConfig" . | fromYaml -}}
 {{- if .Values.batchWorker.enabled -}}
 {{- $apiDefaults := dict "general_settings" (dict "cache_invalidation_worker_enabled" false "organization_deletion_worker_enabled" false "embeddings_batch_worker_enabled" false "embeddings_batch_completion_outbox_worker_enabled" false "batch_webhook_worker_enabled" false "batch_webhook_observability_enabled" false "embeddings_batch_gc_enabled" false "embeddings_batch_create_session_cleanup_enabled" false "embeddings_batch_scheduler_backfill_enabled" false "embeddings_batch_stale_lease_sweeper_enabled" false) -}}
 {{- $apiConfig = mergeOverwrite $apiConfig $apiDefaults -}}
@@ -101,7 +101,7 @@ general_settings:
 {{ include "deltallm.configYaml" (dict "root" . "config" $apiConfig "role" "api") }}
 {{- end -}}
 {{- define "deltallm.batchWorkerConfigYaml" -}}
-{{- $workerConfig := deepCopy .Values.config -}}
+{{- $workerConfig := include "deltallm.chartConfig" . | fromYaml -}}
 {{- $workerGeneral := default (dict) (get $workerConfig "general_settings") -}}
 {{- if not (hasKey $workerConfig "general_settings") -}}
 {{- $_ := set $workerConfig "general_settings" $workerGeneral -}}
@@ -126,7 +126,7 @@ general_settings:
 {{ include "deltallm.configYaml" (dict "root" . "config" $workerConfig "role" "batchWorker") }}
 {{- end -}}
 {{- define "deltallm.accountingWorkerConfigYaml" -}}
-{{- $workerConfig := deepCopy .Values.config -}}
+{{- $workerConfig := include "deltallm.chartConfig" . | fromYaml -}}
 {{- $workerDefaults := dict "general_settings" (dict
     "accounting_protocol_enabled" true
     "accounting_projection_worker_enabled" true
@@ -156,7 +156,7 @@ general_settings:
 {{ include "deltallm.configYaml" (dict "root" . "config" $workerConfig "role" "accountingWorker") }}
 {{- end -}}
 {{- define "deltallm.accountingRequestConfigYaml" -}}
-{{- $requestConfig := deepCopy .Values.config -}}
+{{- $requestConfig := include "deltallm.chartConfig" . | fromYaml -}}
 {{- $requestConfig = mergeOverwrite $requestConfig (default (dict) .Values.accountingRequest.config) -}}
 {{- $_ := set (get $requestConfig "general_settings") "external_auth" (dict "enabled" false) -}}
 {{- $requestConfig = mergeOverwrite $requestConfig (dict "general_settings" (dict "accounting_projection_worker_enabled" false "audit_ingestion_worker_enabled" false "spend_ingestion_worker_enabled" false)) -}}

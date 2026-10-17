@@ -26,7 +26,8 @@ def test_request_work_bounds_environment_and_examples(field, monkeypatch):
         values = yaml.safe_load(Path(file).read_text())
         for part in parts:
             values = values[part]
-        assert values[field] == default
+        # Example files may omit a default; a value they do show must match it.
+        assert values.get(field, default) == default
     monkeypatch.setenv("DELTALLM_" + field.upper(), str(default + 1))
     assert (
         getattr(resolve_request_work_settings(GeneralSettings(), Settings()), field) == default + 1
