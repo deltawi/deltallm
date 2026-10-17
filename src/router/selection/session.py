@@ -119,7 +119,11 @@ class SelectorSession:
 
 
 def has_new_user_text(payload: ChatCompletionRequest) -> bool:
-    """False for continuations such as tool results or an assistant prefill."""
+    """False for continuations such as tool results or an assistant prefill.
+
+    An image-only user message is a continuation too: OpenAI tool messages cannot
+    carry images, so agents send tool screenshots as user images.
+    """
     if not payload.messages:
         return False
     last = payload.messages[-1]

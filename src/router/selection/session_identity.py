@@ -71,16 +71,26 @@ def _codex_session(raw: str) -> str | None:
 
 
 def _fingerprint(api_key: str, payload: ChatCompletionRequest) -> SelectorSessionIdentity | None:
-    """The system prompt and first user message stay the same for a whole conversation.
+    """The opening of a conversation stays the same on every later request.
 
-    The OpenAI ``user`` field keeps two end users with the same opening apart.
+    The first answer is part of it, because many conversations of one app can share
+    a system prompt and a first user message. A sampled first answer, or the random
+    IDs of its tool calls, keeps those apart. A first turn has no answer yet, so it
+    has no fingerprint session. The OpenAI ``user`` field keeps end users apart.
     """
     first_user = next((m for m in payload.messages if m.role == "user"), None)
-    if first_user is None:
+    first_answer = next((m for m in payload.messages if m.role == "assistant"), None)
+    if first_user is None or first_answer is None:
         return None
     system = next((m for m in payload.messages if m.role == "system"), None)
     material = json.dumps(
-        [payload.user, system.content if system is not None else None, first_user.content],
+        [
+            payload.user,
+            system.content if system is not None else None,
+            first_user.content,
+            first_answer.content,
+            first_answer.tool_calls,
+        ],
         sort_keys=True,
         separators=(",", ":"),
         default=str,

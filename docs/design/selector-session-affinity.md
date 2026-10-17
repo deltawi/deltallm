@@ -13,8 +13,10 @@ and one deployment.
   2. the Claude Code `x-claude-code-session-id` header;
   3. `session_id` in the Codex `x-codex-turn-metadata` header;
   4. `metadata.session_id` in the request body;
-  5. a fingerprint of the OpenAI `user` field, the first system message and the
-     first user message.
+  5. a fingerprint of the OpenAI `user` field, the first system message, the
+     first user message and the first answer. The first answer keeps apart
+     conversations of one app that open with the same messages. A first turn has
+     no answer yet, so it has no fingerprint session.
 - An explicit ID that is blank or longer than 255 characters gives no session.
   The gateway does not use a weaker fallback in this case.
   `x-deltallm-session-affinity: off` disables affinity for one request.
@@ -61,14 +63,15 @@ An explicit `session` block needs all API and Batch processes on this release.
 | Key | `deltallm:<env>:v1:selector-session:<sha256>` |
 | Value | `{"v":1,"r":<rank>,"d":"<deployment id>"}`, at most 512 bytes |
 | Read | One `GET` per selector request, 50 ms timeout |
-| Write | One `SET ... EX ttl` per answer, in a bounded owned task set (256), 250 ms timeout |
+| Write | One raise-only `EVAL` per answer (`SET ... EX ttl`, or only `EXPIRE` when the stored rank is higher), in a bounded owned task set (256), 250 ms timeout |
 | Cardinality | One key per active session per route group |
 
 Redis failure, a timeout or an invalid entry is a miss. The request classifies
 again, as it did before this feature. A full write set drops the write. Shutdown
-waits up to one second for pending writes, then cancels them. Concurrent writes
-for one session keep the last value. A pin is a routing hint, not an economic or
-security record. Thus a Lua compare-and-set is not necessary.
+waits up to one second for pending writes, then cancels them. Agents can send
+parallel requests in one session. The write script keeps the higher rank, so a
+late answer from a lower lane cannot move the session down. At the same rank the
+last answer sets the deployment.
 
 ## Latency and cost budget
 
@@ -84,6 +87,13 @@ and billing writes. Requests to groups without a selector do no new work.
   `invalid_entry`, `write` or `write_dropped`.
 - `deltallm_selector_decisions_total{cause}` adds the `session_pinned` and
   `session_floor` causes. Pinned decisions do not add selector latency samples.
+
+## Limits
+
+- A client can send a hard follow-up as a continuation (for example, after a tool
+  result) and keep a lower lane. This affects only that API key's own requests.
+- With the in-process store, each gateway replica keeps its own pins. A session
+  that reaches another replica classifies again.
 
 ## Alternatives
 

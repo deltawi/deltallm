@@ -104,7 +104,7 @@ keeps working:
 
 DeltaLLM finds the session from the `x-deltallm-session-id` or `x-session-id`
 header, the Claude Code and Codex session headers, `metadata.session_id`, or a
-fingerprint of the first messages. Send `x-deltallm-session-affinity: off` to
+fingerprint of the first messages and the first answer. Send `x-deltallm-session-affinity: off` to
 classify one request on its own. **Session memory** in **Advanced selector
 settings** sets how long a session without requests is kept (60–86,400 seconds,
 3,600 by default). Sessions are kept in Redis; see the

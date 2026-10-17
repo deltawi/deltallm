@@ -41,8 +41,18 @@ async def test_session_pins_are_shared_across_clients_with_a_sliding_ttl() -> No
         assert await reader.lookup(key) == SelectorSessionPin(rank=1, deployment_id="quality")
         assert await reader_redis.ttl(keyspace.selector_session(key)) > 60
 
+        lower = RedisSelectorSessionStore(writer_redis, keyspace=keyspace)
+        lower.remember(key, SelectorSessionPin(rank=0, deployment_id="economy"), ttl_seconds=900)
+        await lower.close()
+        assert await reader.lookup(key) == SelectorSessionPin(rank=1, deployment_id="quality")
+        assert await reader_redis.ttl(keyspace.selector_session(key)) > 600
+
         await reader_redis.set(keyspace.selector_session(key), "{broken", ex=60)
         assert await reader.lookup(key) is None
+        repair = RedisSelectorSessionStore(writer_redis, keyspace=keyspace)
+        repair.remember(key, SelectorSessionPin(rank=0, deployment_id="economy"), ttl_seconds=60)
+        await repair.close()
+        assert await reader.lookup(key) == SelectorSessionPin(rank=0, deployment_id="economy")
     finally:
         await reader_redis.delete(keyspace.selector_session(key))
         await writer_redis.aclose()
