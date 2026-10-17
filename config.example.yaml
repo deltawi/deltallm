@@ -61,6 +61,7 @@ router_settings:
   response_validation:
     enabled: true
     on_exhausted: return_response
+    json_healing: false  # repair JSON-mode answers (code fences, extra text, trailing commas)
   # Set route-group workload mode explicitly. Older files that omit it infer one common
   # enabled-member mode (or chat when no member mode can be resolved) and log a warning.
   # route_groups:

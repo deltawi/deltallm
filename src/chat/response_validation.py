@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, TypeVar
 
+from src.chat.json_healing import heal_json_text
 from src.metrics import (
+    increment_response_json_healed,
     increment_response_validation_exhausted,
     increment_response_validation_failure,
 )
@@ -18,6 +20,7 @@ from src.router.execution import ProviderAttemptSuccess
 from src.router.router import Deployment
 
 RESPONSE_VALIDATION_HEADER: Final = "x-deltallm-response-validation"
+RESPONSE_HEALED_HEADER: Final = "x-deltallm-response-healed"
 RESPONSE_VALIDATION_ERROR_CODE: Final = "invalid_provider_response"
 _MAX_VALIDATED_JSON_CHARS: Final = 1_048_576
 
@@ -94,7 +97,7 @@ def find_response_defect(
 class ResponseValidationScope:
     """Own validation for one failover call and the response kept when attempts run out."""
 
-    __slots__ = ("_request", "_settings", "_rejected", "served_defect")
+    __slots__ = ("_request", "_settings", "_rejected", "served_defect", "served_healed")
 
     def __init__(
         self, request: ChatCompletionRequest, settings: ResponseValidationSettings
@@ -103,14 +106,23 @@ class ResponseValidationScope:
         self._settings = settings
         self._rejected: _RejectedResponse | None = None
         self.served_defect: ResponseValidationReason | None = None
+        self.served_healed = False
 
     async def checked(self, deployment: Deployment, attempt: Awaitable[_AttemptT]) -> _AttemptT:
         outcome = await attempt
         result: ChatAttemptResult = (
             outcome.value if isinstance(outcome, ProviderAttemptSuccess) else outcome
         )
+        healed = (
+            self._settings.enabled
+            and self._settings.json_healing
+            and heal_json_choices(result[0], self._request)
+        )
         defect = find_response_defect(result[0], self._request, self._settings)
         if defect is None:
+            if healed:
+                increment_response_json_healed(deployment_id=deployment.deployment_id)
+            self.served_healed = healed
             return outcome
         increment_response_validation_failure(
             deployment_id=deployment.deployment_id, reason=defect.value
@@ -147,9 +159,36 @@ class ResponseValidationScope:
             return rejected.result, rejected.deployment
 
     def response_headers(self) -> dict[str, str]:
-        if self.served_defect is None:
-            return {}
-        return {RESPONSE_VALIDATION_HEADER: self.served_defect.value}
+        if self.served_defect is not None:
+            return {RESPONSE_VALIDATION_HEADER: self.served_defect.value}
+        if self.served_healed:
+            return {RESPONSE_HEALED_HEADER: "json"}
+        return {}
+
+
+def heal_json_choices(response: dict[str, Any], request: ChatCompletionRequest) -> bool:
+    """Repair JSON-mode answers in place; return whether any content changed."""
+
+    if not _json_output_requested(request):
+        return False
+    require_object = request.response_format is not None and (
+        request.response_format.type == "json_object"
+    )
+    choices = response.get("choices")
+    if not isinstance(choices, list):
+        return False
+    changed = False
+    for choice in choices:
+        message = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            continue
+        if _valid_json_content(choice, message):
+            continue
+        healed = heal_json_text(message["content"], require_object=require_object)
+        if healed is not None:
+            message["content"] = healed
+            changed = True
+    return changed
 
 
 def _choice_message(choice: object) -> Mapping[str, Any]:

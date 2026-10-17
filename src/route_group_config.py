@@ -180,6 +180,7 @@ class ResponseValidationSettings(BaseModel):
     unknown_tool_name: bool = True
     invalid_json_output: bool = True
     on_exhausted: Literal["return_response", "error"] = "return_response"
+    json_healing: bool = False
 
 
 class RouterSettings(BaseModel):

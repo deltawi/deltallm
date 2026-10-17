@@ -188,6 +188,13 @@ deltallm_response_validation_exhausted_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_response_json_healed_metric = Counter(
+    "deltallm_response_json_healed_total",
+    "JSON-mode chat answers repaired by opt-in JSON healing, by deployment",
+    ["deployment_id"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_tier_capacity_fair_share_decisions_metric = Counter(
     "deltallm_tier_capacity_fair_share_decisions_total",
     "Tier capacity fair-share decisions",
@@ -250,6 +257,10 @@ def increment_response_validation_failure(*, deployment_id: str, reason: str) ->
     deltallm_response_validation_failures_metric.labels(
         deployment_id=sanitize_label(deployment_id), reason=reason
     ).inc()
+
+
+def increment_response_json_healed(*, deployment_id: str) -> None:
+    deltallm_response_json_healed_metric.labels(deployment_id=sanitize_label(deployment_id)).inc()
 
 
 def increment_response_validation_exhausted(*, reason: str, outcome: str) -> None:
