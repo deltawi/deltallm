@@ -391,12 +391,12 @@ export default function OrganizationDeletionPanel({
             )}
             <div className="flex flex-wrap gap-2">
               {canManageLifecycle && job.restore_allowed && (
-                <button type="button" onClick={() => setRestoreOpen(true)} disabled={working} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                <button type="button" onClick={() => setRestoreOpen(true)} disabled={working} className="control-sm inline-flex items-center gap-1.5 rounded-lg border border-gray-300 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
                   <RotateCcw className="h-3.5 w-3.5" /> Restore
                 </button>
               )}
               {canExpedite && job.restore_allowed && job.status !== 'failed' && (
-                <button type="button" onClick={openExpedite} disabled={working} className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">
+                <button type="button" onClick={openExpedite} disabled={working} className="control-sm rounded-lg border border-red-300 font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">
                   Delete permanently now
                 </button>
               )}
@@ -409,7 +409,7 @@ export default function OrganizationDeletionPanel({
           </div>
         ) : (
           canManageLifecycle && (
-            <button type="button" onClick={openDelete} disabled={!plan?.can_request} className="mt-4 w-full rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" onClick={openDelete} disabled={!plan?.can_request} className="control-md mt-4 w-full rounded-lg border border-red-300 font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
               Delete organization
             </button>
           )

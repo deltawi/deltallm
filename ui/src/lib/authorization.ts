@@ -9,6 +9,7 @@ export type UIAccess = {
   mcp_servers: boolean;
   mcp_approvals: boolean;
   keys: boolean;
+  coding_agents: boolean;
   organizations: boolean;
   organization_create: boolean;
   teams: boolean;
@@ -44,6 +45,7 @@ function emptyUiAccess(): UIAccess {
     mcp_servers: false,
     mcp_approvals: false,
     keys: false,
+    coding_agents: false,
     organizations: false,
     organization_create: false,
     teams: false,
@@ -70,6 +72,7 @@ function fullUiAccess(): UIAccess {
     mcp_servers: true,
     mcp_approvals: true,
     keys: true,
+    coding_agents: true,
     organizations: true,
     organization_create: true,
     teams: true,
@@ -111,6 +114,7 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
     mcp_servers: true,
     mcp_approvals: isPlatformAdmin || permissions.has('key.update'),
     keys: isPlatformAdmin || canReadKeys,
+    coding_agents: isPlatformAdmin || permissions.has('key.update') || permissions.has('key.create_self'),
     organizations: isPlatformAdmin || permissions.has('org.read'),
     organization_create: isPlatformAdmin,
     teams: isPlatformAdmin || permissions.has('team.read'),

@@ -300,7 +300,7 @@ export default function MCPApprovalTable({
                                     type="button"
                                     disabled={isDeciding}
                                     onClick={() => void onDecision?.(request, 'rejected', rejectComment.trim() || undefined)}
-                                    className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50"
+                                    className="control-sm rounded-md border border-red-200 font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50"
                                   >
                                     Reject
                                   </button>
@@ -343,7 +343,7 @@ export default function MCPApprovalTable({
             type="button"
             onClick={() => onPageChange(Math.max(0, offset - limit))}
             disabled={!hasPrev}
-            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-white disabled:opacity-40"
+            className="control-sm rounded-lg border border-gray-200 font-medium text-gray-600 transition hover:bg-white disabled:opacity-40"
           >
             Previous
           </button>
@@ -351,7 +351,7 @@ export default function MCPApprovalTable({
             type="button"
             onClick={() => onPageChange(offset + limit)}
             disabled={!hasMore}
-            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-white disabled:opacity-40"
+            className="control-sm rounded-lg border border-gray-200 font-medium text-gray-600 transition hover:bg-white disabled:opacity-40"
           >
             Next
           </button>

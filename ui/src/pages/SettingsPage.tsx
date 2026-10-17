@@ -147,7 +147,7 @@ function FallbackEditor({ label, description, entries, onChange }: {
           <h4 className="text-sm font-medium text-gray-700">{label}</h4>
           {description && <p className="text-xs text-gray-400 mt-0.5">{description}</p>}
         </div>
-        <button onClick={() => onChange([...entries, { from: '', to: '' }])} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-brand-primary-ink transition-colors hover:bg-brand-primary-soft hover:text-brand-primary-ink-hover">
+        <button onClick={() => onChange([...entries, { from: '', to: '' }])} className="control-sm flex items-center gap-1.5 rounded-md font-medium text-brand-primary-ink transition-colors hover:bg-brand-primary-soft hover:text-brand-primary-ink-hover">
           <Plus className="w-3.5 h-3.5" /> Add rule
         </button>
       </div>
@@ -160,9 +160,9 @@ function FallbackEditor({ label, description, entries, onChange }: {
         <div className="space-y-2">
           {entries.map((entry, i) => (
             <div key={i} className="flex items-center gap-2 group">
-              <input value={entry.from} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], from: e.target.value }; onChange(u); }} placeholder="Source model group" className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary" />
+              <input value={entry.from} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], from: e.target.value }; onChange(u); }} placeholder="Source model group" className="control-field flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary" />
               <ChevronRight className="w-4 h-4 text-gray-300 shrink-0" />
-              <input value={entry.to} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], to: e.target.value }; onChange(u); }} placeholder="Fallback model group" className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary" />
+              <input value={entry.to} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], to: e.target.value }; onChange(u); }} placeholder="Fallback model group" className="control-field flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary" />
               <button
                 onClick={() => onChange(entries.filter((_, idx) => idx !== i))}
                 aria-label="Remove fallback rule"
@@ -288,7 +288,7 @@ export default function SettingsPage() {
     );
   }
 
-  const inputClass = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent transition-all';
+  const inputClass = 'control-field w-full px-3 border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent transition-all';
   const selectClass = inputClass;
   const themeSaving = theme.mutation === 'save';
   const headerSaving = activeTab === 'theme' ? themeSaving : savingSettings;

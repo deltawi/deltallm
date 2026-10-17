@@ -149,19 +149,19 @@ export default function RequestLogDrawer({ log, canOpenAudit, onClose, onFilterK
         </pre>
       </details>
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={copy} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50">
+        <button type="button" onClick={copy} className="control-sm rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50">
           {copied ? 'Copied' : 'Copy request ID'}
         </button>
         {canOpenAudit && (
           <Link
             to={`/audit?request_id=${encodeURIComponent(log.request_id)}`}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50"
+            className="control-sm rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50"
           >
             Open audit timeline
           </Link>
         )}
         {log.api_key && (
-          <button type="button" onClick={() => onFilterKey(log)} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50">
+          <button type="button" onClick={() => onFilterKey(log)} className="control-sm rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50">
             Show requests from this key
           </button>
         )}

@@ -152,7 +152,7 @@ function FormField({ label, children }: { label: string; children: ReactNode }) 
 }
 
 const inputCls =
-  'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30';
+  'control-field w-full rounded-lg border border-gray-200 px-3 text-gray-900 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30';
 const selectCls = inputCls;
 
 export default function MCPServerDetail() {
@@ -569,7 +569,7 @@ export default function MCPServerDetail() {
                     key={filterValue}
                     type="button"
                     onClick={() => setToolFilter(filterValue)}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    className={`control-sm rounded-lg border font-medium transition-colors ${
                       toolFilter === filterValue
                         ? 'border-brand-primary bg-brand-primary text-brand-on-primary shadow-sm'
                         : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
@@ -699,7 +699,7 @@ export default function MCPServerDetail() {
                     setEditingBindingId(null);
                     setShowBindingForm(true);
                   }}
-                  className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
+                  className="control-md flex items-center gap-1.5 rounded-lg bg-brand-primary font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   {showBindingForm && editingBindingId === null ? 'Close' : 'Add binding'}
@@ -761,14 +761,14 @@ export default function MCPServerDetail() {
                   </div>
                 ) : null}
                 <div className="flex justify-end gap-2">
-                  <button type="button" onClick={resetBindingForm} className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
+                  <button type="button" onClick={resetBindingForm} className="control-md rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
                     Cancel
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleSaveBinding()}
                     disabled={savingBinding || !bindingForm.scope_id.trim()}
-                    className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+                    className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
                   >
                     {savingBinding ? 'Saving…' : editingBindingId ? 'Save Changes' : 'Save Binding'}
                   </button>
@@ -861,7 +861,7 @@ export default function MCPServerDetail() {
                     setEditingPolicyId(null);
                     setShowPolicyForm(true);
                   }}
-                  className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
+                  className="control-md flex items-center gap-1.5 rounded-lg bg-brand-primary font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   {showPolicyForm && editingPolicyId === null ? 'Close' : 'Add policy'}
@@ -967,14 +967,14 @@ export default function MCPServerDetail() {
                   </div>
                 ) : null}
                 <div className="flex justify-end gap-2">
-                  <button type="button" onClick={resetPolicyForm} className="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
+                  <button type="button" onClick={resetPolicyForm} className="control-md rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
                     Cancel
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleSavePolicy()}
                     disabled={savingPolicy || !policyForm.tool_name.trim() || !policyForm.scope_id.trim()}
-                    className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+                    className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
                   >
                     {savingPolicy ? 'Saving…' : editingPolicyId ? 'Save Changes' : 'Save Policy'}
                   </button>
@@ -1159,7 +1159,7 @@ export default function MCPServerDetail() {
                     type="button"
                     onClick={() => void handleSave()}
                     disabled={saving}
-                    className="flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition hover:bg-brand-primary-hover disabled:opacity-50"
+                    className="control-md flex items-center gap-2 rounded-lg bg-brand-primary font-medium text-brand-on-primary transition hover:bg-brand-primary-hover disabled:opacity-50"
                   >
                     <Save className="h-4 w-4" />
                     {saving ? 'Saving…' : 'Save changes'}

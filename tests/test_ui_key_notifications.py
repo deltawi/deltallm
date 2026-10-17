@@ -132,6 +132,7 @@ class _FakeKeyNotificationDB:
                 rpd_limit,
                 tpd_limit,
                 expires,
+                *_period_and_metadata,
             ) = params
             del max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires
             self.keys[str(token_hash)] = {

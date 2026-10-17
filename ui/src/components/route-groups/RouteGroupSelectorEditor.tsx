@@ -37,7 +37,7 @@ function SelectorLookup({ scope, allowed, ...props }: Props & { scope: string; a
     <label className="block space-y-1 text-sm">
       <span>Find a selector deployment</span>
       <input type="search" maxLength={128} value={lookup.search} onChange={(event) => lookup.setSearch(event.target.value)}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2" placeholder="Search by name, provider or deployment ID" />
+        className="control-field-md w-full rounded-lg border border-slate-200 px-3" placeholder="Search by name, provider or deployment ID" />
     </label>
     {lookup.loading && <p role="status" className="text-xs text-slate-500">Loading selector deployments…</p>}
     {lookup.stale && <p className="text-xs text-slate-500">Showing the previous results while this search refreshes.</p>}

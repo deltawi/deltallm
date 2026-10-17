@@ -3,7 +3,7 @@ import Button from '../../Button';
 import type { SsoGroupMapping, SsoGroupTarget, SsoOrgRole, SsoTeamRole } from '../../../lib/api/ssoGroupSync';
 import { mappingKey, ORG_ROLE_OPTIONS, TARGET_STATUS_LABELS, TEAM_ROLE_OPTIONS, targetFor } from '../../../lib/ssoGroupSync';
 
-const SELECT_CLASS = 'w-full min-w-[7.5rem] rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary';
+const SELECT_CLASS = 'control-field-md w-full min-w-[7.5rem] rounded-lg border border-gray-200 bg-white px-2.5 focus:outline-none focus:ring-2 focus:ring-brand-primary';
 
 function TargetCell({ mapping, target }: { mapping: SsoGroupMapping; target: SsoGroupTarget | undefined }) {
   const isTeam = Boolean(mapping.team_id);

@@ -30,7 +30,7 @@ test('platform administrators see every section and Settings in the footer', () 
   assert.deepEqual(labels(visibleNavSections(access)), [
     ['', ['Dashboard', 'Playground']],
     ['Gateway', ['Models', 'Route groups', 'Provider credentials', 'Prompts', 'MCP', 'Guardrails']],
-    ['Access', ['API keys', 'Organizations', 'Teams', 'People', 'Tiers']],
+    ['Access', ['API keys', 'Coding agents', 'Organizations', 'Teams', 'People', 'Tiers']],
     ['Activity', ['Usage', 'Batch jobs', 'Audit logs']],
   ]);
   assert.deepEqual(visibleNavFooterItems(access).map((item) => item.label), ['Settings']);

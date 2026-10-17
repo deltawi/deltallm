@@ -542,13 +542,13 @@ export default function ApiKeys() {
             <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
               <button
                 onClick={() => { setViewTab('all'); setPageOffset(0); }}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'all' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+                className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'all' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
               >
                 <List className="w-3.5 h-3.5" /> All Keys
               </button>
               <button
                 onClick={() => { setViewTab('my'); setPageOffset(0); }}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'my' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+                className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'my' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
               >
                 <Key className="w-3.5 h-3.5" /> My Keys
               </button>
@@ -558,7 +558,7 @@ export default function ApiKeys() {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search keys..."
-            className="hidden md:block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary sm:w-72"
+            className="control-field-md hidden md:block w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary sm:w-72"
           />
         </div>
       )}

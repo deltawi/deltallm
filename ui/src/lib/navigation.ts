@@ -13,6 +13,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  SquareTerminal,
   Users,
   UsersRound,
   Workflow,
@@ -59,6 +60,7 @@ export const NAV_SECTIONS: NavSection[] = [
     label: 'Access',
     items: [
       { to: '/keys', icon: Key, label: 'API keys', pageKey: 'keys' },
+      { to: '/coding-agents', icon: SquareTerminal, label: 'Coding agents', pageKey: 'coding_agents' },
       { to: '/organizations', icon: Building2, label: 'Organizations', pageKey: 'organizations' },
       { to: '/teams', icon: UsersRound, label: 'Teams', pageKey: 'teams' },
       { to: '/users', icon: Users, label: 'People', pageKey: 'people_access' },

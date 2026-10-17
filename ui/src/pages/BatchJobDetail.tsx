@@ -405,7 +405,7 @@ export default function BatchJobDetail() {
               maxLength={500}
               onChange={(event) => setFailReason(event.target.value)}
               placeholder="Marked failed by operator"
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+              className="control-field rounded-lg border border-gray-200 px-3 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
             />
           </label>
         )}
@@ -440,7 +440,7 @@ export default function BatchJobDetail() {
             <button
               type="button"
               onClick={() => { void reloadResource().catch(() => undefined); }}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
+              className="control-md mt-4 inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white font-medium text-gray-900 hover:bg-gray-50"
             >
               <RefreshCw className="h-4 w-4" aria-hidden="true" /> Retry
             </button>
@@ -570,7 +570,7 @@ export default function BatchJobDetail() {
               maxLength={256}
               onChange={(event) => setCustomIdInput(event.target.value)}
               placeholder="Custom ID"
-              className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-2.5 text-[13px] text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+              className="control-field-md w-full rounded-lg border border-gray-200 bg-white pl-8 pr-2.5 text-[13px] text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
             />
           </label>
         </div>
@@ -605,7 +605,7 @@ export default function BatchJobDetail() {
                   type="button"
                   onClick={handleItemsPreviousPage}
                   disabled={itemsQuery.offset === 0 || loading}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                  className="control-sm rounded-lg border border-gray-200 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                 >
                   Previous
                 </button>
@@ -613,7 +613,7 @@ export default function BatchJobDetail() {
                   type="button"
                   onClick={handleItemsNextPage}
                   disabled={itemsPagination?.next_after_line_number == null || loading}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                  className="control-sm rounded-lg border border-gray-200 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                 >
                   Next
                 </button>

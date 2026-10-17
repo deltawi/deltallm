@@ -91,7 +91,7 @@ export default function BatchItemDrawer({ batchId, item, hasPrevious, hasNext, o
             type="button"
             onClick={() => onStep(-1)}
             disabled={!hasPrevious}
-            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+            className="control-sm inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50"
           >
             <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> Previous line
           </button>
@@ -99,7 +99,7 @@ export default function BatchItemDrawer({ batchId, item, hasPrevious, hasNext, o
             type="button"
             onClick={() => onStep(1)}
             disabled={!hasNext}
-            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+            className="control-sm inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50"
           >
             <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> Next line
           </button>

@@ -680,7 +680,7 @@ export default function TeamDetail() {
                       <input
                         value={form.team_alias}
                         onChange={(e) => setForm({ ...form, team_alias: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div>
@@ -689,7 +689,7 @@ export default function TeamDetail() {
                         type="number"
                         value={form.max_budget}
                         onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         placeholder="No limit"
                       />
                     </div>
@@ -700,7 +700,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.rpm_limit}
                           onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -710,7 +710,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.tpm_limit}
                           onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -722,7 +722,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.rph_limit}
                           onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -732,7 +732,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.rpd_limit}
                           onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -742,7 +742,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.tpd_limit}
                           onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -750,14 +750,14 @@ export default function TeamDetail() {
                     <div className="flex gap-2 pt-1">
                       <button
                         onClick={() => { outputMutation.cancel(); setSaving(false); setIsEditingSettings(false); setTeamError(null); }}
-                        className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        className="control-sm flex-1 text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={handleSaveSettings}
                         disabled={saving}
-                        className="flex-1 px-3 py-1.5 text-xs text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+                        className="control-sm flex-1 text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                       >
                         {saving ? 'Saving…' : 'Save'}
                       </button>
@@ -917,7 +917,7 @@ export default function TeamDetail() {
                             type="number"
                             value={policyForm.self_service_max_keys_per_user}
                             onChange={(e) => setPolicyForm({ ...policyForm, self_service_max_keys_per_user: e.target.value })}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                            className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             placeholder="Unlimited"
                             min="1"
                           />
@@ -928,7 +928,7 @@ export default function TeamDetail() {
                             type="number"
                             value={policyForm.self_service_budget_ceiling}
                             onChange={(e) => setPolicyForm({ ...policyForm, self_service_budget_ceiling: e.target.value })}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                            className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             placeholder="No ceiling"
                             min="0"
                             step="0.01"
@@ -952,7 +952,7 @@ export default function TeamDetail() {
                             type="number"
                             value={policyForm.self_service_max_expiry_days}
                             onChange={(e) => setPolicyForm({ ...policyForm, self_service_max_expiry_days: e.target.value })}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                            className="control-field-md w-full px-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             placeholder="No limit"
                             min="1"
                           />
@@ -962,14 +962,14 @@ export default function TeamDetail() {
                     <div className="flex gap-2 pt-1">
                       <button
                         onClick={() => { setIsEditingPolicy(false); setPolicyError(null); }}
-                        className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        className="control-sm flex-1 text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={handleSavePolicy}
                         disabled={policySaving}
-                        className="flex-1 px-3 py-1.5 text-xs text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+                        className="control-sm flex-1 text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                       >
                         {policySaving ? 'Saving…' : 'Save'}
                       </button>
@@ -1029,13 +1029,13 @@ export default function TeamDetail() {
                 <div className="flex items-center gap-2">
                   <Link
                     to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`}
-                    className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50"
+                    className="control-sm flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white font-medium text-indigo-700 transition-colors hover:bg-indigo-50"
                   >
                     Invite by Email
                   </Link>
                   <button
                     onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
+                    className="control-sm flex items-center gap-1.5 font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
                   >
                     <UserPlus className="w-3.5 h-3.5" /> Add Member
                   </button>
@@ -1185,7 +1185,7 @@ export default function TeamDetail() {
                     <button
                       onClick={handleSaveAssets}
                       disabled={saving || !form.organization_id || teamAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
-                      className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+                      className="control-md bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                     >
                       {saving ? 'Saving…' : 'Save Changes'}
                     </button>
@@ -1299,7 +1299,7 @@ export default function TeamDetail() {
               {!isEditingAssets && canManageAssets && (
                 <button
                   onClick={openEditAssets}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
+                  className="control-md w-full flex items-center justify-center gap-1.5 font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
                 >
                   <Pencil className="w-3.5 h-3.5" /> Edit Asset Selection
                 </button>
@@ -1339,7 +1339,7 @@ export default function TeamDetail() {
             <select
               value={memberForm.user_role}
               onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white"
             >
               <option value="team_viewer">Viewer</option>
               <option value="team_developer">Developer</option>
@@ -1352,7 +1352,7 @@ export default function TeamDetail() {
             <button
               onClick={handleAddMember}
               disabled={saving || !memberForm.user_id.trim()}
-              className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+              className="control-md bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
             >
               Add Member
             </button>

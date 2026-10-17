@@ -375,6 +375,16 @@ export interface ApiKey {
   /** Null when no use is recorded. Batched by the gateway, so about one minute coarse. */
   last_used_at?: string | null;
   model_output_tpm_limit?: Record<string, number> | null;
+  /** Budget period such as "1d"; the spend resets at budget_reset_at. */
+  budget_duration?: string | null;
+  budget_reset_at?: string | null;
+  coding_agent?: CodingAgentTag | null;
+}
+
+export interface CodingAgentTag {
+  agent: 'claude-code' | 'codex' | 'opencode' | 'other';
+  main_model?: string | null;
+  small_model?: string | null;
 }
 
 export interface CallableTargetListItem {
@@ -932,8 +942,10 @@ export const mcpServers = {
 };
 
 export const keys = {
-  list: (params?: { search?: string; team_id?: string; my_keys?: boolean; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params)),
+  list: (
+    params?: { search?: string; team_id?: string; my_keys?: boolean; coding_agent?: boolean; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ) => apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params), { signal }),
   create: (payload: object, signal?: AbortSignal) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload, signal }),
   update: (tokenHash: string, payload: object, signal?: AbortSignal) =>
     apiFetch<ApiKey>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'PUT', json: payload, signal }),

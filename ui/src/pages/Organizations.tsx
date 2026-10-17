@@ -461,7 +461,7 @@ export default function Organizations() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search organizations…"
-              className="h-8 w-full rounded-lg border border-gray-300 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full rounded-lg border border-gray-300 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div className="ml-auto flex gap-1.5">
@@ -642,19 +642,19 @@ export default function Organizations() {
               <button
                 onClick={() => setPageOffset(Math.max(0, pageOffset - pageSize))}
                 disabled={!hasPrev || statusTab !== 'All'}
-                className="px-3 py-1 text-xs text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="control-sm text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Previous
               </button>
               {totalPages > 0 && (
-                <button className="px-3 py-1 text-xs text-brand-primary-ink border border-blue-200 bg-blue-50 rounded-md font-medium">
+                <button className="control-sm text-brand-primary-ink border border-blue-200 bg-blue-50 rounded-md font-medium">
                   {currentPage}
                 </button>
               )}
               <button
                 onClick={() => setPageOffset(pageOffset + pageSize)}
                 disabled={!hasNext || statusTab !== 'All'}
-                className="px-3 py-1 text-xs text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="control-sm text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Next
               </button>
@@ -693,7 +693,7 @@ export default function Organizations() {
               value={form.organization_name}
               onChange={(e) => setForm({ ...form, organization_name: e.target.value })}
               placeholder="Acme Corp"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div>
@@ -703,7 +703,7 @@ export default function Organizations() {
               value={form.max_budget}
               onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
               placeholder="1000"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div>
@@ -713,7 +713,7 @@ export default function Organizations() {
               value={form.soft_budget}
               onChange={(e) => setForm({ ...form, soft_budget: e.target.value })}
               placeholder="800"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
             <p className="text-xs text-gray-400 mt-1">Notification threshold. Must be less than or equal to max budget.</p>
           </div>
@@ -736,7 +736,7 @@ export default function Organizations() {
                   type="datetime-local"
                   value={form.budget_reset_at}
                   onChange={(e) => setForm({ ...form, budget_reset_at: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                  className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
             )}
@@ -754,7 +754,7 @@ export default function Organizations() {
                 value={form.rpm_limit}
                 onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
                 placeholder="100"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Requests per minute</p>
             </div>
@@ -765,7 +765,7 @@ export default function Organizations() {
                 value={form.tpm_limit}
                 onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
                 placeholder="100000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per minute</p>
             </div>
@@ -777,7 +777,7 @@ export default function Organizations() {
                 value={form.rph_limit}
                 onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
                 placeholder="5000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Requests per hour</p>
             </div>
@@ -788,7 +788,7 @@ export default function Organizations() {
                 value={form.rpd_limit}
                 onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
                 placeholder="50000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Requests per day</p>
             </div>
@@ -799,7 +799,7 @@ export default function Organizations() {
                 value={form.tpd_limit}
                 onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
                 placeholder="2000000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per day</p>
             </div>
@@ -918,7 +918,7 @@ export default function Organizations() {
             <button
               onClick={handleSave}
               disabled={saving || editAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
-              className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
+              className="control-md bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving…' : editItem ? 'Save Changes' : 'Create'}
             </button>
