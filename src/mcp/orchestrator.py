@@ -186,14 +186,21 @@ class MCPChatOrchestrator:
                 and (
                     definition.allowed_tools is None
                     or tool.original_name in set(definition.allowed_tools)
+                    # Across all servers, a namespaced name selects one server's tool.
+                    or (
+                        definition.server == ALL_SERVERS
+                        and tool.namespaced_name in set(definition.allowed_tools)
+                    )
                 )
             ]
             if not matched:
                 raise InvalidRequestError(
                     message=f"No visible MCP tools are available for server '{definition.server}'"
                 )
+            kept = 0
             for tool in matched:
                 if tool.namespaced_name in exposed:
+                    kept += 1
                     continue
                 if tool.namespaced_name not in resolved_tools:
                     requires_manual_approval = False
@@ -223,12 +230,21 @@ class MCPChatOrchestrator:
                         scope_id=getattr(tool, "scope_id", None),
                     )
                 resolved = resolved_tools[tool.namespaced_name]
+                kept += 1
                 if definition.tool_search:
                     searchable[resolved.namespaced_name] = resolved
                     continue
                 exposed.add(resolved.namespaced_name)
                 searchable.pop(resolved.namespaced_name, None)
                 translated.append(_function_tool(resolved))
+            if not kept and definition.tool_search:
+                # Do not run the request without the tools that the caller asked for.
+                raise InvalidRequestError(
+                    message=(
+                        f"All MCP tools for server '{definition.server}' require manual approval. "
+                        "Use the /mcp tools/call flow and retry after approval."
+                    )
+                )
 
         search = None
         if searchable:
@@ -305,8 +321,14 @@ class MCPChatOrchestrator:
         tool_messages: list[ToolChatMessage] = []
         mcp_calls: list[dict[str, Any]] = []
         loaded: list[ResolvedMCPTool] = []
+        declared = {
+            tool.function.get("name")
+            for tool in current_payload.tools or []
+            if isinstance(tool, FunctionToolDefinition)
+        }
+        free_slots = [MAX_LOADED_TOOLS - len(declared & tool_set.searchable)]
         # Keep the provider order of tool results; search calls run in place.
-        for tool_call in tool_calls:
+        for position, tool_call in enumerate(tool_calls):
             search = tool_set.search
             if search is not None and self._tool_name_from_call(tool_call) == SEARCH_TOOL_NAME:
                 if mcp_calls:
@@ -320,7 +342,14 @@ class MCPChatOrchestrator:
                         )
                     )
                     mcp_calls = []
-                message, found = self._run_tool_search(search, tool_set, tool_call)
+                message, found = self._run_tool_search(
+                    search,
+                    tool_set,
+                    tool_call,
+                    declared=declared,
+                    free_slots=free_slots,
+                    position=position,
+                )
                 tool_messages.append(message)
                 loaded.extend(found)
             else:
@@ -343,16 +372,35 @@ class MCPChatOrchestrator:
         return current_payload.model_copy(update=update)
 
     def _run_tool_search(
-        self, search: ToolSearchIndex, tool_set: MCPToolSet, tool_call: dict[str, Any]
+        self,
+        search: ToolSearchIndex,
+        tool_set: MCPToolSet,
+        tool_call: dict[str, Any],
+        *,
+        declared: set[str],
+        free_slots: list[int],
+        position: int,
     ) -> tuple[ToolChatMessage, list[ResolvedMCPTool]]:
         arguments = self._arguments_from_tool_call(tool_call)
         query = arguments.get("query")
         limit = arguments.get("limit", DEFAULT_SEARCH_LIMIT)
         if not isinstance(query, str):
             query = ""
+        if isinstance(limit, float) and limit.is_integer():
+            limit = int(limit)
         if not isinstance(limit, int) or isinstance(limit, bool):
             limit = DEFAULT_SEARCH_LIMIT
-        hits = search.search(query, limit=limit)
+        hits = []
+        found: list[ResolvedMCPTool] = []
+        for hit in search.search(query, limit=limit):
+            if hit.name not in declared:
+                # Only list tools that the next request really declares.
+                if free_slots[0] <= 0:
+                    continue
+                free_slots[0] -= 1
+                declared.add(hit.name)
+                found.append(tool_set.resolved[hit.name])
+            hits.append(hit)
         record_mcp_tool_search(result_count=len(hits))
         content = json.dumps(
             {
@@ -366,9 +414,9 @@ class MCPChatOrchestrator:
         message = ToolChatMessage(
             role="tool",
             content=content,
-            tool_call_id=str(tool_call.get("id") or SEARCH_TOOL_NAME),
+            tool_call_id=str(tool_call.get("id") or f"{SEARCH_TOOL_NAME}_{position}"),
         )
-        return message, [tool_set.resolved[hit.name] for hit in hits]
+        return message, found
 
     def gateway_owns_tool_calls(
         self,

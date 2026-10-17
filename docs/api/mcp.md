@@ -226,7 +226,14 @@ Rules:
 
 - The search uses only tools that the caller can already see. A search does not give access to a tool.
 - Tools that require manual approval are not in the search results. Call them through `/mcp`.
-- Searches can add a maximum of 32 tools to one request.
+  If all tools of a search entry require manual approval, DeltaLLM rejects the request with HTTP 400.
+- Searches can add a maximum of 32 tools to one request. When this limit is reached, a search lists
+  only the tools that are already in the request.
+- With `"server": "*"`, `allowed_tools` can also contain namespaced names, for example
+  `"github.create_issue"`, to select the tool of one server.
+- If the model calls `mcp_tool_search` together with one of your own function tools in one turn,
+  DeltaLLM returns all the tool calls to the client. Do not use your own function tools with tool
+  search if your client cannot ignore an `mcp_tool_search` call.
 - Each search is one model call, so it counts against the tool hop limit.
 - The search is a word match (BM25). It runs in the gateway process and adds no network calls.
 - You can use a normal entry and a search entry together, for example

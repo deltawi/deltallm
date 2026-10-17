@@ -201,3 +201,96 @@ async def test_direct_tools_stay_and_search_covers_the_rest(client, test_app) ->
         "docs.search",
         SEARCH_TOOL_NAME,
     ]
+
+
+@pytest.mark.app
+async def test_tool_search_lists_only_tools_within_the_load_budget(
+    client, test_app, monkeypatch
+) -> None:
+    from src.mcp import orchestrator
+
+    monkeypatch.setattr(orchestrator, "MAX_LOADED_TOOLS", 1)
+    test_app.state.mcp_gateway_service = _CatalogGateway()
+    test_app.state.audit_service = _RecordingAuditService()
+    upstream: list[dict[str, Any]] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN202
+        del url, headers, timeout
+        upstream.append(json)
+        if len(upstream) == 1:
+            return httpx.Response(
+                200, json=_tool_call(SEARCH_TOOL_NAME, {"query": "github", "limit": 5.0}, "")
+            )
+        return httpx.Response(200, json=_answer())
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "mcp", "server": "*", "tool_search": True}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    search_message = upstream[1]["messages"][-1]
+    listed = [tool["name"] for tool in json.loads(search_message["content"])["tools"]]
+    declared = [tool["function"]["name"] for tool in upstream[1]["tools"]]
+    assert len(listed) == 1
+    assert declared == [SEARCH_TOOL_NAME, *listed]
+    assert search_message["tool_call_id"] == f"{SEARCH_TOOL_NAME}_0"
+
+
+@pytest.mark.app
+async def test_tool_search_rejects_a_server_whose_tools_all_need_approval(client, test_app) -> None:
+    test_app.state.mcp_gateway_service = _CatalogGateway(manual={"docs.search"})
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "mcp", "server": "docs", "tool_search": True}],
+        },
+    )
+    assert response.status_code == 400
+    assert "manual approval" in response.json()["error"]["message"]
+
+
+@pytest.mark.app
+async def test_all_servers_allowed_tools_accepts_namespaced_names(client, test_app) -> None:
+    test_app.state.mcp_gateway_service = _CatalogGateway()
+    upstream: list[dict[str, Any]] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN202
+        del url, headers, timeout
+        upstream.append(json)
+        return (
+            httpx.Response(200, json=_tool_call(SEARCH_TOOL_NAME, {"query": "search create"}, "s1"))
+            if len(upstream) == 1
+            else httpx.Response(200, json=_answer())
+        )
+
+    test_app.state.http_client.post = post
+    test_app.state.audit_service = _RecordingAuditService()
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "*",
+                    "tool_search": True,
+                    "allowed_tools": ["docs.search"],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    listed = json.loads(upstream[1]["messages"][-1]["content"])["tools"]
+    assert [tool["name"] for tool in listed] == ["docs.search"]
