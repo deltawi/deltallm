@@ -16,12 +16,18 @@ export interface GuidedSelector {
   defaultLane: string;
   timeoutMs: string;
   maxInputChars: string;
+  /** Keep a conversation on one lane and deployment; on unless the policy says otherwise. */
+  sessionEnabled: boolean;
+  sessionTtlSeconds: string;
 }
+
+const DEFAULT_SESSION_TTL_SECONDS = '3600';
 
 export function selectorDefaults(): GuidedSelector {
   return {
     state: 'disabled', classifier: '', defaultLane: 'quality',
     timeoutMs: '750', maxInputChars: '8000', assignments: {},
+    sessionEnabled: true, sessionTtlSeconds: DEFAULT_SESSION_TTL_SECONDS,
     lanes: [
       { id: 'economy', rank: '0', description: 'Routine extraction, formatting, classification and simple questions' },
       { id: 'quality', rank: '1', description: 'Complex reasoning, ambiguity, advanced tools and difficult requests' },
@@ -51,10 +57,13 @@ export function readGuidedSelector(policy: Record<string, unknown>): GuidedSelec
     id: String(lane.id), rank: String(lane.rank), description: String(lane.description),
   }));
   const highest = [...lanes].sort((a, b) => Number(b.rank) - Number(a.rank))[0];
+  const session = record(raw.session) ? raw.session : {};
   return {
     state: 'enabled', lanes,
     classifier: typeof raw.classifier_deployment_id === 'string' ? raw.classifier_deployment_id : '',
     timeoutMs: String(raw.timeout_ms ?? 750), maxInputChars: String(raw.max_input_chars ?? 8000),
+    sessionEnabled: session.enabled !== false,
+    sessionTtlSeconds: String(session.ttl_seconds ?? DEFAULT_SESSION_TTL_SECONDS),
     defaultLane: typeof raw.default_lane === 'string' ? raw.default_lane : highest?.id ?? '',
     assignments: Object.fromEntries((Array.isArray(policy.members) ? policy.members : [])
       .filter((entry): entry is Record<string, unknown> => record(entry)
@@ -135,6 +144,7 @@ export function validateGuidedSelector(
   if (!laneIds.includes(selector.defaultLane)) return 'Choose a configured safe-default lane.';
   if (!integerInRange(selector.timeoutMs, 100, 5000)) return 'Selector timeout must be 100–5000 ms.';
   if (!integerInRange(selector.maxInputChars, 256, 32768)) return 'Selector input limit must be 256–32768 characters.';
+  if (!integerInRange(selector.sessionTtlSeconds, 60, 86400)) return 'Session memory must be 60–86400 seconds.';
   if (ids.some((id) => !laneIds.includes(selector.assignments[id]))) return 'Assign every selected deployment to a configured lane.';
   if (laneIds.some((lane) => !ids.some((id) => selector.assignments[id] === lane))) return 'Each lane needs at least one selected deployment.';
   return null;
@@ -156,8 +166,16 @@ export function applyGuidedSelector(
     });
     return next;
   }
+  const baseSelector: Record<string, unknown> = record(base.selector) ? { ...base.selector } : {};
+  // Omit default session settings so older gateways keep accepting the policy.
+  const writeSession = !selector.sessionEnabled
+    || selector.sessionTtlSeconds !== DEFAULT_SESSION_TTL_SECONDS || record(baseSelector.session);
+  delete baseSelector.session;
   next.selector = {
-    ...(record(base.selector) ? base.selector : {}),
+    ...baseSelector,
+    ...(writeSession ? {
+      session: { enabled: selector.sessionEnabled, ttl_seconds: Number(selector.sessionTtlSeconds) },
+    } : {}),
     kind: 'llm-tier', classifier_deployment_id: selector.classifier,
     timeout_ms: Number(selector.timeoutMs), max_input_chars: Number(selector.maxInputChars),
     default_lane: selector.defaultLane,

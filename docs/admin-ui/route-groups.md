@@ -215,6 +215,8 @@ You can also edit or paste a policy and select **Apply** to load it into the for
    the number of extra attempts, and the error types that cause a retry.
 4. **Context-aware routing**: see [Route by context size](#route-by-context-size).
 5. **Model selector**: see [Model-router Policies](#model-router-policies). Chat groups only.
+   **Keep each conversation on one model** sends follow-up requests in a conversation
+   to the same model, so its prompt cache keeps working. It is on by default.
 
 The **Draft check** panel updates as you edit.
 It shows the live and draft traffic shares, unhealthy or missing models, and errors that stop a publish.

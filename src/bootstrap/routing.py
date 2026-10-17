@@ -33,6 +33,10 @@ from src.router import (
     build_deployment_registry,
     build_route_group_policies,
 )
+from src.router.selector_session_store import (
+    MemorySelectorSessionStore,
+    RedisSelectorSessionStore,
+)
 from src.services.access.callable_targets import build_callable_target_catalog
 from src.services.models.model_deployments import (
     bootstrap_model_deployments_from_config,
@@ -51,6 +55,7 @@ logger = logging.getLogger(__name__)
 class RoutingRuntime:
     health_checker: BackgroundHealthChecker
     health_task: Task[None] | None = None
+    selector_sessions: RedisSelectorSessionStore | MemorySelectorSessionStore | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -164,6 +169,16 @@ async def init_routing_runtime(
         deployment_registry=deployment_registry,
     )
     app.state.router_state_backend = state_backend
+    session_redis = getattr(app.state, "cache_redis", None)
+    selector_sessions: RedisSelectorSessionStore | MemorySelectorSessionStore = (
+        RedisSelectorSessionStore(
+            session_redis,
+            keyspace=RouterRedisKeyspace(environment=getattr(settings, "app_env", "dev")),
+        )
+        if session_redis is not None
+        else MemorySelectorSessionStore()
+    )
+    app.state.selector_session_store = selector_sessions
     app.state.cooldown_manager = CooldownManager(
         state_backend=state_backend,
         cooldown_time=cfg.router_settings.cooldown_time,
@@ -274,6 +289,7 @@ async def init_routing_runtime(
     return RoutingRuntime(
         health_checker=health_checker,
         health_task=health_task,
+        selector_sessions=selector_sessions,
         statuses=(
             BootstrapStatus(
                 "routing",
@@ -289,6 +305,8 @@ async def init_routing_runtime(
 
 async def shutdown_routing_runtime(runtime: RoutingRuntime) -> None:
     runtime.health_checker.stop()
+    if runtime.selector_sessions is not None:
+        await runtime.selector_sessions.close()
     if runtime.health_task is not None:
         await stop_tasks_before_deadline(
             [runtime.health_task], deadline=cleanup_deadline(5), cancel_first=True

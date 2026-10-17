@@ -35,6 +35,15 @@ class SelectorCause(StrEnum):
     CAPACITY_DENIED = "capacity_denied"
     CAPACITY_UNAVAILABLE = "capacity_unavailable"
     POLICY_DENIED = "policy_denied"
+    # Session affinity: reused the session lane without a classifier call, or kept
+    # the session lane because the classifier chose a lower one.
+    SESSION_PINNED = "session_pinned"
+    SESSION_FLOOR = "session_floor"
+
+
+_CHOSEN_LANE_CAUSES = frozenset(
+    {SelectorCause.CLASSIFIED, SelectorCause.SESSION_PINNED, SelectorCause.SESSION_FLOOR}
+)
 
 
 class SelectorPolicyIdentity(FrozenContract):
@@ -116,7 +125,7 @@ class SelectorHopFailure(FrozenContract):
 
     @model_validator(mode="after")
     def reject_success_cause(self) -> SelectorHopFailure:
-        if self.cause is SelectorCause.CLASSIFIED:
+        if self.cause in _CHOSEN_LANE_CAUSES:
             raise ValueError("a failed selector hop cannot be classified")
         return self
 
@@ -134,7 +143,7 @@ class SelectorDecision(FrozenContract):
 
     @property
     def used_default(self) -> bool:
-        return self.cause is not SelectorCause.CLASSIFIED
+        return self.cause not in _CHOSEN_LANE_CAUSES
 
 
 class SelectorModelHop(Protocol):

@@ -1,6 +1,7 @@
 import { useId, type ReactNode } from 'react';
 import type { SelectorDeploymentOption } from '../../lib/api/routeGroups';
 import Button from '../Button';
+import ToggleSwitch from '../ToggleSwitch';
 import type { PolicyGuidedValues, PolicyMemberOption } from '../../lib/routeGroups';
 import { chooseSelector, eligibleClassifiers, validateGuidedSelector, type GuidedSelector } from '../../lib/routeGroupSelector';
 
@@ -19,6 +20,7 @@ interface Props {
 
 export default function PolicySelectorEditor({ values, onChange, members, workloadMode, selectorOptions = [], lookupControls, bare = false }: Props) {
   const errorId = useId();
+  const sessionLabelId = useId();
   const selector = values.selector;
   const enabled = selector.state === 'enabled';
   const available = eligibleClassifiers(selectorOptions);
@@ -63,6 +65,7 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
             {classifier?.provider ? ` (${classifier.provider})` : ''}. This adds one provider call and latency;
             customers pay its actual cost, including when the answer fails. Check that this provider is allowed to receive the request data.
             Publishing makes it active immediately. Cached answers skip selection.
+            {selector.sessionEnabled ? ' In a conversation, follow-up requests reuse the chosen lane without this call.' : ''}
           </div>
           <p className="text-xs text-slate-500">Assign the answering members below to lanes. Choosing a selector does not add it as an answer member. Higher ranks mean more capability; routing can move up, never down. Context checks require known model capacities.</p>
           {values.memberIds.includes(selector.classifier) && <p className="text-xs text-slate-500">This deployment is also explicitly listed as an answer member; its answer role follows the membership and lane settings below.</p>}
@@ -75,6 +78,17 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
                 {selector.lanes.map((lane, index) => <option key={index} value={lane.id}>{lane.id || 'Unnamed lane'} (rank {lane.rank})</option>)}
               </select>
             </label>)}
+          </div>
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 p-3">
+            <div className="min-w-0">
+              <p id={sessionLabelId} className="text-sm font-medium text-slate-900">Keep each conversation on one model</p>
+              <p className="text-xs leading-5 text-slate-500">
+                Follow-up requests in a session go to the same model, so its prompt cache keeps working.
+                The selector runs again only when the user writes a new message, and a conversation can move up a lane, never down.
+              </p>
+            </div>
+            <ToggleSwitch checked={selector.sessionEnabled} activeColor="rgb(var(--brand-primary))" aria-label="Keep each conversation on one model"
+              onCheckedChange={(checked) => update({ sessionEnabled: checked })} />
           </div>
           <details className="rounded-lg border border-slate-200 p-3">
             <summary className="cursor-pointer text-sm font-medium">Advanced selector settings</summary>
@@ -91,6 +105,12 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
                 </label>
                 <label className="space-y-1"><span className="text-xs font-medium">Input limit (characters)</span>
                   <input className={inputClass} type="number" min={256} max={32768} step={1} value={selector.maxInputChars} onChange={(event) => update({ maxInputChars: event.target.value })} />
+                </label>
+                <label className="space-y-1"><span className="text-xs font-medium">Session memory (seconds)</span>
+                  <input className={inputClass} type="number" min={60} max={86400} step={1} value={selector.sessionTtlSeconds}
+                    disabled={!selector.sessionEnabled} aria-describedby={sessionLabelId}
+                    onChange={(event) => update({ sessionTtlSeconds: event.target.value })} />
+                  <span className="block text-xs text-slate-500">A session is forgotten after this long without a request.</span>
                 </label>
               </div>
               {selector.lanes.map((lane, index) => <fieldset key={index} className="space-y-2 rounded-lg border border-slate-200 p-3">

@@ -203,6 +203,7 @@ nav:
           - Request deadlines: deployment/request-deadlines.md
           - Provider connection tuning: deployment/upstream-http.md
           - Provider connection pool design: design/upstream-http-pool.md
+          - Selector session affinity design: design/selector-session-affinity.md
           - Upgrade and rollback behavior: deployment/upgrade-and-rollback.md
           - Release-specific rollouts: deployment/rollout-index.md
           - Governance migration: deployment/governance.md

@@ -31,6 +31,14 @@ from src.router.selection.contracts import SelectorInvariantError
 from src.router.selection.request_state import SelectorState
 from src.router.static_filters import required_request_tags, tags_allow_deployment
 from src.router.selection.answer_observation import SelectorAnswerObservation
+from src.router.selection.session import (
+    SelectorSession,
+    SelectorSessionLookup,
+    SelectorSessionPin,
+    pinned_decision,
+    set_preferred_deployment,
+)
+from src.metrics.selector import observe_selector_decision, observe_selector_session
 
 _OPERATION_KEY = "_deltallm_selector_operation"
 
@@ -71,6 +79,7 @@ class SelectorOperation:
         context: dict[str, object],
         planner: RouteCandidatePlanner,
         checkpoint: SelectorDecisionCheckpoint | None = None,
+        session: SelectorSession | None = None,
     ) -> None:
         self.state, self._selectors, self._factory = state, selectors, factory
         self._principal, self._id, self._model = principal, operation_id, model
@@ -80,7 +89,10 @@ class SelectorOperation:
         self._context = context
         self._planner = planner
         self._checkpoint = checkpoint
-        self.answer_observation = SelectorAnswerObservation(selectors)
+        self._session = session
+        self.answer_observation = SelectorAnswerObservation(
+            selectors, remember=session.remember if session is not None else None
+        )
         self._prepared_groups: set[str] = set()
         self.refresh_payload(payload, token_estimate)
 
@@ -120,6 +132,43 @@ class SelectorOperation:
             # Hard-rejected groups do not justify a paid classification. Execution
             # may proceed to a configured, eligible context fallback instead.
             return
+        pin = await self._session_pin(model_group, qualified)
+        if pin is not None and self._session is not None:
+            set_preferred_deployment(self._context, pin.deployment_id)
+            if self._session.reuses(pin, qualified.routing.policy):
+                observe_selector_session(SelectorSessionLookup.REUSED)
+                self._decided(pinned_decision(pin, qualified.routing.policy, qualified.identity))
+                return
+            observe_selector_session(SelectorSessionLookup.RECLASSIFIED)
+        await self._classify(model_group, qualified, floor_rank=pin.rank if pin else None)
+
+    async def _session_pin(
+        self, model_group: str, qualified: QualifiedSelector
+    ) -> SelectorSessionPin | None:
+        if self._session is None:
+            return None
+        policy = qualified.routing.policy
+        if not policy.effective_session.enabled:
+            observe_selector_session(SelectorSessionLookup.DISABLED)
+            return None
+        pin = await self.deadline.wait_for(
+            self._session.lookup(model_group, policy, qualified.identity)
+        )
+        if pin is None:
+            observe_selector_session(SelectorSessionLookup.MISS)
+        return pin
+
+    def _decided(self, decision: SelectorDecision) -> None:
+        # A reused session lane makes no classifier call, so it has no selector
+        # charge, admission or billing operation.
+        self.state.restore(decision)
+        observe_selector_decision(decision)
+        self.answer_observation.decision = decision
+        self._observe(decision)
+
+    async def _classify(
+        self, model_group: str, qualified: QualifiedSelector, *, floor_rank: int | None
+    ) -> None:
         operation = SoftSelectorOperation(
             attribution=SelectorChargeAttribution(
                 operation_id=self._id,
@@ -158,6 +207,7 @@ class SelectorOperation:
                 token_estimate=self._tokens,
                 policy=qualified.routing.policy,
                 identity=qualified.identity,
+                floor_rank=floor_rank,
             )
         )
         if self._checkpoint is not None:

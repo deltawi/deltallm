@@ -10,6 +10,9 @@ export default function PolicySelectorSummary({ policy, label = 'Selector' }: {
   return <div className="space-y-1 text-xs text-slate-600">
     <p className="break-all"><span className="font-medium">{label}:</span> {selector.classifier} · safe default: {selector.defaultLane}</p>
     <p>{selector.timeoutMs} ms timeout · {selector.maxInputChars} input characters · one paid call per uncached request</p>
+    <p>{selector.sessionEnabled
+      ? `Sessions: kept on one model for ${selector.sessionTtlSeconds} s without a request · selector runs on new user messages only`
+      : 'Sessions: off · selector runs on every uncached request'}</p>
     <ul className="list-inside list-disc">
       {[...selector.lanes].sort((a, b) => Number(a.rank) - Number(b.rank)).map((lane) => <li key={lane.id} className="break-all">
         {lane.id} (rank {lane.rank}): {Object.entries(selector.assignments).filter(([, assigned]) => assigned === lane.id).map(([id]) => id).join(', ') || 'No assignments'}

@@ -155,3 +155,24 @@ test('unsupported modes and removed answer members fail locally before publicati
   assert.match(validateGuidedPolicy(enabled(), members, 'embedding')!, /chat groups/);
   assert.match(validateGuidedPolicy(enabled(), members.slice(1), 'chat')!, /disabled or no longer available/);
 });
+
+test('session affinity stays omitted by default and round-trips when changed', () => {
+  const guided = enabled();
+  assert.equal(guided.selector.sessionEnabled, true);
+  assert.equal(guided.selector.sessionTtlSeconds, '3600');
+  assert.equal('session' in (buildPolicyFromGuided({}, guided).selector as Record<string, unknown>), false);
+  guided.selector.sessionEnabled = false;
+  guided.selector.sessionTtlSeconds = '600';
+  const policy = buildPolicyFromGuided({}, guided);
+  assert.deepEqual((policy.selector as Record<string, unknown>).session, { enabled: false, ttl_seconds: 600 });
+  const restored = toGuidedPolicy(policy, members);
+  assert.equal(restored.selector.sessionEnabled, false);
+  assert.equal(restored.selector.sessionTtlSeconds, '600');
+  // An explicit stored block is kept even after it is reset to the default values.
+  restored.selector.sessionEnabled = true;
+  restored.selector.sessionTtlSeconds = '3600';
+  assert.deepEqual((buildPolicyFromGuided(policy, restored).selector as Record<string, unknown>).session,
+    { enabled: true, ttl_seconds: 3600 });
+  restored.selector.sessionTtlSeconds = '30';
+  assert.match(validateGuidedPolicy(restored, members, 'chat')!, /Session memory/);
+});
