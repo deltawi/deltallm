@@ -32,6 +32,7 @@ import { sessionPrincipal } from './lib/authTypes';
 import { loginPathFor, returnToFromSearch, safeReturnTo } from './lib/authRedirect';
 
 const ApiKeys = lazy(() => import('./pages/ApiKeys'));
+const CodingAgents = lazy(() => import('./pages/CodingAgents'));
 const UsersPage = lazy(() => import('./pages/UsersPage'));
 const Playground = lazy(() => import('./pages/Playground'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
@@ -227,6 +228,7 @@ function AppRoutes() {
           <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServerDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/mcp-approvals" element={uiAccess.mcp_servers ? <MCPApprovalsRedirect /> : <Navigate to="/" replace />} />
           <Route path="/keys" element={uiAccess.keys ? <ChunkedRoute><ApiKeys /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/coding-agents" element={uiAccess.coding_agents ? <ChunkedRoute><CodingAgents /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/organizations" element={uiAccess.organizations ? <ChunkedRoute><Organizations /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/organizations/new" element={uiAccess.organization_create ? <ChunkedRoute><OrganizationCreate /></ChunkedRoute> : <Navigate to="/organizations" replace />} />
           <Route path="/organizations/:orgId" element={uiAccess.organizations ? <ChunkedRoute><OrganizationDetail /></ChunkedRoute> : <Navigate to="/" replace />} />

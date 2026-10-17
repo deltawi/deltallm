@@ -20,6 +20,13 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.api.admin.accounting_budget import apply_accounting_balances
+from src.api.admin.key_coding_agent import (
+    coding_agent_json,
+    coding_agent_metadata_json,
+    first_budget_reset_at,
+    normalize_coding_agent,
+    normalize_key_budget_duration,
+)
 from src.billing.accounting.accounting_protocol import AccountingScope
 from src.api.admin.key_removal import (
     remove_key_with_required_audit as _remove_key_with_required_audit,
@@ -439,6 +446,7 @@ async def _validate_owner_references(
     owner_account_id: str | None,
     owner_service_account_id: str | None,
     require_owner: bool,
+    existing_owner_account_id: str | None = None,
 ) -> tuple[str | None, str | None]:
     if owner_account_id and owner_service_account_id:
         raise HTTPException(
@@ -456,11 +464,28 @@ async def _validate_owner_references(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="owner_account_id not found"
             )
-        if ctx is not None and str(ctx.account_id) != owner_account_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="owner_account_id must match the current account",
+        if (
+            ctx is not None
+            and str(ctx.account_id) != owner_account_id
+            and owner_account_id != existing_owner_account_id
+        ):
+            # Key admins can issue a key to a team member, for example a
+            # coding-agent key for one developer.
+            member_rows = await db.query_raw(
+                """
+                SELECT account_id
+                FROM deltallm_teammembership
+                WHERE account_id = $1 AND team_id = $2
+                LIMIT 1
+                """,
+                owner_account_id,
+                team_id,
             )
+            if not member_rows:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="owner_account_id must be the current account or a member of the team",
+                )
         return owner_account_id, None
 
     if owner_service_account_id:
@@ -515,14 +540,20 @@ async def _insert_key_row(
     rpd_limit: Any,
     tpd_limit: Any,
     expires: str | None,
+    budget_duration: str | None = None,
+    coding_agent: dict[str, str | None] | None = None,
 ) -> None:
     await db.execute_raw(
         """
         INSERT INTO deltallm_verificationtoken (
             id, token, key_name, user_id, team_id, owner_account_id, owner_service_account_id,
-            spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
+            spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires,
+            budget_duration, budget_reset_at, metadata, created_at, updated_at
         )
-        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13::timestamp, NOW(), NOW())
+        VALUES (
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13::timestamp,
+            $14, $15::timestamp, $16::jsonb, NOW(), NOW()
+        )
         """,
         token_hash,
         key_name,
@@ -537,6 +568,9 @@ async def _insert_key_row(
         rpd_limit,
         tpd_limit,
         expires,
+        budget_duration,
+        first_budget_reset_at(budget_duration),
+        coding_agent_metadata_json(coding_agent),
     )
 
 
@@ -546,6 +580,7 @@ async def list_keys(
     search: str | None = Query(default=None),
     team_id: str | None = Query(default=None),
     my_keys: bool = Query(default=False),
+    coding_agent: bool | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -574,6 +609,9 @@ async def list_keys(
     if team_id:
         params.append(team_id)
         clauses.append(f"vt.team_id = ${len(params)}")
+    if coding_agent is not None:
+        presence = "IS NOT NULL" if coding_agent else "IS NULL"
+        clauses.append(f"vt.metadata->'coding_agent' {presence}")
 
     join_sql = """
         LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
@@ -610,6 +648,9 @@ async def list_keys(
             vt.rpd_limit,
             vt.tpd_limit,
             vt.expires,
+            vt.budget_duration,
+            vt.budget_reset_at,
+            vt.metadata->'coding_agent' AS coding_agent,
             vt.created_at,
             vt.updated_at,
             lu.last_used_at
@@ -670,6 +711,8 @@ async def create_key(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime"
         )
+    budget_duration = normalize_key_budget_duration(payload.get("budget_duration"))
+    coding_agent = normalize_coding_agent(payload.get("coding_agent"))
 
     if not key_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="key_name is required")
@@ -792,6 +835,8 @@ async def create_key(
                     rpd_limit=rpd_limit,
                     tpd_limit=tpd_limit,
                     expires=expires,
+                    budget_duration=budget_duration,
+                    coding_agent=coding_agent,
                 )
             else:
                 await _insert_key_row(
@@ -809,6 +854,8 @@ async def create_key(
                     rpd_limit=rpd_limit,
                     tpd_limit=tpd_limit,
                     expires=expires,
+                    budget_duration=budget_duration,
+                    coding_agent=coding_agent,
                 )
 
             await persist_output_policy(tx, scope="key", identity=token_hash, change=output_change)
@@ -831,6 +878,8 @@ async def create_key(
             "rpd_limit": rpd_limit,
             "tpd_limit": tpd_limit,
             "expires": expires,
+            "budget_duration": budget_duration,
+            "coding_agent": coding_agent,
             "self_service": self_service_only,
         }
         await _notify_key_lifecycle(
@@ -898,7 +947,7 @@ async def update_key(
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     rows = await db.query_raw(
         """
-        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, output_tpm_limit, model_output_tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
+        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, output_tpm_limit, model_output_tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, budget_duration, budget_reset_at, metadata->'coding_agent' AS coding_agent, created_at, updated_at
         FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
@@ -934,6 +983,20 @@ async def update_key(
     rph_limit = payload.get("rph_limit", existing.get("rph_limit"))
     rpd_limit = payload.get("rpd_limit", existing.get("rpd_limit"))
     tpd_limit = payload.get("tpd_limit", existing.get("tpd_limit"))
+    existing_budget_duration = existing.get("budget_duration")
+    budget_duration = (
+        normalize_key_budget_duration(payload.get("budget_duration"))
+        if "budget_duration" in payload
+        else existing_budget_duration
+    )
+    # A new period starts at the next UTC boundary; an unchanged period keeps its reset time.
+    budget_reset_at = (
+        existing.get("budget_reset_at")
+        if budget_duration == existing_budget_duration
+        else first_budget_reset_at(budget_duration)
+    )
+    coding_agent_changed = "coding_agent" in payload
+    coding_agent = normalize_coding_agent(payload.get("coding_agent"))
 
     if not key_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="key_name is required")
@@ -957,6 +1020,7 @@ async def update_key(
         owner_account_id=owner_account_id,
         owner_service_account_id=owner_service_account_id,
         require_owner=False,
+        existing_owner_account_id=str(existing.get("owner_account_id") or "").strip() or None,
     )
 
     try:
@@ -990,6 +1054,13 @@ async def update_key(
                     rpd_limit = $10,
                     tpd_limit = $11,
                     expires = $12::timestamp,
+                    budget_duration = $14,
+                    budget_reset_at = $15::timestamp,
+                    metadata = CASE
+                        WHEN NOT $16::boolean THEN metadata
+                        WHEN $17::jsonb IS NULL THEN COALESCE(metadata, '{}'::jsonb) - 'coding_agent'
+                        ELSE jsonb_set(COALESCE(metadata, '{}'::jsonb), '{coding_agent}', $17::jsonb, true)
+                    END,
                     updated_at = NOW()
                 WHERE token = $13
                 """,
@@ -1006,6 +1077,10 @@ async def update_key(
                 tpd_limit,
                 expires,
                 token_hash,
+                budget_duration,
+                budget_reset_at,
+                coding_agent_changed,
+                coding_agent_json(coding_agent),
             )
 
             await persist_output_policy(tx, scope="key", identity=token_hash, change=output_change)
@@ -1029,6 +1104,9 @@ async def update_key(
                     vt.rpd_limit,
                     vt.tpd_limit,
                     vt.expires,
+                    vt.budget_duration,
+                    vt.budget_reset_at,
+                    vt.metadata->'coding_agent' AS coding_agent,
                     vt.created_at,
                     vt.updated_at,
                     lu.last_used_at
@@ -1038,7 +1116,7 @@ async def update_key(
                 LEFT JOIN deltallm_platformaccount pa ON vt.owner_account_id = pa.account_id
                 LEFT JOIN deltallm_serviceaccount sa
                   ON vt.owner_service_account_id = sa.service_account_id
-                WHERE token = $1
+                WHERE vt.token = $1
                 LIMIT 1
                 """,
                 token_hash,

@@ -8,6 +8,7 @@ from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
 from src.models.platform_auth import PlatformAuthContext
 from src.services.ui.ui_authorization import (
+    build_ui_access,
     build_batch_create_session_capabilities,
     build_organization_capabilities,
     build_team_capabilities,
@@ -1261,3 +1262,24 @@ async def test_list_batch_create_sessions_exposes_session_capabilities_for_updat
         "retry": True,
         "expire": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("permissions", "external_customer", "expected"),
+    [
+        ({Permission.KEY_UPDATE}, False, True),
+        ({Permission.KEY_CREATE_SELF}, False, True),
+        ({Permission.PLATFORM_ADMIN}, False, True),
+        ({Permission.KEY_READ, Permission.TEAM_READ}, False, False),
+        ({Permission.KEY_CREATE_SELF}, True, False),
+    ],
+)
+def test_coding_agents_page_needs_a_way_to_create_keys(
+    permissions: set[str], external_customer: bool, expected: bool
+) -> None:
+    access = build_ui_access(
+        authenticated=True,
+        effective_permissions=permissions,
+        external_customer=external_customer,
+    )
+    assert access["coding_agents"] is expected
