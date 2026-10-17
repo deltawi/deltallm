@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import clsx from 'clsx';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'success' | 'danger' | 'danger-outline' | 'warning-outline' | 'ghost' | 'link';
-export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon';
+export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon' | 'icon-sm';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -24,12 +24,15 @@ const variantClasses: Record<ButtonVariant, string> = {
   link: 'border-transparent bg-transparent text-brand-primary-ink hover:text-brand-primary-ink-hover',
 };
 
+// Heights come from the control-* classes in index.css: sm 28 px, md 32 px, lg 40 px (8 px taller on phones).
+// lg is only for the sign-in, password and MFA pages.
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'gap-1.5 rounded-lg px-3 py-1.5 text-xs',
-  md: 'gap-2 rounded-lg px-4 py-2 text-sm',
-  lg: 'gap-2 rounded-lg px-5 py-2.5 text-sm',
+  sm: 'control-sm gap-1.5 rounded-md',
+  md: 'control-md gap-1.5 rounded-lg',
+  lg: 'control-lg gap-2 rounded-lg',
   // Same height as md, so icon-only buttons line up with labelled ones.
-  icon: 'h-[38px] w-[38px] rounded-lg p-0',
+  icon: 'control-icon-md rounded-lg',
+  'icon-sm': 'control-icon-sm rounded-md',
 };
 
 export default function Button({

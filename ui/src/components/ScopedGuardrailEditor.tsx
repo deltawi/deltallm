@@ -210,7 +210,7 @@ export default function ScopedGuardrailEditor({ scope, entityId, entityLabel, on
       )}
 
       <div className="flex justify-end pt-2 border-t border-gray-100">
-        <button onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50">
+        <button onClick={handleSave} disabled={saving} className="control-md bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50">
           {saving ? 'Saving...' : 'Save Configuration'}
         </button>
       </div>

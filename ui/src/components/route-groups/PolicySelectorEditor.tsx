@@ -44,7 +44,7 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
         {lookupControls}
         <label className="block space-y-1">
           <span className="text-sm font-medium text-slate-700">Selector model</span>
-          <select className={inputClass} value={enabled ? selector.classifier : ''}
+          <select className={`${inputClass} control-field`} value={enabled ? selector.classifier : ''}
             disabled={workloadMode !== 'chat'}
             onChange={(event) => onChange(chooseSelector(values, event.target.value))}>
             <option value="">None — use the routing strategy only</option>
@@ -80,24 +80,24 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
             <summary className="cursor-pointer text-sm font-medium">Advanced selector settings</summary>
             <div className="mt-3 space-y-3">
               <label className="block space-y-1"><span className="text-xs font-medium">Safe-default lane</span>
-                <select className={inputClass} value={selector.defaultLane} onChange={(event) => update({ defaultLane: event.target.value })}>
+                <select className={`${inputClass} control-field`} value={selector.defaultLane} onChange={(event) => update({ defaultLane: event.target.value })}>
                   {selector.lanes.map((lane, index) => <option key={index} value={lane.id}>{lane.id}</option>)}
                 </select>
                 <span className="block text-xs text-slate-500">Used if selection fails. Keep the highest-capability lane unless you deliberately accept a lower fallback.</span>
               </label>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="space-y-1"><span className="text-xs font-medium">Selector timeout (ms)</span>
-                  <input className={inputClass} type="number" min={100} max={5000} step={1} value={selector.timeoutMs} onChange={(event) => update({ timeoutMs: event.target.value })} />
+                  <input className={`${inputClass} control-field`} type="number" min={100} max={5000} step={1} value={selector.timeoutMs} onChange={(event) => update({ timeoutMs: event.target.value })} />
                 </label>
                 <label className="space-y-1"><span className="text-xs font-medium">Input limit (characters)</span>
-                  <input className={inputClass} type="number" min={256} max={32768} step={1} value={selector.maxInputChars} onChange={(event) => update({ maxInputChars: event.target.value })} />
+                  <input className={`${inputClass} control-field`} type="number" min={256} max={32768} step={1} value={selector.maxInputChars} onChange={(event) => update({ maxInputChars: event.target.value })} />
                 </label>
               </div>
               {selector.lanes.map((lane, index) => <fieldset key={index} className="space-y-2 rounded-lg border border-slate-200 p-3">
                 <legend className="px-1 text-xs font-medium">Lane {index + 1}</legend>
                 <div className="grid gap-2 md:grid-cols-2">
-                  <label className="space-y-1"><span className="text-xs">Lane ID</span><input className={inputClass} maxLength={32} value={lane.id} onChange={(event) => updateLane(index, 'id', event.target.value)} /></label>
-                  <label className="space-y-1"><span className="text-xs">Capability rank</span><input className={inputClass} type="number" min={0} max={7} step={1} value={lane.rank} onChange={(event) => updateLane(index, 'rank', event.target.value)} /></label>
+                  <label className="space-y-1"><span className="text-xs">Lane ID</span><input className={`${inputClass} control-field`} maxLength={32} value={lane.id} onChange={(event) => updateLane(index, 'id', event.target.value)} /></label>
+                  <label className="space-y-1"><span className="text-xs">Capability rank</span><input className={`${inputClass} control-field`} type="number" min={0} max={7} step={1} value={lane.rank} onChange={(event) => updateLane(index, 'rank', event.target.value)} /></label>
                 </div>
                 <label className="block space-y-1"><span className="text-xs">When to use this lane</span><textarea className={inputClass} maxLength={512} rows={2} value={lane.description} onChange={(event) => updateLane(index, 'description', event.target.value)} /></label>
                 <Button size="sm" variant="secondary" disabled={selector.lanes.length <= 2}

@@ -16,7 +16,7 @@ function LegacyRouteGroup({ groupKey }: { groupKey: string }) {
     <div className="space-y-4 p-6">
       <Link to="/route-groups" className="text-sm text-brand-primary">Back to Route Groups</Link>
       <p role={resolution.error ? 'alert' : 'status'}>{message}</p>
-      {!!resolution.error && <button onClick={resolution.refetch} className="rounded border px-3 py-2">Retry</button>}
+      {!!resolution.error && <button onClick={resolution.refetch} className="control-md rounded border">Retry</button>}
     </div>
   );
 }

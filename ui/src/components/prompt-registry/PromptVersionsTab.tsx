@@ -89,7 +89,7 @@ export default function PromptVersionsTab({
               id="prompt-compare-select"
               value={other ? String(other.version) : ''}
               onChange={(event) => onCompareChange(event.target.value ? Number(event.target.value) : null)}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md rounded-lg border border-gray-300 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="">Nothing</option>
               {versions.filter((item) => item.version !== current.version).map((item) => {

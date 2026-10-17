@@ -96,14 +96,14 @@ export default function PromptLabelDialog({ start, labels, versions, bindings, s
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label htmlFor="prompt-label-choice" className="mb-1 block text-sm font-medium text-gray-700">Label</label>
-              <select id="prompt-label-choice" value={choice} onChange={(event) => setChoice(event.target.value)} className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
+              <select id="prompt-label-choice" value={choice} onChange={(event) => setChoice(event.target.value)} className="control-field w-full rounded-lg border border-gray-300 bg-white px-3">
                 {labels.map((item) => <option key={item.prompt_label_id} value={item.label}>{item.label} (now v{item.version})</option>)}
                 <option value={NEW_LABEL}>New label…</option>
               </select>
             </div>
             <div>
               <label htmlFor="prompt-label-version" className="mb-1 block text-sm font-medium text-gray-700">Version</label>
-              <select id="prompt-label-version" value={version} onChange={(event) => setVersion(Number(event.target.value))} className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
+              <select id="prompt-label-version" value={version} onChange={(event) => setVersion(Number(event.target.value))} className="control-field w-full rounded-lg border border-gray-300 bg-white px-3">
                 {versions.map((item) => <option key={item.prompt_version_id} value={item.version}>v{item.version}</option>)}
               </select>
             </div>
@@ -111,7 +111,7 @@ export default function PromptLabelDialog({ start, labels, versions, bindings, s
           {isNew ? (
             <div>
               <label htmlFor="prompt-label-name" className="mb-1 block text-sm font-medium text-gray-700">New label name</label>
-              <input id="prompt-label-name" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="staging" aria-invalid={Boolean(nameError)} aria-describedby="prompt-label-name-hint" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" />
+              <input id="prompt-label-name" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="staging" aria-invalid={Boolean(nameError)} aria-describedby="prompt-label-name-hint" className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary" />
               <p id="prompt-label-name-hint" className={`mt-1 text-xs ${nameError && newName ? 'text-red-600' : 'text-gray-500'}`}>
                 {nameError && newName ? nameError : 'API calls that do not name a label use production.'}
               </p>
@@ -137,7 +137,7 @@ export default function PromptLabelDialog({ start, labels, versions, bindings, s
           {isProductionName(labelName) ? (
             <div>
               <label htmlFor="prompt-label-approved-by" className="mb-1 block text-sm font-medium text-gray-700">Approved by (optional)</label>
-              <input id="prompt-label-approved-by" value={approvedBy} onChange={(event) => setApprovedBy(event.target.value)} placeholder="name@company.com" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" />
+              <input id="prompt-label-approved-by" value={approvedBy} onChange={(event) => setApprovedBy(event.target.value)} placeholder="name@company.com" className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary" />
               <p className="mt-1 text-xs text-gray-500">The audit log records this name with the change.</p>
             </div>
           ) : null}

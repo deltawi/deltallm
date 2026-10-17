@@ -63,7 +63,7 @@ interface NamedCredentialFormProps {
 }
 
 const MASK = '***REDACTED***';
-const inputClass = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary';
+const inputClass = 'control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary';
 
 function emptyForm(
   initialProvider = '',
@@ -450,7 +450,7 @@ export default function NamedCredentialForm({
           type="button"
           onClick={onCancel}
           disabled={saving || accessDirty}
-          className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          className="control-md rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
         >
           Cancel
         </button>
@@ -458,7 +458,7 @@ export default function NamedCredentialForm({
           type="button"
           onClick={() => { void handleSave(); }}
           disabled={saving || accessDirty}
-          className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+          className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
           {saving ? 'Saving...' : editing ? 'Save credential settings' : 'Create credential'}
         </button>

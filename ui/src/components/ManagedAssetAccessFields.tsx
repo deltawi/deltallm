@@ -216,7 +216,7 @@ export default function ManagedAssetAccessFields({
                     setRemoteLoading(false);
                   }}
                   onKeyDown={(event) => activateTabFromKeyboard(event, index)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${activeTab === tab.value ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                  className={`control-segment rounded-md font-medium transition-colors ${activeTab === tab.value ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
                 >
                   {tab.label}
                   {grantCount > 0 ? <span className="ml-1.5 opacity-80">{grantCount}</span> : null}
@@ -269,7 +269,7 @@ export default function ManagedAssetAccessFields({
                           value={grant.access_role}
                           disabled={disabled}
                           onChange={(event) => replaceGrant(grant, event.target.value as AssetAccessRole)}
-                          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                          className="control-field-md rounded-md border border-slate-300 bg-white px-2 text-xs"
                         >
                           <option value="reader">Read</option>
                           <option value="editor">Read / Write</option>
@@ -307,7 +307,7 @@ export default function ManagedAssetAccessFields({
                     }
                   }}
                   placeholder={`Search ${activeTab === 'team' ? 'teams' : 'organizations'}…`}
-                  className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm disabled:bg-slate-100"
+                  className="control-field-md w-full rounded-lg border border-slate-300 pl-9 pr-3 disabled:bg-slate-100"
                 />
               </label>
 

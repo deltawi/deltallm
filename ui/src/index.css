@@ -2,6 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Control sizes. Desktop: small 28 px, default 32 px, form field 36 px, large 40 px.
+ * Below 768 px every size grows by 8 px so controls stay easy to tap.
+ * These sit in the components layer, so a utility on the element (flex, w-full, px-4...) still wins.
+ */
+@layer components {
+  .control-sm { @apply inline-flex items-center justify-center h-9 px-2.5 text-xs md:h-7; }
+  .control-md { @apply inline-flex items-center justify-center h-10 px-3 text-[13px] md:h-8; }
+  .control-lg { @apply inline-flex items-center justify-center h-12 px-4 text-sm md:h-10; }
+  .control-icon-sm { @apply inline-flex items-center justify-center h-9 w-9 p-0 md:h-7 md:w-7; }
+  .control-icon-md { @apply inline-flex items-center justify-center h-10 w-10 p-0 md:h-8 md:w-8; }
+  /* Segmented control options sit inside a 2 px padded track, so the whole group is 32 px. */
+  .control-segment { @apply inline-flex items-center justify-center h-[34px] px-2.5 text-xs md:h-[26px]; }
+  .control-field { @apply h-11 text-sm md:h-9; }
+  /* Sign-in, password and MFA pages, next to the large button. */
+  .control-field-lg { @apply h-12 text-sm md:h-10; }
+  .control-field-md { @apply h-10 text-[13px] md:h-8; }
+  /* A field inside a bordered group (prefix select, copy button): the group's border makes up the 2 px. */
+  .control-field-inset { @apply h-[42px] text-sm md:h-[34px]; }
+}
+
 :root {
   --brand-primary: 91 80 214;
   --brand-primary-ink: 91 80 214;

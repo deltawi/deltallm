@@ -8,7 +8,7 @@ export type TeamOption = { team_id: string; team_alias?: string | null; organiza
 export const PLATFORM_ROLES = [{ value: 'org_user', label: 'Organization User' }, { value: 'platform_admin', label: 'Platform Admin' }];
 export const ORGANIZATION_ROLES = [{ value: 'org_member', label: 'Member' }, { value: 'org_owner', label: 'Owner' }, { value: 'org_admin', label: 'Admin' }, { value: 'org_billing', label: 'Billing' }, { value: 'org_auditor', label: 'Auditor' }];
 export const TEAM_ROLES = [{ value: 'team_admin', label: 'Admin' }, { value: 'team_developer', label: 'Developer' }, { value: 'team_viewer', label: 'Viewer' }];
-export const personInputClass = 'block w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-600';
+export const personInputClass = 'control-field block w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-600';
 export type ProvisionForm = {
   email: string; mode: ProvisionMode; platformRole: string; scope: PersonScope;
   organizationId: string; organizationRole: string; teamId: string; teamRole: string;

@@ -27,7 +27,7 @@ interface AuditFilterBarProps {
 
 // Same box as the Usage request search; the placeholder must fit inside it.
 const SEARCH_INPUT =
-  'w-[260px] max-w-full text-ellipsis rounded-lg border border-gray-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
+  'control-field-md w-[260px] max-w-full text-ellipsis rounded-lg border border-gray-300 bg-white pl-8 pr-2.5 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
 
 function useDebounced(value: string, delay = 250): string {
   const [debounced, setDebounced] = useState(value);

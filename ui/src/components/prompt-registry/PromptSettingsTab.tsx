@@ -59,7 +59,7 @@ export default function PromptSettingsTab({
         <div className="grid gap-4 p-4 lg:grid-cols-3">
           <div>
             <label htmlFor="prompt-settings-name" className="mb-1 block text-sm font-medium text-gray-700">Name</label>
-            <input id="prompt-settings-name" value={form.name} disabled={!canWrite} aria-invalid={Boolean(nameError)} aria-describedby={nameError ? 'prompt-settings-name-error' : undefined} onChange={(event) => setForm({ ...form, name: event.target.value })} className={inputClass} />
+            <input id="prompt-settings-name" value={form.name} disabled={!canWrite} aria-invalid={Boolean(nameError)} aria-describedby={nameError ? 'prompt-settings-name-error' : undefined} onChange={(event) => setForm({ ...form, name: event.target.value })} className={`${inputClass} control-field`} />
             {nameError ? <p id="prompt-settings-name-error" className="mt-1 text-xs text-red-600">{nameError}</p> : null}
           </div>
           <div className="lg:col-span-2">
@@ -74,7 +74,7 @@ export default function PromptSettingsTab({
               <summary className="cursor-pointer text-sm font-medium text-gray-700">Legacy metadata</summary>
               <div className="mt-3 max-w-md">
                 <label htmlFor="prompt-settings-owner-scope" className="mb-1 block text-sm font-medium text-gray-700">Owner scope</label>
-                <input id="prompt-settings-owner-scope" value={form.owner_scope} disabled={!canWrite} onChange={(event) => setForm({ ...form, owner_scope: event.target.value })} className={inputClass} />
+                <input id="prompt-settings-owner-scope" value={form.owner_scope} disabled={!canWrite} onChange={(event) => setForm({ ...form, owner_scope: event.target.value })} className={`${inputClass} control-field`} />
               </div>
             </details>
           ) : null}

@@ -71,7 +71,7 @@ export default function UsageTopTable({
           <button
             type="button"
             onClick={onViewRequests}
-            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+            className="control-sm inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
           >
             View matching requests <ArrowRight className="h-3.5 w-3.5" />
           </button>
@@ -163,7 +163,7 @@ export default function UsageTopTable({
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
               placeholder={`Search ${dimensionLabel(dimension, true).toLowerCase()}`}
-              className="w-56 rounded-lg border border-gray-300 py-1.5 pl-7 pr-2 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+              className="control-field-md w-56 rounded-lg border border-gray-300 pl-7 pr-2 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
             />
           </label>
           <div className="flex items-center gap-2">

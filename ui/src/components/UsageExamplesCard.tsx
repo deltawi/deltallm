@@ -404,7 +404,7 @@ export default function UsageExamplesCard({
             <select
               value={language}
               onChange={(event) => setLanguage(event.target.value as ExampleLanguage)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field w-full rounded-lg border border-gray-300 bg-white px-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="curl">curl</option>
               <option value="python">Python</option>

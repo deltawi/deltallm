@@ -41,7 +41,7 @@ const WINDOW_OPTIONS: ReadonlyArray<{ key: AuditWindow; label: string }> = [
 ];
 
 const DATE_INPUT =
-  'rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
+  'control-field-md rounded-lg border border-gray-200 bg-white px-2 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
 
 interface MorePages {
   key: string;
@@ -84,7 +84,7 @@ function ExportMenu({ onExport }: { onExport: (format: 'csv' | 'jsonl') => Promi
         aria-expanded={open}
         disabled={busy}
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+        className="control-md inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
       >
         <Download className="h-4 w-4 text-gray-500" aria-hidden="true" />
         {busy ? 'Exporting' : 'Export'}
@@ -303,7 +303,7 @@ export default function AuditLogs() {
             <div className="px-4 py-10 text-center text-sm text-gray-500">
               {first.error ? 'Events could not be loaded.' : 'No events match these filters in this period.'}
               {anyFilter && (
-                <button type="button" onClick={() => commitFilters({})} className="ml-2 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-900 hover:bg-gray-50">
+                <button type="button" onClick={() => commitFilters({})} className="control-sm ml-2 rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50">
                   Clear filters
                 </button>
               )}
@@ -330,7 +330,7 @@ export default function AuditLogs() {
                 type="button"
                 onClick={loadMore}
                 disabled={extra?.loading}
-                className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] text-gray-900 hover:bg-gray-50 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                className="control-sm rounded-lg border border-gray-200 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
               >
                 {extra?.loading ? 'Loading' : `Load ${PAGE_SIZE} more`}
               </button>

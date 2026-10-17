@@ -225,7 +225,7 @@ interface ModelFormProps {
   onRetryNamedCredentialAudiences?: () => void;
 }
 
-const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary";
+const inputClass = "control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary";
 const CREATE_NEW_NAMED_CREDENTIAL = '__create_new_named_credential__';
 type RequiredField =
   | 'model_name'
@@ -926,7 +926,7 @@ export default function ModelForm({
                 value={form.provider}
                 onChange={(e) => applyProvider(e.target.value)}
                 disabled={form.keep_existing_named_credential}
-                className="w-40 shrink-0 border-r border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed disabled:text-gray-500"
+                className="control-field-inset w-40 shrink-0 border-r border-gray-300 bg-gray-50 px-3 text-gray-900 focus:outline-none disabled:cursor-not-allowed disabled:text-gray-500"
               >
                 <option value="">Select provider</option>
                 {providerPresets.map((preset) => (
@@ -940,7 +940,7 @@ export default function ModelForm({
                 value={form.model}
                 onChange={(e) => updateModelValue(e.target.value)}
                 placeholder={upstreamModelPlaceholder(mode, form.provider)}
-                className="min-w-0 flex-1 px-3 py-2 text-sm text-gray-900 focus:outline-none"
+                className="control-field-inset min-w-0 flex-1 px-3 text-gray-900 focus:outline-none"
               />
             </div>
             <datalist id={modelSuggestionListId}>
@@ -980,7 +980,7 @@ export default function ModelForm({
                   type="button"
                   onClick={() => { void refreshProviderModels(); }}
                   disabled={discoveryLoading}
-                  className="inline-flex items-center rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="control-sm inline-flex items-center rounded-md border border-gray-300 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {hasActiveLiveDiscovery && liveDiscoveryState.loading ? 'Refreshing...' : 'Refresh provider models'}
                 </button>
@@ -1047,7 +1047,7 @@ export default function ModelForm({
                           named_credential_name: '',
                         }));
                       }}
-                      className="mt-3 inline-flex items-center rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                      className="control-sm mt-3 inline-flex items-center rounded-md border border-blue-200 bg-white font-medium text-blue-700 hover:bg-blue-50"
                     >
                       Replace with a credential I can access
                     </button>

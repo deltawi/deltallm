@@ -19,7 +19,7 @@ export default function PromptReferenceSelect({ id, label, value, labels, versio
       aria-label={label}
       value={referenceValue(value)}
       onChange={(event) => onChange(parseReferenceValue(event.target.value))}
-      className={`rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary ${className}`}
+      className={`control-field-md rounded-lg border border-gray-300 bg-white px-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary ${className}`}
     >
       {labels.length > 0 ? (
         <optgroup label="Labels">

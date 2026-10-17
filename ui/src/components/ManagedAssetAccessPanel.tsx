@@ -144,7 +144,7 @@ function ManagedAssetAccessPanelState({
               type="button"
               onClick={() => { setDraft(null); setError(null); }}
               disabled={!dirty || saving}
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="control-md rounded-lg border border-gray-200 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               Discard
             </button>
@@ -156,7 +156,7 @@ function ManagedAssetAccessPanelState({
                 || saving
                 || Boolean(audiencesError)
               }
-              className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+              className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {saving ? 'Saving access…' : 'Save access'}
             </button>

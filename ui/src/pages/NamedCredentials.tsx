@@ -287,13 +287,13 @@ export default function NamedCredentials() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search credentials..."
-              className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full rounded-lg border border-gray-300 pl-9 pr-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <select
             value={providerFilter}
             onChange={(e) => setProviderFilter(e.target.value)}
-            className="h-9 rounded-lg border border-gray-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            className="control-field-md rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
           >
             <option value="">All providers</option>
             {providerPresets.map((preset) => (
@@ -352,7 +352,7 @@ export default function NamedCredentials() {
                       setConvertTarget(row);
                       setConversionName(`${providerDisplayName(row.provider)} Shared`);
                     }}
-                    className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    className="control-sm inline-flex items-center gap-1 rounded-lg border border-gray-200 font-medium text-gray-700 hover:bg-gray-50"
                   >
                     <ArrowRightLeft className="h-3.5 w-3.5" />
                     Convert
@@ -395,7 +395,7 @@ export default function NamedCredentials() {
               <button
                 type="button"
                 onClick={refetchEditingDetail}
-                className="mt-3 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium hover:bg-red-100"
+                className="control-sm mt-3 rounded-lg border border-red-200 bg-white font-medium hover:bg-red-100"
               >
                 Retry
               </button>
@@ -456,7 +456,7 @@ export default function NamedCredentials() {
             <input
               value={conversionName}
               onChange={(e) => setConversionName(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           {convertTarget ? (
@@ -470,7 +470,7 @@ export default function NamedCredentials() {
               type="button"
               onClick={() => setConvertTarget(null)}
               disabled={converting}
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="control-md rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               Cancel
             </button>
@@ -478,7 +478,7 @@ export default function NamedCredentials() {
               type="button"
               onClick={() => { void handleConvert(); }}
               disabled={converting || !conversionName.trim()}
-              className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+              className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {converting ? 'Converting...' : 'Convert'}
             </button>

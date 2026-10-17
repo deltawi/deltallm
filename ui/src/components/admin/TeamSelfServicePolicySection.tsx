@@ -81,7 +81,7 @@ export default function TeamSelfServicePolicySection({
                       min="1"
                       placeholder="Unlimited"
                       disabled={disabled}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
+                      className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
                     />
                   </div>
                   <div>
@@ -96,7 +96,7 @@ export default function TeamSelfServicePolicySection({
                         step="0.01"
                         placeholder="No ceiling"
                         disabled={disabled}
-                        className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
+                        className="control-field w-full pl-7 pr-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
                       />
                     </div>
                   </div>
@@ -128,7 +128,7 @@ export default function TeamSelfServicePolicySection({
                         min="1"
                         placeholder="No limit"
                         disabled={disabled}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
+                        className="control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
                       />
                     </div>
                   )}

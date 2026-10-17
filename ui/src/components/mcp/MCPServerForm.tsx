@@ -167,7 +167,7 @@ export default function MCPServerForm({
             placeholder="docs"
             data-autofocus={!disableServerKey ? 'true' : undefined}
             disabled={disableServerKey || disabled}
-            className={`${inputClass} ${inputDisabledClass}`}
+            className={`${inputClass} control-field ${inputDisabledClass}`}
           />
         </div>
         <div>
@@ -178,7 +178,7 @@ export default function MCPServerForm({
             placeholder="Docs MCP"
             data-autofocus={disableServerKey ? 'true' : undefined}
             disabled={disabled}
-            className={`${inputClass} ${inputDisabledClass}`}
+            className={`${inputClass} control-field ${inputDisabledClass}`}
           />
         </div>
       </div> : null}
@@ -196,7 +196,7 @@ export default function MCPServerForm({
               })
             }
             disabled={disabled || lockOwnerScopeType}
-            className={`${inputClass} ${inputDisabledClass}`}
+            className={`${inputClass} control-field ${inputDisabledClass}`}
           >
             <option value="global">Global</option>
             <option value="organization">Organization</option>
@@ -209,7 +209,7 @@ export default function MCPServerForm({
               value={value.owner_scope_id}
               onChange={(event) => onChange({ ...value, owner_scope_id: textValue(event) })}
               disabled={disabled || disableOwnerScopeId}
-              className={`${inputClass} ${inputDisabledClass}`}
+              className={`${inputClass} control-field ${inputDisabledClass}`}
             >
               <option value="">Select organization</option>
               {ownerScopeOptions.map((option) => (
@@ -233,7 +233,7 @@ export default function MCPServerForm({
           onChange={(event) => onChange({ ...value, base_url: textValue(event) })}
           placeholder="https://mcp.example.com"
           disabled={disabled}
-          className={`${inputClass} ${inputDisabledClass}`}
+          className={`${inputClass} control-field ${inputDisabledClass}`}
         />
       </div>
 
@@ -256,7 +256,7 @@ export default function MCPServerForm({
             value={value.transport}
             onChange={(event) => onChange({ ...value, transport: textValue(event) as 'streamable_http' })}
             disabled={disabled}
-            className={`${inputClass} ${inputDisabledClass}`}
+            className={`${inputClass} control-field ${inputDisabledClass}`}
           >
             <option value="streamable_http">Streamable HTTP</option>
           </select>
@@ -267,7 +267,7 @@ export default function MCPServerForm({
             value={value.auth_mode}
             onChange={(event) => onChange({ ...value, auth_mode: textValue(event) as MCPAuthMode })}
             disabled={disabled}
-            className={`${inputClass} ${inputDisabledClass}`}
+            className={`${inputClass} control-field ${inputDisabledClass}`}
           >
             <option value="none">None</option>
             <option value="bearer">Bearer</option>
@@ -283,7 +283,7 @@ export default function MCPServerForm({
             type="number"
             min="1"
             disabled={disabled}
-            className={`${inputClass} ${inputDisabledClass}`}
+            className={`${inputClass} control-field ${inputDisabledClass}`}
           />
         </div>
       </div>
@@ -305,7 +305,7 @@ export default function MCPServerForm({
             onChange={(event) => onChange({ ...value, bearer_token: textValue(event) })}
             placeholder={preserveExistingCredentials ? 'Leave blank to keep existing token' : 'token'}
             disabled={disabled}
-            className={`${inputClass} ${inputDisabledClass}`}
+            className={`${inputClass} control-field ${inputDisabledClass}`}
           />
         </div>
       )}
@@ -319,7 +319,7 @@ export default function MCPServerForm({
               onChange={(event) => onChange({ ...value, basic_username: textValue(event) })}
               placeholder={preserveExistingCredentials ? 'Leave blank to keep existing username' : undefined}
               disabled={disabled}
-              className={`${inputClass} ${inputDisabledClass}`}
+              className={`${inputClass} control-field ${inputDisabledClass}`}
             />
           </div>
           <div>
@@ -330,7 +330,7 @@ export default function MCPServerForm({
               onChange={(event) => onChange({ ...value, basic_password: textValue(event) })}
               placeholder={preserveExistingCredentials ? 'Leave blank to keep existing password' : undefined}
               disabled={disabled}
-              className={`${inputClass} ${inputDisabledClass}`}
+              className={`${inputClass} control-field ${inputDisabledClass}`}
             />
           </div>
         </div>
@@ -361,7 +361,7 @@ export default function MCPServerForm({
           onChange={(event) => onChange({ ...value, forwarded_headers_allowlist: textValue(event) })}
           placeholder="authorization, x-api-key"
           disabled={disabled}
-          className={`${inputClass} ${inputDisabledClass}`}
+          className={`${inputClass} control-field ${inputDisabledClass}`}
         />
         <p className="mt-1 text-xs text-gray-500">Comma-separated list of header names that clients may forward to this MCP server.</p>
       </div>

@@ -205,7 +205,7 @@ export default function RouteGroupPolicySimulationPanel({
             step="1"
             value={iterations}
             onChange={(event) => setIterations(event.target.value)}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            className="control-field w-full rounded-lg border border-slate-200 px-3 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
           />
         </label>
         <label className="space-y-1.5">
@@ -214,7 +214,7 @@ export default function RouteGroupPolicySimulationPanel({
             value={tags}
             onChange={(event) => setTags(event.target.value)}
             placeholder="vip, production"
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            className="control-field w-full rounded-lg border border-slate-200 px-3 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
           />
         </label>
         <label className="space-y-1.5">
@@ -225,7 +225,7 @@ export default function RouteGroupPolicySimulationPanel({
             step="1"
             value={inputTokens}
             onChange={(event) => setInputTokens(event.target.value)}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            className="control-field w-full rounded-lg border border-slate-200 px-3 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
           />
         </label>
         <label className="space-y-1.5">
@@ -237,7 +237,7 @@ export default function RouteGroupPolicySimulationPanel({
             value={requestedOutputTokens}
             onChange={(event) => setRequestedOutputTokens(event.target.value)}
             placeholder="Use policy default"
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            className="control-field w-full rounded-lg border border-slate-200 px-3 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
           />
         </label>
       </div>
@@ -267,7 +267,7 @@ export default function RouteGroupPolicySimulationPanel({
                       [member.deployment_id]: event.target.value as RoutePolicySimulationOutcome,
                     },
                   })}
-                  className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+                  className="control-field-md shrink-0 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
                 >
                   {OUTCOME_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
@@ -284,7 +284,7 @@ export default function RouteGroupPolicySimulationPanel({
           type="button"
           onClick={handleRun}
           disabled={simulation.loading || !policy || effectiveMembers.length === 0}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary shadow-sm hover:bg-brand-primary-hover disabled:opacity-50"
+          className="control-md inline-flex items-center gap-2 rounded-lg bg-brand-primary font-semibold text-brand-on-primary shadow-sm hover:bg-brand-primary-hover disabled:opacity-50"
         >
           <RefreshCw className={`h-4 w-4 ${simulation.loading ? 'animate-spin' : ''}`} />
           {simulation.loading ? 'Simulating…' : result ? 'Run again' : 'Run simulation'}

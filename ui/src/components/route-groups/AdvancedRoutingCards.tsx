@@ -30,7 +30,7 @@ const OTHER_HINTS: Record<string, string> = {
   'tag-based-routing': 'Legacy. Pick deployments by request tags.',
 };
 
-export const inputClass = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50';
+export const inputClass = 'control-field w-full rounded-lg border border-gray-200 bg-white px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50';
 
 export function NumberedCard({ step, title, description, changed, action, children }: {
   step: number;
@@ -233,7 +233,7 @@ export function TimeoutsCard({ values, disabled, changed, onChange }: CardProps)
           <label className="block space-y-1 text-xs font-medium text-gray-700">
             <span>Request timeout</span>
             <span className="flex overflow-hidden rounded-lg border border-gray-200 focus-within:ring-2 focus-within:ring-brand-primary">
-              <input className="min-w-0 flex-1 px-3 py-2 text-sm focus:outline-none disabled:bg-gray-50" inputMode="decimal" value={timeout} disabled={disabled} placeholder="Not set"
+              <input className="control-field-inset min-w-0 flex-1 px-3 focus:outline-none disabled:bg-gray-50" inputMode="decimal" value={timeout} disabled={disabled} placeholder="Not set"
                 onChange={(event) => { setTimeoutText(event.target.value); onChange({ ...values, timeoutMs: millisecondsFrom(event.target.value) }); }} />
               <span className="border-l border-gray-200 bg-gray-50 px-3 py-2 font-normal text-gray-500">seconds</span>
             </span>
@@ -242,7 +242,7 @@ export function TimeoutsCard({ values, disabled, changed, onChange }: CardProps)
           <label className="block space-y-1 text-xs font-medium text-gray-700">
             <span>Retries</span>
             <span className="flex overflow-hidden rounded-lg border border-gray-200 focus-within:ring-2 focus-within:ring-brand-primary">
-              <input className="min-w-0 flex-1 px-3 py-2 text-sm focus:outline-none disabled:bg-gray-50" inputMode="numeric" value={values.retryMaxAttempts} disabled={disabled} placeholder="Gateway default"
+              <input className="control-field-inset min-w-0 flex-1 px-3 focus:outline-none disabled:bg-gray-50" inputMode="numeric" value={values.retryMaxAttempts} disabled={disabled} placeholder="Gateway default"
                 onChange={(event) => onChange({ ...values, retryMaxAttempts: event.target.value.trim() })} />
               <span className="border-l border-gray-200 bg-gray-50 px-3 py-2 font-normal text-gray-500">extra</span>
             </span>
@@ -256,14 +256,14 @@ export function TimeoutsCard({ values, disabled, changed, onChange }: CardProps)
               const on = classes.includes(item);
               return (
                 <button key={item} type="button" aria-pressed={on} disabled={disabled} onClick={() => setClasses(on ? classes.filter((value) => value !== item) : [...classes, item])}
-                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${on ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-ink' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+                  className={`control-sm inline-flex items-center gap-1 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${on ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-ink' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
                   {on ? <Check aria-hidden="true" className="h-3 w-3" /> : null}{RETRY_CLASS_LABELS[item]}
                 </button>
               );
             })}
             {unknown.map((item) => (
               <button key={item} type="button" disabled={disabled} onClick={() => setClasses(classes.filter((value) => value !== item))} aria-label={`Remove unsupported error class ${item}`}
-                className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs text-red-700">
+                className="control-sm inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 text-red-700">
                 <X aria-hidden="true" className="h-3 w-3" />{item} · not supported
               </button>
             ))}

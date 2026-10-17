@@ -116,7 +116,7 @@ interface SegmentedProps<T extends string> {
 
 export function Segmented<T extends string>({ label, value, options, onChange }: SegmentedProps<T>) {
   return (
-    <div role="group" aria-label={label} className="inline-flex gap-0.5 rounded-lg border border-gray-200 bg-gray-50 p-[3px]">
+    <div role="group" aria-label={label} className="inline-flex gap-0.5 rounded-lg border border-gray-200 bg-gray-50 p-0.5">
       {options.map((option) => (
         <button
           key={option.key}
@@ -124,7 +124,7 @@ export function Segmented<T extends string>({ label, value, options, onChange }:
           aria-pressed={option.key === value}
           disabled={option.disabled}
           onClick={() => onChange(option.key)}
-          className={`rounded-md px-2.5 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-40 ${
+          className={`control-segment rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-40 ${
             option.key === value ? 'bg-white font-semibold text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
           }`}
         >
