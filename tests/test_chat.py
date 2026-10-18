@@ -186,7 +186,8 @@ class _ExplodingMCPGateway:
 
 class _RaisingMCPOrchestrator:
     def __init__(self, gateway, audit_service=None, max_mcp_tool_hops=4, max_mcp_tools_per_turn=8):
-        del gateway, audit_service, max_mcp_tool_hops, max_mcp_tools_per_turn
+        del gateway, audit_service, max_mcp_tools_per_turn
+        self.max_mcp_tool_hops = max_mcp_tool_hops
 
     async def execute(
         self, request_context, auth, payload, execute_chat_call, guardrail_middleware

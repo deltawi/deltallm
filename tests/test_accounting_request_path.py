@@ -23,7 +23,12 @@ from src.models.responses import UserAPIKeyAuth
 from src.models.requests import ChatCompletionRequest
 from src.router.router import Deployment
 from src.telemetry.provider_request_bounds import validated_provider_request_bounds
-from src.telemetry.spend_operation import durable_provider_call, operation_handle
+from src.telemetry.spend_operation import (
+    durable_provider_call,
+    operation_handle,
+    reserve_mcp_tool_hops,
+    settle_mcp_hop,
+)
 
 
 class _AccountingRepository:
@@ -357,5 +362,102 @@ async def test_exhausted_budget_cannot_serve_a_paid_cache_hit():
         assert len(repository.reservations) == 1
         assert repository.finalizations == []
         ingestion.writer.log_spend.assert_not_called()
+    finally:
+        await accounting.close()
+
+
+async def _accounted_mcp_request():
+    repository = _AccountingRepository()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    ingestion = SpendIngestionService(
+        db_client=None,
+        writer=MagicMock(),
+        config=SpendIngestionConfig(),
+        accounting=accounting,
+    )
+    return repository, accounting, ingestion, _request(accounting, ingestion)
+
+
+async def _hop(request, execute=None):
+    return await durable_provider_call(
+        request,
+        model="gpt-test",
+        call_type="completion",
+        deployment=_deployment(),
+        bounds=ProviderRequestBounds(max_output_tokens=10),
+        execute=execute or AsyncMock(return_value="hop"),
+    )
+
+
+async def _finalize(ingestion, request, cost):
+    handle = operation_handle(request)
+    await ingestion.log_spend(
+        event_id=str(handle.reservation.operation_id),
+        operation=handle,
+        request_id="request-1",
+        api_key="key-1",
+        user_id="user-1",
+        team_id="team-1",
+        organization_id="org-1",
+        owner_account_id=None,
+        end_user_id=None,
+        model="gpt-test",
+        call_type="completion",
+        usage={"prompt_tokens": 50, "completion_tokens": 25},
+        cost=cost,
+    )
+
+
+async def test_mcp_tool_hops_share_one_reservation_sized_for_every_hop():
+    repository, accounting, ingestion, request = await _accounted_mcp_request()
+    try:
+        reserve_mcp_tool_hops(request, 4)
+        for hop in range(5):
+            if hop:
+                settle_mcp_hop(request)
+            await _hop(request)
+        assert len(repository.reservations) == 1
+        # 1.3 per call for 3 provider attempts plus 4 extra model hops.
+        assert repository.reservations[0].allowance == Decimal("9.100000000000000000")
+        await _finalize(ingestion, request, 6.5)
+        terminal = repository.finalizations[0]
+        assert terminal.outcome is AccountingOutcome.COMPLETED
+        assert terminal.exact_charge == Decimal("6.5")
+        # Completed hops are part of the charge, so no allowance stays provisional.
+        assert terminal.unresolved_attempts == 0
+    finally:
+        await accounting.close()
+
+
+async def test_failed_attempt_inside_an_mcp_hop_stays_unresolved():
+    repository, accounting, ingestion, request = await _accounted_mcp_request()
+    try:
+        reserve_mcp_tool_hops(request, 4)
+        await _hop(request)
+        settle_mcp_hop(request)
+        with pytest.raises(RuntimeError, match="upstream failed"):
+            await _hop(request, AsyncMock(side_effect=RuntimeError("upstream failed")))
+        await _hop(request)
+        await _finalize(ingestion, request, 2.6)
+        assert repository.finalizations[0].unresolved_attempts == 1
+    finally:
+        await accounting.close()
+
+
+async def test_mcp_hops_beyond_the_reserved_slots_fail_closed():
+    repository, accounting, ingestion, request = await _accounted_mcp_request()
+    try:
+        reserve_mcp_tool_hops(request, 1)
+        for hop in range(4):
+            if hop:
+                settle_mcp_hop(request)
+            await _hop(request)
+        settle_mcp_hop(request)
+        execute = AsyncMock(return_value="must-not-run")
+        with pytest.raises(SpendPersistenceUnavailable):
+            await _hop(request, execute)
+        execute.assert_not_awaited()
+        assert len(repository.reservations) == 1
     finally:
         await accounting.close()

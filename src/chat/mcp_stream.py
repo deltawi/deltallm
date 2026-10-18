@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import Request
 
 from src.chat.durable_execution import open_durable_stream
+from src.telemetry.spend_operation import settle_mcp_hop
 from src.chat.executor import OpenedStream
 from src.chat.mcp_execution import MCPModelRouting, refresh_hop_routing_context
 from src.chat.mcp_stream_buffer import MCPStreamHopBuffer
@@ -271,6 +272,8 @@ class MCPStreamSession:
                         tool_run.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await tool_run
+                # The earlier hop completed; its usage is part of the final charge.
+                settle_mcp_hop(self.telemetry.request)
                 hop = await self._open_hop(next_payload)
                 hop_count += 1
         except asyncio.CancelledError as exc:

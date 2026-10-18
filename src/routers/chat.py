@@ -59,6 +59,7 @@ from src.router.selection.operation import selector_answer_observation
 from src.router.context_policy import RequestTokenDemand, set_request_token_demand
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import seed_request_failure_context
+from src.telemetry.spend_operation import reserve_mcp_tool_hops, settle_mcp_hop
 from src.routers.routing_decision import (
     capture_attempted_deployment,
     capture_initial_route_decision,
@@ -513,6 +514,7 @@ async def handle_chat_like_request(
         response_validation_headers: dict[str, str] = {}
         if has_mcp_tools:
             orchestrator = _mcp_orchestrator(request)
+            reserve_mcp_tool_hops(request, orchestrator.max_mcp_tool_hops)
             mcp_result = await MCPChatExecutionService(
                 failover_manager=routing_runtime.failover_manager,
                 orchestrator=orchestrator,
@@ -536,6 +538,7 @@ async def handle_chat_like_request(
                 on_attempt=track_attempt,
                 response_validation=response_validation_settings,
                 quality=quality,
+                on_next_hop=lambda: settle_mcp_hop(request),
             )
             response_validation_headers = mcp_result.response_validation_headers
             payload_data = mcp_result.payload
@@ -716,13 +719,15 @@ async def _open_mcp_stream(
     routing: MCPModelRouting,
     on_attempt: Callable[[Deployment], None],
 ) -> DeadlineStreamingResponse:
+    orchestrator = _mcp_orchestrator(request)
+    reserve_mcp_tool_hops(request, orchestrator.max_mcp_tool_hops)
     session = MCPStreamSession(
         telemetry=telemetry,
         framing=framing,
         failover_manager=routing_runtime.failover_manager,
         cooldown_manager=routing_runtime.cooldown_manager,
         router_state_backend=request.app.state.router_state_backend,
-        orchestrator=_mcp_orchestrator(request),
+        orchestrator=orchestrator,
         request_context=_mcp_request_context(request, telemetry.request_id),
         routing=routing,
         on_attempt=on_attempt,

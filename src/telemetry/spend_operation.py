@@ -155,6 +155,7 @@ async def durable_provider_call(
             expires_at=previous.expires_at
             if previous
             else datetime.now(UTC) + timedelta(minutes=15),
+            settled_attempts=previous.settled_attempts if previous else 0,
         )
     except (ValueError, TypeError):
         raise SpendPersistenceUnavailable() from None
@@ -201,7 +202,7 @@ async def _accounted_provider_call(
         model=model,
         pricing_snapshot=_pricing_snapshot(pricing),
     )
-    max_attempts = int(getattr(request.app.state, "accounting_max_provider_attempts", 3))
+    max_attempts = _provider_call_slots(request)
     if bounds is None:
         raise SpendPersistenceUnavailable()
     allowance = conservative_provider_allowance(
@@ -238,6 +239,33 @@ async def _accounted_provider_call(
     )
     _store_pricing_snapshot(request, model, deployment, pricing)
     return await execute()
+
+
+def reserve_mcp_tool_hops(request: Request, hops: int) -> None:
+    """Size the request's one reservation for each model hop of an MCP tool loop."""
+    request.state.spend_mcp_tool_hops = max(0, int(hops))
+
+
+def settle_mcp_hop(request: Request) -> None:
+    """Record that the last model hop completed and its usage joins the final charge.
+
+    Call this before the next hop dispatches, so that hop is not counted as an
+    unresolved retry and its leftover allowance is released at finalization.
+    """
+    handle = operation_handle(request)
+    if handle is None:
+        return
+    if isinstance(handle, AccountingOperationHandle):
+        settled = min(handle.settled_attempts + 1, len(handle.attempts), 127)
+    else:
+        settled = min(handle.settled_attempts + 1, len(handle.intent.attempts))
+    request.state.spend_operation_handle = handle.model_copy(update={"settled_attempts": settled})
+
+
+def _provider_call_slots(request: Request) -> int:
+    retries = int(getattr(request.app.state, "accounting_max_provider_attempts", 3))
+    hops = int(getattr(request.state, "spend_mcp_tool_hops", 0) or 0)
+    return min(retries + hops, 128)
 
 
 def _reuse_accounting_allowance(

@@ -54,7 +54,7 @@ class SpendOperationService:
         metadata["operation_intent"] = handle.intent.model_dump(mode="json")
         metadata["operation_outcome"] = "receipt_accepted"
         # A usable final response cannot prove earlier failed attempts were free.
-        metadata["unresolved_prior_attempts"] = max(0, len(handle.intent.attempts) - 1)
+        metadata["unresolved_prior_attempts"] = handle.unresolved_prior_attempts()
         frozen["metadata"] = metadata
         try:
             await self.settlement.accept(
