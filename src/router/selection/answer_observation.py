@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from src.metrics.selector import (
     SelectorEscalation,
@@ -14,8 +14,14 @@ from src.router.selection.qualification import QualifiedSelector
 class SelectorAnswerObservation:
     """One terminal observation per external operation, not per MCP/provider hop."""
 
-    def __init__(self, selectors: Mapping[str, QualifiedSelector]) -> None:
+    def __init__(
+        self,
+        selectors: Mapping[str, QualifiedSelector],
+        *,
+        remember: Callable[[str, str, int], None] | None = None,
+    ) -> None:
         self._selectors = selectors
+        self._remember = remember
         self.decision: SelectorDecision | None = None
         self._lowest_attempt: int | None = None
         self._finished = False
@@ -42,6 +48,8 @@ class SelectorAnswerObservation:
         if self._finished or decision is None or rank is None:
             return
         self._finished = True
+        if self._remember is not None:
+            self._remember(group, deployment_id, rank)
         observe_selector_answer(
             rank=rank, selector_seconds=decision.latency_ms / 1000, streaming=streaming
         )

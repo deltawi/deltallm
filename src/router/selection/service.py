@@ -27,6 +27,7 @@ from src.router.selection.contracts import (
 from src.router.selection.parser import parse_selector_output
 from src.router.selection.prompt import build_selector_prompt, project_selector_request
 from src.router.selection.request_state import RequestSelectorState
+from src.router.selection.session import apply_session_floor
 
 
 class SelectorService:
@@ -53,6 +54,7 @@ class SelectorService:
         token_estimate: int,
         policy: LLMTierSelectorPolicy,
         identity: SelectorPolicyIdentity,
+        floor_rank: int | None = None,
     ) -> SelectorDecision:
         return await state.select_once(
             lambda: self._decide(
@@ -61,6 +63,7 @@ class SelectorService:
                 token_estimate=token_estimate,
                 policy=policy,
                 identity=identity,
+                floor_rank=floor_rank,
             )
         )
 
@@ -72,6 +75,7 @@ class SelectorService:
         token_estimate: int,
         policy: LLMTierSelectorPolicy,
         identity: SelectorPolicyIdentity,
+        floor_rank: int | None,
     ) -> SelectorDecision:
         started = asyncio.get_running_loop().time()
         try:
@@ -104,6 +108,7 @@ class SelectorService:
                 seconds=asyncio.get_running_loop().time() - started,
             )
             raise
+        decision = apply_session_floor(decision, policy, floor_rank)
         observe_selector_decision(decision)
         return decision
 

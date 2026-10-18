@@ -56,6 +56,10 @@ class RouterRedisKeyspace:
     ) -> str:
         return self._key("router-health-probe", scope, deployment_id, generation)
 
+    def selector_session(self, session_key: str) -> str:
+        """``session_key`` is already a SHA-256 digest of principal, group and policy."""
+        return self._key("selector-session", session_key)
+
     def _key(self, capability: str, *identifiers: str) -> str:
         return build_redis_key(
             application=self.application,

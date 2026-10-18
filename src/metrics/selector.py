@@ -4,6 +4,7 @@ from prometheus_client import Counter, Histogram
 
 from src.metrics.prometheus import get_prometheus_registry
 from src.router.selection.contracts import SelectorCause, SelectorDecision
+from src.router.selection.session import SelectorSessionLookup
 
 
 class SelectorTermination(StrEnum):
@@ -11,6 +12,13 @@ class SelectorTermination(StrEnum):
     DEADLINE = "deadline"
     ACCOUNTING_UNAVAILABLE = "accounting_unavailable"
     INVARIANT_FAILURE = "invariant_failure"
+
+
+class SelectorSessionStoreFailure(StrEnum):
+    LOOKUP = "lookup"
+    INVALID_ENTRY = "invalid_entry"
+    WRITE = "write"
+    WRITE_DROPPED = "write_dropped"
 
 
 class SelectorEscalation(StrEnum):
@@ -62,6 +70,18 @@ terminal_lanes = Counter(
     ["rank"],
     registry=get_prometheus_registry(),
 )
+session_lookups = Counter(
+    "deltallm_selector_session_lookups_total",
+    "Session affinity results for selector requests",
+    ["result"],
+    registry=get_prometheus_registry(),
+)
+session_store_failures = Counter(
+    "deltallm_selector_session_store_failures_total",
+    "Session affinity store failures; each lookup failure acts as a miss",
+    ["operation"],
+    registry=get_prometheus_registry(),
+)
 ttft_contribution = Histogram(
     "deltallm_selector_ttft_contribution_seconds",
     "Selector contribution to streaming TTFT",
@@ -74,7 +94,21 @@ def observe_selector_decision(decision: SelectorDecision) -> None:
     if not isinstance(decision.cause, SelectorCause):
         raise ValueError("invalid selector cause")
     decisions.labels(cause=decision.cause.value, rank=_rank(decision.minimum_rank)).inc()
-    latency.observe(decision.latency_ms / 1000)
+    if decision.cause is not SelectorCause.SESSION_PINNED:
+        # A reused session lane has no selector hop, so it has no selector latency.
+        latency.observe(decision.latency_ms / 1000)
+
+
+def observe_selector_session(result: SelectorSessionLookup) -> None:
+    if not isinstance(result, SelectorSessionLookup):
+        raise ValueError("invalid selector session result")
+    session_lookups.labels(result=result.value).inc()
+
+
+def observe_selector_session_store_failure(operation: SelectorSessionStoreFailure) -> None:
+    if not isinstance(operation, SelectorSessionStoreFailure):
+        raise ValueError("invalid selector session store failure")
+    session_store_failures.labels(operation=operation.value).inc()
 
 
 def observe_selector_termination(cause: SelectorTermination, *, seconds: float) -> None:
