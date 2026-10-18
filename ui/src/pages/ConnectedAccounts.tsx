@@ -147,7 +147,7 @@ export default function ConnectedAccounts() {
     {
       key: 'expires',
       header: 'Expires',
-      render: (row) => <span className="whitespace-nowrap">{connectionExpiryText(row)}</span>,
+      render: (row) => <span className="md:whitespace-nowrap">{connectionExpiryText(row)}</span>,
     },
   ];
 
