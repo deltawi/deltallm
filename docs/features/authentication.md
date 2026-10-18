@@ -306,7 +306,22 @@ When `sso_sign_in.allowed_email_domains` has domains, DeltaLLM checks every SSO 
 - The domain of the email must be in the list. The match is exact, so `example.com` does not include `eu.example.com`. Add each subdomain.
 - The identity provider must send `email_verified: true`. Without a verified email, the domain proves nothing.
 
-Other sign-ins get `403` before DeltaLLM reads or changes an account. This check is useful with shared identity providers, such as Google, Microsoft Entra multi-tenant apps, or GitHub, where people from other companies can also sign in.
+Other sign-ins get `403` before DeltaLLM reads or changes an account. This check is useful with shared identity providers, such as Google, where people from other companies can also sign in.
+
+The `403` message tells you which check failed:
+
+| Message | Cause | Fix |
+| --- | --- | --- |
+| "Your email domain is not allowed to sign in with SSO." | The email domain is not in the list. | Add the domain. Subdomains need their own entry. |
+| "Your identity provider did not mark your email as verified. ..." | The domain is in the list, but the identity provider did not send `email_verified: true` in the userinfo response. | Make the identity provider send a verified email. See the notes below. |
+
+Identity provider notes:
+
+- **Keycloak**: open **Users**, select the user, and turn on **Email verified**. For users that sign in through an identity provider (brokering), turn on **Trust Email** on that identity provider, then have the user sign in again. The client must have the `email` client scope, which adds `email_verified`.
+- **Google**: Google sends `email_verified`. No change is necessary.
+- **Microsoft Entra ID**: the userinfo endpoint (`https://graph.microsoft.com/oidc/userinfo`) does not send `email_verified`, so the list refuses every sign-in. Do not set `allowed_email_domains`. To limit sign-in to your company, register a single-tenant app.
+
+The `AUTH_SSO_CALLBACK` audit event with status `error` records each refused sign-in.
 
 `self_registration.allowed_domains` is a different list. It selects the people that self-registration puts in the sandbox.
 

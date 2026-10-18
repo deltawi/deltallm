@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -33,17 +33,23 @@ class SSOSignInSettings(BaseModel):
     def normalize_domains(cls, value: list[str]) -> list[str]:
         return normalize_email_domains(value, field="allowed_email_domains")
 
-    def admits_email(self, email: str, *, email_verified: bool | None) -> bool:
-        """Apply the domain gate. An empty list admits every email.
+    def refusal(
+        self, email: str, *, email_verified: bool | None
+    ) -> Literal["email_domain", "unverified_email"] | None:
+        """Why the domain gate refuses this email, or None when it admits it.
 
-        With a list, the identity provider must also assert a verified email, because an
-        unverified email claim (for example, on a shared IdP) proves nothing about the domain.
+        An empty list admits every email. With a list, the identity provider must also assert
+        a verified email, because an unverified email claim (for example, on a shared IdP)
+        proves nothing about the domain.
         """
 
         if not self.allowed_email_domains:
-            return True
-        domain = email_domain(email)
-        return email_verified is True and domain in self.allowed_email_domains
+            return None
+        if email_domain(email) not in self.allowed_email_domains:
+            return "email_domain"
+        if email_verified is not True:
+            return "unverified_email"
+        return None
 
 
 def password_login_enabled(general_settings: Any) -> bool:
