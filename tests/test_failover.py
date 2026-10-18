@@ -9,7 +9,7 @@ from email.utils import format_datetime
 import httpx
 import pytest
 
-from src.batch.retry import BatchResponseShapeError
+from src.batch.retry import BatchResponseShapeError, classify_batch_retry
 from src.chat.stream_response import DeadlineStreamingResponse
 from src.models.errors import (
     FailureClassification,
@@ -24,7 +24,12 @@ from src.models.errors import (
 )
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.azure import AzureOpenAIAdapter
-from src.providers.base import invalid_provider_response_error, map_standard_provider_status_error
+from src.providers.base import (
+    invalid_provider_response_error,
+    map_standard_provider_status_error,
+    map_standard_provider_error,
+    sanitize_provider_proxy_error,
+)
 from src.providers.bedrock import BedrockAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.healthcheck import HealthProbeResult, probe_provider_health
@@ -3291,3 +3296,91 @@ def test_failover_event_history_limit_returns_tail_subset():
 
     assert len(events) == 2
     assert [event["attempt"] for event in events] == [3, 4]
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [("30", 30), ("0", 0), ("-1", 0), ("invalid", None), ("", None), (None, None), ("1200", 1200)],
+)
+def test_http_retry_after_reaches_batch_retry(status_code, header, expected):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    request = httpx.Request("POST", "https://example.org/v1/embeddings")
+    response = httpx.Response(
+        status_code, headers={"Retry-After": header} if header is not None else {}, request=request
+    )
+    error = httpx.HTTPStatusError("provider failed", request=request, response=response)
+
+    normalized = manager._normalize_http_error(error)
+    decision = classify_batch_retry(normalized)
+
+    assert normalized.retry_after == expected
+    assert decision.retry_after_seconds == expected
+    assert decision.retryable is True
+    if expected:
+        assert manager._compute_backoff(0, normalized) == min(expected, manager.config.backoff_max)
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 503])
+def test_normalized_retry_after_http_date_uses_shared_parser(status_code, monkeypatch):
+    fixed_now = datetime(2030, 1, 1, tzinfo=UTC)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now
+
+    monkeypatch.setattr("src.models.errors.datetime", FixedDatetime)
+    header = format_datetime(fixed_now + timedelta(seconds=30))
+    normalized = map_standard_provider_status_error(status_code, retry_after_header=header)
+
+    assert classify_batch_retry(normalized).retry_after_seconds == 30
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_mapped", [False, True])
+async def test_retry_after_survives_exhausted_primary_and_fallback(adapter_mapped):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    fallback = _deployment("dep-b")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0, fallbacks={"group-a": ["group-b"]}),
+        candidate_planner=_planner(state, {"group-a": [primary], "group-b": [fallback]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts = []
+
+    async def run(deployment):
+        attempts.append(deployment.deployment_id)
+        delay = "30" if deployment is primary else "45"
+        request = httpx.Request("POST", "https://example.org/v1/embeddings")
+        response = httpx.Response(503, headers={"Retry-After": delay}, request=request)
+        error = httpx.HTTPStatusError("provider failed", request=request, response=response)
+        if adapter_mapped:
+            raise sanitize_provider_proxy_error(map_standard_provider_error(error))
+        raise error
+
+    with pytest.raises(ServiceUnavailableError) as caught:
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    assert attempts == ["dep-a", "dep-b"]
+    assert classify_batch_retry(caught.value).retry_after_seconds == 45
+    assert get_failover_attempt_context(caught.value).attempted_deployment_ids == ("dep-a", "dep-b")
+
+
+@pytest.mark.parametrize("code", [None, NO_HEALTHY_DEPLOYMENTS_CODE])
+def test_sanitization_keeps_service_unavailable_retry_metadata(code):
+    error = ServiceUnavailableError("private provider detail", code=code, retry_after=30)
+    sanitized = sanitize_provider_proxy_error(error)
+
+    assert sanitized.retry_after == 30
+    assert classify_batch_retry(sanitized).retry_after_seconds == 30
+    assert "private provider detail" not in str(sanitized)

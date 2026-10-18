@@ -302,7 +302,7 @@ class FailoverManager:
         delay = min(delay, self.config.backoff_max)
         if self.config.backoff_jitter:
             delay = delay * (0.5 + random.random() * 0.5)
-        retry_after = getattr(error, "retry_after", None)
+        retry_after = error.retry_after if isinstance(error, ProxyError) else None
         if retry_after is not None:
             try:
                 delay = max(delay, max(0.0, float(retry_after)))
@@ -341,6 +341,11 @@ class FailoverManager:
         if affects_deployment_health(error):
             return ServiceUnavailableError(
                 message="Provider unavailable",
+                retry_after=(
+                    parse_retry_after_header(response.headers.get("retry-after"))
+                    if response is not None
+                    else None
+                ),
                 affects_deployment_health=True,
             )
         return InvalidRequestError(

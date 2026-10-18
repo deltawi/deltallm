@@ -63,6 +63,7 @@ class ProxyError(Exception):
         param: str | None = None,
         code: str | None = None,
         *,
+        retry_after: int | None = None,
         affects_deployment_health: bool | None = None,
         failure_classification: FailureClassification | None = None,
         routing_failure_action: RoutingFailureAction | None = None,
@@ -70,6 +71,7 @@ class ProxyError(Exception):
         self.message = message or self.message
         self.param = param
         self.code = code
+        self.retry_after = retry_after
         self.affects_deployment_health = affects_deployment_health
         self.failure_classification = failure_classification
         self.routing_failure_action = routing_failure_action
@@ -88,8 +90,7 @@ class RateLimitError(ProxyError):
     message = "Rate limit exceeded"
 
     def __init__(self, message: str | None = None, retry_after: int | None = None, **kwargs):
-        super().__init__(message=message, **kwargs)
-        self.retry_after = retry_after
+        super().__init__(message=message, retry_after=retry_after, **kwargs)
 
 
 class BudgetExceededError(ProxyError):
@@ -145,7 +146,11 @@ class AuthenticationUnavailableError(ServiceUnavailableError):
     retry_after = 1
 
     def __init__(self) -> None:
-        super().__init__(code="auth_fallback_unavailable", affects_deployment_health=False)
+        super().__init__(
+            code="auth_fallback_unavailable",
+            retry_after=self.retry_after,
+            affects_deployment_health=False,
+        )
 
 
 class GatewayCapacityError(ServiceUnavailableError):

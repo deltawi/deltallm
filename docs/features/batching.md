@@ -1051,7 +1051,9 @@ Finalization assembles the output file from completed items. If storage writes f
 
 Each item is retried up to `embeddings_batch_max_attempts` times (default: 3).
 Retry delays use exponential backoff starting from `embeddings_batch_retry_initial_seconds`, capped by `embeddings_batch_retry_max_seconds`.
-Provider `Retry-After` hints are honored for retryable rate-limit failures, but are also capped by `embeddings_batch_retry_max_seconds`.
+Provider `Retry-After` hints apply to retryable rate-limit and upstream `5xx` failures, including exhausted fallback chains.
+The header accepts seconds or an HTTP date.
+`embeddings_batch_retry_max_seconds` caps the resulting batch delay.
 
 - Open the batch detail in the admin UI to see per-item error messages
 - Common causes: invalid model name, provider rate limits, upstream timeouts

@@ -7,6 +7,7 @@ from src.batch.backpressure import BatchModelGroupDeferred
 from src.batch.chat_batching import normalize_chat_microbatch_results
 from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, classify_batch_retry
 from src.models.errors import (
+    AuthenticationUnavailableError,
     BudgetExceededError,
     GatewayCapacityError,
     InvalidRequestError,
@@ -337,3 +338,11 @@ def test_chat_microbatch_results_reject_ambiguous_or_invalid_identity(
         normalize_chat_microbatch_results(
             raw_results, expected_count=expected_count, custom_ids=custom_ids
         )
+
+
+def test_authentication_unavailable_retains_its_retry_recommendation():
+    error = AuthenticationUnavailableError()
+
+    assert error.retry_after == 1
+    assert classify_batch_retry(error).retry_after_seconds == 1
+    assert error.affects_deployment_health is False

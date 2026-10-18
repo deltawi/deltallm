@@ -322,6 +322,7 @@ def map_standard_provider_status_error(
     if status_code >= 500:
         return ServiceUnavailableError(
             message="Provider unavailable",
+            retry_after=parse_retry_after_header(retry_after_header),
             affects_deployment_health=True,
             failure_classification=(failure_classification or FailureClassification.GENERIC),
         )
@@ -355,7 +356,7 @@ def sanitize_provider_proxy_error(provider_error: ProxyError) -> ProxyError:
     if isinstance(provider_error, GatewayCapacityError):
         return GatewayCapacityError(failure_classification=classification)
     if isinstance(provider_error, RateLimitError):
-        retry_after = getattr(provider_error, "retry_after", None)
+        retry_after = provider_error.retry_after
         return RateLimitError(
             message="Provider rate limited request",
             retry_after=parse_retry_after_header(
@@ -374,11 +375,13 @@ def sanitize_provider_proxy_error(provider_error: ProxyError) -> ProxyError:
             return ServiceUnavailableError(
                 message="No healthy deployments available",
                 code=NO_HEALTHY_DEPLOYMENTS_CODE,
+                retry_after=provider_error.retry_after,
                 affects_deployment_health=health_impact,
                 failure_classification=classification,
             )
         return ServiceUnavailableError(
             message="Provider unavailable",
+            retry_after=provider_error.retry_after,
             affects_deployment_health=health_impact,
             failure_classification=classification,
         )
@@ -389,7 +392,7 @@ def sanitize_provider_proxy_error(provider_error: ProxyError) -> ProxyError:
             failure_classification=classification,
             routing_failure_action=provider_error.routing_failure_action,
         )
-    retry_after = getattr(provider_error, "retry_after", None)
+    retry_after = provider_error.retry_after
     return map_standard_provider_status_error(
         provider_error.status_code,
         retry_after_header=str(retry_after) if retry_after is not None else None,
