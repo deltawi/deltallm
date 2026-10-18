@@ -89,8 +89,8 @@ const location = () => document.getElementById('location')?.textContent;
 test('the approvals tab opens from the URL, shows the pending count, and filters by server', async () => {
   await withPage('/mcp-servers?tab=approvals&server_id=srv-1', { approver: true }, async ({ requests }) => {
     const pageTabs = tabs('MCP sections');
-    assert.deepEqual(pageTabs.map((tab) => tab.textContent), ['Servers', 'Approvals3']);
-    assert.equal(pageTabs[1].getAttribute('aria-selected'), 'true');
+    assert.deepEqual(pageTabs.map((tab) => tab.textContent), ['Servers', 'Bundles', 'Approvals3']);
+    assert.equal(pageTabs[2].getAttribute('aria-selected'), 'true');
     assert.ok(document.getElementById('mcp-panel-approvals'));
 
     const statusTabs = tabs('Approval status');
@@ -126,14 +126,16 @@ test('the approvals tab opens from the URL, shows the pending count, and filters
 
 test('a failed pending count shows no number on the tab', async () => {
   await withPage('/mcp-servers', { approver: true, pendingCountFails: true }, async () => {
-    assert.deepEqual(tabs('MCP sections').map((tab) => tab.textContent), ['Servers', 'Approvals']);
+    assert.deepEqual(tabs('MCP sections').map((tab) => tab.textContent), ['Servers', 'Bundles', 'Approvals']);
     assert.ok(document.querySelector('[aria-label="Search servers"]'));
   });
 });
 
-test('a user without approval access sees the servers tab only', async () => {
+test('a user without approval access gets no approvals tab', async () => {
   await withPage('/mcp-servers?tab=approvals', { approver: false }, async ({ requests }) => {
-    assert.equal(tabs('MCP sections').length, 0);
+    const pageTabs = tabs('MCP sections');
+    assert.deepEqual(pageTabs.map((tab) => tab.textContent), ['Servers', 'Bundles']);
+    assert.equal(pageTabs[0].getAttribute('aria-selected'), 'true');
     assert.ok(document.querySelector('[aria-label="Search servers"]'));
     assert.equal(requests.some((url) => url.pathname === '/ui/api/mcp-approval-requests'), false);
   });

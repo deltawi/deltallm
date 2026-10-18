@@ -3,13 +3,15 @@
 Use the MCP page to register upstream MCP servers, control who can use them, set how each tool
 runs, and decide tool calls that need approval.
 
-To open the page, select **Gateway**, then **MCP**. The page has two tabs:
+To open the page, select **Gateway**, then **MCP**. The page has these tabs:
 
 - **Servers**: register, check, and manage MCP servers.
+- **Bundles**: show the tools of several servers at one endpoint.
 - **Approvals**: approve or reject tool calls that need manual approval. This tab shows only when
   your account can decide approvals.
 
-The tab is part of the page URL (for example, `/mcp-servers?tab=approvals`). You can bookmark or
+The tab is part of the page URL (for example, `/mcp-servers?tab=approvals` or
+`/mcp-servers?tab=bundles`). You can bookmark or
 share a link to a tab. The old `/mcp-approvals` link opens the **Approvals** tab.
 
 **Access:** `key.read` can expose read views; `org.update` is required for server, binding, and tool-
@@ -26,6 +28,7 @@ Use this area when you need to:
 - bind a server to an organization, team, API key, or user
 - set policy for a specific tool
 - review and decide manual approval requests
+- group the tools of several servers into one bundle
 
 ## Quick Success Workflow
 
@@ -156,6 +159,72 @@ Available controls:
 - **Max Total Execution Time**: fail long-running tool calls
 
 Use policies to keep the server broadly visible but still control the riskiest tools narrowly.
+
+## Bundles tab
+
+A bundle shows tools from several servers at one endpoint. It does not give access. A caller sees
+only the tools that their key can already use. Bindings, tool policies and approvals stay the
+only access rules.
+
+**Access:** `key.read` shows the bundles of your scope. `org.update` in the owner organization is
+necessary to create, change, or delete a bundle. Only a platform administrator can manage a
+**Global** bundle. A team administrator can read the bundles of the team, but cannot change them.
+
+The table shows:
+
+| Column | Content |
+| --- | --- |
+| Bundle | The name, the key, and the owner scope |
+| Servers | One chip for each server, with the number of its tools in the bundle |
+| Tools | The number of tools in the bundle |
+| Endpoint | The bundle path. Select the copy button to copy the full URL |
+
+Use the search box to find a bundle by its key or name.
+
+### Create or change a bundle
+
+1. Select **Create bundle**, or select a row to open a bundle.
+2. In **Details**, enter the name. DeltaLLM makes the key from the name. You can change the key
+   before you save. You cannot change the key after you save.
+3. Select the owner scope: **Global**, **Organization**, or **Team**. Callers outside the owner
+   scope get "not found". You cannot change the owner scope after you save.
+4. In **Servers and tools**, select **Add server**, then select a server.
+5. Open a server to see its tools. Use the search box, **Select all**, and **Clear** to select
+   the tools. **Select all** also includes the tools that the server adds later.
+6. Enter a **Name prefix** when two servers have tools with the same name. The bundle then shows
+   `<prefix>_<tool>`, for example `gh_create_issue`.
+7. Select **Save bundle**.
+
+The tool list shows these badges for the owner scope:
+
+- **Needs approval**: a tool policy requires manual approval. Chat and Responses requests reject
+  this tool. Use `/mcp/<bundle_key>` or remove the tool with `allowed_tools`.
+- **Disabled by policy**: a tool policy disables the tool. Callers do not see it.
+- **Name conflict**: two selected tools have the same bundle name. Set a name prefix on one of the
+  servers.
+
+### Endpoint card
+
+The **Endpoint** card shows:
+
+- the MCP client URL, `/mcp/<bundle_key>`. Use it in MCP clients with the API key in the
+  `Authorization` header.
+- the `tools` entry for `/v1/chat/completions` and `/v1/responses`.
+
+### Preview card
+
+Use **Check a key** to see what one API key can use. Select a key. For each tool, the card shows
+one of these results:
+
+| Result | Meaning |
+| --- | --- |
+| **Can use** | The key can call the tool |
+| **Needs approval** | The key can call the tool through `/mcp/<bundle_key>` after a person approves the call |
+| **Disabled by policy** | A tool policy disables the tool for the key |
+| **No access** | No binding gives the key this tool |
+
+If the owner scope does not include the key, the card tells you that the key cannot see the
+bundle.
 
 ## Approvals tab
 

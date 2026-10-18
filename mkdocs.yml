@@ -102,7 +102,7 @@ nav:
           - Reuse provider credentials: guides/admin-provider-credentials.md
           - Manage route groups: guides/admin-route-groups.md
           - Prompts: admin-ui/prompt-registry.md
-          - MCP servers and approvals: admin-ui/mcp.md
+          - MCP servers, bundles and approvals: admin-ui/mcp.md
           - Connected accounts: admin-ui/connected-accounts.md
           - Test a model: admin-ui/playground.md
       - Manage organizations and access:

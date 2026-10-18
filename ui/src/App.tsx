@@ -50,6 +50,7 @@ const PromptTemplateDetail = lazy(() => import('./pages/PromptTemplateDetail'));
 const MCPServers = lazy(() => import('./pages/MCPServers'));
 const MCPServerDetail = lazy(() => import('./pages/MCPServerDetail'));
 const ConnectedAccounts = lazy(() => import('./pages/ConnectedAccounts'));
+const MCPBundleEditor = lazy(() => import('./pages/MCPBundleEditor'));
 
 class RouteChunkBoundary extends Component<
   { children: ReactNode },
@@ -226,6 +227,8 @@ function AppRoutes() {
           <Route path="/prompts" element={uiAccess.prompts ? <ChunkedRoute><PromptRegistry /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <ChunkedRoute><PromptTemplateDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServers /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/mcp-servers/bundles/new" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPBundleEditor /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/mcp-servers/bundles/:bundleId" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPBundleEditor /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServerDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/connected-accounts" element={<ChunkedRoute><ConnectedAccounts /></ChunkedRoute>} />
           {/* The connect link in a tool error (connect_url) and the OAuth callback redirect open this path. */}

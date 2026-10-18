@@ -1,7 +1,8 @@
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle2, Plug, Server } from 'lucide-react';
+import { Boxes, CheckCircle2, Plug, Server } from 'lucide-react';
 import MCPApprovalsPanel from '../components/mcp/MCPApprovalsPanel';
 import MCPServersTab from '../components/mcp/MCPServersTab';
+import MCPBundlesTab from '../components/mcp/bundles/MCPBundlesTab';
 import { IconTabs, IndexShell } from '../components/admin/shells';
 import { mcpServers } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -50,6 +51,10 @@ export default function MCPServers() {
     updateParams((next) => {
       if (tab === 'approvals') {
         next.set('tab', 'approvals');
+      } else if (tab === 'bundles') {
+        next.set('tab', 'bundles');
+        next.delete('status');
+        next.delete('server_id');
       } else {
         next.delete('tab');
         next.delete('status');
@@ -67,6 +72,7 @@ export default function MCPServers() {
 
   const tabs: Array<{ id: MCPPageTab; label: string; icon: typeof Server; count?: number }> = [
     { id: 'servers', label: 'Servers', icon: Server },
+    { id: 'bundles', label: 'Bundles', icon: Boxes },
   ];
   if (canReviewApprovals) {
     tabs.push({ id: 'approvals', label: 'Approvals', icon: CheckCircle2, count: pendingCount ?? undefined });
@@ -77,12 +83,13 @@ export default function MCPServers() {
       eyebrowPrefix={navSectionLabel('/mcp-servers')}
       title="MCP"
       titleIcon={Plug}
-      description="Connect external tool servers and review the tool calls that need approval."
+      description="Connect external tool servers, group their tools into bundles, and review the tool calls that need approval."
       tabs={tabs.length > 1 ? (
         <IconTabs id={TABS_ID} label="MCP sections" variant="header" items={tabs} active={activeTab} onChange={selectTab} />
       ) : null}
     >
       <div role={tabs.length > 1 ? 'tabpanel' : undefined} id={`${TABS_ID}-panel-${activeTab}`} aria-labelledby={tabs.length > 1 ? `${TABS_ID}-tab-${activeTab}` : undefined}>
+        {activeTab === 'bundles' ? <MCPBundlesTab /> : null}
         {activeTab === 'approvals' ? (
           <MCPApprovalsPanel
             serverId={serverFilter}
@@ -92,9 +99,8 @@ export default function MCPServers() {
             pendingCount={pendingCount}
             onRefresh={refetchPending}
           />
-        ) : (
-          <MCPServersTab canRegister={uiAccess.mcp_servers} />
-        )}
+        ) : null}
+        {activeTab === 'servers' ? <MCPServersTab canRegister={uiAccess.mcp_servers} /> : null}
       </div>
     </IndexShell>
   );

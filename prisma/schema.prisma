@@ -1701,12 +1701,51 @@ model DeltaLLM_MCPServer {
   approval_requests DeltaLLM_MCPApprovalRequest[]
   oauth_connections DeltaLLM_MCPOAuthConnection[]
   oauth_states DeltaLLM_MCPOAuthState[]
+  bundle_members DeltaLLM_MCPBundleMember[]
   managed_asset DeltaLLM_ManagedAsset? @relation(fields: [managed_asset_id], references: [asset_id], onDelete: SetNull)
 
   @@index([enabled], map: "deltallm_mcpserver_enabled_idx")
   @@index([created_at], map: "deltallm_mcpserver_created_at_idx")
   @@index([owner_scope_type, owner_scope_id], map: "deltallm_mcpserver_owner_scope_idx")
   @@map("deltallm_mcpserver")
+}
+
+model DeltaLLM_MCPBundle {
+  mcp_bundle_id         String   @id @default(uuid())
+  bundle_key            String   @unique
+  name                  String
+  description           String?
+  owner_scope_type      String   @default("global")
+  owner_scope_id        String?
+  enabled               Boolean  @default(true)
+  metadata              Json?
+  created_by_account_id String?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  members DeltaLLM_MCPBundleMember[]
+
+  @@index([owner_scope_type, owner_scope_id], map: "deltallm_mcpbundle_owner_scope_idx")
+  @@map("deltallm_mcpbundle")
+}
+
+model DeltaLLM_MCPBundleMember {
+  mcp_bundle_member_id String   @id @default(uuid())
+  mcp_bundle_id        String
+  mcp_server_id        String
+  position             Int      @default(0)
+  all_tools            Boolean  @default(false)
+  tool_allowlist       String[]
+  name_prefix          String?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  bundle DeltaLLM_MCPBundle @relation(fields: [mcp_bundle_id], references: [mcp_bundle_id], onDelete: Cascade)
+  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade)
+
+  @@unique([mcp_bundle_id, mcp_server_id], map: "deltallm_mcpbundlemember_bundle_server_key")
+  @@index([mcp_server_id], map: "deltallm_mcpbundlemember_server_idx")
+  @@map("deltallm_mcpbundlemember")
 }
 
 model DeltaLLM_MCPServerBinding {

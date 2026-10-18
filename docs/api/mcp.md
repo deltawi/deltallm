@@ -564,6 +564,131 @@ Streamable HTTP servers may return either JSON or `text/event-stream` JSON-RPC r
 }
 ```
 
+## MCP Bundles
+
+A bundle shows the tools of several MCP servers at one endpoint. A bundle does not give access. Bindings, tool policies and approvals stay the only access rules. A caller sees only the bundle tools that their key can already use through `POST /mcp`.
+
+### Bundle Visibility
+
+Each bundle has an owner scope:
+
+| Owner scope | Who can see the bundle |
+| --- | --- |
+| `global` | All callers |
+| `organization` | Keys of that organization |
+| `team` | Keys of that team |
+
+A disabled bundle, or a bundle with an owner scope that does not include the key, gives the same result as an unknown name: HTTP `404` on `/mcp/{bundle_key}`, and HTTP `400` on chat and responses.
+
+### Tool Names
+
+A bundle member is one server, a list of its tools (or all tools), and an optional name prefix.
+
+- With a prefix, the bundle shows the tool as `<prefix>_<tool>`. For example, prefix `gh` and tool `create_issue` give `gh_create_issue`.
+- Without a prefix, the bundle shows the tool name of the server.
+- Two tools in one bundle cannot have the same name. The API rejects the save with HTTP `400`, and the message names the two tools.
+- The name `mcp_tool_search` is reserved.
+
+DeltaLLM sends each call to the real server and tool. Audit events and usage records use the namespaced name (`github.create_issue`) and add `bundle_key` to the audit metadata.
+
+When a server adds a tool later, and that tool name is already in the bundle, the bundle keeps the first tool. Use a name prefix to prevent this.
+
+### Bundle Endpoint
+
+```text
+POST /mcp/{bundle_key}
+```
+
+The endpoint supports `initialize`, `ping`, `tools/list` and `tools/call`. `tools/list` returns the bundle names. `tools/call` accepts the bundle names only.
+
+```bash
+curl http://localhost:8000/mcp/eng-assist \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gh_create_issue","arguments":{"title":"Bug"}}}'
+```
+
+`POST /mcp` does not change. It does not show bundle tools.
+
+### Bundles in Chat and Responses
+
+Put the bundle key in the `server` field:
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "messages": [{"role": "user", "content": "List the open pull requests"}],
+  "tools": [
+    {"type": "mcp", "server": "eng-assist", "allowed_tools": ["gh_list_pull_requests"]}
+  ]
+}
+```
+
+- `allowed_tools` and `tool_search` use the bundle names.
+- Streaming and non-streaming requests are supported.
+- When a server and a bundle have the same key, the server is used. The API does not let you create a bundle with the key of a server, or a server with the key of a bundle.
+- If two MCP entries in one request give the same tool name, or a tool name is also the name of a `function` tool, DeltaLLM rejects the request with HTTP `400`.
+
+### Admin Bundle Endpoints
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/ui/api/mcp-bundles` | List the bundles that the admin scope can read. Accepts `search`, `limit` and `offset` |
+| `POST` | `/ui/api/mcp-bundles` | Create a bundle |
+| `GET` | `/ui/api/mcp-bundles/{bundle_id}` | Get one bundle |
+| `PATCH` | `/ui/api/mcp-bundles/{bundle_id}` | Update the name, description, `enabled` flag or members |
+| `DELETE` | `/ui/api/mcp-bundles/{bundle_id}` | Delete a bundle |
+| `POST` | `/ui/api/mcp-bundles/preview` | Show the tools of a saved or draft bundle, and what one API key can use |
+
+Permissions:
+
+- A platform admin can manage all bundles. Only a platform admin can create a `global` bundle.
+- An organization admin can manage the bundles of their organization and of its teams.
+- A team admin can read the bundles of their team. They cannot change them.
+- A member server must be visible to the admin. A server that an organization owns can be in a bundle of that organization or of its teams only.
+- You cannot change `bundle_key` or the owner scope after you create the bundle.
+
+DeltaLLM writes the audit actions `ADMIN_MCP_BUNDLE_CREATE`, `ADMIN_MCP_BUNDLE_UPDATE` and `ADMIN_MCP_BUNDLE_DELETE`.
+
+Create a bundle:
+
+```json
+{
+  "bundle_key": "eng-assist",
+  "name": "Engineering assistant",
+  "description": "Code review and issue triage",
+  "owner_scope_type": "organization",
+  "owner_scope_id": "org-acme",
+  "members": [
+    {"mcp_server_id": "mcp-github", "all_tools": true, "name_prefix": "gh"},
+    {"mcp_server_id": "mcp-jira", "all_tools": false, "tool_names": ["search"], "name_prefix": "jira"}
+  ]
+}
+```
+
+Rules:
+
+- `bundle_key`: 1 to 63 characters, `a-z`, `0-9`, `-` and `_`. It must start with a letter or a digit.
+- `name_prefix`: 1 to 32 characters, letters, digits, `-` and `_`.
+- A bundle can have at most 50 servers. One member can list at most 500 tools.
+- Each tool in `tool_names` must be a tool of the server.
+
+Preview a bundle. Send `mcp_bundle_id` for a saved bundle, or the owner scope and the members for a draft. `api_key` is optional. It is the key hash (`token`) from `GET /ui/api/keys`.
+
+```json
+{
+  "mcp_bundle_id": "bundle-1",
+  "api_key": "KEY_TOKEN_HASH"
+}
+```
+
+The response contains:
+
+- `servers`: each member server with its tools. Each tool has `needs_approval` and `disabled_by_policy` for the owner scope.
+- `tools`: the bundle names and the real server and tool of each name.
+- `errors`: the problems that stop a save, for example a name conflict.
+- `key`: when you send `api_key`, the result for that key. `sees_bundle` is `false` when the owner scope does not include the key. Each tool has an `access` value: `available`, `needs_approval`, `disabled_by_policy` or `no_access`.
+
 ## Related Pages
 
 - [Connect your first MCP server](../getting-started/mcp-quickstart.md)

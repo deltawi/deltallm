@@ -162,6 +162,28 @@ the model calls that asked for tools.
 
 For early production rollouts, verify the provider and model combination with a real tool call path before enabling it broadly.
 
+## Group tools into bundles
+
+A bundle shows the tools of several MCP servers at one endpoint. Use a bundle when an application
+needs tools from more than one server, for example GitHub and Jira, and you want one MCP client
+URL or one `tools` entry.
+
+A bundle does not give access. A caller sees only the bundle tools that their key can already use
+through bindings and tool policies. Approvals apply in the same way.
+
+- The bundle has a key, for example `eng-assist`. MCP clients use `/mcp/eng-assist`. Chat and
+  responses requests use `{"type": "mcp", "server": "eng-assist"}`.
+- Each server in the bundle has a tool list (or all tools) and an optional name prefix. With
+  prefix `gh`, the tool `create_issue` shows as `gh_create_issue`.
+- Two tools in one bundle cannot have the same name. Set a name prefix to prevent a conflict.
+- The owner scope (`global`, `organization`, or `team`) controls who can see the bundle. For a key
+  outside the owner scope, the bundle does not exist.
+- Requests that do not name a bundle do not change. DeltaLLM keeps the bundles in memory with the
+  other MCP rules, so a request does not read the database to find a bundle.
+
+For the endpoints and the rules, see [MCP Bundles](../api/mcp.md#mcp-bundles). For the UI, see
+[Admin UI: MCP](../admin-ui/mcp.md#bundles-tab).
+
 ## MCP server requirements
 
 DeltaLLM currently supports:
@@ -212,6 +234,8 @@ For the day-to-day UI workflow, see [Admin UI: MCP](../admin-ui/mcp.md).
 | --- | --- |
 | `No visible MCP tools are available for server 'docs'` | The caller has no matching binding, or the binding and policy combination hides every tool |
 | `Unknown MCP tool 'docs.search'` | The tool is not visible to that caller, or the upstream capabilities changed and were not refreshed |
+| `/mcp/<bundle_key>` returns `404` | The bundle is disabled, or its owner scope does not include the key |
+| A bundle shows fewer tools than you selected | The key has no binding for some tools, or a tool policy disables them. Use **Check a key** in the bundle editor |
 | Health check reports `unhealthy` | Base URL, upstream auth, or network reachability is wrong |
 | `/mcp` works but chat fails | The provider/model may not support tool calling well enough |
 | A stream ends with `data: {"error": ...}` and no `[DONE]` | A tool or a later model call failed after the stream started. The error message tells which |

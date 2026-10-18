@@ -43,6 +43,7 @@ from src.db.catalog.logical_models import LogicalModelRepository
 from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.mcp.mcp import MCPRepository
 from src.db.mcp.mcp_oauth import MCPOAuthRepository
+from src.db.mcp.mcp_bundles import MCPBundleRepository
 from src.db.mcp.mcp_scope_policies import MCPScopePolicyRepository
 from src.db.catalog.named_credentials import NamedCredentialRepository
 from src.db.catalog.prompt_registry import PromptRegistryRepository
@@ -478,6 +479,7 @@ async def _init_infrastructure_runtime(
     )
     await app.state.creator_mcp_access_service.reload()
     app.state.mcp_scope_policy_repository = MCPScopePolicyRepository(prisma_manager.client)
+    app.state.mcp_bundle_repository = MCPBundleRepository(prisma_manager.client)
     app.state.batch_repository = BatchRepository(
         prisma_manager.client,
         webhook_max_attempts=getattr(cfg.general_settings, "batch_webhook_max_attempts", 8),

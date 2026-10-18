@@ -17,6 +17,7 @@ _RESOURCE_NAME_QUERIES: dict[str, str] = {
     "model_deployment": "SELECT deployment_id AS id, model_name AS name FROM deltallm_modeldeployment WHERE deployment_id = ANY($1::text[])",
     "route_group": "SELECT group_key AS id, COALESCE(name, group_key) AS name FROM deltallm_routegroup WHERE group_key = ANY($1::text[])",
     "mcp_server": "SELECT mcp_server_id AS id, name FROM deltallm_mcpserver WHERE mcp_server_id = ANY($1::text[])",
+    "mcp_bundle": "SELECT mcp_bundle_id AS id, name FROM deltallm_mcpbundle WHERE mcp_bundle_id = ANY($1::text[])",
     "prompt_template": "SELECT template_key AS id, name FROM deltallm_prompttemplate WHERE template_key = ANY($1::text[])",
     "named_credential": "SELECT credential_id AS id, name FROM deltallm_namedcredential WHERE credential_id = ANY($1::text[])",
     "tier": "SELECT tier_id AS id, name FROM deltallm_tier WHERE tier_id = ANY($1::text[])",

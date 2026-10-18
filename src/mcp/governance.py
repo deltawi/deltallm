@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
+from src.mcp.bundles import MCPBundle
 from src.mcp.models import MCPBindingResolution
 from src.services.access.runtime_scopes import resolve_runtime_scope_context
 
 if TYPE_CHECKING:
     from src.db.mcp.mcp import MCPRepository
+    from src.db.mcp.mcp_bundles import MCPBundleRepository
     from src.db.mcp.mcp_scope_policies import MCPScopePolicyRepository
 
 
@@ -23,6 +25,7 @@ class MCPGovernanceSnapshot:
     binding_counts_by_scope: dict[tuple[str, str], int]
     scope_modes_by_scope: dict[tuple[str, str], str]
     policies_by_scope: dict[tuple[str, str], tuple[MCPToolPolicyRecord, ...]]
+    bundles_by_key: dict[str, MCPBundle] = field(default_factory=dict)
 
 
 class MCPGovernanceService:
@@ -31,9 +34,11 @@ class MCPGovernanceService:
         repository: MCPRepository | None,
         *,
         policy_repository: MCPScopePolicyRepository | None = None,
+        bundle_repository: MCPBundleRepository | None = None,
     ) -> None:
         self.repository = repository
         self.policy_repository = policy_repository
+        self.bundle_repository = bundle_repository
         self._reload_lock = asyncio.Lock()
         self._snapshot = MCPGovernanceSnapshot(
             enabled_servers=(),
@@ -122,6 +127,21 @@ class MCPGovernanceService:
                     if not page or offset >= total:
                         break
 
+            bundles_by_key: dict[str, MCPBundle] = {}
+            if self.bundle_repository is not None:
+                offset = 0
+                limit = 500
+                while True:
+                    bundle_page, total = await self.bundle_repository.list_bundles(
+                        limit=limit, offset=offset
+                    )
+                    for record in bundle_page:
+                        if record.enabled:
+                            bundles_by_key[record.bundle_key] = record.to_bundle()
+                    offset += len(bundle_page)
+                    if not bundle_page or offset >= total:
+                        break
+
             self._snapshot = MCPGovernanceSnapshot(
                 enabled_servers=tuple(enabled_servers),
                 servers_by_id=servers_by_id,
@@ -133,6 +153,7 @@ class MCPGovernanceService:
                 policies_by_scope={
                     scope: tuple(items) for scope, items in policies_by_scope.items()
                 },
+                bundles_by_key=bundles_by_key,
             )
 
     async def invalidate_all(self) -> None:
@@ -143,6 +164,9 @@ class MCPGovernanceService:
 
     def get_server(self, server_id: str) -> MCPServerRecord | None:
         return self._snapshot.servers_by_id.get(str(server_id or "").strip())
+
+    def get_bundle(self, bundle_key: str) -> MCPBundle | None:
+        return self._snapshot.bundles_by_key.get(str(bundle_key or "").strip())
 
     def get_scope_mode(self, scope_type: str, scope_id: str) -> str | None:
         normalized_scope_type = str(scope_type or "").strip()

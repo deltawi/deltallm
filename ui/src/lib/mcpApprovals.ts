@@ -1,6 +1,6 @@
 import type { MCPApprovalRequest } from './api';
 
-export type MCPPageTab = 'servers' | 'approvals';
+export type MCPPageTab = 'servers' | 'bundles' | 'approvals';
 
 export type MCPApprovalStatusFilter = 'pending' | 'approved' | 'rejected' | 'expired' | 'all';
 
@@ -22,9 +22,11 @@ export const MCP_SERVERS_PATH = '/mcp-servers';
 /**
  * Resolve the active tab from the `tab` query value. A user without approval
  * access always gets the Servers tab, also when the URL asks for approvals.
+ * Every user of the page can open the Bundles tab.
  */
 export function resolveMCPPageTab(raw: string | null | undefined, canReviewApprovals: boolean): MCPPageTab {
   if (raw === 'approvals' && canReviewApprovals) return 'approvals';
+  if (raw === 'bundles') return 'bundles';
   return 'servers';
 }
 

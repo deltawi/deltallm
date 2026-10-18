@@ -718,6 +718,7 @@ export type {
 } from './api/routeGroups';
 
 export * from './api/promptRegistry';
+export * from './api/mcpBundles';
 
 export interface SettingsResponse {
   router_settings?: {

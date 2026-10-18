@@ -45,6 +45,7 @@ from .exceptions import (
     MCPToolNotFoundError,
     MCPTransportError,
 )
+from .bundle_runtime import list_bundle_tools, resolve_visible_bundle
 from .gateway import MCPGatewayService
 from .hop_usage import add_hop_usage
 from .metrics import record_mcp_tool_search
@@ -69,6 +70,12 @@ class ResolvedMCPTool:
     input_schema: dict[str, Any]
     scope_type: str | None = None
     scope_id: str | None = None
+    # The real `server.tool` name when a bundle shows the tool under another name.
+    call_name: str | None = None
+
+    @property
+    def gateway_name(self) -> str:
+        return self.call_name or self.namespaced_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,35 +181,31 @@ class MCPChatOrchestrator:
         exposed: set[str] = set()
         searchable: dict[str, ResolvedMCPTool] = {}
 
+        client_function_names = {tool.function.get("name") for tool in translated}
+
         for definition in requested_mcp_tools:
             if definition.server == ALL_SERVERS and not definition.tool_search:
                 raise InvalidRequestError(
                     message=f"MCP server '{ALL_SERVERS}' needs `tool_search: true`"
                 )
-            matched = [
-                tool
-                for tool in visible
-                if definition.server in (ALL_SERVERS, tool.server_key)
-                and (
-                    definition.allowed_tools is None
-                    or tool.original_name in set(definition.allowed_tools)
-                    # Across all servers, a namespaced name selects one server's tool.
-                    or (
-                        definition.server == ALL_SERVERS
-                        and tool.namespaced_name in set(definition.allowed_tools)
-                    )
-                )
-            ]
+            matched = await self._match_definition_tools(
+                auth, definition, visible, client_function_names
+            )
             if not matched:
                 raise InvalidRequestError(
                     message=f"No visible MCP tools are available for server '{definition.server}'"
                 )
             kept = 0
-            for tool in matched:
-                if tool.namespaced_name in exposed:
+            for name, tool in matched:
+                existing = resolved_tools.get(name)
+                if existing is not None and existing.gateway_name != tool.namespaced_name:
+                    raise InvalidRequestError(
+                        message=f"Two MCP tools in this request use the name '{name}'"
+                    )
+                if name in exposed:
                     kept += 1
                     continue
-                if tool.namespaced_name not in resolved_tools:
+                if existing is None:
                     requires_manual_approval = False
                     if hasattr(self.gateway, "tool_requires_manual_approval"):
                         requires_manual_approval = await self.gateway.tool_requires_manual_approval(
@@ -220,16 +223,17 @@ class MCPChatOrchestrator:
                                 "Use the /mcp tools/call flow and retry after approval."
                             )
                         )
-                    resolved_tools[tool.namespaced_name] = ResolvedMCPTool(
+                    resolved_tools[name] = ResolvedMCPTool(
                         server_key=tool.server_key,
                         original_name=tool.original_name,
-                        namespaced_name=tool.namespaced_name,
+                        namespaced_name=name,
                         description=tool.description,
                         input_schema=dict(tool.input_schema or {}),
                         scope_type=getattr(tool, "scope_type", None),
                         scope_id=getattr(tool, "scope_id", None),
+                        call_name=tool.namespaced_name if name != tool.namespaced_name else None,
                     )
-                resolved = resolved_tools[tool.namespaced_name]
+                resolved = resolved_tools[name]
                 kept += 1
                 if definition.tool_search:
                     searchable[resolved.namespaced_name] = resolved
@@ -264,6 +268,47 @@ class MCPChatOrchestrator:
         return payload.model_copy(update={"tools": translated}), MCPToolSet(
             resolved=resolved_tools, search=search, searchable=frozenset(searchable)
         )
+
+    async def _match_definition_tools(
+        self,
+        auth: UserAPIKeyAuth,
+        definition: MCPToolDefinition,
+        visible: list[Any],
+        client_function_names: set[Any],
+    ) -> list[tuple[str, Any]]:
+        """Return (name for the model, visible tool) pairs for one MCP tool entry."""
+        allowed = set(definition.allowed_tools) if definition.allowed_tools is not None else None
+        if definition.server == ALL_SERVERS or any(
+            tool.server_key == definition.server for tool in visible
+        ):
+            return [
+                (tool.namespaced_name, tool)
+                for tool in visible
+                if definition.server in (ALL_SERVERS, tool.server_key)
+                and (
+                    allowed is None
+                    or tool.original_name in allowed
+                    # Across all servers, a namespaced name selects one server's tool.
+                    or (definition.server == ALL_SERVERS and tool.namespaced_name in allowed)
+                )
+            ]
+        # Not a server that the caller can see: look for a bundle. A bundle that
+        # the caller cannot see gives the same error as an unknown server.
+        if not isinstance(self.gateway, MCPGatewayService):
+            return []
+        bundle = resolve_visible_bundle(self.gateway, auth, definition.server)
+        if bundle is None:
+            return []
+        matched: list[tuple[str, Any]] = []
+        for item in await list_bundle_tools(self.gateway, auth, bundle, visible_tools=visible):
+            if allowed is not None and item.exposed_name not in allowed:
+                continue
+            if item.exposed_name in client_function_names:
+                raise InvalidRequestError(
+                    message=f"The function name '{item.exposed_name}' is also a tool of MCP bundle '{bundle.bundle_key}'"
+                )
+            matched.append((item.exposed_name, item.tool))
+        return matched
 
     async def execute(
         self,
@@ -462,7 +507,7 @@ class MCPChatOrchestrator:
             await self._emit_tool_audit_attempt_event(
                 request_context=request_context,
                 auth=auth,
-                namespaced_tool_name=tool_name,
+                namespaced_tool_name=resolved.gateway_name,
                 server_key=resolved.server_key,
                 scope_type=resolved.scope_type,
                 scope_id=resolved.scope_id,
@@ -472,7 +517,7 @@ class MCPChatOrchestrator:
             try:
                 result = await self.gateway.call_tool(
                     auth,
-                    namespaced_tool_name=tool_name,
+                    namespaced_tool_name=resolved.gateway_name,
                     arguments=guarded_arguments,
                     request_headers=dict(request_context.request_headers),
                     request_id=request_context.request_id,
@@ -482,7 +527,7 @@ class MCPChatOrchestrator:
                 await self._emit_tool_audit_failure_event(
                     request_context=request_context,
                     auth=auth,
-                    namespaced_tool_name=tool_name,
+                    namespaced_tool_name=resolved.gateway_name,
                     server_key=resolved.server_key,
                     scope_type=resolved.scope_type,
                     scope_id=resolved.scope_id,
@@ -496,7 +541,7 @@ class MCPChatOrchestrator:
                 await self._emit_tool_audit_failure_event(
                     request_context=request_context,
                     auth=auth,
-                    namespaced_tool_name=tool_name,
+                    namespaced_tool_name=resolved.gateway_name,
                     server_key=resolved.server_key,
                     scope_type=resolved.scope_type,
                     scope_id=resolved.scope_id,
@@ -515,7 +560,7 @@ class MCPChatOrchestrator:
                 await self._emit_tool_audit_failure_event(
                     request_context=request_context,
                     auth=auth,
-                    namespaced_tool_name=tool_name,
+                    namespaced_tool_name=resolved.gateway_name,
                     server_key=resolved.server_key,
                     scope_type=resolved.scope_type,
                     scope_id=resolved.scope_id,
@@ -529,7 +574,7 @@ class MCPChatOrchestrator:
                 await self._emit_tool_audit_failure_event(
                     request_context=request_context,
                     auth=auth,
-                    namespaced_tool_name=tool_name,
+                    namespaced_tool_name=resolved.gateway_name,
                     server_key=resolved.server_key,
                     scope_type=resolved.scope_type,
                     scope_id=resolved.scope_id,
@@ -548,7 +593,7 @@ class MCPChatOrchestrator:
                 await self._emit_tool_audit_failure_event(
                     request_context=request_context,
                     auth=auth,
-                    namespaced_tool_name=tool_name,
+                    namespaced_tool_name=resolved.gateway_name,
                     server_key=resolved.server_key,
                     scope_type=resolved.scope_type,
                     scope_id=resolved.scope_id,
@@ -569,7 +614,7 @@ class MCPChatOrchestrator:
             await self._emit_tool_audit_event(
                 request_context=request_context,
                 auth=auth,
-                namespaced_tool_name=tool_name,
+                namespaced_tool_name=resolved.gateway_name,
                 server_key=resolved.server_key,
                 scope_type=resolved.scope_type,
                 scope_id=resolved.scope_id,
