@@ -44,7 +44,7 @@ def prepare_accounting_charge(
         spend_payload=accepted,
         audit_envelope=audit_envelope,
         occurred_at=occurred_at,
-        unresolved_attempts=max(0, len(operation.attempts) - 1),
+        unresolved_attempts=operation.unresolved_attempts(),
     )
 
 

@@ -164,6 +164,12 @@ class AccountingOperationHandle(FrozenBillingContract):
     dispatch_token: UUID = Field(repr=False)
     accounting_partition: int = Field(ge=0, le=63)
     attempts: tuple[AccountingAttempt, ...] = Field(min_length=1, max_length=128)
+    # Earlier attempts whose usage is part of the final charge, such as the
+    # completed model hops of an MCP tool loop. They are not unresolved retries.
+    settled_attempts: int = Field(default=0, ge=0, le=127)
+
+    def unresolved_attempts(self) -> int:
+        return max(0, len(self.attempts) - 1 - self.settled_attempts)
 
 
 class AccountingFinalization(FrozenBillingContract):

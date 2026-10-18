@@ -282,6 +282,14 @@ One request with MCP tools can call the model more than one time: one call that 
 and one more call after each tool result. The `usage` in the response, and the spend that DeltaLLM
 records, is the sum of all these model calls. This is true for streaming and non-streaming requests.
 
+When accounting is on, DeltaLLM makes one spend reservation for the full request before the first
+model call. The reservation has space for each model call that the tool loop can make. The number of
+calls is `accounting_max_provider_attempts` (default `3`) plus the MCP hop limit (default `4`), with a
+maximum of `128`. Thus a request with MCP tools holds more budget than a request without tools while
+it runs. When the request ends, DeltaLLM charges the sum of the model calls and releases the
+remainder of the reservation. Only a failed or retried model call keeps its part of the reservation
+as unresolved spend.
+
 ### Important Limits
 
 - chat and responses requests do not support manual approval. If a tool that the request can use requires manual approval, DeltaLLM rejects the full request with HTTP `400`. Use `allowed_tools` to remove that tool from the request, or call the tool through `/mcp`

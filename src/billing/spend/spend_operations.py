@@ -68,3 +68,8 @@ class OperationHandle(BaseModel):
     owner_token: UUID = Field(repr=False)
     intent: SpendOperationIntent = Field(repr=False)
     expires_at: AwareDatetime
+    # Earlier attempts whose usage is part of the final charge (completed MCP hops).
+    settled_attempts: int = Field(default=0, ge=0)
+
+    def unresolved_prior_attempts(self) -> int:
+        return max(0, len(self.intent.attempts) - 1 - self.settled_attempts)

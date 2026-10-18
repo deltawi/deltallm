@@ -25,6 +25,7 @@ ChatDeploymentCall = Callable[
     Awaitable[tuple[dict[str, Any], float]],
 ]
 DeploymentAttemptObserver = Callable[[Deployment], None]
+HopObserver = Callable[[], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,7 @@ class MCPChatExecutionService:
         on_attempt: DeploymentAttemptObserver | None = None,
         response_validation: ResponseValidationSettings | None = None,
         quality: AttemptQualityRecorder | None = None,
+        on_next_hop: HopObserver | None = None,
     ) -> MCPChatExecutionResult:
         deadline = routing.request_deadline or self.failover_manager.create_request_deadline(
             routing.timeout_seconds
@@ -101,11 +103,16 @@ class MCPChatExecutionService:
         validation_settings = response_validation or ResponseValidationSettings(enabled=False)
         validation_headers: dict[str, str] = {}
         recorder = quality or AttemptQualityRecorder(None)
+        hops_started = 0
 
         async def execute_model_phase(
             phase_payload: ChatCompletionRequest,
         ) -> tuple[dict[str, Any], float]:
-            nonlocal fallback_used, phase_primary, served_deployment
+            nonlocal fallback_used, hops_started, phase_primary, served_deployment
+            if hops_started and on_next_hop is not None:
+                # The earlier hop completed; its usage is part of the final charge.
+                on_next_hop()
+            hops_started += 1
             refresh_hop_routing_context(routing.routing_context, phase_payload)
             attempted_primary = phase_primary
             phase_validation = ResponseValidationScope(phase_payload, validation_settings)
