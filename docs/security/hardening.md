@@ -17,6 +17,9 @@ Expose only routes required by each listener:
 | `/health/deployments`, `/health/fallback-events`, `/metrics` | No | No | Yes |
 | `/docs`, `/redoc`, `/openapi.json` | No by default | Optional | Yes |
 
+- If you use MCP servers with OAuth 2.0 (per user), serve `GET /mcp/oauth/callback` and
+  `/ui/connect/*` on the listener at `email_base_url`, the same origin as the Admin UI. The
+  callback needs the session cookie of the user who started the connection.
 - Terminate TLS with a trusted certificate and redirect or reject plaintext traffic.
 - Configure an explicit host allowlist and request-body/time limits at the reverse proxy.
 - Strip client-supplied forwarding headers and set them only at the trusted proxy. The application
@@ -52,6 +55,8 @@ Expose only routes required by each listener:
   then revoking the old version. Plan master- and salt-key rotation separately because they can
   affect existing clients or stored-key verification.
 - Treat accidental log, issue, or artifact exposure as compromise: revoke first, then investigate.
+- If you use MCP servers with OAuth 2.0 (per user), keep `mcp_oauth_encryption_key` in the secret
+  manager. It protects the user tokens in PostgreSQL. A changed key makes all users connect again.
 
 ## PostgreSQL and Redis
 
@@ -93,6 +98,10 @@ Expose only routes required by each listener:
   addresses. Keep HTTPS-only/port restrictions and add private CIDRs only for reviewed targets.
 - Treat configured MCP servers and callback integrations as privileged egress. Review destination,
   authentication, forwarded-header allowlists, tool permissions, and data classification.
+- MCP OAuth requests (discovery, client registration, token, and revocation) use the same outbound
+  policy as batch webhooks: HTTPS only, port 443, no private or metadata addresses, no redirects,
+  a 10 second timeout, and a 256 KiB response limit. Use `mcp_oauth_allowed_ports` and
+  `mcp_oauth_allowed_private_cidrs` only for reviewed authorization servers.
 - Disable message-content logging when content retention is not required:
 
 ```yaml

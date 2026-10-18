@@ -122,6 +122,12 @@
       name: {{ include "deltallm.appSecretName" $root }}
       key: {{ $root.Values.secret.keys.batchWebhookEncryptionKey }}
       optional: true
+- name: DELTALLM_MCP_OAUTH_ENCRYPTION_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "deltallm.appSecretName" $root }}
+      key: {{ $root.Values.secret.keys.mcpOAuthEncryptionKey }}
+      optional: true
 {{- end }}
 {{- if and (eq $general.accounting_execution_mode "local_journal") (ne $general.deployment_capacity_role "accountingWorker") }}
 - name: DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET

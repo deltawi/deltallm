@@ -47,7 +47,9 @@ def test_accounting_worker_has_isolated_runtime_and_capacity_role():
     api_general = api_config["general_settings"]
     worker_general = worker_config["general_settings"]
     api_general["batch_webhook_encryption_key"] = None
+    api_general["mcp_oauth_encryption_key"] = None
     worker_general["batch_webhook_encryption_key"] = None
+    worker_general["mcp_oauth_encryption_key"] = None
     validated_api = AppConfig.model_validate(api_config)
     validated_worker = AppConfig.model_validate(worker_config)
 

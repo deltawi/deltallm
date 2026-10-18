@@ -42,6 +42,7 @@ from src.db.identity.invitations import InvitationRepository
 from src.db.catalog.logical_models import LogicalModelRepository
 from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.mcp.mcp import MCPRepository
+from src.db.mcp.mcp_oauth import MCPOAuthRepository
 from src.db.mcp.mcp_scope_policies import MCPScopePolicyRepository
 from src.db.catalog.named_credentials import NamedCredentialRepository
 from src.db.catalog.prompt_registry import PromptRegistryRepository
@@ -72,6 +73,7 @@ from src.upstream_http import (
 )
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.providers.discovery_runtime import ProviderDiscoveryRuntime
+from src.mcp.oauth.http import MCPOAuthHTTP
 
 
 logger = logging.getLogger(__name__)
@@ -356,6 +358,18 @@ async def _init_infrastructure_runtime(
             resolution_timeout_seconds=2.0,
         ),
     )
+    # MCP OAuth discovery, registration, token and revocation calls go to
+    # operator-configured servers and to URLs found in their metadata, so they
+    # use the shared outbound policy (address checks, no redirects, size bound).
+    app.state.mcp_oauth_http = MCPOAuthHTTP(
+        transport=control_transport,
+        policy=OutboundNetworkPolicy(
+            allow_http=cfg.general_settings.mcp_oauth_allow_http,
+            allowed_ports=cfg.general_settings.mcp_oauth_allowed_ports,
+            allowed_private_cidrs=cfg.general_settings.mcp_oauth_allowed_private_cidrs,
+            resolution_timeout_seconds=2.0,
+        ),
+    )
     app.state.upstream_http_settings = cfg.general_settings
     app.state.http_client = http_client
     app.state.control_http_client = control_http_client
@@ -456,6 +470,7 @@ async def _init_infrastructure_runtime(
     )
     app.state.tier_repository = TierRepository(prisma_manager.client)
     app.state.mcp_repository = MCPRepository(prisma_manager.client)
+    app.state.mcp_oauth_repository = MCPOAuthRepository(prisma_manager.client)
     app.state.creator_mcp_access_service = CreatorMCPAccessService(
         app.state.managed_asset_access_repository,
         app.state.mcp_repository,

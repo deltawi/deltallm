@@ -185,6 +185,12 @@ general_settings:
   # batch_webhook_enabled: true
   batch_webhook_encryption_key: os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY
   #
+  # MCP servers with OAuth 2.0 (per user). The key encrypts user tokens and client
+  # secrets at rest. It is required only when such a server exists. Generate it
+  # like the webhook key. The connect flow also needs email_base_url (the public
+  # gateway origin) for the redirect URL /mcp/oauth/callback.
+  mcp_oauth_encryption_key: os.environ/DELTALLM_MCP_OAUTH_ENCRYPTION_KEY
+  #
   # Accounting v2 signing secret, read from the environment; used only with
   # accounting_execution_mode: local_journal (docs/deployment/accounting-v2.md).
   accounting_rpc_signing_secret: os.environ/DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET

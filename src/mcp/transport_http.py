@@ -384,6 +384,7 @@ class StreamableHTTPMCPClient:
             request_headers=request_headers,
             server_key=server.server_key,
             allowlist=server.forwarded_headers_allowlist,
+            oauth_access_token=server.oauth_access_token,
         )
 
 

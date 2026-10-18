@@ -11,6 +11,7 @@ from fastapi import HTTPException, Request, status
 from src.api.admin.endpoints.common import optional_int, to_json_value
 from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.mcp.metrics import record_mcp_capability_refresh
+from src.mcp.models import MCPServerConfig
 from src.mcp.registry import server_record_to_config
 
 from src.api.admin.endpoints.mcp.constants import _SCOPE_SPECIFICITY
@@ -62,11 +63,13 @@ def _filter_server_tools_for_scope(
 async def _capability_refresh(
     request: Request,
     server: MCPServerRecord,
+    *,
+    config: MCPServerConfig | None = None,
 ) -> tuple[MCPServerRecord, list[dict[str, Any]]]:
     started = perf_counter()
     registry = _registry_or_503(request)
     transport = _transport_or_503(request)
-    config = server_record_to_config(server)
+    config = config if config is not None else server_record_to_config(server)
     try:
         await transport.initialize(config)
         tools = await transport.list_tools(config)

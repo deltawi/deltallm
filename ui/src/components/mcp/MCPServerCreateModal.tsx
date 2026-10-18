@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import ManagedAssetAccessFields from '../ManagedAssetAccessFields';
 import Modal from '../Modal';
 import { useToast } from '../ToastProvider';
-import MCPServerForm, {
+import MCPServerForm from './MCPServerForm';
+import {
   buildMCPServerPayload,
   EMPTY_MCP_SERVER_FORM,
   type MCPServerFormValues,
-} from './MCPServerForm';
+} from '../../lib/mcpServerForm';
 import { mcpServers, managedAssetAccessInput, type ManagedAssetGrantInput } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { isPlatformAdminSession } from '../../lib/authorization';

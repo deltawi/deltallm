@@ -26,11 +26,12 @@ import DataTable from '../components/DataTable';
 import ManagedAssetAccessPanel from '../components/ManagedAssetAccessPanel';
 import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
 import MCPApprovalsPanel from '../components/mcp/MCPApprovalsPanel';
-import MCPServerForm, {
+import MCPServerForm from '../components/mcp/MCPServerForm';
+import {
   buildMCPServerPayload,
   formFromMCPServer,
   type MCPServerFormValues,
-} from '../components/mcp/MCPServerForm';
+} from '../lib/mcpServerForm';
 import {
   type MCPBinding,
   mcpServers,
@@ -1153,6 +1154,8 @@ export default function MCPServerDetail() {
                   preserveExistingCredentials
                   credentialsConfigured={server.auth_credentials_present}
                   showOwnerScope={isPlatformAdmin || !server.access}
+                  oauth={server.oauth}
+                  serverId={server.mcp_server_id}
                 />
                 <div className="flex justify-end pt-2">
                   <button

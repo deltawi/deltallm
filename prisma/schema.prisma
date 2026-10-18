@@ -551,6 +551,8 @@ model DeltaLLM_PlatformAccount {
   created_managed_assets DeltaLLM_ManagedAsset[] @relation("managed_asset_creator")
   created_asset_grants DeltaLLM_AssetGrant[] @relation("asset_grant_creator")
   authorized_model_credential_bindings DeltaLLM_ModelDeployment[] @relation("model_credential_binding_authorizer")
+  mcp_oauth_connections DeltaLLM_MCPOAuthConnection[]
+  mcp_oauth_states DeltaLLM_MCPOAuthState[]
 
   @@map("deltallm_platformaccount")
 }
@@ -1697,6 +1699,8 @@ model DeltaLLM_MCPServer {
   bindings     DeltaLLM_MCPServerBinding[]
   tool_policies DeltaLLM_MCPToolPolicy[]
   approval_requests DeltaLLM_MCPApprovalRequest[]
+  oauth_connections DeltaLLM_MCPOAuthConnection[]
+  oauth_states DeltaLLM_MCPOAuthState[]
   managed_asset DeltaLLM_ManagedAsset? @relation(fields: [managed_asset_id], references: [asset_id], onDelete: SetNull)
 
   @@index([enabled], map: "deltallm_mcpserver_enabled_idx")
@@ -1794,6 +1798,57 @@ model DeltaLLM_MCPApprovalRequest {
   @@index([requested_by_api_key, created_at], map: "deltallm_mcpapproval_api_key_created_idx")
   @@index([requested_by_user, created_at], map: "deltallm_mcpapproval_user_created_idx")
   @@map("deltallm_mcpapprovalrequest")
+}
+
+// Per-user OAuth tokens for MCP servers with auth_mode "oauth2". Token
+// columns hold AES-GCM envelopes (mcp_oauth_encryption_key), never plaintext.
+model DeltaLLM_MCPOAuthConnection {
+  mcp_oauth_connection_id  String    @id @default(uuid())
+  mcp_server_id            String
+  account_id               String
+  status                   String    @default("connected")
+  status_reason            String?
+  client_id                String
+  access_token_ciphertext  String
+  refresh_token_ciphertext String?
+  token_type               String?
+  scopes                   String[]  @default([])
+  account_label            String?
+  expires_at               DateTime?
+  token_version            Int       @default(1)
+  refresh_lease_owner      String?
+  refresh_lease_expires_at DateTime?
+  connected_at             DateTime  @default(now())
+  last_refreshed_at        DateTime?
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @updatedAt
+
+  server  DeltaLLM_MCPServer       @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade, map: "deltallm_mcpoauthconnection_server_fk")
+  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade, map: "deltallm_mcpoauthconnection_account_fk")
+
+  @@unique([mcp_server_id, account_id], map: "deltallm_mcpoauthconnection_server_account_key")
+  @@index([account_id], map: "deltallm_mcpoauthconnection_account_idx")
+  @@map("deltallm_mcpoauthconnection")
+}
+
+// Pending OAuth authorization requests: single use, short lived.
+model DeltaLLM_MCPOAuthState {
+  state_hash               String   @id
+  mcp_server_id            String
+  account_id               String
+  client_id                String
+  redirect_uri             String
+  code_verifier_ciphertext String
+  expires_at               DateTime
+  created_at               DateTime @default(now())
+
+  server  DeltaLLM_MCPServer       @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade, map: "deltallm_mcpoauthstate_server_fk")
+  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade, map: "deltallm_mcpoauthstate_account_fk")
+
+  @@index([account_id, created_at], map: "deltallm_mcpoauthstate_account_created_idx")
+  @@index([expires_at], map: "deltallm_mcpoauthstate_expires_idx")
+  @@index([mcp_server_id], map: "deltallm_mcpoauthstate_server_idx")
+  @@map("deltallm_mcpoauthstate")
 }
 
 model DeltaLLM_PromptTemplate {

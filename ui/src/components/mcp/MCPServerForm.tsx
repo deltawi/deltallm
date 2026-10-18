@@ -1,42 +1,7 @@
 import type { ChangeEvent } from 'react';
-
-export type MCPAuthMode = 'none' | 'bearer' | 'basic' | 'header_map';
-
-export interface MCPServerFormValues {
-  server_key: string;
-  name: string;
-  description: string;
-  owner_scope_type: 'global' | 'organization';
-  owner_scope_id: string;
-  base_url: string;
-  transport: 'streamable_http';
-  enabled: boolean;
-  auth_mode: MCPAuthMode;
-  bearer_token: string;
-  basic_username: string;
-  basic_password: string;
-  header_map_json: string;
-  forwarded_headers_allowlist: string;
-  request_timeout_ms: string;
-}
-
-export const EMPTY_MCP_SERVER_FORM: MCPServerFormValues = {
-  server_key: '',
-  name: '',
-  description: '',
-  owner_scope_type: 'global',
-  owner_scope_id: '',
-  base_url: '',
-  transport: 'streamable_http',
-  enabled: true,
-  auth_mode: 'none',
-  bearer_token: '',
-  basic_username: '',
-  basic_password: '',
-  header_map_json: '{\n  "Authorization": "Bearer <token>"\n}',
-  forwarded_headers_allowlist: '',
-  request_timeout_ms: '30000',
-};
+import type { MCPOAuthServerSettings } from '../../lib/api/mcpOAuth';
+import type { MCPAuthMode, MCPServerFormValues } from '../../lib/mcpServerForm';
+import MCPOAuthFields from './MCPOAuthFields';
 
 const inputClass =
   'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary';
@@ -59,88 +24,9 @@ interface MCPServerFormProps {
   preserveExistingCredentials?: boolean;
   credentialsConfigured?: boolean;
   showOwnerScope?: boolean;
-}
-
-export function buildMCPServerPayload(
-  form: MCPServerFormValues,
-  options?: { preserveExistingCredentials?: boolean }
-) {
-  const allowlist = form.forwarded_headers_allowlist
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-
-  const preserveExistingCredentials = Boolean(options?.preserveExistingCredentials);
-  let auth_config: Record<string, unknown> | undefined;
-  if (form.auth_mode === 'bearer') {
-    const token = form.bearer_token.trim();
-    if (!preserveExistingCredentials || token) {
-      auth_config = { token };
-    }
-  } else if (form.auth_mode === 'basic') {
-    const username = form.basic_username.trim();
-    const password = form.basic_password;
-    if (!preserveExistingCredentials || username || password) {
-      auth_config = {
-        username,
-        password,
-      };
-    }
-  } else if (form.auth_mode === 'header_map') {
-    const headersJson = form.header_map_json.trim();
-    if (!preserveExistingCredentials || headersJson) {
-      auth_config = { headers: headersJson ? JSON.parse(headersJson) : {} };
-    }
-  } else {
-    auth_config = {};
-  }
-
-  return {
-    server_key: form.server_key.trim().toLowerCase(),
-    name: form.name.trim(),
-    description: form.description.trim() || null,
-    owner_scope_type: form.owner_scope_type,
-    owner_scope_id: form.owner_scope_type === 'organization' ? form.owner_scope_id.trim() : null,
-    base_url: form.base_url.trim(),
-    transport: form.transport,
-    enabled: form.enabled,
-    auth_mode: form.auth_mode,
-    forwarded_headers_allowlist: allowlist,
-    request_timeout_ms: Number(form.request_timeout_ms || '30000'),
-    ...(auth_config !== undefined ? { auth_config } : {}),
-  };
-}
-
-export function formFromMCPServer(server: {
-  server_key: string;
-  name: string;
-  description?: string | null;
-  owner_scope_type: 'global' | 'organization';
-  owner_scope_id?: string | null;
-  base_url: string;
-  transport: 'streamable_http';
-  enabled: boolean;
-  auth_mode: MCPAuthMode;
-  forwarded_headers_allowlist?: string[] | null;
-  request_timeout_ms: number;
-}): MCPServerFormValues {
-  return {
-    server_key: server.server_key,
-    name: server.name,
-    description: server.description || '',
-    owner_scope_type: server.owner_scope_type || 'global',
-    owner_scope_id: server.owner_scope_id || '',
-    base_url: server.base_url,
-    transport: server.transport,
-    enabled: server.enabled,
-    auth_mode: server.auth_mode,
-    bearer_token: '',
-    basic_username: '',
-    basic_password: '',
-    header_map_json: '',
-    forwarded_headers_allowlist: (server.forwarded_headers_allowlist || []).join(', '),
-    request_timeout_ms: String(server.request_timeout_ms || 30000),
-  };
+  // Stored OAuth settings and the server ID, for an existing oauth2 server.
+  oauth?: MCPOAuthServerSettings | null;
+  serverId?: string;
 }
 
 export default function MCPServerForm({
@@ -154,6 +40,8 @@ export default function MCPServerForm({
   preserveExistingCredentials = false,
   credentialsConfigured = false,
   showOwnerScope = true,
+  oauth,
+  serverId,
 }: MCPServerFormProps) {
   const inputDisabledClass = 'disabled:bg-gray-50 disabled:text-gray-500';
   return (
@@ -273,6 +161,7 @@ export default function MCPServerForm({
             <option value="bearer">Bearer</option>
             <option value="basic">Basic</option>
             <option value="header_map">Header Map</option>
+            <option value="oauth2">OAuth 2.0 (per user)</option>
           </select>
         </div>
         <div>
@@ -288,7 +177,7 @@ export default function MCPServerForm({
         </div>
       </div>
 
-      {preserveExistingCredentials && value.auth_mode !== 'none' ? (
+      {preserveExistingCredentials && value.auth_mode !== 'none' && value.auth_mode !== 'oauth2' ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {credentialsConfigured
             ? 'Credentials are already configured. Leave the secret fields blank to keep the current value, or enter a new value to replace it.'
@@ -352,6 +241,18 @@ export default function MCPServerForm({
             className={`${textareaClass} ${inputDisabledClass}`}
           />
         </div>
+      )}
+
+      {value.auth_mode === 'oauth2' && (
+        <MCPOAuthFields
+          // Show the stored discovery result again after a save reloads the server.
+          key={`${serverId ?? 'new'}:${oauth?.discovery?.checked_at ?? ''}:${oauth?.discovery_error ?? ''}`}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          oauth={oauth}
+          serverId={serverId}
+        />
       )}
 
       <div>

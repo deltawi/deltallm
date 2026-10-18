@@ -103,6 +103,7 @@ nav:
           - Manage route groups: guides/admin-route-groups.md
           - Prompts: admin-ui/prompt-registry.md
           - MCP servers and approvals: admin-ui/mcp.md
+          - Connected accounts: admin-ui/connected-accounts.md
           - Test a model: admin-ui/playground.md
       - Manage organizations and access:
           - Organizations: admin-ui/organizations.md

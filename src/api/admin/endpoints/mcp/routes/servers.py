@@ -26,6 +26,7 @@ from src.auth.roles import Permission
 from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.mcp.mcp import MCPRepository, MCPServerRecord
 from src.mcp.exceptions import MCPError
+from src.mcp.oauth import OAUTH2_AUTH_MODE
 from src.middleware.admin import require_authenticated
 
 from src.api.admin.endpoints.mcp.dependencies import (
@@ -40,6 +41,11 @@ from src.api.admin.endpoints.mcp.loaders import (
     _list_scoped_tool_policies,
     _load_server_or_404,
     _server_visible_to_scope,
+)
+from src.api.admin.endpoints.mcp.oauth_support import (
+    acting_user_server_config,
+    build_oauth2_auth_config,
+    drop_oauth_connections_if_target_changed,
 )
 from src.api.admin.endpoints.mcp.operations import (
     _capability_refresh,
@@ -404,6 +410,14 @@ async def create_mcp_server(
         # Creator access is authoritative. The legacy field remains neutral metadata.
         owner_scope_type, owner_scope_id = "global", None
 
+    base_url = _validate_url(payload.get("base_url"))
+    auth_config = (
+        await build_oauth2_auth_config(
+            request, base_url=base_url, requested=payload.get("auth_config"), existing=None
+        )
+        if auth_mode == OAUTH2_AUTH_MODE
+        else _validate_auth_config(auth_mode, payload.get("auth_config"))
+    )
     create_kwargs = {
         "server_key": server_key,
         "name": name,
@@ -413,10 +427,10 @@ async def create_mcp_server(
         "owner_scope_type": owner_scope_type,
         "owner_scope_id": owner_scope_id,
         "transport": _normalize_transport(payload.get("transport")),
-        "base_url": _validate_url(payload.get("base_url")),
+        "base_url": base_url,
         "enabled": bool(payload.get("enabled", True)),
         "auth_mode": auth_mode,
-        "auth_config": _validate_auth_config(auth_mode, payload.get("auth_config")),
+        "auth_config": auth_config,
         "forwarded_headers_allowlist": _normalize_allowlist(
             payload.get("forwarded_headers_allowlist")
         ),
@@ -751,6 +765,16 @@ async def update_mcp_server(
                 detail="MCP server ownership cannot be changed",
             )
     auth_mode = _normalize_auth_mode(payload.get("auth_mode", existing.auth_mode))
+    base_url = _validate_url(payload.get("base_url", existing.base_url))
+    auth_config = (
+        await build_oauth2_auth_config(
+            request, base_url=base_url, requested=payload.get("auth_config"), existing=existing
+        )
+        if auth_mode == OAUTH2_AUTH_MODE
+        else _validate_auth_config(
+            auth_mode, payload.get("auth_config", existing.auth_config or {})
+        )
+    )
     updated = await repository.update_server(
         server_id,
         name=str(payload.get("name", existing.name) or "").strip() or existing.name,
@@ -758,12 +782,10 @@ async def update_mcp_server(
         if payload.get("description") is not None
         else existing.description,
         transport=_normalize_transport(payload.get("transport", existing.transport)),
-        base_url=_validate_url(payload.get("base_url", existing.base_url)),
+        base_url=base_url,
         enabled=bool(payload.get("enabled", existing.enabled)),
         auth_mode=auth_mode,
-        auth_config=_validate_auth_config(
-            auth_mode, payload.get("auth_config", existing.auth_config or {})
-        ),
+        auth_config=auth_config,
         forwarded_headers_allowlist=_normalize_allowlist(
             payload.get("forwarded_headers_allowlist", existing.forwarded_headers_allowlist or [])
         ),
@@ -772,6 +794,7 @@ async def update_mcp_server(
     )
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
+    await drop_oauth_connections_if_target_changed(request, existing, updated)
     await registry.invalidate_server(updated.server_key)
     await _reload_runtime_governance(request, invalidate_registry=False)
     response = _serialize_server(
@@ -873,8 +896,9 @@ async def refresh_mcp_server_capabilities(
         legacy_scope,
         operate=True,
     )
+    oauth_config = await acting_user_server_config(request, server, scope)
     try:
-        updated, tools = await _capability_refresh(request, server)
+        updated, tools = await _capability_refresh(request, server, config=oauth_config)
     except MCPError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     response = {
@@ -925,8 +949,9 @@ async def health_check_mcp_server(
         operate=True,
     )
     probe = _health_probe_or_503(request)
+    oauth_config = await acting_user_server_config(request, server, scope)
     try:
-        result = await probe.check_server(server)
+        result = await probe.check_server(server, config=oauth_config)
     except MCPError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     refreshed = await _load_server_or_404(request, server_id)

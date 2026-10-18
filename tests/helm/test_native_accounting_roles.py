@@ -81,6 +81,7 @@ def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_pat
         raw = _config_yaml(_by_kind_and_name(documents, "ConfigMap", name + "-config"))
         assert raw["model_list"] == [] and raw["deltallm_settings"] == {}
         raw["general_settings"]["batch_webhook_encryption_key"] = None
+        raw["general_settings"]["mcp_oauth_encryption_key"] = None
         raw["general_settings"]["accounting_rpc_signing_secret"] = None
         raw["general_settings"]["deployment_capacity_path"] = str(report_path)
         config = AppConfig.model_validate(raw)

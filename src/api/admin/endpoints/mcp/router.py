@@ -6,7 +6,9 @@ from fastapi import APIRouter
 from src.api.admin.endpoints.mcp.routes import (
     approvals,
     bindings,
+    connections,
     migration,
+    oauth,
     scope_policies,
     servers,
     tool_policies,
@@ -22,5 +24,7 @@ router.include_router(scope_policies.router)
 router.include_router(tool_policies.router)
 router.include_router(approvals.router)
 router.include_router(migration.router)
+router.include_router(oauth.router)
+router.include_router(connections.router)
 
 __all__ = ["router"]

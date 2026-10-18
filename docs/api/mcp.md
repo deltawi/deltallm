@@ -295,6 +295,99 @@ as unresolved spend.
 - chat and responses requests do not support manual approval. If a tool that the request can use requires manual approval, DeltaLLM rejects the full request with HTTP `400`. Use `allowed_tools` to remove that tool from the request, or call the tool through `/mcp`
 - the upstream model/provider must support tool calling well enough for the bridge to work reliably
 
+## Per-user OAuth servers
+
+A server with `auth_mode: "oauth2"` (OAuth 2.0, per user) has no shared credential. Each user
+connects an own account on the **Connected accounts** page. A tool call then uses the token of
+the user who owns the API key.
+
+Rules for a tool call:
+
+- The tools of the server stay in `tools/list`, also for users without a connection.
+- An API key that a user owns uses the connection of that user.
+- An API key that no user owns (for example, a service account key) cannot use the server.
+- When the access token expires, the gateway refreshes it before the call. Only one refresh
+  runs at a time for each connection, also across replicas.
+- When the MCP server rejects the token with HTTP `401` or `403`, the gateway refreshes the
+  token and tries the call one more time.
+- When the authorization server rejects the refresh token (`invalid_grant`), the connection
+  changes to **Connect again**.
+
+### Connection required
+
+Without a usable connection, `tools/call` returns a tool result with `isError: true`. It is not
+a JSON-RPC error, so the client and the model can show the message to the user:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Connect your GitHub account to use this tool.\nOpen https://gateway.example.com/ui/connect/github"
+      }
+    ],
+    "structuredContent": {
+      "error": {
+        "type": "mcp_connection_required",
+        "server": "github",
+        "message": "Connect your GitHub account to use this tool.",
+        "connect_url": "https://gateway.example.com/ui/connect/github"
+      }
+    },
+    "isError": true
+  }
+}
+```
+
+| `error.type` | When | Message |
+| --- | --- | --- |
+| `mcp_connection_required` | The user has no connection | `Connect your <Name> account to use this tool.` |
+| `mcp_connection_required` with `reason: "needs_reconnect"` | The server revoked the token | `Connect your <Name> account again to use this tool.` |
+| `mcp_user_key_required` | No user owns the API key | `This key is not owned by a user. Per-user OAuth tools need a user key.` |
+
+`connect_url` is `<email_base_url>/ui/connect/<server_key>`. If `general_settings.email_base_url`
+is not set, the error has no `connect_url` and the text has no link.
+
+In chat and responses requests, the tool message to the model contains the same `error` object.
+The model can tell the user to open the link.
+
+### Connect flow
+
+1. The user selects **Connect**. The gateway makes a PKCE S256 verifier and a random state. The
+   state is bound to the signed-in account, works one time, and expires after 10 minutes.
+2. The browser opens the authorization endpoint of the server.
+3. The authorization server sends the browser to `GET /mcp/oauth/callback`. The gateway checks
+   the state and the signed-in account, exchanges the code, and stores the tokens encrypted for
+   the pair of server and account.
+4. The gateway sends the browser to `/ui/connect/<server_key>?result=connected` (or
+   `result=error&reason=<code>`).
+
+**Disconnect** revokes the refresh token (RFC 7009) when the server has a revocation endpoint,
+then deletes the tokens. When a user account or a server is deleted, its connections are also
+deleted. When an administrator changes the base URL of a server or changes its auth mode, the
+gateway deletes all connections of that server, because a token is valid for one resource only.
+
+### Discovery
+
+When an administrator saves an `oauth2` server, the gateway finds the authorization server:
+
+1. It sends `initialize` without credentials and reads `resource_metadata` from the
+   `WWW-Authenticate` header (RFC 9728).
+2. It reads `/.well-known/oauth-protected-resource` (path-aware, then root).
+3. It reads the authorization server metadata (RFC 8414), then OpenID configuration.
+4. When no resource metadata exists, it uses the origin of the server as the authorization server.
+
+The server must declare PKCE with `S256`. When the administrator gives no client ID, the gateway
+registers a public client (RFC 7591). Discovery and registration errors do not block the save;
+the server shows the error, and **Run again** repeats the steps.
+
+Capability refresh and health check on an `oauth2` server use the connection of the
+administrator who runs them. Without a connection, they return `409` with the steps to connect.
+The master key has no account, so it cannot run them.
+
 ## Admin MCP Endpoints
 
 These endpoints back the MCP pages in the Admin UI.
@@ -311,6 +404,36 @@ These endpoints back the MCP pages in the Admin UI.
 | `DELETE` | `/ui/api/mcp-servers/{server_id}` | Delete a server |
 | `POST` | `/ui/api/mcp-servers/{server_id}/refresh-capabilities` | Refresh upstream tools |
 | `POST` | `/ui/api/mcp-servers/{server_id}/health-check` | Run `initialize` and `tools/list` against upstream |
+
+### OAuth 2.0 (per user)
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/ui/api/mcp-oauth/settings` | Read the redirect URL and whether the key and the public base URL are set |
+| `POST` | `/ui/api/mcp-servers/oauth/discover` | Run discovery for a `base_url` before the server exists. Stores nothing |
+| `POST` | `/ui/api/mcp-servers/{server_id}/oauth/discovery` | Run discovery again, register a client when none is set, and store the result |
+| `GET` | `/ui/api/mcp-connections` | List the `oauth2` servers that the signed-in user can use, with the connection status |
+| `POST` | `/ui/api/mcp-connections/{server_key}/connect` | Start the connect flow. Returns `authorization_url` |
+| `DELETE` | `/ui/api/mcp-connections/{server_key}` | Revoke and delete the connection of the signed-in user |
+| `GET` | `/mcp/oauth/callback` | Redirect target of the authorization server. Not for API clients |
+
+The connection endpoints act for the signed-in account only. The master key has no account:
+`connect` returns `403` and the list is empty.
+
+For an `oauth2` server, the server payload contains `oauth`:
+
+```json
+{
+  "client_id": "dyn-7f3a",
+  "client_id_source": "dynamic",
+  "client_secret_set": false,
+  "scopes": ["repo", "read:user"],
+  "discovery": {"authorization_server": "https://auth.example.com", "found_from": "WWW-Authenticate header", "...": "..."},
+  "discovery_error": null
+}
+```
+
+The client secret is write-only. The API returns only `client_secret_set`.
 
 ### Bindings
 
@@ -388,6 +511,27 @@ The decision body is `{"status": "approved" | "rejected", "decision_comment": "o
 }
 ```
 
+Create a server with OAuth 2.0 (per user):
+
+```json
+{
+  "server_key": "github",
+  "name": "GitHub",
+  "base_url": "https://api.githubcopilot.com/mcp",
+  "auth_mode": "oauth2",
+  "auth_config": {
+    "client_id": "",
+    "client_secret": "optional, write-only",
+    "scopes": ["repo", "read:user"]
+  }
+}
+```
+
+An empty `client_id` uses dynamic client registration. On update, a missing field keeps the
+stored value. Send `"clear_client_secret": true` to remove the stored secret. The server needs
+`general_settings.mcp_oauth_encryption_key` and `general_settings.email_base_url`; without them
+the API returns `400`.
+
 `transport: "http"` is accepted as a compatibility alias and normalized to `streamable_http`.
 Streamable HTTP servers may return either JSON or `text/event-stream` JSON-RPC responses; DeltaLLM also reuses upstream `MCP-Session-Id` values when a server establishes a stateful session.
 
@@ -425,3 +569,4 @@ Streamable HTTP servers may return either JSON or `text/event-stream` JSON-RPC r
 - [Connect your first MCP server](../getting-started/mcp-quickstart.md)
 - [MCP Gateway & Tools](../features/mcp.md)
 - [Admin UI: MCP](../admin-ui/mcp.md)
+- [Admin UI: Connected accounts](../admin-ui/connected-accounts.md)

@@ -32,6 +32,9 @@ def build_server_headers(
         password = str(config.get("password") or "")
         encoded = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
         return {"Authorization": f"Basic {encoded}"}
+    if mode == "oauth2":
+        # Per-user tokens are added per call, never from the stored config.
+        return {}
     if mode == "header_map":
         headers = config.get("headers")
         if isinstance(headers, dict):
@@ -96,8 +99,9 @@ def build_effective_mcp_upstream_headers(
     request_headers: dict[str, str] | None,
     server_key: str,
     allowlist: list[str] | None,
+    oauth_access_token: str | None = None,
 ) -> dict[str, str]:
-    return filter_protected_mcp_headers(
+    headers = filter_protected_mcp_headers(
         {
             **build_server_headers(auth_mode=auth_mode, auth_config=auth_config),
             **build_forwarded_headers(
@@ -107,3 +111,10 @@ def build_effective_mcp_upstream_headers(
             ),
         }
     )
+    if oauth_access_token:
+        # The user's own token always wins over a forwarded Authorization header.
+        headers = {
+            key: value for key, value in headers.items() if key.strip().lower() != "authorization"
+        }
+        headers["Authorization"] = f"Bearer {oauth_access_token}"
+    return headers
