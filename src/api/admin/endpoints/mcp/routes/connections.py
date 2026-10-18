@@ -64,14 +64,18 @@ def _account_id_or_403(scope: AuthScope) -> str:
 
 async def _visible_oauth_servers(
     request: Request, scope: AuthScope, connected_server_ids: set[str]
-) -> list[MCPServerRecord]:
-    """Enabled oauth2 servers the user can reach, plus servers the user already connected."""
+) -> tuple[list[MCPServerRecord], set[str]]:
+    """Enabled oauth2 servers to list, and the IDs of those the user can use now.
+
+    The list also has servers that the user connected earlier, so the user can
+    disconnect them after losing access.
+    """
     repository = _repository_or_503(request)
     servers, _ = await repository.list_servers(enabled=True, limit=_MAX_OAUTH_SERVERS, offset=0)
     candidates = [server for server in servers if server.auth_mode == OAUTH2_AUTH_MODE]
     if scope.is_platform_admin or not candidates:
-        return candidates
-    visible_ids = set(connected_server_ids)
+        return candidates, {server.mcp_server_id for server in candidates}
+    visible_ids: set[str] = set()
     access_repository = getattr(request.app.state, "managed_asset_access_repository", None)
     if access_repository is not None:
         policies = await access_repository.list_accessible_policies(
@@ -105,7 +109,8 @@ async def _visible_oauth_servers(
             *params,
         )
         visible_ids.update(str(row.get("mcp_server_id")) for row in rows)
-    return [server for server in candidates if server.mcp_server_id in visible_ids]
+    listed = visible_ids | connected_server_ids
+    return [server for server in candidates if server.mcp_server_id in listed], visible_ids
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -113,7 +118,7 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _connection_row(
-    server: MCPServerRecord, connection: MCPOAuthConnectionRecord | None
+    server: MCPServerRecord, connection: MCPOAuthConnectionRecord | None, *, accessible: bool
 ) -> dict[str, Any]:
     settings = OAuth2ServerSettings.from_auth_config(server.auth_config)
     status_value = "not_connected" if connection is None else connection.status
@@ -128,7 +133,12 @@ def _connection_row(
         "expires_at": _iso(connection.expires_at) if connection is not None else None,
         "renews_automatically": bool(connection and connection.refresh_token_ciphertext),
         "connected_at": _iso(connection.connected_at) if connection is not None else None,
-        "connect_available": settings.discovery is not None and bool(settings.client_id),
+        "connect_available": (
+            accessible
+            and settings.discovery is not None
+            and settings.discovery.pkce_s256_supported
+            and bool(settings.client_id)
+        ),
     }
 
 
@@ -144,28 +154,33 @@ async def list_mcp_connections(
     if service is None or not account_id:
         return {"data": [], "account_connectable": bool(account_id)}
     connections = {item.server_id: item for item in await service.list_connections(account_id)}
-    servers = await _visible_oauth_servers(request, scope, set(connections))
-    rows = [_connection_row(server, connections.get(server.mcp_server_id)) for server in servers]
+    servers, accessible_ids = await _visible_oauth_servers(request, scope, set(connections))
+    rows = [
+        _connection_row(
+            server,
+            connections.get(server.mcp_server_id),
+            accessible=server.mcp_server_id in accessible_ids,
+        )
+        for server in servers
+    ]
     rows.sort(key=lambda row: (row["server_name"].lower(), row["server_key"]))
     return {"data": rows, "account_connectable": True}
 
 
-async def _load_user_server(
-    request: Request, scope: AuthScope, server_key: str, account_id: str
-) -> MCPServerRecord:
+async def _load_user_server(request: Request, scope: AuthScope, server_key: str) -> MCPServerRecord:
+    """An enabled oauth2 server that the user can use now.
+
+    A server that the user connected earlier but can no longer use stays in the
+    list (so the user can disconnect it), but the user cannot connect it again.
+    """
     key = _normalize_server_key(server_key)
     repository = _repository_or_503(request)
     server = await repository.get_server_by_key(key)
     not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
-    if server is None or server.auth_mode != OAUTH2_AUTH_MODE:
+    if server is None or server.auth_mode != OAUTH2_AUTH_MODE or not server.enabled:
         raise not_found
-    service = oauth_service_or_503(request)
-    connection = await service.repository.get_connection(
-        server_id=server.mcp_server_id, account_id=account_id
-    )
-    connected = {server.mcp_server_id} if connection is not None else set()
-    visible = await _visible_oauth_servers(request, scope, connected)
-    if server.mcp_server_id not in {item.mcp_server_id for item in visible}:
+    _, accessible_ids = await _visible_oauth_servers(request, scope, set())
+    if server.mcp_server_id not in accessible_ids:
         raise not_found
     return server
 
@@ -183,7 +198,7 @@ async def start_mcp_connection(
     """Start the authorization code flow. The browser opens the returned URL."""
     scope = get_auth_scope(request, authorization, x_master_key)
     account_id = _account_id_or_403(scope)
-    server = await _load_user_server(request, scope, server_key, account_id)
+    server = await _load_user_server(request, scope, server_key)
     service = oauth_service_or_503(request)
     try:
         authorization_url = await service.start_authorization(server, account_id=account_id)

@@ -302,3 +302,21 @@ async def test_new_base_url_deletes_user_connections(client, test_app, monkeypat
     )
     assert moved.status_code == 200, moved.text
     assert env.harness.repository.connections == {}
+
+
+async def test_user_who_lost_access_can_disconnect_but_not_connect(client, test_app, monkeypatch):  # noqa: ANN001
+    env = _Env(test_app, monkeypatch)
+    created = await env.create_server(client)
+    env.sign_in()
+    await env.connect(client)
+    env.sign_in(role="org_user")
+
+    rows = (await client.get("/ui/api/mcp-connections")).json()["data"]
+    assert [(row["server_key"], row["status"], row["connect_available"]) for row in rows] == [
+        ("github", "connected", False)
+    ]
+    start = await client.post("/ui/api/mcp-connections/github/connect")
+    assert start.status_code == 404
+    delete = await client.delete("/ui/api/mcp-connections/github")
+    assert delete.status_code == 200
+    assert created["mcp_server_id"] not in {key[0] for key in env.harness.repository.connections}

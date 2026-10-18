@@ -17,6 +17,9 @@ Expose only routes required by each listener:
 | `/health/deployments`, `/health/fallback-events`, `/metrics` | No | No | Yes |
 | `/docs`, `/redoc`, `/openapi.json` | No by default | Optional | Yes |
 
+- If you use MCP servers with OAuth 2.0 (per user), serve `GET /mcp/oauth/callback` and
+  `/ui/connect/*` on the listener at `email_base_url`, the same origin as the Admin UI. The
+  callback needs the session cookie of the user who started the connection.
 - Terminate TLS with a trusted certificate and redirect or reject plaintext traffic.
 - Configure an explicit host allowlist and request-body/time limits at the reverse proxy.
 - Strip client-supplied forwarding headers and set them only at the trusted proxy. The application
