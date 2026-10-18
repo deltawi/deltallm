@@ -276,12 +276,17 @@ secret:
     masterKey: master-key
     saltKey: salt-key
     batchWebhookEncryptionKey: batch-webhook-encryption-key
+    mcpOAuthEncryptionKey: mcp-oauth-encryption-key
   values:
     masterKey: ""
     saltKey: ""
     # URL-safe base64 encoding of exactly 32 random bytes. Keep this stable
     # for as long as pending webhook deliveries may need to be decrypted.
     batchWebhookEncryptionKey: ""
+    # URL-safe base64 encoding of exactly 32 random bytes. Required only when
+    # an MCP server uses OAuth 2.0 (per user). If you change it, users must
+    # connect their accounts again.
+    mcpOAuthEncryptionKey: ""
 
 runtime:
   accounting:
@@ -306,13 +311,20 @@ config:
   model_list: []
   router_settings:
     routing_strategy: simple-shuffle
-    num_retries: 3
+    # One retry on the same deployment, then fail over to the next one.
+    num_retries: 1
     retry_after: 1
-    timeout: 300
+    timeout: 600
+    # A deployment rests for cooldown_time seconds after more than allowed_fails
+    # rate-limit, server, or timeout errors within five minutes.
     cooldown_time: 60
-    allowed_fails: 0
+    allowed_fails: 2
     enable_pre_call_checks: false
     model_group_alias: {}
+    response_validation:
+      enabled: true
+      on_exhausted: return_response
+      json_healing: false
   deltallm_settings:
     fallbacks: []
     context_window_fallbacks: []
@@ -323,20 +335,55 @@ config:
     callbacks: []
     callback_settings: {}
     turn_off_message_logging: false
+  # Every general setting not listed here is rendered from the chart's
+  # files/config-defaults.yaml (the gateway's built-in defaults), so each ConfigMap
+  # stays explicit. Override any of them below; values here win. All settings:
+  # docs/configuration/general-settings-reference.md
   general_settings:
-    external_auth:
-      enabled: false
-      deployment_protocol: null
-      integrations: []
-      allowed_origins: []
-      trusted_proxy_cidrs: []
-      cleanup_batch_size: 1000
-      cleanup_interval_seconds: 5
-    ui_mount:
-      mount_path: ""
-      external_console: false
-    api_key_auth_cache_ttl_seconds: 300
-    db_pool_size: 20
+    # -------------------------------------------------------------------------
+    # Features. Which to turn on, what each needs, and ready-made profiles:
+    # docs/deployment/feature-switches.md. values-production.yaml turns on what
+    # production requires; the chart refuses a production render without it.
+    # -------------------------------------------------------------------------
+    # hybrid serves config.model_list plus models added in the Admin UI; production
+    # requires db_only with model_deployment_bootstrap_from_config: false.
+    model_deployment_source: hybrid
+    model_deployment_bootstrap_from_config: true
+    # Probes each provider's model list every health_check_interval seconds (no tokens).
+    background_health_checks: true
+    health_check_interval: 300
+    # Durable spend and audit writes. outbox adds telemetry_db_pool_size and
+    # telemetry_worker_db_pool_size connections per process; the Model Selector and
+    # Realtime require spend outbox.
+    spend_ingestion_mode: legacy
+    spend_ingestion_worker_enabled: true
+    spend_operation_intents_enabled: false
+    audit_ingestion_mode: legacy
+    audit_ingestion_worker_enabled: true
+    # Response cache. A hit is currently charged like a miss. Use redis with more
+    # than one pod.
+    cache_enabled: false
+    cache_backend: memory
+    # Batch API. With replicaCount > 1 or batchWorker.enabled, use s3 storage.
+    embeddings_batch_enabled: false
+    embeddings_batch_storage_backend: local
+    batch_webhook_enabled: false
+    # Ingress admission and preflight capacity. Size them from
+    # docs/deployment/ingress-admission.md before turning them on.
+    gateway_ingress_enabled: false
+    gateway_ingress_max_active: 100
+    gateway_ingress_max_waiters: 0
+    gateway_ingress_health_max_active: 4
+    gateway_ingress_control_max_active: 16
+    gateway_preflight_capacity_enabled: false
+    # redis_degraded_mode: fail_closed   # production; default fail_open
+    budget_enforcement_query_mode: legacy
+    tier_policy_mode: disabled
+    # Organization deletion requests. Startup fails while the deletion readiness check
+    # finds missing migrations or unowned records, so enable only after it passes and
+    # every API and worker replica reports the backend's current lifecycle
+    # protocol version (v2 for this rollout).
+    organization_deletion_requests_enabled: false
     # Opt-in manual OpenAI Realtime sessions; requires spend outbox + Redis.
     realtime:
       enabled: false
@@ -356,287 +403,47 @@ config:
       write_seconds: 10
       health_seconds: 5
       cleanup_seconds: 5
+    external_auth:
+      enabled: false
+      deployment_protocol: null
+      integrations: []
+      allowed_origins: []
+      trusted_proxy_cidrs: []
+      cleanup_batch_size: 1000
+      cleanup_interval_seconds: 5
+    api_key_auth_cache_ttl_seconds: 300
 
-    readiness_probe_timeout_seconds: 1
-    readiness_cache_seconds: 1
-    lifecycle_withdrawal_seconds: 5
-    lifecycle_request_drain_seconds: 45
-    lifecycle_cancellation_seconds: 5
-    lifecycle_worker_drain_seconds: 20
-    lifecycle_close_seconds: 5
-    lifecycle_shutdown_seconds: 80
-    migration_mode: startup
+    # -------------------------------------------------------------------------
+    # Connection pools. The chart reads these to size PostgreSQL
+    # and Redis connections per process; change them together
+    # with dependencyCapacity (docs/deployment/dependency-capacity.md).
+    # -------------------------------------------------------------------------
+    db_pool_size: 20
+    db_foreground_pool_size: 8
+    telemetry_db_pool_size: 5
+    telemetry_worker_db_pool_size: 5
+    spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
+    redis_critical_max_connections: 64
+    redis_bulk_max_connections: 16
+    redis_cache_max_connections: 16
+    upstream_http_max_connections: 500
     deployment_capacity_path: null
     deployment_capacity_role: api
-    migration_verify_timeout_seconds: 10
-    # Finite Redis allocations (restart required).
-    redis_bulk_url: null
-    redis_critical_max_connections: 64
-    redis_critical_max_waiters: 64
-    redis_bulk_max_connections: 16
-    redis_bulk_max_waiters: 0
-    redis_acquisition_timeout_seconds: 0.2
-    redis_socket_timeout_seconds: 1.0
-    redis_connect_timeout_seconds: 1.0
-    deltallm_key_header_name: Authorization
-    # Startup-only provider discovery egress; independent of batch webhook policy.
-    provider_discovery_allow_http: false
-    provider_discovery_allowed_ports: [443]
-    provider_discovery_allowed_private_cidrs: []
-    upstream_http_connect_timeout_seconds: 10
-    upstream_http_read_timeout_seconds: 300
-    upstream_http_write_timeout_seconds: 30
-    upstream_http_pool_timeout_seconds: 10
-    upstream_http_max_connections: 500
-    upstream_http_max_keepalive_connections: 100
-    upstream_http_keepalive_expiry_seconds: 60
-    prompt_negative_cache_enabled: false
-    prompt_cache_l1_ttl_seconds: 30
-    prompt_cache_l2_ttl_seconds: 300
-    prompt_negative_l1_ttl_seconds: 5
-    prompt_negative_l2_ttl_seconds: 30
-    prompt_cache_l1_max_entries: 10000
-    prompt_singleflight_max_keys: 256
-    prompt_singleflight_timeout_seconds: 2
-    email_worker_batch_size: 10
-    email_worker_delivery_lease_seconds: 60
-    email_worker_audit_lease_seconds: 30
-    email_worker_startup_timeout_seconds: 5
-    email_worker_shutdown_drain_timeout_seconds: 20
-    budget_enforcement_query_mode: legacy
-    budget_enforcement_shadow_sample_rate: 0.01
-    budget_enforcement_query_timeout_seconds: 2
-    # Per-process ingress admission (restart required; enable after workload validation).
-    gateway_ingress_control_max_active: 16
-    gateway_ingress_control_max_buffered_bytes: 67108864
-    auth_fallback_max_active: 8
-    auth_fallback_max_waiters: 32
-    auth_fallback_queue_timeout_ms: 10
-    auth_fallback_timeout_seconds: 0.5
-    auth_fallback_cache_timeout_seconds: 0.1
-    auth_fallback_cache_max_bytes: 131072
-    # Startup-only callback delivery and guardrail execution bounds.
-    callback_max_pending: 128
-    callback_max_concurrency: 4
-    callback_max_payload_bytes: 262144
-    callback_max_bytes: 8388608
-    callback_timeout_seconds: 5
-    callback_shutdown_seconds: 5
-    guardrail_max_concurrency: 2
-    guardrail_max_pending: 8
-    guardrail_max_bytes: 33554432
-    guardrail_timeout_seconds: 5
-    guardrail_shutdown_seconds: 5
-    gateway_ingress_enabled: false
-    gateway_ingress_max_active: 100
-    gateway_ingress_max_waiters: 0
-    gateway_ingress_queue_timeout_ms: 10
-    gateway_ingress_max_body_bytes: 33554432
-    gateway_ingress_max_buffered_bytes: 67108864
-    gateway_ingress_body_timeout_seconds: 10.0
-    gateway_ingress_health_max_active: 4
-    gateway_preflight_capacity_enabled: false
-    gateway_preflight_global_max_parallel: 300
-    gateway_preflight_org_max_parallel: 100
-    gateway_preflight_lease_ttl_seconds: 30
-    spend_ingestion_mode: legacy
-    spend_operation_intents_enabled: false
-    spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
-    spend_ingestion_batch_size: 100
-    spend_ingestion_flush_interval_ms: 100
-    spend_ingestion_lease_seconds: 30
-    spend_ingestion_max_attempts: 10
-    spend_ingestion_worker_enabled: true
-    spend_ingestion_max_pending_events: 100000
-    spend_ingestion_overload_policy: sync_fallback
-    spend_ingestion_fallback_max_concurrency: 1
-    spend_ingestion_fallback_max_waiters: 8
-    spend_ingestion_fallback_queue_timeout_ms: 100
-    spend_ingestion_fallback_execution_timeout_seconds: 2
-    spend_ingestion_completed_retention_hours: 1
-    spend_ingestion_failed_retention_days: 30
-    spend_ingestion_cleanup_interval_seconds: 60
-    spend_ingestion_cleanup_batch_size: 1000
-    spend_ingestion_cleanup_max_batches_per_run: 10
-    spend_ingestion_cleanup_time_budget_seconds: 2
-    db_pool_size: 20
-    db_pool_timeout: 30
-    telemetry_db_pool_size: 5
-    db_foreground_pool_size: 8
-    telemetry_worker_db_pool_size: 5
-    db_acquisition_timeout_seconds: 0.2
-    db_statement_timeout_seconds: 1.0
-    db_lock_timeout_seconds: 0.2
-    db_transaction_timeout_seconds: 2.0
-    db_background_statement_timeout_seconds: 5.0
-    db_background_lock_timeout_seconds: 1.0
-    db_background_transaction_timeout_seconds: 10.0
-    redis_cache_max_connections: 16
-    redis_cache_max_waiters: 0
-    telemetry_db_pool_timeout_seconds: 2
-    telemetry_worker_startup_timeout_seconds: 5
-    telemetry_shutdown_drain_timeout_seconds: 20
+
+    # -------------------------------------------------------------------------
+    # Accounting v2 (off). Read by the chart for the accounting roles; see
+    # docs/deployment/accounting-v2.md before changing.
+    # -------------------------------------------------------------------------
     accounting_protocol_enabled: false
     accounting_execution_mode: assigned
     accounting_request_url: null
     accounting_rpc_signing_secret: null
-    accounting_rpc_allow_http: false
-    accounting_rpc_allowed_ports: [443]
-    accounting_rpc_allowed_private_cidrs: []
     accounting_rpc_max_connections: 16
-    accounting_local_max_subjects: 1024
     accounting_protocol_generation: 1
-    accounting_microbatch_max_size: 8
-    accounting_microbatch_dwell_ms: 2
-    accounting_reservation_max_pending: 4096
-    accounting_finalization_max_pending: 8192
-    accounting_reservation_max_pending_bytes: 8388608
-    accounting_finalization_max_pending_bytes: 8388608
-    accounting_statement_timeout_ms: 250
-    accounting_reservation_ack_timeout_ms: 1000
-    accounting_finalization_ack_timeout_ms: 2000
     accounting_hot_path_db_pool_size: 2
-    accounting_max_provider_attempts: 3
     accounting_grants_enabled: true
-    accounting_grant_target_operations: 32
-    accounting_grant_ttl_seconds: 30
     accounting_projection_worker_enabled: false
-    accounting_projection_batch_size: 64
     accounting_projection_max_concurrent_partitions: 4
-    accounting_projection_lease_seconds: 30
-    accounting_projection_poll_interval_ms: 50
-    accounting_projection_maintenance_interval_ms: 1000
-    audit_ingestion_mode: legacy
-    audit_ingestion_worker_enabled: true
-    audit_ingestion_batch_size: 100
-    audit_ingestion_flush_interval_ms: 100
-    audit_ingestion_lease_seconds: 30
-    audit_ingestion_max_attempts: 10
-    audit_ingestion_max_pending_events: 100000
-    audit_ingestion_required_reserve: 10000
-    audit_ingestion_completed_retention_hours: 1
-    audit_ingestion_failed_retention_days: 30
-    audit_ingestion_cleanup_interval_seconds: 60
-    audit_ingestion_cleanup_batch_size: 1000
-    audit_ingestion_cleanup_max_batches_per_run: 10
-    audit_ingestion_cleanup_time_budget_seconds: 2
-    cache_enabled: false
-    cache_backend: memory
-    cache_ttl: 3600
-    cache_max_size: 10000
-    background_health_checks: true
-    health_check_interval: 300
-    health_check_model: gpt-3.5-turbo
-    model_deployment_source: hybrid
-    model_deployment_bootstrap_from_config: true
-    organization_lifecycle_auth_max_staleness_seconds: 3
-    organization_lifecycle_auth_cache_max_entries: 10000
-    organization_deletion_recovery_window_hours: 168
-    organization_deletion_max_attempts: 20
-    organization_deletion_requests_enabled: false
-    organization_deletion_worker_enabled: true
-    organization_deletion_worker_poll_interval_seconds: 5
-    organization_deletion_worker_batch_size: 5
-    organization_deletion_worker_max_concurrency: 2
-    organization_deletion_worker_lease_seconds: 60
-    organization_deletion_worker_record_timeout_seconds: 45
-    organization_deletion_worker_page_size: 100
-    organization_deletion_worker_max_pages_per_claim: 10
-    organization_deletion_waiting_poll_seconds: 10
-    organization_deletion_retry_initial_seconds: 5
-    organization_deletion_retry_max_seconds: 300
-    cache_invalidation_worker_enabled: true
-    cache_invalidation_worker_poll_interval_seconds: 5
-    cache_invalidation_worker_batch_size: 25
-    cache_invalidation_worker_max_concurrency: 4
-    cache_invalidation_worker_lease_seconds: 60
-    cache_invalidation_worker_record_timeout_seconds: 10
-    cache_invalidation_max_attempts: 10
-    cache_invalidation_retry_initial_seconds: 5
-    cache_invalidation_retry_max_seconds: 300
-    cache_invalidation_immediate_timeout_seconds: 0.5
-    # Batch API defaults are safe for local/single-replica deployments.
-    # If embeddings_batch_enabled is true and replicaCount > 1, configure
-    # embeddings_batch_storage_backend: s3 so every pod can read/write artifacts.
-    embeddings_batch_enabled: false
-    embeddings_batch_worker_enabled: true
-    embeddings_batch_completion_outbox_worker_enabled: true
-    batch_webhook_enabled: false
-    batch_webhook_worker_enabled: true
-    batch_webhook_observability_enabled: true
-    batch_webhook_poll_interval_seconds: 1
-    batch_webhook_observability_refresh_interval_seconds: 15
-    batch_webhook_max_concurrency: 4
-    batch_webhook_lease_seconds: 30
-    batch_webhook_timeout_seconds: 10
-    batch_webhook_max_attempts: 8
-    batch_webhook_retry_initial_seconds: 5
-    batch_webhook_retry_max_seconds: 3600
-    batch_webhook_allowed_ports:
-      - 443
-    batch_webhook_allowed_private_cidrs: []
-    batch_webhook_allow_http: false
-    batch_webhook_delivery_retention_days: 30
-    batch_webhook_cleanup_max_rows_per_run: 10000
-    embeddings_batch_storage_backend: local
-    embeddings_batch_storage_dir: .deltallm/batch-artifacts
-    embeddings_batch_create_session_cleanup_enabled: true
-    embeddings_batch_gc_enabled: true
-    # Phase 6 scheduler rollout controls. Leave commented to preserve legacy
-    # boolean flag behavior; set explicitly to make this one field control
-    # active scheduler behavior.
-    # embeddings_batch_scheduler_mode: fifo_v1
-    # embeddings_batch_scheduler_shadow_mode: none
-    embeddings_batch_scheduler_shadow_decision_timeout_seconds: 0.5
-    embeddings_batch_scheduler_shadow_max_pending_decisions: 16
-    embeddings_batch_scheduler_enabled: false
-    embeddings_batch_scheduler_shadow_enabled: false
-    embeddings_batch_scheduler_strict_model_homogeneity_enabled: false
-    embeddings_batch_scheduler_default_service_tier: standard
-    embeddings_batch_scheduler_estimator_version: v1
-    embeddings_batch_scheduler_backfill_enabled: false
-    embeddings_batch_scheduler_backfill_interval_seconds: 60
-    embeddings_batch_scheduler_backfill_scan_limit: 500
-    embeddings_batch_stale_lease_sweeper_enabled: true
-    embeddings_batch_stale_lease_sweeper_interval_seconds: 60
-    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: 30
-    embeddings_batch_stale_lease_sweeper_page_size: 100
-    embeddings_batch_stale_lease_sweeper_max_rows_per_run: 500
-    embeddings_batch_scheduler_claim_mode: job_fifo
-    embeddings_batch_advisory_lock_mode: dual
-    embeddings_batch_work_claim_max_items: 0
-    embeddings_batch_work_claim_max_work_units: 0
-    embeddings_batch_work_claim_min_items_for_microbatch: 4
-    embeddings_batch_model_capacity_enabled: false
-    embeddings_batch_default_model_max_in_flight: 16
-    embeddings_batch_default_model_max_claim_work_units: 64
-    embeddings_batch_model_capacity_fraction: 0.25
-    embeddings_batch_model_capacity_refresh_seconds: 5
-    embeddings_batch_model_capacity_fail_open: false
-    embeddings_batch_tenant_fair_share_enabled: false
-    embeddings_batch_scheduler_base_quantum_work_units: 16
-    embeddings_batch_scheduler_max_deficit_multiplier: 8
-    embeddings_batch_tenant_max_in_flight_work_units: 0
-    embeddings_batch_tenant_max_queued_work_units: 0
-    embeddings_batch_scheduler_max_active_flows_per_decision: 100
-    embeddings_batch_scheduler_max_candidate_jobs_per_flow: 50
-    embeddings_batch_tenant_scope_preference: organization,team,api_key,user
-    embeddings_batch_tenant_fair_share_disabled_model_groups: []
-    embeddings_batch_size_aware_scheduling_enabled: false
-    embeddings_batch_aging_seconds_per_work_unit: 30
-    embeddings_batch_max_age_credit_work_units: 1000
-    embeddings_batch_min_large_job_claim_interval_seconds: 30
-    embeddings_batch_small_job_fast_lane_enabled: false
-    embeddings_batch_small_job_max_work_units: 100
-    embeddings_batch_finalization_first: true
-    tier_policy_mode: disabled
-    tier_policy_missing_service_mode: fail_open
-    tier_policy_refresh_interval_seconds: 300
-    tier_policy_refresh_jitter_seconds: 1
-    tier_policy_transition_grace_seconds: 0.05
-    tier_policy_refresh_retry_delay_seconds: 5
-    tier_capacity_fair_share_enabled: false
-    tier_capacity_fair_share_active_ttl_seconds: 10
 
 s3:
   enabled: false
