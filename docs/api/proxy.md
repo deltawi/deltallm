@@ -242,6 +242,10 @@ POST /v1/audio/transcriptions
 
 This endpoint accepts multipart form data.
 
+`response_format` accepts `json` (default), `verbose_json`, `text`, `srt` and `vtt`.
+As in the OpenAI API, `json` and `verbose_json` return a JSON object, and `text`, `srt` and `vtt`
+return the transcript itself as `text/plain` (`text/vtt` for `vtt`).
+
 Public transcription requests remain OpenAI-compatible when the selected deployment is ElevenLabs.
 DeltaLLM sends uploaded audio to the native `POST /v1/speech-to-text` endpoint.
 It maps public `language` to `language_code` and maps `temperature`.

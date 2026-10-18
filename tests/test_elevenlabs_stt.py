@@ -277,7 +277,13 @@ async def test_audio_transcription_elevenlabs_response_formats(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"text": expected_text}
+    if response_format == "json":
+        assert response.json() == {"text": expected_text}
+    else:
+        assert response.text == expected_text
+        assert response.headers["content-type"].startswith(
+            "text/vtt" if response_format == "vtt" else "text/plain"
+        )
 
 
 @pytest.mark.asyncio
