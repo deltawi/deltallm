@@ -31,7 +31,12 @@ cp config.example.yaml config.yaml
 
 - active values cover the minimum local/dev setup
 - secrets come from environment variables
-- advanced blocks stay commented with guidance on when to enable them
+- every setting it leaves out uses its built-in default
+- optional features stay commented, each with what it needs
+
+`config.small-team.example.yaml` is a fuller single-server example with the spend and audit outbox
+(needed by the Model Selector and Realtime) and the Batch API. To decide which features an instance
+needs, see [Choose what to turn on](../deployment/feature-switches.md).
 
 ## Main Sections
 

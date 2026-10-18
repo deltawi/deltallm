@@ -361,18 +361,18 @@ These settings apply to gateway-level retries:
 
 ```yaml
 router_settings:
-  num_retries: 2
+  num_retries: 1
   retry_after: 1
   timeout: 600
   cooldown_time: 60
-  allowed_fails: 0
+  allowed_fails: 2
 ```
 
 - `num_retries`: how many extra attempts DeltaLLM makes after the first failure
 - `retry_after`: base delay before retrying; backoff increases automatically
 - `timeout`: maximum request time before DeltaLLM treats the call as failed
 - `cooldown_time`: how long a failing deployment stays out of rotation
-- `allowed_fails`: how many failures are allowed before cooldown starts
+- `allowed_fails`: how many failures are allowed before cooldown starts; `0` benches a deployment on its first rate-limit answer
 
 Failover owns health records for routed provider attempts.
 It records each attempt that affects health once against the deployment it called.

@@ -16,6 +16,11 @@ an existing deployment healthy.
 The Docker Compose `ha` profile is useful for testing more than one DeltaLLM process, but it is not
 a production high-availability setup. Its services still share one machine.
 
+## Choose what to turn on
+
+Every optional feature starts off. [Choose what to turn on](feature-switches.md) lists each
+feature switch, what it needs, and three ready-made profiles: Starter, Small team, and Production.
+
 ## Before serving real traffic
 
 1. Work through the [production checklist](production-checklist.md).

@@ -21,7 +21,7 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 4. Verify the server-owned spend event identity, Prisma transaction-client detection, blocked-event replay, and claim-token fencing tests before enabling spend producers.
 5. Set the pod termination grace period above `telemetry_shutdown_drain_timeout_seconds`.
    If email is enabled, also set it above `email_worker_shutdown_drain_timeout_seconds`.
-   The Helm default is 30 seconds. Each shutdown deadline defaults to 20 seconds.
+   The Helm default is 90 seconds. Each shutdown deadline defaults to 20 seconds.
    This permits cancellation and connection cleanup before `SIGKILL`.
 6. Keep the audit and spend ingestion modes on `legacy` until all replicas use the corrected admission sequence.
    This requirement includes API and worker replicas.

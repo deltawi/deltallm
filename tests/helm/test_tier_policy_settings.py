@@ -67,7 +67,9 @@ def _general_settings(config_map: dict[str, Any]) -> dict[str, Any]:
 @pytest.mark.parametrize("values_file", ["values.yaml", "values-production.yaml"])
 def test_tier_policy_defaults_are_safe_and_complete(values_file: str) -> None:
     values = yaml.safe_load((HELM_CHART_DIR / values_file).read_text())
-    general = values["config"]["general_settings"]
+    defaults = yaml.safe_load((HELM_CHART_DIR / "files/config-defaults.yaml").read_text())
+    # The chart renders its defaults file under the values file.
+    general = {**defaults["general_settings"], **values["config"]["general_settings"]}
 
     assert {key: general[key] for key in TIER_POLICY_DEFAULTS} == TIER_POLICY_DEFAULTS
 

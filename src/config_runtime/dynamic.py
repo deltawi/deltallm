@@ -24,7 +24,7 @@ from src.db.identity.output_policy import OutputPolicyDatabase
 from src.config_runtime.loader import build_app_config, deep_merge
 from src.config_runtime.secrets import SecretResolver
 from src.metrics import increment_batch_scheduler_rollback, increment_config_reload
-from src.runtime_settings import resolve_general_setting
+from src.runtime_settings import resolve_general_setting, resolve_redis_degraded_mode
 
 logger = logging.getLogger(__name__)
 
@@ -377,9 +377,10 @@ class DynamicConfigManager:
                 db,
                 candidate,
                 redis_available=self.redis is not None,
-                degraded_mode=(
-                    candidate.general_settings.redis_degraded_mode
-                    or self.output_policy_degraded_mode
+                degraded_mode=resolve_redis_degraded_mode(
+                    candidate.general_settings,
+                    self.runtime_settings,
+                    self.output_policy_degraded_mode,
                 ),
                 runtime_settings=self.runtime_settings,
             )

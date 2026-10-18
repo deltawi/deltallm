@@ -214,7 +214,7 @@ batchWorker:
       embeddings_batch_item_claim_limit: 10
 ```
 
-When `batchWorker.enabled=true`, the chart automatically disables batch executor, completion outbox, and cleanup loops in the API ConfigMap and enables them in the worker ConfigMap. `config` remains the shared base config, `api.config` overrides only API/UI/gateway pods, and `batchWorker.config` overrides only worker pods.
+When `batchWorker.enabled=true`, the chart automatically disables batch executor, completion outbox, cleanup, cache-invalidation, and organization-deletion loops in the API ConfigMap and enables them in the worker ConfigMap. Only `api.config` can turn one of them back on for API pods; the shared `config` cannot. When the worker config leaves them unset, the chart also sets `embeddings_batch_worker_concurrency: 2` and `embeddings_batch_item_claim_limit: 10` for worker pods (the gateway defaults are 4 and 20). `config` remains the shared base config, `api.config` overrides only API/UI/gateway pods, and `batchWorker.config` overrides only worker pods.
 
 The Service keeps the legacy API selector for upgrade safety. Worker pods use a distinct `app.kubernetes.io/name`, so they are not routed by the public Service. When `prometheus.serviceMonitor.enabled=true`, split mode also renders a worker-only metrics Service and ServiceMonitor so API and worker metrics can be scraped separately.
 

@@ -37,6 +37,7 @@ from src.services.identity.keys.key_service import KeyService
 from src.services.identity.keys.auth_fallback import AuthFallbackLimits
 from src.services.identity.keys.key_last_used import KeyLastUsedRecorder
 from src.config_startup import startup_field_values
+from src.runtime_settings import resolve_redis_degraded_mode
 from src.services.admission.limit_counter import LimitCounter
 from src.services.admission.output_policy_configuration import validate_output_policy_configuration
 from src.services.admission.output_limit_lua import OUTPUT_ACCOUNTING_LUA
@@ -259,17 +260,13 @@ async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRu
     app.state.limit_counter = LimitCounter(
         redis_client=app.state.redis,
         environment=app.state.settings.app_env,
-        degraded_mode=str(
-            cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
-        ),
+        degraded_mode=resolve_redis_degraded_mode(cfg.general_settings, app.state.settings),
     )
     await validate_output_policy_configuration(
         app.state.prisma_manager.client,
         cfg,
         redis_available=app.state.redis is not None,
-        degraded_mode=str(
-            cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
-        ),
+        degraded_mode=resolve_redis_degraded_mode(cfg.general_settings, app.state.settings),
         runtime_settings=app.state.settings,
     )
     if app.state.redis is not None:

@@ -55,7 +55,8 @@ def _config(documents: list[dict[str, Any]], name: str) -> dict[str, Any]:
 
 def test_organization_deletion_defaults_and_schema_match_runtime() -> None:
     values = yaml.safe_load((HELM_CHART_DIR / "values.yaml").read_text())
-    general = values["config"]["general_settings"]
+    defaults = yaml.safe_load((HELM_CHART_DIR / "files/config-defaults.yaml").read_text())
+    general = {**defaults["general_settings"], **values["config"]["general_settings"]}
     assert general["organization_deletion_requests_enabled"] is False
     assert general["organization_deletion_worker_enabled"] is True
     assert general["organization_deletion_recovery_window_hours"] == 168
@@ -73,6 +74,7 @@ def test_rollout_guidance_matches_lifecycle_protocol_constant() -> None:
     assert ORGANIZATION_LIFECYCLE_PROTOCOL_VERSION == 2
     for path in (
         REPO_ROOT / "config.example.yaml",
+        HELM_CHART_DIR / "values.yaml",
         HELM_CHART_DIR / "values-production.yaml",
     ):
         guidance = path.read_text(encoding="utf-8")
