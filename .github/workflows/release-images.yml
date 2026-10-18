@@ -12,7 +12,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Images publish only when the newest official OpenAI Python SDK still works
+  # against this release's chat, embeddings, audio, files and batch endpoints.
+  openai-sdk:
+    uses: ./.github/workflows/openai-sdk-compat.yml
+    permissions:
+      contents: read
+    with:
+      openai-version: latest
+    secrets: inherit
+
   docker:
+    needs: openai-sdk
     uses: ./.github/workflows/lifecycle-acceptance.yml
     permissions:
       contents: read

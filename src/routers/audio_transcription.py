@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from src.audio.elevenlabs_stt import execute_elevenlabs_stt
 from src.audio.transcription_formats import render_srt, render_vtt
@@ -469,7 +469,7 @@ async def audio_transcriptions(
                 request,
             ),
         )
-        return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
+        return _transcription_response(data, response_format, route_decision_headers(request))
     except httpx.HTTPError as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
         failure_provider = str(failure_target.provider or api_provider)
@@ -635,6 +635,26 @@ def _resolve_upstream_response_format(
         for field in ("input_cost_per_second", "output_cost_per_second")
     )
     return "verbose_json" if has_second_pricing else normalized_format
+
+
+# OpenAI answers these formats with the transcript itself, not a JSON object,
+# and the official SDKs return that body to the caller as a plain string.
+_PLAIN_TEXT_MEDIA_TYPES = {"text": "text/plain", "srt": "text/plain", "vtt": "text/vtt"}
+
+
+def _transcription_response(
+    data: dict[str, Any], requested_response_format: str | None, headers: dict[str, str]
+) -> Response:
+    normalized_format = (requested_response_format or "json").strip().lower() or "json"
+    media_type = _PLAIN_TEXT_MEDIA_TYPES.get(normalized_format)
+    if media_type is None:
+        return JSONResponse(status_code=200, content=data, headers=headers)
+    return Response(
+        content=str(data.get("text") or ""),
+        status_code=200,
+        media_type=f"{media_type}; charset=utf-8",
+        headers=headers,
+    )
 
 
 def _reshape_transcription_response(

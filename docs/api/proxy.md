@@ -2,6 +2,8 @@
 
 DeltaLLM's proxy API is OpenAI-compatible. In most clients, you only change the `base_url` and API key.
 
+Each change is tested with the official OpenAI Python SDK. See [OpenAI SDK compatibility](openai-sdk-compatibility.md).
+
 ## Quick Start
 
 Use the same auth header for every proxy endpoint: `Authorization: Bearer YOUR_API_KEY`
@@ -241,6 +243,10 @@ POST /v1/audio/transcriptions
 ```
 
 This endpoint accepts multipart form data.
+
+`response_format` accepts `json` (default), `verbose_json`, `text`, `srt` and `vtt`.
+As in the OpenAI API, `json` and `verbose_json` return a JSON object, and `text`, `srt` and `vtt`
+return the transcript itself as `text/plain` (`text/vtt` for `vtt`).
 
 Public transcription requests remain OpenAI-compatible when the selected deployment is ElevenLabs.
 DeltaLLM sends uploaded audio to the native `POST /v1/speech-to-text` endpoint.

@@ -1,0 +1,114 @@
+name: OpenAI SDK compatibility
+
+# Runs the official OpenAI Python SDK against the gateway's chat, embeddings,
+# audio, files and batch endpoints. Pull requests already run these tests with
+# the pinned SDK in tests/openai_sdk/requirements.txt; this workflow runs them
+# with the newest SDK release every night and before a release publishes images.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      openai-version:
+        description: SDK version to test, such as 3.35.1, or "latest"
+        type: string
+        default: latest
+  workflow_call:
+    inputs:
+      openai-version:
+        type: string
+        default: latest
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openai-sdk-compat-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  sdk:
+    name: OpenAI SDK (${{ inputs.openai-version || 'latest' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deltallm_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        with:
+          version: '0.9.28'
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Generate Prisma client
+        run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Apply Prisma migrations
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
+        run: uv run prisma migrate deploy --schema=./prisma/schema.prisma
+
+      - name: Install the OpenAI SDK under test
+        env:
+          OPENAI_VERSION: ${{ inputs.openai-version || 'latest' }}
+        run: |
+          if [ "$OPENAI_VERSION" = "latest" ]; then
+            requirement="openai"
+          elif [[ "$OPENAI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            requirement="openai==$OPENAI_VERSION"
+          else
+            echo "::error::openai-version must be latest or X.Y.Z" && exit 1
+          fi
+          uv venv /tmp/deltallm-openai-sdk
+          uv pip install --python /tmp/deltallm-openai-sdk/bin/python "$requirement"
+          installed="$(/tmp/deltallm-openai-sdk/bin/python -c 'import openai; print(openai.__version__)')"
+          echo "Testing openai $installed" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run OpenAI SDK compatibility tests
+        shell: bash
+        env:
+          CI: 'true'
+          DELTALLM_OPENAI_SDK_PYTHON: /tmp/deltallm-openai-sdk/bin/python
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
+          DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only-0000
+          DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
+        run: >-
+          uv run pytest -q -m postgres tests/test_openai_sdk_compat_postgres.py
+          --tb=short
+          | tee pytest-output.txt
+
+      - name: Annotate failed tests
+        if: failure()
+        run: >-
+          grep -E '^(FAILED|ERROR) ' pytest-output.txt | head -n 50
+          | sed 's/^/::error title=OpenAI SDK::/' || true
