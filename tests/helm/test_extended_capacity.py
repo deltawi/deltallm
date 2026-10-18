@@ -140,6 +140,7 @@ def test_runtime_bootstrap_checks_the_actual_rendered_contract(tmp_path, monkeyp
     config = yaml.safe_load(raw)
     config["general_settings"]["deployment_capacity_path"] = str(contract)
     config["general_settings"]["batch_webhook_encryption_key"] = None
+    config["general_settings"]["mcp_oauth_encryption_key"] = None
     app_config = AppConfig.model_validate(config)
     settings = Settings(database_url="postgresql://fixture:fixture@fixture/db")
     snapshot = DependencyAllocationSnapshot.build(app_config, settings)
