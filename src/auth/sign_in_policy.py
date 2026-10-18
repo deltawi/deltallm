@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 
 PASSWORD_LOGIN_DISABLED_DETAIL = "Password sign-in is turned off. Sign in with SSO."
 SSO_EMAIL_DOMAIN_DENIED_DETAIL = "Your email domain is not allowed to sign in with SSO."
+SSO_EMAIL_UNVERIFIED_DETAIL = (
+    "Your identity provider did not mark your email as verified. Allowed email domains "
+    "need a verified email. Ask your administrator to verify your email in the identity provider."
+)
 
 
 def request_general_settings(request: Request) -> Any:
@@ -52,11 +56,16 @@ def session_allowed(general_settings: Any, context: PlatformAuthContext) -> bool
 def require_sso_email_admitted(general_settings: Any, identity: SSOIdentityAssertion) -> None:
     """Apply `sso_sign_in.allowed_email_domains` to every SSO sign-in, admins included."""
 
-    settings = sso_sign_in_settings(general_settings)
-    if not settings.admits_email(identity.email, email_verified=identity.email_verified):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail=SSO_EMAIL_DOMAIN_DENIED_DETAIL
+    refusal = sso_sign_in_settings(general_settings).refusal(
+        identity.email, email_verified=identity.email_verified
+    )
+    if refusal is not None:
+        detail = (
+            SSO_EMAIL_UNVERIFIED_DETAIL
+            if refusal == "unverified_email"
+            else SSO_EMAIL_DOMAIN_DENIED_DETAIL
         )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
 def sso_may_create_account(

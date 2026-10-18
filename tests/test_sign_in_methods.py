@@ -54,12 +54,13 @@ def test_sign_in_settings_default_to_open_and_normalize_domains() -> None:
 
 def test_domain_gate_needs_a_verified_email_in_the_list() -> None:
     open_rules = SSOSignInSettings()
-    assert open_rules.admits_email("a@anything.io", email_verified=None) is True
+    assert open_rules.refusal("a@anything.io", email_verified=None) is None
     rules = SSOSignInSettings(allowed_email_domains=["example.com"])
-    assert rules.admits_email("A@Example.com", email_verified=True) is True
-    assert rules.admits_email("a@sub.example.com", email_verified=True) is False
-    assert rules.admits_email("a@example.com", email_verified=None) is False
-    assert rules.admits_email("a@example.com", email_verified=False) is False
+    assert rules.refusal("A@Example.com", email_verified=True) is None
+    assert rules.refusal("a@sub.example.com", email_verified=True) == "email_domain"
+    assert rules.refusal("a@other.com", email_verified=None) == "email_domain"
+    assert rules.refusal("a@example.com", email_verified=None) == "unverified_email"
+    assert rules.refusal("a@example.com", email_verified=False) == "unverified_email"
 
 
 def test_cross_field_rules_reject_lockout_and_conflicts() -> None:
@@ -163,12 +164,17 @@ def _sso_app(test_app, **general: Any) -> _StubIdentityService:
 
 
 @pytest.mark.parametrize(
-    ("email", "verified"),
-    [("person@other.com", True), ("person@example.com", None), ("person@example.com", False)],
+    ("email", "verified", "reason"),
+    [
+        ("person@other.com", True, "email domain is not allowed"),
+        ("person@other.com", None, "email domain is not allowed"),
+        ("person@example.com", None, "did not mark your email as verified"),
+        ("person@example.com", False, "did not mark your email as verified"),
+    ],
 )
 @pytest.mark.asyncio
 async def test_domain_gate_refuses_before_any_account_change(
-    client, test_app, email: str, verified: bool | None
+    client, test_app, email: str, verified: bool | None, reason: str
 ) -> None:
     identity = _sso_app(
         test_app,
@@ -181,7 +187,7 @@ async def test_domain_gate_refuses_before_any_account_change(
     )
 
     assert response.status_code == 403
-    assert "email domain is not allowed" in response.json()["detail"]
+    assert reason in response.json()["detail"]
     assert identity.legacy_upserts == []
     assert identity.login_results == []
 
