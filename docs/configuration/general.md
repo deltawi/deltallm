@@ -467,7 +467,7 @@ Email delivery is optional but required for:
 | `email_provider` | `smtp` | Provider: `smtp`, `resend`, or `sendgrid` |
 | `email_from_address` | — | Sender address for transactional and governance email |
 | `email_reply_to` | — | Optional reply-to address |
-| `email_base_url` | — | Base URL used in invite and password-reset links |
+| `email_base_url` | — | Public base URL of the gateway. Invite and password-reset links use it. MCP servers with OAuth 2.0 (per user) also use it for the redirect URL and the connect links |
 | `email_worker_enabled` | `true` | Run the internal outbox worker |
 | `email_worker_batch_size` | `10` | Maximum delivery and delivery-audit records claimed in one worker pass |
 | `email_worker_max_concurrency` | `3` | Maximum delivery records processed concurrently in one process |
@@ -702,6 +702,46 @@ through dynamic configuration returns `409 restart_required`; roll the deploymen
 to apply a new bound consistently.
 
 Batch execution honors the same model access, budget, callback, guardrail, rate-limit, and max-parallel policies as synchronous gateway requests. For multi-replica deployments, run Redis and configure `redis_url` so rate-limit counters, max-parallel slots, and model-group backpressure are shared across workers. Without Redis, persistent Postgres state still prevents duplicate item ownership, but in-memory counters and backpressure are local to each replica.
+
+## MCP OAuth Settings
+
+These settings apply only to MCP servers with the auth mode `oauth2` (OAuth 2.0, per user). Without such a server, the gateway does not use them.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `mcp_oauth_encryption_key` | unset | URL-safe base64 encoding of exactly 32 random bytes. The gateway encrypts user tokens, client secrets and PKCE verifiers with this key (AES-256-GCM). It is required when you create an `oauth2` server |
+| `mcp_oauth_allowed_ports` | `[443]` | Ports that discovery, registration, token, and revocation requests can use |
+| `mcp_oauth_allowed_private_cidrs` | `[]` | Private CIDR ranges that these requests can reach. Cloud metadata addresses stay blocked |
+| `mcp_oauth_allow_http` | `false` | Permit `http://` authorization servers. Use it only in a controlled development network |
+
+All four settings are startup settings. To change them, restart the gateway.
+
+Make a key:
+
+```bash
+python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
+```
+
+Set the key from the environment:
+
+```yaml
+general_settings:
+  mcp_oauth_encryption_key: os.environ/DELTALLM_MCP_OAUTH_ENCRYPTION_KEY
+  email_base_url: https://gateway.example.com
+```
+
+The OAuth flow also needs `email_base_url`. The redirect URL is `<email_base_url>/mcp/oauth/callback` and the connect link is `<email_base_url>/ui/connect/<server_key>`.
+
+If `email_base_url` is not set:
+
+- You cannot save an `oauth2` server. The API returns `400`.
+- A user cannot start a connection. The API returns `409`.
+- The tool error `mcp_connection_required` has no `connect_url`.
+- The gateway writes an error to the log at startup when an `oauth2` server exists.
+
+If `mcp_oauth_encryption_key` is not set and an `oauth2` server exists, the gateway writes an error to the log at startup. Tool calls to that server then fail: a user without a connection gets `mcp_connection_required`, and a user with a stored connection gets a JSON-RPC upstream error until you set the key.
+
+The gateway does not rotate this key. If you change the key, the gateway cannot read the stored tokens. Each user must then connect again, and an administrator must enter the client secrets again.
 
 ## Audit Settings
 

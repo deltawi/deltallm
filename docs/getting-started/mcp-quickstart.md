@@ -60,7 +60,7 @@ Important fields:
 
 - `server_key`: stable identifier that clients will later reference in chat requests
 - `transport`: use `streamable_http`; `http` is accepted as a compatibility alias and normalized to `streamable_http`
-- `auth_mode`: one of `none`, `bearer`, `basic`, or `header_map`
+- `auth_mode`: one of `none`, `bearer`, `basic`, `header_map`, or `oauth2` (per-user OAuth, see [MCP endpoints](../api/mcp.md#per-user-oauth-servers))
 
 Save the returned `mcp_server_id`.
 

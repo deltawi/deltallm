@@ -47,7 +47,7 @@ When you create or edit a server, the key fields are:
 - **Transport**: currently `streamable_http`
 - **Base URL**: upstream MCP endpoint
 - **Enabled**: hides or exposes the server at runtime
-- **Auth Mode**: `none`, `bearer`, `basic`, or `header_map`
+- **Auth Mode**: `none`, `bearer`, `basic`, `header_map`, or **OAuth 2.0 (per user)**
 - **Forwarded Headers Allowlist**: which caller-supplied headers DeltaLLM may forward
 - **Request Timeout**: per-request timeout to the MCP server
 
@@ -57,6 +57,43 @@ Platform admins can create:
 - organization-owned servers
 
 Scoped admins can create only organization-owned servers for organizations they manage.
+
+## OAuth 2.0 (per user)
+
+Use this auth mode when each user must use an own account at the MCP server (for example,
+GitHub or Linear). The gateway stores no shared credential. Each user connects an account on
+the [Connected accounts](connected-accounts.md) page.
+
+Before you start, make sure that the gateway has these settings:
+
+- `general_settings.mcp_oauth_encryption_key`: the key that encrypts the tokens.
+- `general_settings.email_base_url`: the public URL of the gateway.
+
+If a setting is missing, the form shows a warning and the save fails. See
+[MCP OAuth settings](../configuration/general.md#mcp-oauth-settings).
+
+The form shows these fields:
+
+- **Discovery**: the result of the metadata discovery. It shows the authorization server,
+  where the gateway found it, the endpoints, and whether the server supports PKCE (S256) and
+  client registration. Select **Run discovery** (new server) or **Run again** (saved server) to
+  read the metadata again. The gateway also runs discovery when you save the server or change
+  its base URL.
+- **Client ID**: the ID of the OAuth app at the provider. Leave it empty to let the gateway
+  register a client automatically (RFC 7591). The form then shows the registered ID.
+- **Client secret**: optional. The gateway encrypts it and never shows it again. The form shows
+  only **Set** or **Not set**. Leave the field empty to keep the stored secret, or select
+  **Remove the stored secret**.
+- **Scopes**: the scopes that the gateway asks for. Type a scope and press Enter, or select a
+  scope that the server supports.
+- **Redirect URL**: read-only. Copy it into the OAuth app at the provider.
+
+To refresh capabilities or run a health check, the gateway uses **your** connection. Connect
+your account on the Connected accounts page first. The master key cannot run these actions for
+an OAuth 2.0 (per user) server.
+
+If you change the base URL or the auth mode, the gateway deletes all user connections of the
+server. The users must connect again.
 
 ## Refresh and Health Check
 
@@ -223,6 +260,8 @@ DeltaLLM strips the prefix and forwards only the allowlisted header names.
 | Health check fails in Docker | Use `host.docker.internal` instead of `localhost` for a host-run MCP server |
 | A tool is visible to the master key but not to app keys | Missing binding or overly narrow allowlist/policy |
 | Chat requests fail but `/mcp tools/call` works | The chosen model is not handling tool calling reliably enough |
+| A tool on an OAuth 2.0 (per user) server returns `mcp_user_key_required` | Use an API key that a user owns. Service account keys cannot use a personal connection |
+| Refresh capabilities returns `409` on an OAuth 2.0 (per user) server | Connect your own account on the Connected accounts page, then try again |
 
 ## Related Pages
 

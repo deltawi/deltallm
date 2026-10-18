@@ -23613,6 +23613,227 @@
         ]
       }
     },
+    "/ui/api/mcp-connections": {
+      "get": {
+        "operationId": "list_mcp_connections_ui_api_mcp_connections_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Mcp Connections Ui Api Mcp Connections Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Mcp Connections",
+        "tags": [
+          "Admin MCP"
+        ]
+      }
+    },
+    "/ui/api/mcp-connections/{server_key}": {
+      "delete": {
+        "description": "Revoke the tokens at the server (RFC 7009) when it can, then delete them.",
+        "operationId": "delete_mcp_connection_ui_api_mcp_connections__server_key__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_key",
+            "required": true,
+            "schema": {
+              "title": "Server Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Mcp Connection Ui Api Mcp Connections  Server Key  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Mcp Connection",
+        "tags": [
+          "Admin MCP"
+        ]
+      }
+    },
+    "/ui/api/mcp-connections/{server_key}/connect": {
+      "post": {
+        "description": "Start the authorization code flow. The browser opens the returned URL.",
+        "operationId": "start_mcp_connection_ui_api_mcp_connections__server_key__connect_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_key",
+            "required": true,
+            "schema": {
+              "title": "Server Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Start Mcp Connection Ui Api Mcp Connections  Server Key  Connect Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Mcp Connection",
+        "tags": [
+          "Admin MCP"
+        ]
+      }
+    },
     "/ui/api/mcp-migration/backfill": {
       "post": {
         "operationId": "backfill_mcp_migration_ui_api_mcp_migration_backfill_post",
@@ -23843,6 +24064,74 @@
           }
         },
         "summary": "Get Mcp Migration Report",
+        "tags": [
+          "Admin MCP"
+        ]
+      }
+    },
+    "/ui/api/mcp-oauth/settings": {
+      "get": {
+        "description": "Gateway values the server form shows for OAuth 2.0 (per user).",
+        "operationId": "get_mcp_oauth_settings_ui_api_mcp_oauth_settings_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Mcp Oauth Settings Ui Api Mcp Oauth Settings Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Mcp Oauth Settings",
         "tags": [
           "Admin MCP"
         ]
@@ -24418,6 +24707,86 @@
         ]
       }
     },
+    "/ui/api/mcp-servers/oauth/discover": {
+      "post": {
+        "description": "Run discovery for a base URL before the server exists. Nothing is stored.",
+        "operationId": "preview_mcp_oauth_discovery_ui_api_mcp_servers_oauth_discover_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Mcp Oauth Discovery Ui Api Mcp Servers Oauth Discover Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Mcp Oauth Discovery",
+        "tags": [
+          "Admin MCP"
+        ]
+      }
+    },
     "/ui/api/mcp-servers/{server_id}": {
       "delete": {
         "operationId": "delete_mcp_server_ui_api_mcp_servers__server_id__delete",
@@ -24735,6 +25104,83 @@
           }
         },
         "summary": "Health Check Mcp Server",
+        "tags": [
+          "Admin MCP"
+        ]
+      }
+    },
+    "/ui/api/mcp-servers/{server_id}/oauth/discovery": {
+      "post": {
+        "description": "Run discovery again and register a client when the server has none.",
+        "operationId": "run_mcp_oauth_discovery_ui_api_mcp_servers__server_id__oauth_discovery_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Mcp Oauth Discovery Ui Api Mcp Servers  Server Id  Oauth Discovery Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Mcp Oauth Discovery",
         "tags": [
           "Admin MCP"
         ]

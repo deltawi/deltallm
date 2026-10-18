@@ -179,6 +179,7 @@ Supported upstream auth modes:
 - `bearer`
 - `basic`
 - `header_map`
+- `oauth2`: each user connects an own account. See [Connected accounts](../admin-ui/connected-accounts.md)
 
 If you need to pass selected end-user headers through DeltaLLM, use `forwarded_headers_allowlist`. Callers then send headers in this form:
 
