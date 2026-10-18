@@ -388,6 +388,13 @@ async def create_mcp_server(
             status_code=status.HTTP_409_CONFLICT,
             detail="An MCP server with this server_key already exists",
         )
+    # Server keys and bundle keys share one name space: both name a `server` in requests.
+    bundle_repository = getattr(request.app.state, "mcp_bundle_repository", None)
+    if bundle_repository is not None and await bundle_repository.get_bundle_by_key(server_key):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An MCP bundle with this key already exists",
+        )
     if access_repository is None:
         legacy_scope = get_auth_scope(
             request,

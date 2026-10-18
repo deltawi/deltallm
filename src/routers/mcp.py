@@ -25,6 +25,8 @@ from src.mcp import (
     MCPToolTimeoutError,
     MCPTransportError,
 )
+from src.mcp.bundle_runtime import list_bundle_tools, resolve_visible_bundle
+from src.mcp.bundles import MCPBundle
 from src.routers.audit_helpers import emit_audit_event
 from src.services.audit.audit_service import require_audit_service
 
@@ -110,10 +112,37 @@ def _initialize_result() -> dict[str, Any]:
 
 @router.post("/mcp", dependencies=[Depends(require_api_key)])
 async def mcp_gateway(request: Request):
+    return await _handle_mcp_request(request, bundle_key=None)
+
+
+@router.post("/mcp/{bundle_key}", dependencies=[Depends(require_api_key)])
+async def mcp_bundle_gateway(request: Request, bundle_key: str):
+    """One MCP endpoint that lists only the tools of one bundle."""
+    return await _handle_mcp_request(request, bundle_key=bundle_key)
+
+
+async def _bundle_tool_target(
+    gateway: MCPGatewayService, auth: Any, bundle: MCPBundle, tool_name: str
+) -> str:
+    # Map the exposed name back to the real tool. A tool that the caller cannot
+    # see is unknown, so an error does not show the names of hidden tools.
+    for item in await list_bundle_tools(gateway, auth, bundle):
+        if item.exposed_name == tool_name:
+            return item.tool.namespaced_name
+    raise MCPToolNotFoundError(f"Unknown MCP tool '{tool_name}'")
+
+
+async def _handle_mcp_request(request: Request, *, bundle_key: str | None):
     request_start = perf_counter()
     auth = await authenticate_request(request)
     request_id: str | int | None = None
     tool_operation_id: str | None = None
+    resolved_tool_name: str | None = None
+    bundle: MCPBundle | None = None
+    if bundle_key is not None:
+        bundle = resolve_visible_bundle(_gateway_or_503(request), auth, bundle_key)
+        if bundle is None:
+            return JSONResponse(status_code=404, content={"detail": "MCP bundle not found"})
 
     try:
         payload = await request.json()
@@ -148,15 +177,24 @@ async def mcp_gateway(request: Request):
         if method == "ping":
             return _jsonrpc_success(request_id, {})
         if method == "tools/list":
-            tools = await gateway.list_visible_tools(auth)
+            listed = (
+                [
+                    (item.exposed_name, item.tool)
+                    for item in await list_bundle_tools(gateway, auth, bundle)
+                ]
+                if bundle is not None
+                else [
+                    (tool.namespaced_name, tool) for tool in await gateway.list_visible_tools(auth)
+                ]
+            )
             response = {
                 "tools": [
                     {
-                        "name": tool.namespaced_name,
+                        "name": name,
                         "description": tool.description,
                         "inputSchema": tool.input_schema,
                     }
-                    for tool in tools
+                    for name, tool in listed
                 ]
             }
             await emit_audit_event(
@@ -183,6 +221,9 @@ async def mcp_gateway(request: Request):
             arguments = params.get("arguments")
             if arguments is not None and not isinstance(arguments, dict):
                 raise ValueError("tools/call params.arguments must be an object")
+            if bundle is not None:
+                tool_name = await _bundle_tool_target(gateway, auth, bundle, tool_name)
+            resolved_tool_name = tool_name
             tool_operation_id = str(uuid4())
             try:
                 server_key = parse_namespaced_tool_name(tool_name)[0]
@@ -206,6 +247,7 @@ async def mcp_gateway(request: Request):
                     "phase": "attempt",
                     "server_key": server_key,
                     "tool_name": tool_name,
+                    **({"bundle_key": bundle.bundle_key} if bundle is not None else {}),
                 },
                 critical=True,
                 event_id=_tool_audit_event_id(tool_operation_id, "attempt"),
@@ -238,6 +280,7 @@ async def mcp_gateway(request: Request):
                     "tool_name": str(result.metadata.get("tool_name") or tool_name),
                     "scope_type": result.metadata.get("scope_type"),
                     "scope_id": result.metadata.get("scope_id"),
+                    **({"bundle_key": bundle.bundle_key} if bundle is not None else {}),
                 },
                 critical=False,
                 event_id=_tool_audit_event_id(tool_operation_id, "outcome"),
@@ -255,7 +298,7 @@ async def mcp_gateway(request: Request):
         )
     except MCPError as exc:
         if method == "tools/call":
-            tool_name = str(tool_params.get("name") or "")
+            tool_name = resolved_tool_name or str(tool_params.get("name") or "")
             try:
                 server_key = parse_namespaced_tool_name(tool_name)[0]
             except MCPToolNotFoundError:
@@ -315,7 +358,7 @@ async def mcp_gateway(request: Request):
                 organization_id=auth.organization_id,
                 api_key=auth.api_key,
                 resource_type="mcp_tool",
-                resource_id=str(tool_params.get("name") or ""),
+                resource_id=resolved_tool_name or str(tool_params.get("name") or ""),
                 error=exc,
                 metadata={
                     "operation_id": tool_operation_id,

@@ -82,6 +82,8 @@ const testSources = [
   'tests/mcpPage.test.tsx',
   'tests/mcpConnections.test.ts',
   'tests/connectedAccountsPage.test.tsx',
+  'tests/mcpBundles.test.ts',
+  'tests/mcpBundlesPage.test.tsx',
   'tests/promptVersions.test.ts',
   'tests/promptTemplateDetail.test.tsx',
   'tests/auditEvents.test.ts',

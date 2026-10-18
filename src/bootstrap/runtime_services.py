@@ -253,6 +253,7 @@ async def _init_runtime_services(
     app.state.mcp_governance_service = MCPGovernanceService(
         repository=app.state.mcp_repository,
         policy_repository=getattr(app.state, "mcp_scope_policy_repository", None),
+        bundle_repository=getattr(app.state, "mcp_bundle_repository", None),
     )
     await app.state.mcp_governance_service.reload()
     app.state.mcp_transport_client = StreamableHTTPMCPClient(

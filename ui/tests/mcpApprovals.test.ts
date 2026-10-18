@@ -35,6 +35,7 @@ test('the approvals tab needs approval access', () => {
   assert.equal(resolveMCPPageTab('approvals', false), 'servers');
   assert.equal(resolveMCPPageTab(null, true), 'servers');
   assert.equal(resolveMCPPageTab('unknown', true), 'servers');
+  assert.equal(resolveMCPPageTab('bundles', false), 'bundles');
 });
 
 test('status filters start with pending and end with all', () => {
