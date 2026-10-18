@@ -5,6 +5,7 @@ import type { OrganizationTierPolicyPreview, TierPolicySimulation, TierPolicySim
 import type { KeyRemovalResult } from './api/keyRevocations';
 import type { Paginated, Pagination } from './api/pagination';
 import type { ManagedAssetAccess, ManagedAssetAccessInput } from './api/managedAssets';
+import type { MCPOAuthServerSettings } from './api/mcpOAuth';
 export type { Paginated, Pagination } from './api/pagination';
 import { apiFetch, withQuery } from './api/transport';
 import { updateRuntimeOutputTpm } from './api/runtimeUsers';
@@ -212,8 +213,10 @@ export interface MCPServer {
   transport: 'streamable_http';
   base_url: string;
   enabled: boolean;
-  auth_mode: 'none' | 'bearer' | 'basic' | 'header_map';
+  auth_mode: 'none' | 'bearer' | 'basic' | 'header_map' | 'oauth2';
   auth_credentials_present: boolean;
+  // Present only for auth_mode "oauth2". The client secret is reported as set or not set.
+  oauth?: MCPOAuthServerSettings | null;
   forwarded_headers_allowlist?: string[] | null;
   request_timeout_ms: number;
   capabilities_json?: Record<string, unknown> | null;

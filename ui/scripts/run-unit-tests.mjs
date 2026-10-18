@@ -80,6 +80,8 @@ const testSources = [
   'tests/useRoutePolicySimulation.test.ts',
   'tests/mcpApprovals.test.ts',
   'tests/mcpPage.test.tsx',
+  'tests/mcpConnections.test.ts',
+  'tests/connectedAccountsPage.test.tsx',
   'tests/promptVersions.test.ts',
   'tests/promptTemplateDetail.test.tsx',
   'tests/auditEvents.test.ts',

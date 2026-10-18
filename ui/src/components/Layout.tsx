@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import {
   BookOpen,
   ChevronsUpDown,
   ExternalLink,
+  Link2,
   LogOut,
   Menu,
   X,
@@ -23,6 +24,8 @@ import {
   type NavSection,
 } from '../lib/navigation';
 import { useDesktopSidebarWidth } from '../lib/useDesktopSidebarWidth';
+import { CONNECTED_ACCOUNTS_PATH } from '../lib/mcpConnectionAttention';
+import { useMCPConnectionAttention } from '../lib/useMCPConnectionAttention';
 import BrandLogo from './BrandLogo';
 import { useToast } from './ToastProvider';
 
@@ -112,16 +115,41 @@ function SidebarSection({
   );
 }
 
+function attentionLabel(count: number) {
+  return `${count} connected ${count === 1 ? 'account needs' : 'accounts need'} attention`;
+}
+
+function AttentionBadge({ count, className }: { count: number; className?: string }) {
+  return (
+    <span
+      title={attentionLabel(count)}
+      className={clsx(
+        'inline-flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-amber-500 px-1.5 text-xs font-semibold text-white',
+        className,
+      )}
+    >
+      <span aria-hidden="true">{count}</span>
+      <span className="sr-only">{attentionLabel(count)}</span>
+    </span>
+  );
+}
+
 function AccountMenu({
   displayEmail,
   displayRole,
   logout,
   isLoggingOut,
+  showConnections,
+  connectionAttention,
+  onNavClick,
 }: {
   displayEmail: string;
   displayRole: string;
   logout: () => void;
   isLoggingOut: boolean;
+  showConnections: boolean;
+  connectionAttention: number | null;
+  onNavClick?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -155,6 +183,20 @@ function AccountMenu({
           id={menuId}
           className="absolute bottom-full left-0 right-0 z-20 mb-2 rounded-lg border border-gray-200 bg-white p-1 shadow-lg"
         >
+          {showConnections ? (
+            <Link
+              to={CONNECTED_ACCOUNTS_PATH}
+              onClick={() => {
+                setOpen(false);
+                onNavClick?.();
+              }}
+              className={menuItemClass}
+            >
+              <Link2 className="w-4 h-4 shrink-0 text-gray-400" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">Connected accounts</span>
+              {connectionAttention ? <AttentionBadge count={connectionAttention} /> : null}
+            </Link>
+          ) : null}
           <a
             href={DOCS_URL}
             target="_blank"
@@ -186,7 +228,7 @@ function AccountMenu({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        aria-label={`Account menu for ${displayEmail}`}
+        aria-label={`Account menu for ${displayEmail}${showConnections && connectionAttention ? `, ${attentionLabel(connectionAttention)}` : ''}`}
         className="flex w-full min-w-0 items-center gap-3 rounded-lg p-1.5 text-left transition-colors hover:bg-brand-menu-hover"
       >
         <span className="flex items-center justify-center w-8 h-8 rounded-full bg-brand-secondary-soft text-brand-secondary-ink font-medium shrink-0 text-sm" aria-hidden="true">
@@ -198,6 +240,7 @@ function AccountMenu({
           </span>
           {displayRole && <RoleBadge role={displayRole} />}
         </span>
+        {showConnections && connectionAttention ? <AttentionBadge count={connectionAttention} /> : null}
         <ChevronsUpDown className="w-4 h-4 shrink-0 text-gray-400" aria-hidden="true" />
       </button>
     </div>
@@ -217,6 +260,8 @@ function SidebarContent({
   collapsed,
   canCollapse,
   onToggleCollapsed,
+  showConnections,
+  connectionAttention,
 }: {
   sections: NavSection[];
   footerItems: NavItem[];
@@ -230,6 +275,8 @@ function SidebarContent({
   collapsed: boolean;
   canCollapse: boolean;
   onToggleCollapsed: () => void;
+  showConnections: boolean;
+  connectionAttention: number | null;
 }) {
   const toggleLabel = !showExpanded ? 'Expand sidebar' : collapsed ? 'Pin sidebar open' : 'Collapse sidebar';
   return (
@@ -288,15 +335,21 @@ function SidebarContent({
               displayRole={displayRole}
               logout={logout}
               isLoggingOut={isLoggingOut}
+              showConnections={showConnections}
+              connectionAttention={connectionAttention}
+              onNavClick={onNavClick}
             />
           ) : (
-            <div className="flex justify-center">
+            <div className="relative flex justify-center">
               <div
                 className="w-8 h-8 rounded-full bg-brand-secondary-soft text-brand-secondary-ink font-medium flex items-center justify-center text-sm"
                 title={displayEmail}
               >
                 {displayEmail.charAt(0).toUpperCase()}
               </div>
+              {showConnections && connectionAttention ? (
+                <AttentionBadge count={connectionAttention} className="absolute -right-1 -top-1" />
+              ) : null}
             </div>
           )}
         </div>
@@ -332,6 +385,9 @@ export default function Layout() {
     return visibleNavSections(uiAccess, (item) => (item.pageKey === 'usage' ? usageLabel : item.label));
   }, [uiAccess, isPlatformAdmin, permissions]);
   const footerItems = useMemo(() => visibleNavFooterItems(uiAccess), [uiAccess]);
+  // Only a signed-in user has an account to connect; the master key has none.
+  const showConnections = authMode === 'session';
+  const connectionAttention = useMCPConnectionAttention(showConnections);
 
   const handleLogout = useCallback(() => {
     void logout().catch((error: unknown) => {
@@ -372,6 +428,8 @@ export default function Layout() {
           collapsed={collapsed}
           canCollapse={true}
           onToggleCollapsed={toggleCollapsed}
+          showConnections={showConnections}
+          connectionAttention={connectionAttention}
         />
 
         {!collapsed && (
@@ -425,6 +483,8 @@ export default function Layout() {
               collapsed={false}
               canCollapse={false}
               onToggleCollapsed={() => {}}
+              showConnections={showConnections}
+              connectionAttention={connectionAttention}
             />
           </aside>
         </div>

@@ -49,6 +49,7 @@ const PromptRegistry = lazy(() => import('./pages/PromptRegistry'));
 const PromptTemplateDetail = lazy(() => import('./pages/PromptTemplateDetail'));
 const MCPServers = lazy(() => import('./pages/MCPServers'));
 const MCPServerDetail = lazy(() => import('./pages/MCPServerDetail'));
+const ConnectedAccounts = lazy(() => import('./pages/ConnectedAccounts'));
 
 class RouteChunkBoundary extends Component<
   { children: ReactNode },
@@ -226,6 +227,9 @@ function AppRoutes() {
           <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <ChunkedRoute><PromptTemplateDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServers /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <ChunkedRoute><MCPServerDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+          <Route path="/connected-accounts" element={<ChunkedRoute><ConnectedAccounts /></ChunkedRoute>} />
+          {/* The connect link in a tool error (connect_url) and the OAuth callback redirect open this path. */}
+          <Route path="/ui/connect/:serverKey" element={<ChunkedRoute><ConnectedAccounts /></ChunkedRoute>} />
           <Route path="/mcp-approvals" element={uiAccess.mcp_servers ? <MCPApprovalsRedirect /> : <Navigate to="/" replace />} />
           <Route path="/keys" element={uiAccess.keys ? <ChunkedRoute><ApiKeys /></ChunkedRoute> : <Navigate to="/" replace />} />
           <Route path="/coding-agents" element={uiAccess.coding_agents ? <ChunkedRoute><CodingAgents /></ChunkedRoute> : <Navigate to="/" replace />} />
