@@ -276,12 +276,17 @@ secret:
     masterKey: master-key
     saltKey: salt-key
     batchWebhookEncryptionKey: batch-webhook-encryption-key
+    mcpOAuthEncryptionKey: mcp-oauth-encryption-key
   values:
     masterKey: ""
     saltKey: ""
     # URL-safe base64 encoding of exactly 32 random bytes. Keep this stable
     # for as long as pending webhook deliveries may need to be decrypted.
     batchWebhookEncryptionKey: ""
+    # URL-safe base64 encoding of exactly 32 random bytes. Required only when
+    # an MCP server uses OAuth 2.0 (per user). If you change it, users must
+    # connect their accounts again.
+    mcpOAuthEncryptionKey: ""
 
 runtime:
   accounting:

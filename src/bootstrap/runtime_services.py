@@ -49,6 +49,7 @@ from src.mcp import (
     MCPToolResultCache,
     StreamableHTTPMCPClient,
 )
+from src.bootstrap.mcp_oauth import build_mcp_oauth_service
 from src.notifications.channels import EmailChannel, SlackChannel
 from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.types import NotificationChannel
@@ -258,6 +259,7 @@ async def _init_runtime_services(
         app.state.http_client,
         general_settings=getattr(app.state, "upstream_http_settings", cfg.general_settings),
     )
+    app.state.mcp_oauth_service = build_mcp_oauth_service(app, cfg.general_settings)
     app.state.mcp_health_probe = MCPHealthProbe(
         registry=app.state.mcp_registry_service,
         client=app.state.mcp_transport_client,
@@ -270,6 +272,7 @@ async def _init_runtime_services(
         result_cache=MCPToolResultCache(getattr(app.state, "cache_backend", None)),
         approval_service=MCPApprovalService(app.state.mcp_repository),
         creator_access_service=getattr(app.state, "creator_mcp_access_service", None),
+        oauth_service=app.state.mcp_oauth_service,
     )
     app.state.governance_invalidation_service = GovernanceInvalidationService(
         redis_client=app.state.redis,

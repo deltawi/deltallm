@@ -25,6 +25,8 @@ from .exceptions import (
 from .governance import MCPGovernanceService
 from .metrics import record_mcp_tool_call, record_mcp_tools_list
 from .models import MCPBindingResolution, MCPToolCallResult
+from .oauth.service import OAUTH2_AUTH_MODE, MCPOAuthService
+from .oauth.tool_access import MCPOAuthToolAccess, OAuthToolCall
 from .policy import MCPToolPolicyEnforcer, resolve_policy_timeout_ms
 from .result_cache import MCPToolResultCache
 from .registry import MCPRegistryService, server_record_to_config
@@ -58,6 +60,7 @@ class MCPGatewayService:
         approval_service: MCPApprovalService | None = None,
         governance_service: MCPGovernanceService | None = None,
         creator_access_service: CreatorMCPAccessService | None = None,
+        oauth_service: MCPOAuthService | None = None,
     ) -> None:
         self.registry = registry
         self.transport_client = transport_client
@@ -66,6 +69,7 @@ class MCPGatewayService:
         self.approval_service = approval_service
         self.governance_service = governance_service
         self.creator_access_service = creator_access_service
+        self.oauth_access = MCPOAuthToolAccess(oauth_service)
 
     async def list_visible_tools(self, auth: UserAPIKeyAuth) -> list[NamespacedTool]:
         started = perf_counter()
@@ -149,6 +153,28 @@ class MCPGatewayService:
             raise MCPToolNotFoundError(f"Unknown MCP tool '{namespaced_tool_name}'")
 
         policy = await self._effective_tool_policy(auth, visible.server.mcp_server_id, tool_name)
+        oauth_call: OAuthToolCall | None = None
+        if visible.server.auth_mode == OAUTH2_AUTH_MODE and (policy is None or policy.enabled):
+            # Only oauth2 servers read a user connection. Check it before an
+            # approval request exists, so a user who must connect first does not
+            # wait for an approval that cannot run.
+            resolved = await self.oauth_access.resolve(
+                auth, server_record_to_config(visible.server)
+            )
+            if isinstance(resolved, MCPToolCallResult):
+                record_mcp_tool_call(
+                    server_key=server_key,
+                    tool_name=tool_name,
+                    success=False,
+                    latency_ms=int((perf_counter() - started) * 1000),
+                )
+                return self._with_call_metadata(
+                    resolved,
+                    server_key=server_key,
+                    namespaced_tool_name=namespaced_tool_name,
+                    binding=visible.binding,
+                )
+            oauth_call = resolved
         approved_request_id: str | None = None
         approval_inputs: dict[str, Any] = {}
         if policy is not None:
@@ -263,12 +289,21 @@ class MCPGatewayService:
                         auth_api_key=getattr(auth, "api_key", None),
                     )
                 if result is None:
-                    result = await self.transport_client.call_tool(
-                        server_config,
-                        tool_name=tool_name,
-                        arguments=arguments or {},
-                        request_headers=request_headers,
-                    )
+                    if oauth_call is not None:
+                        result = await self.oauth_access.call_tool(
+                            self.transport_client,
+                            oauth_call,
+                            tool_name=tool_name,
+                            arguments=arguments or {},
+                            request_headers=request_headers,
+                        )
+                    else:
+                        result = await self.transport_client.call_tool(
+                            server_config,
+                            tool_name=tool_name,
+                            arguments=arguments or {},
+                            request_headers=request_headers,
+                        )
                     if cache_ttl > 0 and self.result_cache is not None:
                         await self.result_cache.set(
                             server=server_config,
@@ -329,13 +364,28 @@ class MCPGatewayService:
                 "scope_id": visible.binding.scope_id,
             },
         )
+        return self._with_call_metadata(
+            result,
+            server_key=server_key,
+            namespaced_tool_name=namespaced_tool_name,
+            binding=visible.binding,
+        )
+
+    @staticmethod
+    def _with_call_metadata(
+        result: MCPToolCallResult,
+        *,
+        server_key: str,
+        namespaced_tool_name: str,
+        binding: MCPBindingResolution,
+    ) -> MCPToolCallResult:
         result_metadata = dict(result.metadata or {})
         result_metadata.update(
             {
                 "server_key": server_key,
                 "tool_name": namespaced_tool_name,
-                "scope_type": visible.binding.scope_type,
-                "scope_id": visible.binding.scope_id,
+                "scope_type": binding.scope_type,
+                "scope_id": binding.scope_id,
             }
         )
         return MCPToolCallResult(

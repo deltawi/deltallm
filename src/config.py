@@ -16,6 +16,7 @@ from pydantic import (
     Field,
     SecretStr,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -51,6 +52,7 @@ from src.batch.scheduling.modes import (
     resolve_scheduler_modes_from_settings,
 )
 from src.batch.webhooks.crypto import decode_batch_webhook_encryption_key
+from src.secret_envelope import decode_envelope_key
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,
@@ -777,6 +779,12 @@ class GeneralSettings(
     batch_webhook_worker_enabled: bool = True
     batch_webhook_observability_enabled: bool = True
     batch_webhook_encryption_key: SecretStr | None = None
+    mcp_oauth_encryption_key: SecretStr | None = None
+    mcp_oauth_allow_http: bool = Field(default=False, strict=True)
+    mcp_oauth_allowed_ports: list[int] = Field(
+        default_factory=lambda: [443], min_length=1, max_length=64
+    )
+    mcp_oauth_allowed_private_cidrs: list[str] = Field(default_factory=list, max_length=128)
     batch_webhook_poll_interval_seconds: float = Field(default=1.0, gt=0.0)
     batch_webhook_observability_refresh_interval_seconds: float = Field(default=15.0, gt=0.0)
     batch_webhook_max_concurrency: int = Field(default=4, ge=1, le=100)
@@ -991,28 +999,32 @@ class GeneralSettings(
         decode_batch_webhook_encryption_key(value)
         return value
 
-    @field_validator("provider_discovery_allowed_ports", mode="before")
+    @field_validator("mcp_oauth_encryption_key")
     @classmethod
-    def validate_provider_discovery_ports(cls, value: object) -> object:
+    def validate_mcp_oauth_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value().strip():
+            return None
+        decode_envelope_key(value, key_name="mcp_oauth_encryption_key")
+        return value
+
+    @field_validator("provider_discovery_allowed_ports", "mcp_oauth_allowed_ports", mode="before")
+    @classmethod
+    def validate_provider_discovery_ports(cls, value: object, info: ValidationInfo) -> object:
         if not isinstance(value, list) or any(
             type(port) is not int or not 1 <= port <= 65535 for port in value
         ):
-            raise ValueError(
-                "provider_discovery_allowed_ports requires integer ports between 1 and 65535"
-            )
+            raise ValueError(f"{info.field_name} requires integer ports between 1 and 65535")
         if len(value) != len(set(value)):
-            raise ValueError("provider_discovery_allowed_ports requires unique ports")
+            raise ValueError(f"{info.field_name} requires unique ports")
         return value
 
-    @field_validator("provider_discovery_allowed_private_cidrs")
+    @field_validator("provider_discovery_allowed_private_cidrs", "mcp_oauth_allowed_private_cidrs")
     @classmethod
-    def validate_provider_discovery_cidrs(cls, value: list[str]) -> list[str]:
+    def validate_provider_discovery_cidrs(cls, value: list[str], info: ValidationInfo) -> list[str]:
         try:
             return list(dict.fromkeys(str(ip_network(cidr, strict=False)) for cidr in value))
         except ValueError:
-            raise ValueError(
-                "provider_discovery_allowed_private_cidrs requires valid IPv4 or IPv6 CIDRs"
-            ) from None
+            raise ValueError(f"{info.field_name} requires valid IPv4 or IPv6 CIDRs") from None
 
     @field_validator("batch_webhook_allowed_ports")
     @classmethod

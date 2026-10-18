@@ -29,6 +29,7 @@
 {{- $_ := set $generalSettings "deployment_capacity_path" "/app/capacity/report.json" -}}
 {{- end -}}
 {{- $_ := set $generalSettings "batch_webhook_encryption_key" "os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY" -}}
+{{- $_ := set $generalSettings "mcp_oauth_encryption_key" "os.environ/DELTALLM_MCP_OAUTH_ENCRYPTION_KEY" -}}
 {{- if $minimal }}
 model_list: []
 router_settings: {}

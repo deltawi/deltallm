@@ -77,6 +77,9 @@ def _credentials_present(auth_mode: str, auth_config: dict[str, Any] | None) -> 
         return bool(str(config.get("token") or "").strip())
     if auth_mode == "basic":
         return bool(str(config.get("username") or "") and str(config.get("password") or ""))
+    if auth_mode == "oauth2":
+        # Users bring their own tokens. "Present" means the server has an OAuth client.
+        return bool(str(config.get("client_id") or "").strip())
     headers = config.get("headers")
     return isinstance(headers, dict) and any(
         str(key).strip() and value is not None for key, value in headers.items()
@@ -156,6 +159,13 @@ def _validate_auth_config(auth_mode: str, value: Any) -> dict[str, Any]:
                 detail="auth_config.username and auth_config.password are required for basic auth",
             )
         return {"username": username, "password": password}
+    if auth_mode == "oauth2":
+        # oauth_support.build_oauth2_auth_config owns this mode: it encrypts the
+        # client secret and runs discovery, which needs I/O.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="oauth2 auth_config must be built by the OAuth service",
+        )
     headers = config.get("headers")
     if not isinstance(headers, dict) or not headers:
         raise HTTPException(

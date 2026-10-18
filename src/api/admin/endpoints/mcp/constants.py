@@ -1,7 +1,7 @@
 """Static constants for the admin MCP endpoints."""
 from __future__ import annotations
 
-_ALLOWED_AUTH_MODES = {"none", "bearer", "basic", "header_map"}
+_ALLOWED_AUTH_MODES = {"none", "bearer", "basic", "header_map", "oauth2"}
 _ALLOWED_SCOPE_TYPES = {"organization", "team", "api_key", "user"}
 _ALLOWED_OWNER_SCOPE_TYPES = {"global", "organization"}
 _ALLOWED_TRANSPORTS = {"streamable_http"}

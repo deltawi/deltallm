@@ -5,6 +5,8 @@ from time import perf_counter
 
 from src.db.mcp.mcp import MCPServerRecord
 
+from .models import MCPServerConfig
+
 from .metrics import record_mcp_health_check
 from .registry import MCPRegistryService, server_record_to_config
 from .transport_http import StreamableHTTPMCPClient
@@ -22,10 +24,13 @@ class MCPHealthProbe:
         self.registry = registry
         self.client = client
 
-    async def check_server(self, server: MCPServerRecord) -> MCPHealthResult:
+    async def check_server(
+        self, server: MCPServerRecord, *, config: MCPServerConfig | None = None
+    ) -> MCPHealthResult:
+        """Probe the server. ``config`` overrides the stored config (an oauth2 user token)."""
         started = perf_counter()
         try:
-            config = server_record_to_config(server)
+            config = config if config is not None else server_record_to_config(server)
             await self.client.initialize(config)
             await self.client.list_tools(config)
         except Exception as exc:

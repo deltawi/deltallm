@@ -14,6 +14,7 @@ from src.db.mcp.mcp import (
 )
 from src.db.mcp.mcp_scope_policies import MCPScopePolicyRecord
 from src.mcp.capabilities import extract_tool_schemas
+from src.mcp.oauth import OAUTH2_AUTH_MODE, OAuth2ServerSettings
 from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetPrincipal,
@@ -35,6 +36,10 @@ def _serialize_server(
     payload.pop("auth_config", None)
     payload["tool_count"] = len(extract_tool_schemas(server.capabilities_json or {}))
     payload["auth_credentials_present"] = _credentials_present(server.auth_mode, server.auth_config)
+    if server.auth_mode == OAUTH2_AUTH_MODE:
+        payload["oauth"] = OAuth2ServerSettings.from_auth_config(
+            server.auth_config
+        ).to_public_json()
     if capabilities is not None:
         payload["capabilities"] = to_json_value(asdict(capabilities))
     if policy is not None and principal is not None:

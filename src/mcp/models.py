@@ -15,6 +15,8 @@ class MCPServerConfig:
     auth_config: dict[str, Any] = field(default_factory=dict)
     forwarded_headers_allowlist: list[str] = field(default_factory=list)
     request_timeout_ms: int = 30000
+    # Set per call for auth_mode "oauth2": the calling user's access token.
+    oauth_access_token: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
