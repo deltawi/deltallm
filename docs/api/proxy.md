@@ -2,6 +2,8 @@
 
 DeltaLLM's proxy API is OpenAI-compatible. In most clients, you only change the `base_url` and API key.
 
+Each change is tested with the official OpenAI Python SDK. See [OpenAI SDK compatibility](openai-sdk-compatibility.md).
+
 ## Quick Start
 
 Use the same auth header for every proxy endpoint: `Authorization: Bearer YOUR_API_KEY`

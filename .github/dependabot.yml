@@ -20,3 +20,21 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
+
+  # The pinned official OpenAI SDK used by the compatibility tests. The nightly
+  # workflow already tests the newest release; this keeps the pull request pin close.
+  - package-ecosystem: pip
+    directory: /tests/openai_sdk
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    groups:
+      openai-sdk:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
