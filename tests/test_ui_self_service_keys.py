@@ -348,6 +348,7 @@ class _FakeKeyDB:
                 rpd_limit,
                 tpd_limit,
                 expires,
+                *_period_and_metadata,
             ) = params
             team = self.teams.get(str(team_id), {})
             self.keys[str(token_hash)] = {

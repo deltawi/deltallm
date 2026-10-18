@@ -80,6 +80,14 @@ def build_ui_access(
         "mcp_approvals": authenticated
         and (is_platform_admin or Permission.KEY_UPDATE in permissions),
         "keys": authenticated and (is_platform_admin or can_read_keys),
+        # Key admins set up developers; members with self-service create their own key.
+        "coding_agents": authenticated
+        and not external_customer
+        and (
+            is_platform_admin
+            or Permission.KEY_UPDATE in permissions
+            or Permission.KEY_CREATE_SELF in permissions
+        ),
         "organizations": authenticated
         and (is_platform_admin or Permission.ORG_READ in permissions),
         "organization_create": is_platform_admin,

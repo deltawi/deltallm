@@ -109,6 +109,7 @@ nav:
           - Teams: admin-ui/teams.md
           - People and permissions: admin-ui/people-and-access.md
           - Application keys: admin-ui/api-keys.md
+          - Coding agents: admin-ui/coding-agents.md
           - Plans and tiers: guides/admin-tiers.md
           - Set up sign-in and SSO: guides/admin-authentication.md
           - External customer sign-in: configuration/external-customer-auth.md

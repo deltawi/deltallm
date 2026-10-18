@@ -9328,6 +9328,11 @@
             "title": "Batches",
             "type": "boolean"
           },
+          "coding_agents": {
+            "default": false,
+            "title": "Coding Agents",
+            "type": "boolean"
+          },
           "dashboard": {
             "default": false,
             "title": "Dashboard",
@@ -21708,6 +21713,22 @@
               "default": false,
               "title": "My Keys",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "coding_agent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Coding Agent"
             }
           },
           {

@@ -481,6 +481,14 @@ top-level `default_prompt` field. An unchanged value is kept without a new check
 
 `GET /ui/api/keys` and `PUT /ui/api/keys/{token_hash}` return `last_used_at` for each key. The value is an ISO 8601 UTC time, or `null` when no use is recorded. The gateway writes this value in batches about once per minute, so the value can be up to one minute old.
 
+`POST /ui/api/keys` and `PUT /ui/api/keys/{token_hash}` accept these optional fields:
+
+- `budget_duration`: a budget period, such as `"1h"`, `"1d"` or `"1mo"`. The key spend then resets at each period. The first reset is at the next UTC boundary, for example the next 00:00 UTC for `"1d"`. If you change the period, the reset time starts again. Send `null` to remove the period.
+- `coding_agent`: an object with `agent` (`claude-code`, `codex`, `opencode` or `other`), `main_model` and `small_model`. The [Coding agents](../admin-ui/coding-agents.md) page writes this value. The gateway does not use it to route requests. Send `null` to remove it. Other key metadata does not change.
+- `owner_account_id`: an administrator can set a member of the key team as the owner. Other accounts are refused. The current owner stays valid when you edit a key.
+
+The list and the update responses contain `budget_duration`, `budget_reset_at` and `coding_agent`. `GET /ui/api/keys?coding_agent=true` returns only keys with a `coding_agent` value, and `coding_agent=false` returns only keys without one.
+
 ### Service Accounts
 
 | Method | Endpoint | Purpose |

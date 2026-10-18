@@ -127,6 +127,7 @@ class UIAccessResponse(BaseModel):
     mcp_servers: bool = False
     mcp_approvals: bool = False
     keys: bool = False
+    coding_agents: bool = False
     organizations: bool = False
     organization_create: bool = False
     teams: bool = False

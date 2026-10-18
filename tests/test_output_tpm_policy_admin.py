@@ -52,7 +52,9 @@ class _KeyDB(_OutputMutationDB, _FakeKeyDB):
         self.fail_enqueue = False
 
     async def query_raw(self, query, *params):
-        if "FROM deltallm_verificationtoken" in query and "WHERE token = $1" in query:
+        if "FROM deltallm_verificationtoken" in query and (
+            "WHERE token = $1" in query or "WHERE vt.token = $1" in query
+        ):
             row = self.keys.get(params[0])
             return [dict(row)] if row else []
         return await super().query_raw(query, *params)
