@@ -346,7 +346,7 @@ const AccessGroupTokenInput = forwardRef<AccessGroupTokenInputHandle, AccessGrou
           aria-invalid={Boolean(message)}
           aria-describedby={message ? messageId : undefined}
           placeholder={selectedGroups.length > 0 ? 'Add group' : placeholder}
-          className="min-w-[10rem] flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none placeholder:text-gray-400"
+          className="control-field-md min-w-[10rem] flex-1 border-0 bg-transparent px-1 outline-none placeholder:text-gray-400"
         />
       </div>
 

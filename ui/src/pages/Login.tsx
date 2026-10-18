@@ -187,7 +187,7 @@ export default function Login() {
                     onChange={(e) => { setEmail(e.target.value); setError(''); }}
                     placeholder="admin@example.com"
                     autoComplete="email"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    className="control-field-lg w-full rounded-lg border border-gray-300 px-3 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </div>
                 <div className="mb-4">
@@ -198,7 +198,7 @@ export default function Login() {
                     onChange={(e) => { setPassword(e.target.value); setError(''); }}
                     placeholder="Enter your password"
                     autoComplete="current-password"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    className="control-field-lg w-full rounded-lg border border-gray-300 px-3 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </div>
                 <div className="mb-4 flex justify-end">
@@ -216,7 +216,7 @@ export default function Login() {
                       placeholder="6-digit code"
                       autoComplete="one-time-code"
                       maxLength={6}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm tracking-wider focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                      className="control-field-lg w-full rounded-lg border border-gray-300 px-3 font-mono tracking-wider focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     />
                   </div>
                 )}
@@ -265,7 +265,7 @@ export default function Login() {
                     onChange={(e) => { setMasterKey(e.target.value); setError(''); }}
                     placeholder="sk-..."
                     autoComplete="off"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    className="control-field-lg w-full rounded-lg border border-gray-300 px-3 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </div>
                 <Button

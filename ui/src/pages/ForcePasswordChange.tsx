@@ -64,7 +64,7 @@ export default function ForcePasswordChange() {
               onChange={(e) => setCurrentPassword(e.target.value)}
               placeholder="Enter current password"
               autoComplete="current-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field-lg w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             />
           </div>
           <div className="mb-4">
@@ -75,7 +75,7 @@ export default function ForcePasswordChange() {
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="At least 12 characters"
               autoComplete="new-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field-lg w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             />
           </div>
           <div className="mb-4">
@@ -86,7 +86,7 @@ export default function ForcePasswordChange() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Repeat new password"
               autoComplete="new-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field-lg w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             />
           </div>
           <div className="flex gap-3">

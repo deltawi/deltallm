@@ -82,7 +82,7 @@ export default function BatchFilterBar({ state, teamLabels, summary, onChange }:
           onChange={(event) => setDraft({ base: state.search, value: event.target.value })}
           placeholder="Batch ID or model"
           maxLength={200}
-          className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-2.5 text-[13px] text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+          className="control-field-md w-full rounded-lg border border-gray-200 bg-white pl-8 pr-2.5 text-[13px] text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
         />
       </label>
       <ChipMenu label="Model" value={state.model ?? undefined} onClear={() => onChange({ model: null })}>

@@ -90,7 +90,7 @@ export function OrganizationDeletionRequestDialog({
       {plan && <ImpactSummary plan={plan} />}
       <div>
         <label htmlFor="organization-delete-confirmation" className="mb-1 block text-xs font-medium text-gray-700">Organization name</label>
-        <input id="organization-delete-confirmation" value={confirmationName} onChange={(event) => onConfirmationNameChange(event.target.value)} autoComplete="off" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" />
+        <input id="organization-delete-confirmation" value={confirmationName} onChange={(event) => onConfirmationNameChange(event.target.value)} autoComplete="off" className="control-field w-full rounded-lg border border-gray-300 px-3 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" />
       </div>
       <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
         <input type="checkbox" checked={acknowledged} onChange={(event) => onAcknowledgedChange(event.target.checked)} className="mt-0.5" />
@@ -133,7 +133,7 @@ export function OrganizationDeletionExpediteDialog({
       </p>
       <div>
         <label htmlFor="organization-expedite-confirmation" className="mb-1 block text-xs font-medium text-gray-700">Organization name</label>
-        <input id="organization-expedite-confirmation" value={confirmationName} onChange={(event) => onConfirmationNameChange(event.target.value)} autoComplete="off" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" />
+        <input id="organization-expedite-confirmation" value={confirmationName} onChange={(event) => onConfirmationNameChange(event.target.value)} autoComplete="off" className="control-field w-full rounded-lg border border-gray-300 px-3 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-200" />
       </div>
       <label className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-900">
         <input type="checkbox" checked={acknowledged} onChange={(event) => onAcknowledgedChange(event.target.checked)} className="mt-0.5" />

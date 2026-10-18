@@ -154,7 +154,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
               onChange={(event) => setForm({ ...form, guardrailName: event.target.value })}
               placeholder="presidio-pii"
               disabled={Boolean(item)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-slate-50 disabled:text-slate-500"
+              className="control-field w-full rounded-lg border border-slate-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-slate-50 disabled:text-slate-500"
             />
           </div>
 
@@ -211,7 +211,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
                 value={form.classPath}
                 onChange={(event) => setForm({ ...form, classPath: event.target.value })}
                 placeholder="src.guardrails.custom.MyGuardrail"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full rounded-lg border border-slate-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="mt-1 text-xs text-slate-500">Use this only for custom runtime guardrails that are already available in the backend codebase.</p>
             </div>
@@ -223,7 +223,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
               <select
                 value={form.mode}
                 onChange={(event) => setForm({ ...form, mode: event.target.value as typeof form.mode })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full rounded-lg border border-slate-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {modeOptions.map((mode) => (
                   <option key={mode} value={mode}>
@@ -237,7 +237,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
               <select
                 value={form.defaultAction}
                 onChange={(event) => setForm({ ...form, defaultAction: event.target.value as typeof form.defaultAction })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full rounded-lg border border-slate-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {actionOptions.map((action) => (
                   <option key={action} value={action}>
@@ -299,7 +299,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
                     <button
                       type="button"
                       onClick={() => setShowAdvanced((current) => !current)}
-                      className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      className="control-md rounded-lg border border-slate-200 font-medium text-slate-700 hover:bg-slate-50"
                     >
                       {showAdvanced ? 'Hide advanced' : 'Show advanced'}
                     </button>

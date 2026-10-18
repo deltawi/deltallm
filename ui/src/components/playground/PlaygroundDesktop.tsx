@@ -87,7 +87,7 @@ function ModeSelector({ mode, onChange }: { mode: PlaygroundMode; onChange: (m: 
         <button
           key={m.key}
           onClick={() => onChange(m.key)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+          className={`control-sm flex items-center gap-1.5 font-medium rounded-md transition-all ${
             mode === m.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
           }`}
         >
@@ -111,7 +111,7 @@ function ApiKeyInput({ value, onChange }: { value: string; onChange: (v: string)
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="sk-..."
-          className="w-full bg-white border border-gray-200 rounded-md py-1.5 pl-8 pr-8 text-sm text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+          className="control-field-md w-full bg-white border border-gray-200 rounded-md pl-8 pr-8 text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
         />
         <button
           onClick={() => setVisible(!visible)}
@@ -168,7 +168,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                   <button
                     key={v}
                     onClick={() => setVoice(v)}
-                    className={`px-2 py-1.5 text-xs font-medium rounded-md border transition-all ${
+                    className={`control-sm font-medium rounded-md border transition-all ${
                       voice === v
                         ? 'bg-blue-50 border-blue-300 text-blue-700'
                         : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
@@ -184,7 +184,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                 value={voice}
                 onChange={(e) => setVoice(e.target.value)}
                 placeholder="e.g. alloy, nova, autumn"
-                className="w-full px-3 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="control-field-md w-full px-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
             )}
           </div>
@@ -214,7 +214,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             <select
               value={format}
               onChange={(e) => setFormat(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full appearance-none bg-white border border-gray-200 rounded-md pl-3 pr-8 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="mp3">MP3</option>
               <option value="opus">Opus</option>
@@ -243,7 +243,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
           <button
             onClick={handleGenerate}
             disabled={!text.trim() || isGenerating || !apiKey}
-            className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg hover:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
+            className="control-md flex items-center gap-2 bg-brand-primary text-brand-on-primary font-medium rounded-lg hover:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
           >
             {isGenerating ? (
               <>
@@ -405,7 +405,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <select
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full appearance-none bg-white border border-gray-200 rounded-md pl-3 pr-8 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="">Auto-detect</option>
               <option value="en">English</option>
@@ -423,7 +423,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <select
               value={responseFormat}
               onChange={(e) => setResponseFormat(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full appearance-none bg-white border border-gray-200 rounded-md pl-3 pr-8 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="json">JSON</option>
               <option value="text">Plain Text</option>
@@ -440,7 +440,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
               value={outputPrompt}
               onChange={(e) => setOutputPrompt(e.target.value)}
               placeholder="Guide the model style..."
-              className="w-full bg-white border border-gray-200 rounded-md py-1.5 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full bg-white border border-gray-200 rounded-md px-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
         </div>
@@ -539,7 +539,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <button
               onClick={handleTranscribe}
               disabled={isTranscribing || !apiKey}
-              className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg hover:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
+              className="control-md flex items-center gap-2 bg-brand-primary text-brand-on-primary font-medium rounded-lg hover:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
             >
               {isTranscribing ? (
                 <>
@@ -702,7 +702,7 @@ export default function PlaygroundDesktop({
                   <label className="block text-xs font-medium text-gray-500 mb-1">Model</label>
                   <div className="relative group">
                     <select
-                      className="w-full appearance-none bg-gray-50 border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent cursor-pointer"
+                      className="control-field-md w-full appearance-none bg-gray-50 border border-gray-200 rounded-md pl-3 pr-8 font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent cursor-pointer"
                       value={selectedModel?.id || ''}
                       onChange={(e) => setSelectedModel(currentModels.find((m) => m.id === e.target.value) || selectedModel)}
                     >
@@ -799,7 +799,7 @@ export default function PlaygroundDesktop({
                         type="number"
                         value={params.maxTokens}
                         onChange={(e) => setParams((p) => ({ ...p, maxTokens: parseInt(e.target.value) || 0 }))}
-                        className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                        className="control-field-md w-full px-2.5 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -812,7 +812,7 @@ export default function PlaygroundDesktop({
                           max={2}
                           step={0.1}
                           onChange={(e) => setParams((p) => ({ ...p, freqPenalty: parseFloat(e.target.value) || 0 }))}
-                          className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         />
                       </div>
                       <div>
@@ -824,7 +824,7 @@ export default function PlaygroundDesktop({
                           max={2}
                           step={0.1}
                           onChange={(e) => setParams((p) => ({ ...p, presPenalty: parseFloat(e.target.value) || 0 }))}
-                          className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                          className="control-field-md w-full px-2.5 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         />
                       </div>
                     </div>

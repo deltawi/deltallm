@@ -86,7 +86,7 @@ export default function OrganizationTeamSelector({
         onChange={(event) => setSearchInput(event.target.value)}
         placeholder="Search organizations…"
         disabled={disabled || !enabled}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
+        className="control-field-md w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
       />
       <div className="relative">
         <Building2 className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
@@ -95,7 +95,7 @@ export default function OrganizationTeamSelector({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           disabled={disabled || !enabled}
-          className="w-full appearance-none rounded-lg border border-gray-300 bg-white py-2 pl-8 pr-4 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
+          className="control-field-md w-full appearance-none rounded-lg border border-gray-300 bg-white pl-8 pr-4 text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
         >
           <option value="">Select an organization…</option>
           {organizations.map((organization) => {

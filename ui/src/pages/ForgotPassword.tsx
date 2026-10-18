@@ -53,7 +53,7 @@ export default function ForgotPassword() {
               type="email"
               value={email}
               onChange={(event) => { setEmail(event.target.value); setError(''); }}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+              className="control-field-lg w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
               placeholder="user@example.com"
               autoComplete="email"
             />

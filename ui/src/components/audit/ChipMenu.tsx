@@ -111,7 +111,7 @@ export function MenuSearch({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-md border border-gray-200 py-1.5 pl-7 pr-2 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+        className="control-field-md w-full rounded-md border border-gray-200 pl-7 pr-2 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
       />
     </form>
   );

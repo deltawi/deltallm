@@ -128,7 +128,7 @@ export default function PromptVersionEditor({ base, nextVersion, labels, saving,
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <label htmlFor="prompt-editor-point-label" className="text-xs text-gray-600">After saving, point</label>
-            <select id="prompt-editor-point-label" value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs">
+            <select id="prompt-editor-point-label" value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} className="control-field-md rounded-lg border border-gray-300 bg-white px-2 text-xs">
               <option value="">no label</option>
               {choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
             </select>

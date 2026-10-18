@@ -42,7 +42,7 @@ export default function TierVersionOverview({
               type="button"
               onClick={onCloneActive}
               disabled={!activeVersion || actionBusy}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+              className="control-sm inline-flex items-center gap-1.5 rounded-lg border border-gray-200 font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
             >
               <Copy className="h-3.5 w-3.5" />
               Clone active
@@ -51,7 +51,7 @@ export default function TierVersionOverview({
               type="button"
               onClick={onCreateDraft}
               disabled={actionBusy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+              className="control-sm inline-flex items-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               <FilePlus2 className="h-3.5 w-3.5" />
               New draft
@@ -88,7 +88,7 @@ export default function TierVersionOverview({
                     type="button"
                     onClick={() => onArchive(version)}
                     disabled={actionBusy}
-                    className="rounded border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-white disabled:opacity-40"
+                    className="control-sm rounded border border-gray-200 font-semibold text-gray-600 hover:bg-white disabled:opacity-40"
                   >
                     Archive
                   </button>
@@ -111,7 +111,7 @@ export default function TierVersionOverview({
           type="button"
           onClick={onPublish}
           disabled={!selectedVersion || selectedVersion.status !== 'draft' || versionPending || actionBusy}
-          className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+          className="control-md mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-brand-primary font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
           <Send className="h-4 w-4" />
           Publish selected draft

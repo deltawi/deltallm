@@ -159,7 +159,7 @@ export default function DataTable<T extends object>({
                 aria-label="Previous page"
                 onClick={onPreviousPage ?? (() => onPageChange?.(Math.max(0, offset - limit)))}
                 disabled={offset === 0}
-                className="h-10 w-10 flex items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                className="control-icon-md rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -171,7 +171,7 @@ export default function DataTable<T extends object>({
                 aria-label="Next page"
                 onClick={onNextPage ?? (() => onPageChange?.(offset + limit))}
                 disabled={!pagination.has_more}
-                className="h-10 w-10 flex items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                className="control-icon-md rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>

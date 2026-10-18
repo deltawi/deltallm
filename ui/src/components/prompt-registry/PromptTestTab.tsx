@@ -126,7 +126,7 @@ export default function PromptTestTab({ templateKey, versions, labels, reference
                 <span className="font-normal text-gray-500">{variable.type}{variable.required ? '' : ', optional'}</span>
               </label>
               {variable.type === 'boolean' ? (
-                <select id={`prompt-test-var-${variable.name}`} value={values[variable.name] ?? ''} onChange={(event) => setValues({ ...values, [variable.name]: event.target.value })} className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
+                <select id={`prompt-test-var-${variable.name}`} value={values[variable.name] ?? ''} onChange={(event) => setValues({ ...values, [variable.name]: event.target.value })} className="control-field w-full rounded-lg border border-gray-300 bg-white px-3">
                   <option value="">Not set</option>
                   <option value="true">true</option>
                   <option value="false">false</option>
@@ -138,7 +138,7 @@ export default function PromptTestTab({ templateKey, versions, labels, reference
                   onChange={(event) => setValues({ ...values, [variable.name]: event.target.value })}
                   placeholder={variable.type === 'object' || variable.type === 'array' ? `JSON ${variable.type}` : undefined}
                   inputMode={variable.type === 'number' || variable.type === 'integer' ? 'decimal' : undefined}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                  className="control-field w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               )}
             </div>

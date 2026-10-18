@@ -226,7 +226,7 @@ export default function ApiKeysMobileList({
             placeholder="Search keys..."
             value={searchValue}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-gray-100 border-transparent rounded-lg py-2 pl-9 pr-4 text-sm focus:bg-white focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
+            className="control-field-md w-full bg-gray-100 border-transparent rounded-lg pl-9 pr-4 focus:bg-white focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
           />
         </div>
       </div>
@@ -415,7 +415,7 @@ export default function ApiKeysMobileList({
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); onEdit(key); }}
-                            className="flex-1 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg active:bg-gray-50 hover:bg-gray-50"
+                            className="control-md flex-1 bg-white border border-gray-200 text-gray-700 font-medium rounded-lg active:bg-gray-50 hover:bg-gray-50"
                           >
                             Edit
                           </button>
@@ -424,7 +424,7 @@ export default function ApiKeysMobileList({
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); onRevoke(key.token); }}
-                            className="flex-1 py-2 bg-white border border-gray-200 text-red-600 text-sm font-medium rounded-lg active:bg-red-50 hover:bg-red-50"
+                            className="control-md flex-1 bg-white border border-gray-200 text-red-600 font-medium rounded-lg active:bg-red-50 hover:bg-red-50"
                           >
                             Revoke
                           </button>

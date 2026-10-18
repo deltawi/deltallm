@@ -43,7 +43,7 @@ export default function TierPagination({
               value={pageSize}
               onChange={(event) => onPageSizeChange(Number(event.target.value))}
               disabled={disabled}
-              className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
+              className="control-field-md rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
             >
               {PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
             </select>

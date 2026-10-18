@@ -56,7 +56,7 @@ export default function ConsoleInferenceKey({ onSelection }: { onSelection: (rea
     <div className="mt-2 flex gap-2">
       <input id="console-inference-key" type="password" autoComplete="off" value={draft}
         onChange={(event) => setDraft(event.target.value)} placeholder="Paste your API key"
-        className="min-w-0 flex-1 rounded border px-3 py-2" disabled={busy} />
+        className="control-field min-w-0 flex-1 rounded border px-3" disabled={busy} />
       <button type="button" disabled={busy || !draft.trim()} onClick={() => void selectKey()}
         className="rounded bg-brand-primary px-4 text-white disabled:opacity-50">{busy ? 'Selecting…' : 'Select key'}</button>
     </div>

@@ -171,7 +171,7 @@ export default function MCPApprovalsPanel({
           {serverFixed && serverId ? (
             <Link
               to={mcpApprovalsTabPath(new URLSearchParams({ server_id: serverId }))}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
+              className="control-sm inline-flex items-center gap-1.5 rounded-lg border border-gray-200 font-medium text-gray-600 transition hover:bg-gray-50"
             >
               <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
               Open in Approvals
@@ -190,7 +190,7 @@ export default function MCPApprovalsPanel({
             type="button"
             onClick={() => void handleExport()}
             disabled={exporting || loadFailed}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
+            className="control-sm inline-flex items-center gap-1.5 rounded-lg border border-gray-200 font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
           >
             <Download className="h-3.5 w-3.5" aria-hidden="true" />
             {exporting ? 'Exporting…' : 'Export'}

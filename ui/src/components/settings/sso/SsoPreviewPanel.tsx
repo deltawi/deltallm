@@ -7,7 +7,7 @@ import type { SsoGroupPreviewChange, SsoGroupPreviewResponse, SsoGroupSyncSettin
 import { errorMessage } from '../../../lib/errorMessage';
 import { buildSsoGroupSyncPayload, describeChange, parsePreviewInput, roleLabel, TARGET_STATUS_LABELS } from '../../../lib/ssoGroupSync';
 
-const INPUT_CLASS = 'w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary';
+const INPUT_CLASS = 'control-field w-full rounded-lg border border-gray-200 bg-gray-50 px-3 transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary';
 
 const CHANGE_STYLES: Record<SsoGroupPreviewChange['action'], { icon: typeof Plus; className: string }> = {
   add: { icon: Plus, className: 'bg-emerald-50 text-emerald-700' },

@@ -170,12 +170,12 @@ export default function Tiers() {
       )}
       toolbar={(
         <div className="space-y-3">
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1" aria-label="Tiers page view">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5" aria-label="Tiers page view">
             <button
               type="button"
               aria-pressed={view === 'catalog'}
               onClick={() => setView('catalog')}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold ${view === 'catalog' ? 'bg-brand-primary text-brand-on-primary' : 'text-gray-600 hover:bg-gray-50'}`}
+              className={`control-segment rounded-md font-semibold ${view === 'catalog' ? 'bg-brand-primary text-brand-on-primary' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               Tiers
             </button>
@@ -183,7 +183,7 @@ export default function Tiers() {
               type="button"
               aria-pressed={view === 'capacity'}
               onClick={() => setView('capacity')}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold ${view === 'capacity' ? 'bg-brand-primary text-brand-on-primary' : 'text-gray-600 hover:bg-gray-50'}`}
+              className={`control-segment rounded-md font-semibold ${view === 'capacity' ? 'bg-brand-primary text-brand-on-primary' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               Capacity health
             </button>
@@ -195,10 +195,10 @@ export default function Tiers() {
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
               placeholder="Search tiers"
-              className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field-md w-full rounded-lg border border-gray-300 bg-white pl-9 pr-3 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
             {[
               ['all', 'All'],
               ['enabled', 'Enabled'],
@@ -209,7 +209,7 @@ export default function Tiers() {
                 type="button"
                 aria-pressed={enabled === value}
                 onClick={() => handleEnabledFilterChange(value as typeof enabled)}
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                className={`control-segment rounded-md font-semibold transition ${
                   enabled === value ? 'bg-brand-primary text-brand-on-primary' : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >

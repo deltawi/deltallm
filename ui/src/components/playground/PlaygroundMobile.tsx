@@ -74,7 +74,7 @@ function ModePills({ mode, onChange }: { mode: PlaygroundMode; onChange: (m: Pla
           onClick={() => onChange(m.key)}
           role="tab"
           aria-selected={mode === m.key}
-          className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-all ${
+          className={`control-sm flex-1 flex items-center justify-center gap-1.5 font-medium rounded-md transition-all ${
             mode === m.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'
           }`}
         >
@@ -417,7 +417,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
               <button
                 key={v}
                 onClick={() => setVoice(v)}
-                className={`px-2 py-1.5 text-xs font-medium rounded-md border ${
+                className={`control-sm font-medium rounded-md border ${
                   voice === v ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-200 text-gray-600'
                 }`}
               >
@@ -431,7 +431,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             value={voice}
             onChange={(e) => setVoice(e.target.value)}
             placeholder="e.g. alloy, nova, autumn"
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            className="control-field w-full px-3 border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
         )}
       </div>
@@ -458,7 +458,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             <select
               value={format}
               onChange={(e) => setFormat(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-2 pl-3 pr-7 text-sm text-gray-700 uppercase"
+              className="control-field w-full appearance-none bg-white border border-gray-200 rounded-md pl-3 pr-7 text-gray-700 uppercase"
             >
               <option value="mp3">MP3</option>
               <option value="opus">Opus</option>
@@ -489,7 +489,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
       <button
         onClick={handleGenerate}
         disabled={!text.trim() || isGenerating || !apiKey}
-        className="w-full flex items-center justify-center gap-2 py-2.5 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg active:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
+        className="control-md w-full flex items-center justify-center gap-2 bg-brand-primary text-brand-on-primary font-medium rounded-lg active:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
       >
         {isGenerating ? (
           <>
@@ -645,7 +645,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <select
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-2 pl-3 pr-7 text-sm text-gray-700"
+              className="control-field w-full appearance-none bg-white border border-gray-200 rounded-md pl-3 pr-7 text-gray-700"
             >
               <option value="">Auto-detect</option>
               <option value="en">English</option>
@@ -665,7 +665,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <select
               value={responseFormat}
               onChange={(e) => setResponseFormat(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-2 pl-3 pr-7 text-sm text-gray-700"
+              className="control-field w-full appearance-none bg-white border border-gray-200 rounded-md pl-3 pr-7 text-gray-700"
             >
               <option value="json">JSON</option>
               <option value="text">Plain Text</option>
@@ -685,7 +685,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
           value={outputPrompt}
           onChange={(e) => setOutputPrompt(e.target.value)}
           placeholder="Guide the model style..."
-          className="w-full bg-white border border-gray-200 rounded-md py-2 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+          className="control-field w-full bg-white border border-gray-200 rounded-md px-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
         />
       </div>
 
@@ -751,7 +751,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
         <button
           onClick={handleTranscribe}
           disabled={isTranscribing || !apiKey}
-          className="w-full flex items-center justify-center gap-2 py-2.5 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg active:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
+          className="control-md w-full flex items-center justify-center gap-2 bg-brand-primary text-brand-on-primary font-medium rounded-lg active:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
         >
           {isTranscribing ? (
             <>
@@ -929,7 +929,7 @@ export default function PlaygroundMobile({
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..."
-              className="w-full bg-white border border-gray-200 rounded-md py-2 pl-8 pr-8 text-sm text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary truncate"
+              className="control-field-md w-full bg-white border border-gray-200 rounded-md pl-8 pr-8 text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary truncate"
             />
             <button
               onClick={() => setShowApiKey(!showApiKey)}
@@ -945,7 +945,7 @@ export default function PlaygroundMobile({
             <button
               ref={paramsBtnRef}
               onClick={openParams}
-              className="flex-none flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-md active:bg-gray-50"
+              className="control-md flex-none flex items-center gap-1 font-medium text-gray-700 bg-white border border-gray-200 rounded-md active:bg-gray-50"
               aria-label="Open parameters"
               aria-haspopup="dialog"
             >
@@ -1046,7 +1046,7 @@ export default function PlaygroundMobile({
               type="number"
               value={params.maxTokens}
               onChange={(e) => setParams((p) => ({ ...p, maxTokens: parseInt(e.target.value) || 0 }))}
-              className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              className="control-field w-full px-3 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1059,7 +1059,7 @@ export default function PlaygroundMobile({
                 max={2}
                 step={0.1}
                 onChange={(e) => setParams((p) => ({ ...p, freqPenalty: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-2.5 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full px-2.5 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
             <div>
@@ -1071,13 +1071,13 @@ export default function PlaygroundMobile({
                 max={2}
                 step={0.1}
                 onChange={(e) => setParams((p) => ({ ...p, presPenalty: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-2.5 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                className="control-field w-full px-2.5 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           </div>
           <button
             onClick={() => setShowParams(false)}
-            className="w-full py-2.5 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg active:bg-brand-primary-hover"
+            className="control-md w-full bg-brand-primary text-brand-on-primary font-medium rounded-lg active:bg-brand-primary-hover"
             type="button"
           >
             Done
