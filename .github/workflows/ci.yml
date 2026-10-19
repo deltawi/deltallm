@@ -93,10 +93,8 @@ jobs:
         shard: [0, 1, 2, 3]
     services:
       postgres:
+        # Public service images do not need secrets, which fork PRs cannot read.
         image: postgres:15
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -110,9 +108,6 @@ jobs:
           - 5432:5432
       redis:
         image: redis:7
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -180,9 +175,6 @@ jobs:
     services:
       redis:
         image: redis:7
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -192,9 +184,6 @@ jobs:
           - 6379:6379
       redis-critical-memory:
         image: redis:7
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -204,9 +193,6 @@ jobs:
           - 6380:6379
       redis-cache-memory:
         image: redis:7
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -250,9 +236,6 @@ jobs:
     services:
       postgres:
         image: postgres:15
-        credentials:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
