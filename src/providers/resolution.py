@@ -49,7 +49,10 @@ PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
 }
 
 PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
-    **{provider: {"chat"} for provider in CHAT_PROVIDER_PROFILES},
+    **{
+        provider: set(profile.supported_modes)
+        for provider, profile in CHAT_PROVIDER_PROFILES.items()
+    },
     "openai": {
         "chat",
         "embedding",

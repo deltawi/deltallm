@@ -35,6 +35,7 @@ PROVIDER_LABELS = {
     "qwen": "Qwen (Alibaba Model Studio)",
     "tencent": "Tencent TokenHub",
     "minimax": "MiniMax",
+    "mistral": "Mistral AI",
     "azure_openai": "Azure OpenAI",
     "bedrock": "Amazon Bedrock",
     "deepinfra": "DeepInfra",

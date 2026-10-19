@@ -45,6 +45,15 @@ model_list:
       #   # false is not supported until a provider adapter defines safe heterogeneous grouping.
       #   require_homogeneous_params: true
 
+  # Mistral supports chat and embeddings. See docs/providers/mistral.md.
+  # - model_name: mistral-chat
+  #   deltallm_params:
+  #     provider: mistral
+  #     model: mistral-small-latest
+  #     api_key: os.environ/MISTRAL_API_KEY
+  #   model_info:
+  #     mode: chat
+
   # Optional direct chat providers: deepseek, zai, qwen, tencent, minimax.
   # See docs/providers/compatible-chat.md for all five examples and regional bases.
   # - model_name: deepseek-chat

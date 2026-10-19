@@ -5,17 +5,20 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
+from src.config import ModelMode
+
 
 @dataclass(frozen=True, slots=True)
 class ChatProviderProfile:
     provider: str
     api_base: str
-    discovery: Literal["openai", "qwen", "catalog"] = "openai"
+    discovery: Literal["openai", "qwen", "catalog", "mistral"] = "openai"
     stream_usage: bool = True
+    supported_modes: tuple[ModelMode, ...] = ("chat",)
 
 
 # Protocol metadata only: client lifetimes, credentials, and retries retain their
-# existing owners. These providers initially expose only the chat model mode.
+# existing owners. Each profile declares its supported model modes.
 CHAT_PROVIDER_PROFILES: Mapping[str, ChatProviderProfile] = MappingProxyType(
     {
         profile.provider: profile
@@ -31,6 +34,13 @@ CHAT_PROVIDER_PROFILES: Mapping[str, ChatProviderProfile] = MappingProxyType(
             ),
             ChatProviderProfile("tencent", "https://tokenhub-intl.tencentcloudmaas.com/v1"),
             ChatProviderProfile("minimax", "https://api.minimax.io/v1"),
+            ChatProviderProfile(
+                "mistral",
+                "https://api.mistral.ai/v1",
+                discovery="mistral",
+                stream_usage=False,
+                supported_modes=("chat", "embedding"),
+            ),
         )
     }
 )

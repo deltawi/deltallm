@@ -363,8 +363,8 @@ async def _discover_chat_profile(
     timeout: httpx.Timeout,
     catalog_options: list[dict[str, object]],
 ) -> dict[str, object]:
-    if mode is not None and mode != "chat":
-        return {"data": [], "warnings": ["This provider currently supports chat mode only."]}
+    if mode is not None and mode not in profile.supported_modes:
+        return {"data": [], "warnings": ["This provider does not support the selected mode."]}
     warnings: list[str] = []
     live_options: list[dict[str, object]] = []
     if profile.discovery == "catalog":
@@ -385,7 +385,7 @@ async def _discover_chat_profile(
                     model_id=item.id,
                     label=item.name or item.id,
                     provider=provider,
-                    supported_modes=["chat"],
+                    supported_modes=list(item.supported_modes),
                 )
                 for item in result.models
             ]

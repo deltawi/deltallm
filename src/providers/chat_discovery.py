@@ -5,7 +5,9 @@ from dataclasses import dataclass
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
+from src.config import ModelMode
 from src.providers.chat_profiles import ChatProviderProfile
+from src.providers.model_catalog import catalog_models_for_provider
 
 from src.providers.discovery_runtime import (
     ProviderDiscoveryRuntime,
@@ -16,14 +18,56 @@ MAX_DISCOVERY_MODELS = 500
 QWEN_DISCOVERY_PAGE_SIZE = 100
 
 
-class DiscoveredChatModel(BaseModel):
+class _OpenAIModel(BaseModel):
     id: str = Field(min_length=1, max_length=512)
     name: str | None = Field(default=None, max_length=512)
     status: str | None = None
 
 
+class DiscoveredChatModel(_OpenAIModel):
+    supported_modes: tuple[ModelMode, ...] = ("chat",)
+
+
 class _OpenAIModelList(BaseModel):
-    data: list[DiscoveredChatModel] = Field(max_length=MAX_DISCOVERY_MODELS)
+    data: list[_OpenAIModel] = Field(max_length=MAX_DISCOVERY_MODELS)
+
+
+class _MistralCapabilities(BaseModel):
+    completion_chat: bool = False
+
+
+class _MistralModel(BaseModel):
+    id: str = Field(min_length=1, max_length=512)
+    name: str | None = Field(default=None, max_length=512)
+    capabilities: _MistralCapabilities = Field(default_factory=_MistralCapabilities)
+    archived: bool = False
+    aliases: list[str] = Field(default_factory=list, max_length=64)
+
+
+class _MistralModelList(BaseModel):
+    data: list[_MistralModel] = Field(max_length=MAX_DISCOVERY_MODELS)
+
+
+def _parse_mistral_models(body: bytes) -> ChatModelDiscovery:
+    embedding_ids = {
+        item["id"] for item in catalog_models_for_provider("mistral", mode="embedding")
+    }
+    models: list[DiscoveredChatModel] = []
+    for item in _MistralModelList.model_validate_json(body).data:
+        if item.archived:
+            continue
+        modes: list[ModelMode] = []
+        if item.capabilities.completion_chat:
+            modes.append("chat")
+        # The models API has no embedding capability flag. The catalog owns
+        # the verified embedding IDs; other non-chat models stay excluded.
+        if item.id in embedding_ids or embedding_ids.intersection(item.aliases):
+            modes.append("embedding")
+        if modes:
+            models.append(
+                DiscoveredChatModel(id=item.id, name=item.name, supported_modes=tuple(modes))
+            )
+    return ChatModelDiscovery(tuple(models))
 
 
 class _QwenModel(BaseModel):
@@ -68,6 +112,8 @@ def chat_models_url(profile: ChatProviderProfile, api_base: str) -> str:
 
 def parse_chat_models(profile: ChatProviderProfile, body: bytes) -> ChatModelDiscovery:
     try:
+        if profile.discovery == "mistral":
+            return _parse_mistral_models(body)
         if profile.discovery == "qwen":
             output = _QwenModelList.model_validate_json(body).output
             models = tuple(
@@ -79,7 +125,9 @@ def parse_chat_models(profile: ChatProviderProfile, body: bytes) -> ChatModelDis
         items = _OpenAIModelList.model_validate_json(body).data
         return ChatModelDiscovery(
             tuple(
-                item for item in items if item.status not in {"offline", "deprecated", "disabled"}
+                DiscoveredChatModel(id=item.id, name=item.name, status=item.status)
+                for item in items
+                if item.status not in {"offline", "deprecated", "disabled"}
             )
         )
     except (ValidationError, ValueError) as exc:

@@ -4,9 +4,9 @@ const PROVIDER_LABELS: Record<string, string> = {
   qwen: 'Qwen (Alibaba Model Studio)',
   tencent: 'Tencent TokenHub',
   minimax: 'MiniMax',
+  mistral: 'Mistral AI',
   openai: 'OpenAI',
   anthropic: 'Anthropic',
-  azure: 'Azure OpenAI',
   azure_openai: 'Azure OpenAI',
   openrouter: 'OpenRouter',
   groq: 'Groq',
@@ -58,7 +58,7 @@ export function canonicalNamedCredentialProvider(provider: string | null | undef
 }
 
 export function providerDisplayName(provider: string | null | undefined): string {
-  const key = (provider || '').trim().toLowerCase() || 'unknown';
+  const key = canonicalNamedCredentialProvider(provider) || 'unknown';
   return PROVIDER_LABELS[key] || key;
 }
 

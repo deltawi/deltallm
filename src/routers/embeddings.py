@@ -35,7 +35,8 @@ from src.providers.base import (
     parse_provider_json_response,
     validate_provider_success_payload,
 )
-from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.providers.embedding_request import translate_embedding_request
+from src.providers.resolution import resolve_provider
 from src.router import ROUTING_MODE_CONTEXT_KEY, require_initial_deployment
 from src.router.context_policy import RequestTokenDemand, set_request_token_demand
 from src.upstream_auth import build_openai_compatible_auth_headers
@@ -218,10 +219,7 @@ async def _execute_embedding(
         content_type="application/json",
     )
 
-    upstream_payload = payload.model_dump(exclude_none=True)
-    upstream_model = resolve_upstream_model(params)
-    if upstream_model:
-        upstream_payload["model"] = upstream_model
+    upstream_payload = translate_embedding_request(payload, params)
 
     from src.routers.utils import apply_default_params
 

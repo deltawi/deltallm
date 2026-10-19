@@ -16,6 +16,7 @@ const PROVIDER_TONES: Record<string, string> = {
   groq: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-100',
   lmstudio: 'bg-slate-100 text-slate-700 border-slate-200',
   minimax: 'bg-rose-50 text-rose-700 border-rose-100',
+  mistral: 'bg-orange-50 text-orange-700 border-orange-100',
   ollama: 'bg-teal-50 text-teal-700 border-teal-100',
   openai: 'bg-emerald-50 text-emerald-700 border-emerald-100',
   openrouter: 'bg-violet-50 text-violet-700 border-violet-100',
