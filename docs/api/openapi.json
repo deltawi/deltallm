@@ -374,6 +374,30 @@
             "default": 0,
             "title": "Frequency Penalty"
           },
+          "guided_json": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "contentMediaType": "application/json",
+                "contentSchema": {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "object"
+                },
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guided Json"
+          },
           "max_completion_tokens": {
             "anyOf": [
               {

@@ -18,6 +18,7 @@ from src.models.errors import (
     RoutingFailureAction,
     ServiceUnavailableError,
 )
+from src.providers.json_guidance import validate_guided_json_support
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
@@ -258,6 +259,7 @@ class BedrockAdapter(ProviderAdapter):
         canonical_request: ChatCompletionRequest,
         provider_config: dict[str, Any],
     ) -> dict[str, Any]:
+        validate_guided_json_support(canonical_request, provider=self.provider_name)
         system_blocks: list[dict[str, str]] = []
         messages: list[dict[str, Any]] = []
 

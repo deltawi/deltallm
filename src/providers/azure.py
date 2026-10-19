@@ -9,6 +9,7 @@ import httpx
 
 from src.models.errors import FailureClassification, ProxyError
 from src.models.request_serialization import dump_openai_chat_request
+from src.providers.json_guidance import validate_guided_json_support
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.token_receipt import ProviderTokenReceipt, openai_token_receipt
@@ -68,6 +69,7 @@ class AzureOpenAIAdapter(ProviderAdapter):
     async def translate_request(
         self, canonical_request: ChatCompletionRequest, provider_config: dict[str, Any]
     ) -> dict[str, Any]:
+        validate_guided_json_support(canonical_request, provider=self.provider_name)
         payload = dump_openai_chat_request(canonical_request)
         if payload.get("tool_choice") is not None and not payload.get("tools"):
             payload.pop("tool_choice", None)

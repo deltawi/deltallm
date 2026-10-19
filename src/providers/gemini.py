@@ -9,6 +9,7 @@ from collections.abc import Callable
 import httpx
 
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
+from src.providers.json_guidance import validate_guided_json_support
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.services.admission.output_limit_types import complete_output_count
@@ -182,6 +183,7 @@ class GeminiAdapter(ProviderAdapter):
         canonical_request: ChatCompletionRequest,
         provider_config: dict[str, Any],
     ) -> dict[str, Any]:
+        validate_guided_json_support(canonical_request, provider=self.provider_name)
         if canonical_request.tools or any(
             message.role == "tool" or bool(message.tool_calls)
             for message in canonical_request.messages

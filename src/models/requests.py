@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    Json,
     JsonValue,
     SerializerFunctionWrapHandler,
     model_serializer,
@@ -109,6 +110,7 @@ class ChatCompletionRequest(BaseModel):
     tools: list[ToolDefinition] | None = None
     tool_choice: Literal["auto", "none", "required"] | ToolChoice | None = "auto"
     response_format: ResponseFormat | None = None
+    guided_json: dict[str, JsonValue] | Json[dict[str, JsonValue]] | None = None
     user: str | None = None
     metadata: dict[str, Any] | None = None
 
@@ -116,6 +118,12 @@ class ChatCompletionRequest(BaseModel):
     def validate_output_cap_names(self) -> ChatCompletionRequest:
         if self.max_tokens is not None and self.max_completion_tokens is not None:
             raise ValueError("Supply only one of max_tokens and max_completion_tokens")
+        return self
+
+    @model_validator(mode="after")
+    def validate_json_guidance(self) -> Self:
+        if self.guided_json is not None and self.response_format is not None:
+            raise ValueError("Supply only one of guided_json and response_format")
         return self
 
 
