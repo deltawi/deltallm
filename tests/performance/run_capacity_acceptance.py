@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 from time import monotonic
 from urllib.parse import urlsplit
 
@@ -220,13 +221,36 @@ def prime_database(cluster: LifecycleCluster, values: Path) -> None:
     cluster.event("capacity_db_only_catalog_primed")
 
 
+def image_config_digest(image: str) -> str:
+    """Return the config digest that the kubelet reports as the pod imageID.
+
+    With the containerd image store, `docker image inspect` gives the digest of the
+    image index, not of the config. The saved archive names the config in both stores.
+    """
+    with subprocess.Popen(["docker", "save", image], stdout=subprocess.PIPE) as process:
+        assert process.stdout is not None
+        with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
+            config = None
+            for member in archive:
+                if member.name == "manifest.json":
+                    contents = archive.extractfile(member)
+                    assert contents is not None
+                    entries = json.loads(contents.read())
+                    assert len(entries) == 1, "Saved image must have one manifest entry"
+                    config = entries[0]["Config"]
+    if process.returncode != 0 or config is None:
+        raise RuntimeError(f"Could not read the config digest of {image}")
+    name = Path(config).name.removesuffix(".json")
+    if len(name) != 64 or any(char not in "0123456789abcdef" for char in name):
+        raise RuntimeError(f"Unexpected config path in the saved archive of {image}")
+    return "sha256:" + name
+
+
 def source_manifest(image: str, baseline_manifest: Path) -> dict:
     digest = hashlib.sha256()
     for path in sorted(Path("src").rglob("*.py")) + [Path("uv.lock")]:
         digest.update(str(path).encode() + b"\0" + path.read_bytes())
-    image_id = subprocess.check_output(
-        ["docker", "image", "inspect", image, "--format", "{{.Id}}"], text=True
-    ).strip()
+    image_id = image_config_digest(image)
     return {
         "candidate_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
