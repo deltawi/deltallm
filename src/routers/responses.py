@@ -66,6 +66,8 @@ async def responses(request: Request):
     def stream_line(line: str) -> str | None:
         # Native frames already carry the provider's own event; relay it unchanged.
         if isinstance(line, NativeSSEFrame):
+            if line.native:
+                translator.follow_native(line.native)
             return line.native or None
         return translator.translate_line(line)
 

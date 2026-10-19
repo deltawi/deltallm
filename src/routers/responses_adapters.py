@@ -255,6 +255,22 @@ class ResponsesStreamTranslator:
                     events.extend(self._call_delta(call))
         return self._join(events)
 
+    def follow_native(self, frame: str) -> None:
+        """Track a relayed native event so a later failure continues that response."""
+
+        if not self._started:
+            self._started = True
+            # The first native event is `response.created`; keep its id and time.
+            try:
+                created = json.loads(frame[frame.index("data:") + len("data:") :])
+            except (ValueError, TypeError):
+                created = {}
+            response = created.get("response") if isinstance(created, dict) else None
+            if isinstance(response, dict):
+                self._id = str(response.get("id") or self._id)
+                self._created_at = response.get("created_at") or self._created_at
+        self._sequence += sum(1 for line in frame.splitlines() if line.startswith("data:"))
+
     def error_event(self, exc: ProxyError) -> str:
         """The terminal event for a stream that fails after it started."""
 

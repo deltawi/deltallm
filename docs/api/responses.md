@@ -41,6 +41,8 @@ DeltaLLM change. DeltaLLM changes only these fields:
 - `stream`: the request mode.
 - `metadata` and `service_tier`: DeltaLLM removes them. `metadata` holds DeltaLLM
   controls, and `service_tier` changes the token price, which DeltaLLM pricing cannot show.
+- `store`: DeltaLLM always sends `false`. A stored response stays in the deployment's
+  provider account, which all DeltaLLM tenants share.
 
 Everything else goes to the provider unchanged. This includes `instructions`, `developer`
 messages, `reasoning`, `include` (for example `reasoning.encrypted_content`), encrypted
@@ -61,8 +63,7 @@ of the body.
 DeltaLLM uses the translation hop for the request when a hook adds or removes messages,
 or changes tools, `tool_choice`, tool call arguments, `temperature` or `top_p`. If that
 request also has content that only the native hop supports (for example, a
-`web_search_call` item or a `local_shell` tool), DeltaLLM sends it only to native
-deployments. If the model has no native deployment, DeltaLLM rejects the request with a
+`web_search_call` item or a `local_shell` tool), DeltaLLM rejects it with a
 `400 invalid_request_error`.
 
 ## Translation hop (other providers)
@@ -130,8 +131,8 @@ keeps the provider message text. The text describes the client's own request. De
 never forwards other provider messages or response bodies.
 
 If a provider fails after a streaming `200` response has started, DeltaLLM does not retry
-or replace the response. It sends one sanitized `response.failed` event (or the provider's
-`error` event, sanitized) and closes the stream without `response.completed`.
+or replace the response. It sends one sanitized `response.failed` event for the same
+response and closes the stream without `response.completed`.
 
 `response.completed` delivery follows the shared
 [streaming accounting contract](proxy.md#streaming-accounting).

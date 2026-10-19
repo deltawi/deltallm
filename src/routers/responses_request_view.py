@@ -194,28 +194,37 @@ def _tools(
             for nested_index, nested in enumerate(tool.get("tools") or []):
                 nested_type = nested.get("type") if isinstance(nested, dict) else None
                 if nested_type not in {"function", "custom"}:
-                    builder.block(f"{context}.tools[{nested_index}]", str(nested_type))
+                    nested_context = f"{context}.tools[{nested_index}]"
+                    if isinstance(nested, dict):
+                        _reject_provider_account_tool(nested, nested_context)
+                    builder.block(nested_context, str(nested_type))
                     continue
                 chat_tools.append(_chat_function(mapped, nested, namespace=namespace))
         elif tool_type == "mcp" and _is_gateway_mcp_tool(tool):
             chat_tools.append(tool)
             uses_gateway_tools = True
-        elif tool_type == "mcp":
-            raise InvalidRequestError(
-                message=(
-                    f"{context}: remote MCP tools are not supported by this gateway; use a "
-                    'DeltaLLM MCP server ({"type": "mcp", "server": "<name>"})'
-                ),
-                param="tools",
-            )
-        elif tool_type in _REJECTED_TOOL_TYPES or _is_hosted_shell(tool):
-            raise InvalidRequestError(
-                message=f"{context}: tool type '{tool_type}' is not supported by this gateway",
-                param="tools",
-            )
-        elif tool_type not in _DROPPED_ON_TRANSLATION_TOOL_TYPES:
-            builder.block(context, tool_type)
+        else:
+            _reject_provider_account_tool(tool, context)
+            if tool_type not in _DROPPED_ON_TRANSLATION_TOOL_TYPES:
+                builder.block(context, tool_type)
     return mapped, chat_tools, uses_gateway_tools
+
+
+def _reject_provider_account_tool(tool: dict[str, Any], context: str) -> None:
+    tool_type = str(tool.get("type") or "")
+    if tool_type == "mcp":
+        raise InvalidRequestError(
+            message=(
+                f"{context}: remote MCP tools are not supported by this gateway; use a "
+                'DeltaLLM MCP server ({"type": "mcp", "server": "<name>"})'
+            ),
+            param="tools",
+        )
+    if tool_type in _REJECTED_TOOL_TYPES or _is_hosted_shell(tool):
+        raise InvalidRequestError(
+            message=f"{context}: tool type '{tool_type}' is not supported by this gateway",
+            param="tools",
+        )
 
 
 def _is_gateway_mcp_tool(tool: dict[str, Any]) -> bool:
@@ -429,12 +438,14 @@ def _add_call_output(state: _Items, item: dict[str, Any], index: int) -> None:
 
 
 def _upstream_safe_body(body: dict[str, Any]) -> dict[str, Any]:
-    if "metadata" not in body and not any(name in body for name in _PRICE_CHANGING_FIELDS):
-        return body
     # DeltaLLM reads its own controls (prompt_ref, cache, tags) from metadata, and the
     # provider stores metadata in the deployment's account. Neither belongs upstream.
-    return {
+    safe = {
         key: value
         for key, value in body.items()
         if key != "metadata" and key not in _PRICE_CHANGING_FIELDS
     }
+    # A stored response stays in the deployment's account, which all tenants share, and
+    # its items can be read back by id. DeltaLLM serves no stored responses.
+    safe["store"] = False
+    return safe

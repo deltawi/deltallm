@@ -190,6 +190,18 @@ def test_policy_view_translates_tool_history() -> None:
             {"tools": [{"type": "shell", "environment": {"type": "container_auto"}}]},
             "'shell'",
         ),
+        (
+            {
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "ns",
+                        "tools": [{"type": "file_search", "vector_store_ids": ["vs_1"]}],
+                    }
+                ]
+            },
+            "file_search",
+        ),
     ],
 )
 def test_policy_view_rejects_provider_account_objects(
@@ -502,3 +514,28 @@ def test_stream_translator_reports_length_as_incomplete_and_errors_as_failed() -
     failed = _events(ResponsesStreamTranslator(_shape()).error_event(ProxyError("boom")))
     assert failed[-1]["type"] == "response.failed"
     assert failed[-1]["response"]["error"]["message"] == "boom"
+
+
+def test_native_body_never_stores_responses_upstream() -> None:
+    view = _view({"model": "m", "input": "hi", "store": True})
+
+    native = view.native_request(view.canonical)
+
+    assert native is not None and native.body["store"] is False
+
+
+def test_failure_after_native_events_continues_the_same_response() -> None:
+    translator = ResponsesStreamTranslator(_shape())
+    created = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {"id": "resp_native", "created_at": 1700000000, "status": "in_progress"},
+    }
+    translator.follow_native("event: response.created\ndata: " + json.dumps(created))
+    translator.follow_native('event: response.output_text.delta\ndata: {"sequence_number":1}')
+
+    events = _events(translator.error_event(ProxyError("boom")))
+
+    assert [event["type"] for event in events] == ["response.failed"]
+    assert events[0]["sequence_number"] == 2
+    assert events[0]["response"]["id"] == "resp_native"
