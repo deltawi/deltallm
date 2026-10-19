@@ -160,6 +160,12 @@ async def test_sse_records_complete_usage_and_headers_keep_admission_snapshot(
     output_app, endpoint, body
 ):
     app, redis, record, environment = output_app
+    if endpoint == "/v1/responses":
+        # These frames are chat chunks, so use the translation hop, not native Responses.
+        app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]["api_base"] = (
+            "https://chat-only.test/v1"
+        )
+        _refresh_runtime_registry(app)
     chunks = [
         {
             "id": "c",
