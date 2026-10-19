@@ -19,7 +19,6 @@ from src.models.errors import (
     InvalidRequestError,
     ProxyError,
     RateLimitError,
-    ServiceUnavailableError,
 )
 from src.middleware.error_responses import (
     anthropic_error_payload as anthropic_error_payload,
@@ -30,6 +29,8 @@ from src.telemetry.request_failures import (
     maybe_log_proxy_error,
     maybe_log_request_validation_failure,
 )
+
+from src.services.admission.output_limit_redis import OutputUsageUnknownError
 
 logger = logging.getLogger(__name__)
 
@@ -97,34 +98,29 @@ def _unhandled_exception_context(request: Request, exc: BaseException) -> dict[s
     }
 
 
+def _retry_after_headers(exc: ProxyError) -> dict[str, str]:
+    # Provider 5xx hints are for batch retry, not interactive clients.
+    if isinstance(exc, (RateLimitError, AuthenticationUnavailableError, OutputUsageUnknownError)):
+        if exc.retry_after is not None:
+            return {"Retry-After": str(exc.retry_after)}
+    return {}
+
+
 def proxy_error_response(exc: ProxyError) -> JSONResponse:
     """Build the canonical HTTP response for a gateway error."""
-    headers = {}
-    retry_after = getattr(exc, "retry_after", None)
-    if (
-        isinstance(exc, (RateLimitError, AuthenticationUnavailableError, ServiceUnavailableError))
-        and retry_after is not None
-    ):
-        headers["Retry-After"] = str(retry_after)
     return JSONResponse(
-        status_code=exc.status_code, content=serialize_proxy_error(exc), headers=headers
+        status_code=exc.status_code,
+        content=serialize_proxy_error(exc),
+        headers=_retry_after_headers(exc),
     )
 
 
 def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:
     """Render a sanitized gateway failure in the Anthropic Messages dialect."""
-
-    headers = {}
-    retry_after = getattr(exc, "retry_after", None)
-    if (
-        isinstance(exc, (RateLimitError, AuthenticationUnavailableError, ServiceUnavailableError))
-        and retry_after is not None
-    ):
-        headers["Retry-After"] = str(retry_after)
     return anthropic_error_response(
         status_code=exc.status_code,
         message=exc.message,
-        headers=headers,
+        headers=_retry_after_headers(exc),
     )
 
 

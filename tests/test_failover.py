@@ -3307,7 +3307,7 @@ def test_http_retry_after_reaches_batch_retry(status_code, header, expected):
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
     manager = FailoverManager(
-        config=FallbackConfig(num_retries=0),
+        config=FallbackConfig(num_retries=0, backoff_jitter=False),
         candidate_planner=_planner(state, {"group-a": [primary]}),
         state_backend=state,
         cooldown_manager=CooldownManager(state),
@@ -3324,8 +3324,10 @@ def test_http_retry_after_reaches_batch_retry(status_code, header, expected):
     assert normalized.retry_after == expected
     assert decision.retry_after_seconds == expected
     assert decision.retryable is True
-    if expected:
-        assert manager._compute_backoff(0, normalized) == min(expected, manager.config.backoff_max)
+    expected_backoff = (
+        min(max(1, expected or 0), manager.config.backoff_max) if status_code == 429 else 1
+    )
+    assert manager._compute_backoff(0, normalized) == expected_backoff
 
 
 @pytest.mark.parametrize("status_code", [429, 500, 503])
@@ -3384,3 +3386,41 @@ def test_sanitization_keeps_service_unavailable_retry_metadata(code):
     assert sanitized.retry_after == 30
     assert classify_batch_retry(sanitized).retry_after_seconds == 30
     assert "private provider detail" not in str(sanitized)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+@pytest.mark.parametrize("adapter_mapped", [False, True])
+async def test_provider_5xx_retry_stays_fast_and_keeps_batch_hint(
+    status_code, adapter_mapped, monkeypatch
+):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=1, backoff_jitter=False),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts = []
+    delays = []
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    async def run(deployment):
+        attempts.append(deployment.deployment_id)
+        request = httpx.Request("POST", "https://example.org/v1/embeddings")
+        response = httpx.Response(status_code, headers={"Retry-After": "3600"}, request=request)
+        error = httpx.HTTPStatusError("provider failed", request=request, response=response)
+        if adapter_mapped:
+            raise sanitize_provider_proxy_error(map_standard_provider_error(error))
+        raise error
+
+    monkeypatch.setattr("src.router.failover.asyncio.sleep", sleep)
+    with pytest.raises(ServiceUnavailableError) as caught:
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    assert attempts == ["dep-a", "dep-a"]
+    assert delays == [1]
+    assert classify_batch_retry(caught.value).retry_after_seconds == 3600

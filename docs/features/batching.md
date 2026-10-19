@@ -1055,6 +1055,9 @@ Provider `Retry-After` hints apply to retryable rate-limit and upstream `5xx` fa
 The header accepts seconds or an HTTP date.
 `embeddings_batch_retry_max_seconds` caps the resulting batch delay.
 
+The router uses provider retry hints for 429 responses only. For provider 5xx failures, same-deployment retry uses the configured local backoff. The OpenAI and Anthropic error responses do not send the provider's 5xx retry hint to clients. Batch retry still uses the hint within its delay cap.
+Gateway authentication and output-usage recovery hints stay unchanged.
+
 - Open the batch detail in the admin UI to see per-item error messages
 - Common causes: invalid model name, provider rate limits, upstream timeouts
 - Budget exhaustion, model access denial, guardrail rejection, deleted keys, and expired keys are terminal and are not retried

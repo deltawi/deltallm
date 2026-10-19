@@ -302,7 +302,7 @@ class FailoverManager:
         delay = min(delay, self.config.backoff_max)
         if self.config.backoff_jitter:
             delay = delay * (0.5 + random.random() * 0.5)
-        retry_after = error.retry_after if isinstance(error, ProxyError) else None
+        retry_after = error.retry_after if isinstance(error, RateLimitError) else None
         if retry_after is not None:
             try:
                 delay = max(delay, max(0.0, float(retry_after)))
