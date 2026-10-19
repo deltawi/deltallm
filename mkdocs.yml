@@ -189,6 +189,7 @@ nav:
           - Provider credentials: admin-ui/named-credentials.md
           - Route-group administration: admin-ui/route-groups.md
           - Authentication and SSO: features/authentication.md
+          - Supplied API key design: design/supplied-api-keys.md
           - Budgets and spending: features/budgets.md
           - Rate limiting: features/rate-limiting.md
           - Audit records: features/audit-log.md

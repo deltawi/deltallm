@@ -27,6 +27,8 @@ _SENSITIVE_KEYS = {
     "new_password",
     "token",
     "raw_key",
+    "key",
+    "new_key",
     "api_key",
     "secret",
     "client_secret",
