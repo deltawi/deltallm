@@ -112,6 +112,7 @@ async def translate_openai_compatible_stream(
     *,
     classify_failure: ProviderFailureClassifier,
     normalize_usage: Callable[[object], dict[str, JsonValue]] | None = None,
+    normalize_choices: Callable[[list[object]], list[object]] | None = None,
     output_observer: Callable[[int | None], None] | None = None,
     output_count: Callable[[object], int | None] = compatible_output_count,
 ) -> AsyncIterator[str]:
@@ -190,6 +191,13 @@ async def translate_openai_compatible_stream(
                 ProviderStreamValidationFailureReason.INVALID_CHOICES
             )
 
+        original_payload = payload
+        if normalize_choices is not None:
+            normalized_choices = normalize_choices(choices)
+            if normalized_choices is not choices:
+                choices = normalized_choices
+                payload = {**payload, "choices": choices}
+
         if evidence is not None:
             evidence.observe(payload, choices)
             complete = evidence.complete()
@@ -198,6 +206,7 @@ async def translate_openai_compatible_stream(
 
         if normalize_usage is not None and payload.get("usage"):
             payload = {**payload, "usage": normalize_usage(payload["usage"])}
+        if payload is not original_payload:
             line = "data: " + json.dumps(payload, separators=(",", ":"))
 
         classified_stop = _content_filter_stop(choices)

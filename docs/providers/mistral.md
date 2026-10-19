@@ -54,6 +54,10 @@ removes this field from upstream requests. Clients can still request a final
 usage chunk with `stream_options: {"include_usage": true}`.
 Tool messages keep the tool-call ID that Mistral returns.
 After output starts, a stream failure cannot start a retry or failover.
+Mistral's `model_length` finish reason becomes OpenAI's `length`.
+The native `error` finish reason is a provider failure. Before output starts,
+the existing retry policy applies. After output starts, the stream ends with
+an error and does not send a successful `[DONE]` frame.
 
 ## Embedding requests
 

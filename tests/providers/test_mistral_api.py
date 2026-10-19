@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -82,6 +83,81 @@ async def test_mistral_chat_single_call_and_usage(client, configured_app, contra
     else:
         assert response.json()["choices"][0]["message"]["content"] == "Sunny."
         assert response.json()["usage"]["total_tokens"] == 14
+
+
+async def test_mistral_model_length_is_returned_without_retry(client, configured_app, contract):
+    calls = []
+    truncated = deepcopy(contract["success"])
+    truncated["choices"][0]["finish_reason"] = "model_length"
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, json=truncated)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as upstream:
+        configured_app.state.http_client = upstream
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {configured_app.state._test_key}"},
+            json=chat_contract.request_body(),
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["finish_reason"] == "length"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("after_output", [False, True])
+async def test_mistral_native_stream_error_respects_retry_boundary(
+    client, configured_app, contract, after_output
+):
+    store = configured_app.state.router.deployment_registry
+    primary = store["gpt-4o-mini"][0]
+    fallback = replace(primary, deployment_id="mistral-fallback")
+    store.replace({**store.snapshot(), "gpt-4o-mini": [primary, fallback]})
+
+    async def choose_primary(model_group, request_context):
+        return primary
+
+    configured_app.state.router.select_deployment = choose_primary
+    terminal = json.loads(contract["stream"][-2][6:])
+    terminal["choices"][0]["finish_reason"] = "error"
+    calls = []
+    responses = []
+
+    def handle(request):
+        calls.append(request)
+        if len(calls) == 1:
+            frames = contract["stream"][: 2 if after_output else 1]
+            frames = [*frames, "data: " + json.dumps(terminal), "data: [DONE]"]
+        else:
+            frames = contract["stream"]
+        response = httpx.Response(200, text="\n\n".join(frames) + "\n\n")
+        responses.append(response)
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as upstream:
+        configured_app.state.http_client = upstream
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {configured_app.state._test_key}"},
+            json=chat_contract.request_body(stream=True),
+        )
+    assert response.status_code == 200, response.text
+    assert len(calls) == (1 if after_output else 2)
+    assert all(response.is_closed for response in responses)
+    if after_output:
+        assert "[DONE]" not in response.text
+        assert response.headers["x-deltallm-route-fallback-used"] == "false"
+    else:
+        assert "[DONE]" in response.text
+        assert response.headers["x-deltallm-route-deployment"] == "mistral-fallback"
+    for deployment in (primary, fallback):
+        assert (
+            await configured_app.state.router_state_backend.get_active_requests(
+                deployment.deployment_id
+            )
+            == 0
+        )
 
 
 async def test_mistral_embeddings_use_default_base_and_strip_prefix(client, configured_app):

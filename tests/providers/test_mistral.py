@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -73,6 +74,44 @@ async def test_mistral_tools_json_and_native_stream_usage(contract):
         message = response.model_dump(mode="json")["choices"][0]["message"]
         assert message["content"] is None
         assert message["tool_calls"] == contract["tool"]["choices"][0]["message"]["tool_calls"]
+
+
+async def test_mistral_model_length_maps_to_length_without_mutating_response(contract):
+    response = deepcopy(contract["success"])
+    response["choices"][0]["finish_reason"] = "model_length"
+    async with httpx.AsyncClient() as client:
+        adapter = ProfiledChatAdapter(client, CHAT_PROVIDER_PROFILES["mistral"])
+        result = await adapter.translate_success_response(
+            httpx.Response(200, json=response), "alias"
+        )
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].message.content == "Sunny."
+    assert response["choices"][0]["finish_reason"] == "model_length"
+
+
+@pytest.mark.parametrize("after_output", [False, True])
+async def test_mistral_error_finish_reason_is_a_stream_failure(contract, after_output):
+    terminal = json.loads(contract["stream"][-2][6:])
+    terminal["choices"][0]["finish_reason"] = "error"
+
+    async def upstream():
+        yield contract["stream"][0]
+        if after_output:
+            yield contract["stream"][1]
+        yield "data: " + json.dumps(terminal)
+        yield "data: [DONE]"
+
+    async with httpx.AsyncClient() as client:
+        adapter = ProfiledChatAdapter(client, CHAT_PROVIDER_PROFILES["mistral"])
+        observed = []
+        with pytest.raises(ProxyError):
+            async for line in adapter.translate_stream(upstream()):
+                observed.append(line)
+    assert "data: [DONE]" not in observed
+    if after_output:
+        assert len(observed) == 2
+    else:
+        assert observed == []
 
 
 @pytest.mark.parametrize(
