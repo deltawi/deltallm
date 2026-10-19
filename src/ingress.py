@@ -25,6 +25,7 @@ INFERENCE_PATHS = frozenset(
         "/completions",
         "/responses",
         "/messages",
+        "/messages/count_tokens",
         "/embeddings",
         "/images/generations",
         "/audio/speech",

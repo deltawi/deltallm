@@ -51,7 +51,7 @@ at most `queue_timeout_ms`, subject to event-loop scheduling. Cancelling a waite
 removes it from the queue.
 
 POST inference routes use the inference allocation: chat/completions, completions,
-responses, messages, embeddings, images/generations, audio/speech,
+responses, messages, messages/count_tokens, embeddings, images/generations, audio/speech,
 audio/transcriptions, and rerank, with or without the `/v1` prefix and trailing
 slash. Other paths and methods, including UI/API requests, diagnostics, and
 unknown routes, use `control_max_active` with no waiting and a separate
@@ -97,9 +97,9 @@ header, and transport limits at the HTTP server and edge as well.
 | 408 | `gateway_request_body_timeout` | Upload stage exceeded its deadline |
 | 400 | `invalid_content_length` | Malformed, repeated, or inconsistent length |
 
-The table lists OpenAI-style error codes. `/messages` and `/v1/messages` use the
-canonical Anthropic error envelope and status-based error type (for example,
-`overloaded_error` for 503). Capacity errors include `Retry-After: 1`.
+The table lists OpenAI-style error codes. `/messages`, `/v1/messages`, and
+`/v1/messages/count_tokens` use the canonical Anthropic error envelope and
+status-based error type (for example, `overloaded_error` for 503). Capacity errors include `Retry-After: 1`.
 For a valid retryable HTTP/1.1 request, the server parser discards the remaining
 upload without application body reads or a new task. The existing server idle
 deadline closes an unfinished upload. An immediate close could erase the error

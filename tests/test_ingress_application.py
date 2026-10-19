@@ -124,5 +124,5 @@ async def test_every_registered_inference_route_uses_reserved_ingress(test_app) 
         if "POST" in getattr(route, "methods", ())
         and expected.intersection(getattr(route, "tags", ()))
     }
-    assert len(paths) == 9
+    assert len(paths) == 10
     assert all(ingress_class(path, "POST") == IngressClass.INFERENCE for path in paths)
