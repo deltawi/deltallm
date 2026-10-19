@@ -46,6 +46,9 @@ Chat Completions accepts `max_tokens` or `max_completion_tokens`. Supply one. Wh
 | `POST /v1/audio/transcriptions` | Speech-to-text |
 | `POST /v1/rerank` | Reranking |
 | `GET /v1/models` | Available public model names |
+| `GET /v1/models/{model}` | One model, if your key can call it |
+| `GET /model/info`, `GET /v1/model/info` | Per-deployment prices, context window, mode and capabilities (LiteLLM-compatible) |
+| `GET /model_group/info` | The same details aggregated per public model name (LiteLLM-compatible) |
 | `POST /v1/files` | Upload batch input files |
 | `GET /v1/files/{file_id}` | Inspect batch files |
 | `GET /v1/files/{file_id}/content` | Download batch file content |
@@ -375,3 +378,105 @@ DeltaLLM returns the public model names that clients can request. This list is b
   ]
 }
 ```
+
+### Retrieve a Model
+
+```text
+GET /v1/models/{model}
+```
+
+Returns the OpenAI model object for one public name, or `404 model_not_found` when the name does not exist or your key cannot call it. Both cases return the same error, so the endpoint does not reveal models outside your access.
+
+### Model Info
+
+```text
+GET /model/info
+GET /v1/model/info
+GET /model_group/info
+```
+
+These endpoints follow LiteLLM's response shapes, so tools written for LiteLLM's `/model/info` and `/model_group/info` work against DeltaLLM. Both only list names your key can call, with the same rules as `GET /v1/models` (key, team, organization, tier and creator access). They accept the key as `Authorization: Bearer ...` or `x-api-key`.
+
+Provider credentials and endpoints are never returned. `litellm_params` only carries `model`, `custom_llm_provider`, `rpm`, `tpm`, `max_tokens`, `timeout` and `stream_timeout`; `api_key`, `api_base`, AWS credentials, custom auth headers, `default_params` and access groups stay on the server.
+
+`/model/info` returns one row per deployment behind each public name. A deployment that serves a route group is listed under the route group name too. Pass `?litellm_model_id=<deployment id>` to get one deployment; an unknown or inaccessible id returns `404`.
+
+```json
+{
+  "data": [
+    {
+      "model_name": "gpt-4o-mini",
+      "litellm_params": {
+        "model": "openai/gpt-4o-mini",
+        "custom_llm_provider": "openai"
+      },
+      "model_info": {
+        "id": "dep_123",
+        "mode": "chat",
+        "litellm_provider": "openai",
+        "max_tokens": null,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "cache_read_input_token_cost": 7.5e-08,
+        "rpm": null,
+        "tpm": null,
+        "chat_capabilities": {"tools": true, "json_object": true, "json_schema": true, "image": true, "audio": false, "file": false, "streaming": true, "multiple_choices": true},
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_response_schema": true,
+        "supports_native_streaming": true
+      }
+    }
+  ]
+}
+```
+
+Prices are the gateway prices configured on the model (what DeltaLLM charges), not the provider's list price. `cache_read_input_token_cost` is the model's cache-hit input price. Other configured prices (batch, audio, image, per character, per second, per request) are included when set.
+
+Capability flags come only from the model's declared chat capabilities (`model_info.chat_capabilities`, see [model capability metadata](../configuration/models.md#model-router-capability-and-price-metadata)); DeltaLLM does not guess them from the model name. When a model has no declared capabilities the `supports_*` flags are `null`, meaning unknown.
+
+`/model_group/info` returns one row per public name, including route groups (`target_type: "route_group"`). Pass `?model_group=<name>` to get one; a name you cannot call returns an empty `data` list.
+
+```json
+{
+  "data": [
+    {
+      "model_group": "gpt-4o-mini",
+      "target_type": "model",
+      "providers": ["azure", "openai"],
+      "mode": "chat",
+      "max_input_tokens": 64000,
+      "max_output_tokens": 16384,
+      "input_cost_per_token": 2e-07,
+      "output_cost_per_token": 6e-07,
+      "cache_read_input_token_cost": 7.5e-08,
+      "rpm": 150,
+      "tpm": null,
+      "supports_function_calling": true,
+      "supports_parallel_function_calling": null,
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_response_schema": false,
+      "supports_native_streaming": true,
+      "supports_reasoning": null,
+      "supports_web_search": null,
+      "supported_openai_params": null,
+      "is_public_model_group": false
+    }
+  ]
+}
+```
+
+A request to a public name can land on any of its deployments, so the group row is conservative where LiteLLM reports the best case:
+
+- `max_input_tokens` and `max_output_tokens` are the smallest known value across deployments
+- prices are the highest known value
+- a `supports_*` flag is `true` only when every deployment declares it, `false` when any deployment lacks it, and `null` when some are undeclared
+- `rpm` and `tpm` are summed only when every deployment has a limit
+
+Differences from LiteLLM: `include_team_models`, `teamId` and `healthy_only` are accepted but ignored, since results are always scoped to the calling key. `/v2/model/info` and the public model hub are not available; admins use the [Models](../admin-ui/models.md) page and admin API instead. `supported_openai_params`, `supports_reasoning` and `supports_web_search` are always `null`.
