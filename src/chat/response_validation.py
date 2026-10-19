@@ -283,7 +283,9 @@ def _offered_function_names(request: ChatCompletionRequest) -> frozenset[str] | 
 
 def _json_output_requested(request: ChatCompletionRequest) -> bool:
     response_format = request.response_format
-    return response_format is not None and response_format.type in {"json_object", "json_schema"}
+    return request.guided_json is not None or (
+        response_format is not None and response_format.type in {"json_object", "json_schema"}
+    )
 
 
 def _valid_json_content(choice: object, message: Mapping[str, Any]) -> bool:

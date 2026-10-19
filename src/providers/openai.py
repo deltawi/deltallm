@@ -20,6 +20,7 @@ from src.providers.base import (
     reject_openai_compatible_failure_response,
 )
 from src.providers.healthcheck import is_provider_healthy
+from src.providers.json_guidance import validate_guided_json_support
 from src.providers.token_receipt import ProviderTokenReceipt, openai_token_receipt
 from src.providers.openai_compatible import (
     translate_openai_compatible_stream,
@@ -83,10 +84,18 @@ class OpenAIAdapter(ProviderAdapter):
         canonical_request: ChatCompletionRequest,
         provider_config: dict[str, Any],
     ) -> dict[str, Any]:
+        provider = resolve_provider(provider_config)
+        validate_guided_json_support(canonical_request, provider=provider)
         payload = dump_openai_chat_request(canonical_request)
+        guided_json = payload.pop("guided_json", None)
+        if guided_json is not None:
+            # vLLM accepts this format before and after removal of guided_json.
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "guided_json", "schema": guided_json},
+            }
         if payload.get("tool_choice") is not None and not payload.get("tools"):
             payload.pop("tool_choice", None)
-        provider = resolve_provider(provider_config)
         upstream_model = resolve_upstream_model(provider_config)
         if upstream_model:
             payload["model"] = upstream_model

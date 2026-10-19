@@ -62,6 +62,10 @@ class CacheKeyBuilder:
             "request": self._normalize(components),
             "routing_fingerprint": routing_fingerprint,
         }
+        # A custom key or field list must not erase an output constraint.
+        if request_data.get("guided_json") is not None:
+            # Schema limits must retain their full numeric precision.
+            normalized["guided_json"] = request_data["guided_json"]
         as_string = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
         if self.salt:
             as_string = f"{self.salt}:{as_string}"

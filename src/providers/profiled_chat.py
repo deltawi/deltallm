@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 import httpx
 
 from src.models.errors import InvalidRequestError
+from src.providers.json_guidance import validate_guided_json_support
 from src.models.requests import ChatCompletionRequest, FunctionToolDefinition, ToolChoice
 from src.providers.base import (
     invalid_provider_response_error,
@@ -55,6 +56,7 @@ class ProfiledChatAdapter(OpenAIAdapter):
     async def translate_request(
         self, canonical_request: ChatCompletionRequest, provider_config: Mapping[str, object]
     ) -> dict[str, object]:
+        validate_guided_json_support(canonical_request, provider=self.provider_name)
         # Only client-specified parameters are sent: OpenAI defaults are not
         # necessarily valid defaults for another vendor's model.
         payload = canonical_request.model_dump(mode="json", exclude_unset=True)
