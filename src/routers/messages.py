@@ -122,7 +122,7 @@ async def messages(request: Request):
         stream_error_transform=_anthropic_stream_error_event,
         stream_response_object="message",
         enable_stream_cache=False,
-        native_messages=view.native_request,
+        native_request=view.native_request,
     )
 
 

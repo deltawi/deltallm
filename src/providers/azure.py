@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 from collections.abc import Callable
 from src.providers.output_usage import compatible_output_count
 
@@ -32,6 +32,9 @@ from src.providers.resolution import (
     resolve_provider,
     resolve_upstream_model,
 )
+
+if TYPE_CHECKING:
+    from src.providers.openai_responses import NativeResponsesRequest
 
 _CONTEXT_IDENTIFIERS = frozenset(
     {
@@ -134,6 +137,18 @@ class AzureOpenAIAdapter(ProviderAdapter):
             provider_error,
             failure_classification=classification,
         )
+
+    def native_responses_adapter(
+        self, native: NativeResponsesRequest, *, api_base: str
+    ) -> ProviderAdapter | None:
+        from src.providers.openai_responses import (
+            OpenAINativeResponsesAdapter,
+            azure_base_serves_responses,
+        )
+
+        if not azure_base_serves_responses(api_base):
+            return None
+        return OpenAINativeResponsesAdapter(self, native, classify_failure=self._classify_failure)
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
         return await is_provider_healthy(

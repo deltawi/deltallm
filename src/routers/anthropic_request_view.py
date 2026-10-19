@@ -9,14 +9,20 @@ use the translation hop instead.
 
 from __future__ import annotations
 
-import copy
 import json
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from typing import Any
 
 from src.models.errors import InvalidRequestError
 from src.models.requests import AnthropicMessage, AnthropicMessagesRequest, ChatCompletionRequest
 from src.providers.anthropic_messages import NativeMessagesRequest
+from src.routers.policy_view import (
+    TextPath,
+    ViewBuilder,
+    ViewMessage,
+    add_untracked_text,
+    apply_policy_text,
+)
 
 _REQUEST_FIELD_MAP = {
     "temperature": "temperature",
@@ -29,52 +35,12 @@ _REQUEST_FIELD_MAP = {
 # translation hop drops them, which providers accept for earlier turns.
 _POLICY_IGNORED_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 
-TextPath: TypeAlias = tuple[str | int, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _ViewMessage:
-    """Where the text of one canonical message lives in the raw body."""
-
-    paths: tuple[TextPath, ...]
-    error_prefix: str = ""
-    # False when the message also holds text from blocks the view cannot write back
-    # (documents, search results). A policy change to it cannot reach the native body.
-    writable: bool = True
-
-
-@dataclass(slots=True)
-class _ViewBuilder:
-    messages: list[dict[str, Any]] = field(default_factory=list)
-    sources: list[_ViewMessage] = field(default_factory=list)
-    blocker: str | None = None
-
-    def block(self, context: str, block_type: str) -> None:
-        if self.blocker is None:
-            self.blocker = (
-                f"{context}: content block type '{block_type}' is supported only when the "
-                "model is served by an Anthropic deployment"
-            )
-
-    def add(
-        self,
-        message: dict[str, Any],
-        paths: list[TextPath],
-        *,
-        error_prefix: str = "",
-        writable: bool = True,
-    ) -> None:
-        self.messages.append(message)
-        self.sources.append(
-            _ViewMessage(paths=tuple(paths), error_prefix=error_prefix, writable=writable)
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class MessagesPolicyView:
     canonical: ChatCompletionRequest
     body: dict[str, Any] = field(repr=False)
-    sources: tuple[_ViewMessage, ...] = field(repr=False)
+    sources: tuple[ViewMessage, ...] = field(repr=False)
     translation_blocker: str | None = None
     anthropic_beta: str | None = None
     anthropic_version: str | None = None
@@ -82,7 +48,9 @@ class MessagesPolicyView:
     def native_request(self, transformed: ChatCompletionRequest) -> NativeMessagesRequest | None:
         """Carry pre-call policy changes into the raw body, or return None to translate."""
 
-        body = _apply_policy_text(self, transformed)
+        body = apply_policy_text(
+            canonical=self.canonical, sources=self.sources, body=self.body, transformed=transformed
+        )
         if body is None:
             if self.translation_blocker is not None:
                 raise InvalidRequestError(
@@ -109,7 +77,12 @@ def build_messages_policy_view(
     anthropic_version: str | None = None,
 ) -> MessagesPolicyView:
     reject_provider_account_references(body)
-    builder = _ViewBuilder()
+    builder = ViewBuilder(
+        blocker_template=(
+            "{context}: content block type '{part_type}' is supported only when the "
+            "model is served by an Anthropic deployment"
+        )
+    )
     if isinstance(payload.system, str) and payload.system:
         builder.add({"role": "system", "content": payload.system}, [("system",)])
     elif isinstance(payload.system, list):
@@ -189,7 +162,7 @@ def reject_provider_account_references(body: dict[str, Any]) -> None:
 
 
 def _collect_text_blocks(
-    builder: _ViewBuilder,
+    builder: ViewBuilder,
     content: list[Any],
     *,
     context: str,
@@ -207,56 +180,11 @@ def _collect_text_blocks(
             texts.append(block["text"])
         elif block_type not in _POLICY_IGNORED_BLOCK_TYPES:
             builder.block(f"{context}[{index}]", str(block_type))
-            writable = _add_untracked_text(block, texts) and writable
+            writable = add_untracked_text(block, texts) and writable
     return writable
 
 
-# Keys that hold identifiers or provider state, not text the model reads.
-_NON_TEXT_KEYS = frozenset(
-    {
-        "type",
-        "id",
-        "tool_use_id",
-        "media_type",
-        "cache_control",
-        "signature",
-        "is_error",
-        "encrypted_content",
-        "encrypted_index",
-    }
-)
-# Inline binary or fetched sources: their payload is not text for policy to read.
-_BINARY_SOURCE_TYPES = frozenset({"base64", "url"})
-
-
-def _add_untracked_text(block: Any, texts: list[str]) -> bool:
-    """Add the text of a native-only block (document, search result) to the policy view.
-
-    Guardrails must see every text the native hop sends. The view cannot write these
-    texts back, so it returns False when it found any.
-    """
-
-    found: list[str] = []
-    stack: list[Any] = [block]
-    while stack:
-        value = stack.pop()
-        if isinstance(value, str):
-            if value:
-                found.append(value)
-        elif isinstance(value, list):
-            stack.extend(reversed(value))
-        elif isinstance(value, dict):
-            binary = value.get("type") in _BINARY_SOURCE_TYPES
-            stack.extend(
-                item
-                for key, item in reversed(value.items())
-                if key not in _NON_TEXT_KEYS and not (binary and key in {"data", "url"})
-            )
-    texts.extend(found)
-    return not found
-
-
-def _add_message(builder: _ViewBuilder, message: AnthropicMessage, index: int) -> None:
+def _add_message(builder: ViewBuilder, message: AnthropicMessage, index: int) -> None:
     role = message.role
     content = message.content
     if isinstance(content, str):
@@ -293,7 +221,7 @@ def _add_message(builder: _ViewBuilder, message: AnthropicMessage, index: int) -
             tool_results += 1
         elif block_type not in _POLICY_IGNORED_BLOCK_TYPES:
             builder.block(context, block_type)
-            writable = _add_untracked_text(block, texts) and writable
+            writable = add_untracked_text(block, texts) and writable
 
     if texts or tool_calls or not tool_results:
         entry: dict[str, Any] = {"role": role, "content": "\n".join(texts)}
@@ -303,7 +231,7 @@ def _add_message(builder: _ViewBuilder, message: AnthropicMessage, index: int) -
 
 
 def _add_tool_result(
-    builder: _ViewBuilder, block: dict[str, Any], *, context: str, path: TextPath
+    builder: ViewBuilder, block: dict[str, Any], *, context: str, path: TextPath
 ) -> None:
     result = block.get("content")
     paths: list[TextPath] = []
@@ -333,7 +261,7 @@ def _add_tool_result(
     )
 
 
-def _function_tools(builder: _ViewBuilder, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _function_tools(builder: ViewBuilder, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     function_tools: list[dict[str, Any]] = []
     for index, tool in enumerate(tools):
         if tool.get("type") not in (None, "custom"):
@@ -404,82 +332,3 @@ def count_tokens_upstream_body(body: dict[str, Any]) -> dict[str, Any]:
         for key, value in body.items()
         if key != "metadata" and key not in PRICE_CHANGING_FIELDS
     }
-
-
-# Request fields that the native hop reads from the raw body. A policy change to one of
-# them cannot be written back, so the request uses the translation hop.
-_POLICY_COMPARED_FIELDS = frozenset({"tools", "tool_choice", "temperature", "top_p", "stop"})
-_MESSAGE_STRUCTURE_FIELDS = frozenset({"role", "name", "tool_calls", "tool_call_id"})
-
-
-def _apply_policy_text(
-    view: MessagesPolicyView, transformed: ChatCompletionRequest
-) -> dict[str, Any] | None:
-    original = view.canonical.messages
-    if len(transformed.messages) != len(original) or any(
-        after.model_dump(include=_MESSAGE_STRUCTURE_FIELDS)
-        != before.model_dump(include=_MESSAGE_STRUCTURE_FIELDS)
-        for after, before in zip(transformed.messages, original)
-    ):
-        return None
-    if transformed.model_dump(include=_POLICY_COMPARED_FIELDS) != view.canonical.model_dump(
-        include=_POLICY_COMPARED_FIELDS
-    ):
-        return None
-    changes: list[tuple[_ViewMessage, str]] = []
-    for after, before, source in zip(transformed.messages, original, view.sources):
-        if after.content == before.content:
-            continue
-        if not isinstance(after.content, str) or not source.paths or not source.writable:
-            return None
-        text = after.content
-        if source.error_prefix and text.startswith(source.error_prefix):
-            text = text[len(source.error_prefix) :]
-        changes.append((source, text))
-    if not changes:
-        return view.body
-    body = copy.deepcopy(view.body)
-    removed: list[TextPath] = []
-    for source, text in changes:
-        _set_path(body, source.paths[0], text)
-        # The changed text is now in the first block of the message; its later text
-        # blocks are removed so the provider sees each text once.
-        removed.extend(source.paths[1:])
-    for path in sorted(removed, key=_path_sort_key, reverse=True):
-        _remove_text_block(body, path)
-    return body
-
-
-def _path_sort_key(path: TextPath) -> tuple[tuple[int, int | str], ...]:
-    return tuple((0, part) if isinstance(part, int) else (1, part) for part in path)
-
-
-def _set_path(body: dict[str, Any], path: TextPath, value: str) -> None:
-    target: Any = body
-    for key in path[:-1]:
-        target = target[key]
-    target[path[-1]] = value
-
-
-def _remove_text_block(body: dict[str, Any], path: TextPath) -> None:
-    # Text block paths end with (..., block_index, "text").
-    if len(path) < 2 or path[-1] != "text" or not isinstance(path[-2], int):
-        return
-    container: Any = body
-    for key in path[:-2]:
-        container = container[key]
-    removed = container.pop(path[-2])
-    cache_control = removed.get("cache_control") if isinstance(removed, dict) else None
-    if cache_control is None:
-        return
-    # Keep the cache breakpoint on the text block that now holds the merged text.
-    keeper = next(
-        (
-            block
-            for block in reversed(container[: path[-2]])
-            if isinstance(block, dict) and block.get("type") == "text"
-        ),
-        None,
-    )
-    if keeper is not None:
-        keeper.setdefault("cache_control", cache_control)

@@ -39,7 +39,7 @@ Chat Completions accepts `max_tokens` or `max_completion_tokens`. Supply one. Wh
 | `POST /v1/messages` | Anthropic Messages API-compatible subset, see [Anthropic Messages](messages.md) |
 | `POST /v1/messages/count_tokens` | Input-token count for a Messages request, see [Count tokens](messages.md#count-tokens) |
 | `POST /v1/completions` | Legacy prompt-style completions |
-| `POST /v1/responses` | Responses API compatible subset |
+| `POST /v1/responses` | OpenAI Responses API. See [OpenAI Responses](responses.md). |
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/images/generations` | Image generation |
 | `POST /v1/audio/speech` | Text-to-speech |
@@ -149,7 +149,9 @@ Unsupported request fields currently return `400`:
 POST /v1/responses
 ```
 
-DeltaLLM supports a compatible subset of the Responses API and translates these requests into chat completions internally.
+DeltaLLM sends Responses requests to OpenAI and Azure deployments unchanged. For other
+deployments, it translates the request to chat completions and translates the answer back.
+See [OpenAI Responses](responses.md) for tools, input items, streaming events, and limits.
 
 ```bash
 curl http://localhost:8000/v1/responses \

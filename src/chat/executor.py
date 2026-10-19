@@ -14,12 +14,14 @@ from src.models.requests import ChatCompletionRequest
 from src.services.admission.output_token_context import OutputTokenContext
 from src.metrics import observe_request_phase
 from src.metrics.request_phases import track_request_phase
-from src.providers.anthropic_messages import (
-    NATIVE_MESSAGES_RESPONSE_KEY,
-    NativeMessagesRequest,
-    bind_native_messages_upstream,
+from src.providers.native_hop import (
+    NATIVE_RESPONSE_KEY,
+    NativeRequest,
+    bind_native_upstream,
+    sends_native_body,
     served_native_response,
 )
+from src.providers.openai_responses import OpenAINativeResponsesAdapter
 from src.providers.base import ProviderAdapter, read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
 from src.providers.chat_hop import HopOutcome, HopPhase, execute_chat_hop
@@ -71,7 +73,7 @@ async def execute_chat(
     deployment: Deployment,
     *,
     record_usage: bool = True,
-    native: NativeMessagesRequest | None = None,
+    native: NativeRequest | None = None,
 ) -> tuple[dict[str, Any], float]:
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
@@ -94,20 +96,18 @@ async def _execute_chat(
     deployment: Deployment,
     *,
     record_usage: bool = True,
-    native: NativeMessagesRequest | None = None,
+    native: NativeRequest | None = None,
 ) -> tuple[dict[str, Any], float]:
     transform_started = perf_counter()
     params = deployment.deltallm_params
-    upstream = bind_native_messages_upstream(
+    upstream = bind_native_upstream(
         resolve_chat_upstream(request, params, is_stream=bool(payload.stream)), native
     )
     adapter, timeout = upstream.adapter, upstream.timeout
     upstream_request = _upstream_chat_request(payload)
     upstream_payload = await adapter.translate_request(upstream_request, params)
 
-    from src.routers.utils import apply_default_params
-
-    apply_default_params(upstream_payload, deployment.model_info)
+    _apply_default_params(adapter, upstream_payload, deployment.model_info)
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
     )
@@ -145,7 +145,7 @@ async def _execute_chat(
     canonical_payload = canonical.model_dump(mode="json")
     native_response = served_native_response(adapter)
     if native_response is not None:
-        canonical_payload[NATIVE_MESSAGES_RESPONSE_KEY] = native_response
+        canonical_payload[NATIVE_RESPONSE_KEY] = native_response
 
     if record_usage:
         router_state_backend = getattr(request.app.state, "router_state_backend", None)
@@ -182,7 +182,7 @@ async def open_stream_with_first_chunk(
     payload: ChatCompletionRequest,
     deployment: Deployment,
     *,
-    native: NativeMessagesRequest | None = None,
+    native: NativeRequest | None = None,
 ) -> OpenedStream:
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
@@ -202,11 +202,11 @@ async def _open_stream_with_first_chunk(
     payload: ChatCompletionRequest,
     deployment: Deployment,
     *,
-    native: NativeMessagesRequest | None = None,
+    native: NativeRequest | None = None,
 ) -> OpenedStream:
     transform_started = perf_counter()
     params = deployment.deltallm_params
-    upstream = bind_native_messages_upstream(
+    upstream = bind_native_upstream(
         resolve_chat_upstream(request, params, is_stream=bool(payload.stream)), native
     )
     adapter, api_base, endpoint, headers, timeout = (
@@ -220,13 +220,13 @@ async def _open_stream_with_first_chunk(
     client_stream_usage_requested = _client_stream_usage_requested(payload)
     upstream_payload = await adapter.translate_request(upstream_request, params)
 
-    from src.routers.utils import apply_default_params
-
-    apply_default_params(upstream_payload, deployment.model_info)
+    _apply_default_params(adapter, upstream_payload, deployment.model_info)
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
     )
-    internal_stream_usage_requested = _request_stream_usage_when_supported(upstream_payload, params)
+    internal_stream_usage_requested = not sends_native_body(
+        adapter
+    ) and _request_stream_usage_when_supported(upstream_payload, params)
     observe_request_phase(
         route="chat_completions",
         phase="upstream_transform",
@@ -357,6 +357,18 @@ def _request_stream_usage_when_supported(
         upstream_payload["stream_options"] = {**stream_options, "include_usage": True}
         return True
     return False
+
+
+def _apply_default_params(
+    adapter: ProviderAdapter, upstream_payload: dict[str, Any], model_info: dict[str, Any]
+) -> None:
+    if isinstance(adapter, OpenAINativeResponsesAdapter):
+        # Configured defaults use chat names; the native Responses body needs its own.
+        adapter.apply_default_params(upstream_payload, model_info)
+        return
+    from src.routers.utils import apply_default_params
+
+    apply_default_params(upstream_payload, model_info)
 
 
 def _client_stream_usage_requested(payload: ChatCompletionRequest) -> bool:

@@ -4,10 +4,12 @@ import json
 from typing import Any
 
 from src.models.errors import InvalidRequestError
-from src.models.requests import ChatCompletionRequest, CompletionsRequest, ResponsesRequest
+from src.models.requests import ChatCompletionRequest, CompletionsRequest
 
 
-def _copy_explicit_fields(source: CompletionsRequest | ResponsesRequest, target: dict[str, Any], field_map: dict[str, str]) -> None:
+def _copy_explicit_fields(
+    source: CompletionsRequest, target: dict[str, Any], field_map: dict[str, str]
+) -> None:
     fields_set = getattr(source, "model_fields_set", set())
     for source_field, target_field in field_map.items():
         if source_field in fields_set:
@@ -52,63 +54,16 @@ def completions_to_chat_request(payload: CompletionsRequest) -> ChatCompletionRe
     return ChatCompletionRequest.model_validate(data)
 
 
-def responses_to_chat_request(payload: ResponsesRequest) -> ChatCompletionRequest:
-    messages: list[dict[str, Any]] = []
-    if payload.instructions:
-        messages.append({"role": "system", "content": payload.instructions})
-
-    if isinstance(payload.input, str):
-        messages.append({"role": "user", "content": payload.input})
-    elif isinstance(payload.input, list):
-        text_parts: list[str] = []
-        for item in payload.input:
-            if isinstance(item, str):
-                text_parts.append(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            role = item.get("role")
-            content = item.get("content")
-            if isinstance(role, str) and isinstance(content, str):
-                messages.append({"role": role, "content": content})
-                continue
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") in {"input_text", "text"} and isinstance(block.get("text"), str):
-                        text_parts.append(block["text"])
-        if text_parts:
-            messages.append({"role": "user", "content": "\n".join(text_parts)})
-    if not messages:
-        raise InvalidRequestError(message="Responses `input` could not be translated into chat messages")
-
-    data: dict[str, Any] = {
-        "model": payload.model,
-        "messages": messages,
-    }
-    _copy_explicit_fields(
-        payload,
-        data,
-        {
-            "temperature": "temperature",
-            "max_output_tokens": "max_tokens",
-            "top_p": "top_p",
-            "stream": "stream",
-            "tools": "tools",
-            "tool_choice": "tool_choice",
-            "user": "user",
-            "metadata": "metadata",
-        },
-    )
-    return ChatCompletionRequest.model_validate(data)
-
-
 def chat_response_to_completions_response(chat_payload: dict[str, Any]) -> dict[str, Any]:
     choices_out: list[dict[str, Any]] = []
     for choice in chat_payload.get("choices", []):
         message = choice.get("message") or {}
         content = message.get("content")
         if isinstance(content, list):
-            text = "".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content)
+            text = "".join(
+                str(part.get("text", "")) if isinstance(part, dict) else str(part)
+                for part in content
+            )
         else:
             text = str(content or "")
         choices_out.append(
@@ -125,35 +80,8 @@ def chat_response_to_completions_response(chat_payload: dict[str, Any]) -> dict[
         "created": chat_payload.get("created"),
         "model": chat_payload.get("model"),
         "choices": choices_out,
-        "usage": chat_payload.get("usage") or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-    }
-
-
-def chat_response_to_responses_response(chat_payload: dict[str, Any]) -> dict[str, Any]:
-    first_choice = ((chat_payload.get("choices") or [{}])[0]) or {}
-    message = first_choice.get("message") or {}
-    content = message.get("content")
-    if isinstance(content, list):
-        text = "".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content)
-    else:
-        text = str(content or "")
-
-    response_id = str(chat_payload.get("id") or "")
-    return {
-        "id": response_id,
-        "object": "response",
-        "created_at": chat_payload.get("created"),
-        "model": chat_payload.get("model"),
-        "output": [
-            {
-                "id": f"msg_{response_id}" if response_id else "msg_0",
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": text}],
-            }
-        ],
-        "usage": chat_payload.get("usage") or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        "status": "completed",
+        "usage": chat_payload.get("usage")
+        or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
 
@@ -187,29 +115,5 @@ def stream_chat_to_completions_line(line: str) -> str | None:
         "created": chunk.get("created"),
         "model": chunk.get("model"),
         "choices": out_choices,
-    }
-    return f"data: {json.dumps(out, separators=(',', ':'))}"
-
-
-def stream_chat_to_responses_line(line: str) -> str | None:
-    if not line.startswith("data:"):
-        return line
-    payload = line[len("data:") :].strip()
-    if payload == "[DONE]":
-        return "data: [DONE]"
-    try:
-        chunk = json.loads(payload)
-    except json.JSONDecodeError:
-        return line
-
-    first_choice = ((chunk.get("choices") or [{}])[0]) or {}
-    delta = first_choice.get("delta") or {}
-    text = str(delta.get("content") or "")
-    out = {
-        "id": chunk.get("id"),
-        "object": "response.output_text.delta",
-        "created_at": chunk.get("created"),
-        "model": chunk.get("model"),
-        "delta": text,
     }
     return f"data: {json.dumps(out, separators=(',', ':'))}"

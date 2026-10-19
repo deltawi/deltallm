@@ -5022,168 +5022,6 @@
         "title": "ResponseFormat",
         "type": "object"
       },
-      "ResponsesRequest": {
-        "properties": {
-          "input": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              }
-            ],
-            "title": "Input"
-          },
-          "instructions": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Instructions"
-          },
-          "max_output_tokens": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Output Tokens"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          },
-          "model": {
-            "title": "Model",
-            "type": "string"
-          },
-          "stream": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": false,
-            "title": "Stream"
-          },
-          "temperature": {
-            "anyOf": [
-              {
-                "maximum": 2.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": 1.0,
-            "title": "Temperature"
-          },
-          "tool_choice": {
-            "anyOf": [
-              {
-                "enum": [
-                  "auto",
-                  "none",
-                  "required"
-                ],
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/ToolChoice"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": "auto",
-            "title": "Tool Choice"
-          },
-          "tools": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/FunctionToolDefinition"
-                    },
-                    {
-                      "$ref": "#/components/schemas/MCPToolDefinition"
-                    }
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tools"
-          },
-          "top_p": {
-            "anyOf": [
-              {
-                "maximum": 1.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": 1.0,
-            "title": "Top P"
-          },
-          "user": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User"
-          }
-        },
-        "required": [
-          "model",
-          "input"
-        ],
-        "title": "ResponsesRequest",
-        "type": "object"
-      },
       "RouteGroupBindingResponse": {
         "properties": {
           "created_at": {
@@ -47113,7 +46951,220 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ResponsesRequest"
+                "additionalProperties": true,
+                "properties": {
+                  "include": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Include"
+                  },
+                  "input": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": true,
+                              "type": "object"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Input"
+                  },
+                  "instructions": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Instructions"
+                  },
+                  "max_output_tokens": {
+                    "anyOf": [
+                      {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Max Output Tokens"
+                  },
+                  "metadata": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Metadata"
+                  },
+                  "model": {
+                    "title": "Model",
+                    "type": "string"
+                  },
+                  "parallel_tool_calls": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Parallel Tool Calls"
+                  },
+                  "reasoning": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Reasoning"
+                  },
+                  "store": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Store"
+                  },
+                  "stream": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": false,
+                    "title": "Stream"
+                  },
+                  "temperature": {
+                    "anyOf": [
+                      {
+                        "maximum": 2,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Temperature"
+                  },
+                  "text": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Text"
+                  },
+                  "tool_choice": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "auto",
+                          "none",
+                          "required"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Tool Choice"
+                  },
+                  "tools": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Tools"
+                  },
+                  "top_p": {
+                    "anyOf": [
+                      {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Top P"
+                  },
+                  "user": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "User"
+                  }
+                },
+                "required": [
+                  "model",
+                  "input"
+                ],
+                "title": "ResponsesRequest",
+                "type": "object"
               }
             }
           },

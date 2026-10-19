@@ -179,7 +179,7 @@ async def translate_openai_compatible_stream(
             )
 
         if "error" in payload:
-            raise _map_openai_compatible_stream_error(payload, classify_failure)
+            raise map_openai_compatible_stream_error(payload, classify_failure)
 
         choices = payload.get("choices")
         if not isinstance(choices, list):
@@ -320,7 +320,7 @@ def _invalid_stream_response_error(
     )
 
 
-def _map_openai_compatible_stream_error(
+def map_openai_compatible_stream_error(
     payload: Mapping[str, object],
     classify_failure: ProviderFailureClassifier,
 ) -> ProxyError:

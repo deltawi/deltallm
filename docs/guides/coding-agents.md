@@ -1,6 +1,6 @@
 # Use coding agents
 
-You can send coding-agent traffic, such as Claude Code, through DeltaLLM. DeltaLLM then
+You can send coding-agent traffic, such as Claude Code or Codex, through DeltaLLM. DeltaLLM then
 applies keys, budgets, rate limits, guardrails, and usage reports to each developer.
 
 ## Claude Code
@@ -37,3 +37,38 @@ Notes:
 - Claude Code counts tokens with `POST /v1/messages/count_tokens`. DeltaLLM asks
   Anthropic for the count, or returns an estimate for other providers. DeltaLLM does not
   bill these calls. See [Count tokens](../api/messages.md#count-tokens).
+
+## Codex
+
+Codex uses the OpenAI Responses API. Use a model that has a deployment with
+`provider: openai` on `api.openai.com`, or `provider: azure` with an `api_base` that ends
+with `/openai/v1`. DeltaLLM then sends each request to the provider unchanged, so
+reasoning, encrypted reasoning items, and all Codex tools work. See
+[OpenAI Responses](../api/responses.md#native-hop-openai-and-azure-deployments).
+
+Other deployments use the translation hop. Codex function tools work on this hop, but
+`web_search` is not available and reasoning is not kept between turns.
+
+1. Create an application key for the developer, as for Claude Code. The
+   [Coding agents](../admin-ui/coding-agents.md) page also gives the setup text.
+2. Add a DeltaLLM provider to `~/.codex/config.toml`:
+
+```toml
+# Use your DeltaLLM model name.
+model = "gpt-5-codex"
+model_provider = "deltallm"
+
+[model_providers.deltallm]
+name = "DeltaLLM"
+base_url = "https://your-gateway.example.com/v1"
+env_key = "DELTALLM_API_KEY"
+wire_api = "responses"
+```
+
+3. Set `DELTALLM_API_KEY` to the DeltaLLM key, then start `codex`.
+
+Notes:
+
+- Codex sends `store: false` and the full conversation in each request. DeltaLLM does not
+  support `previous_response_id`.
+- DeltaLLM does not bill `web_search` calls. OpenAI charges the deployment's account for them.
