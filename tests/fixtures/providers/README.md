@@ -9,7 +9,11 @@ These are deterministic synthetic examples shaped from the official API referenc
 They contain no live provider responses or credentials. Model IDs and endpoint
 bases were checked on September 9, 2026.
 
-Each JSON file includes text success, a null-content tool completion, and SSE
+The [Mistral](https://docs.mistral.ai/api) fixture was checked on
+October 19, 2026. It uses text, a tool call, and native stream usage.
+It has no synthetic reasoning or cache counters.
+
+The five earlier JSON files include text success, a null-content tool completion, and SSE
 frames for role, reasoning, text, usage, and termination. Token counts are small
 test values. DeepSeek uses its native cache-hit counter; other examples exercise
 OpenAI-style cache details. MiniMax reasoning blocks include opaque fields to

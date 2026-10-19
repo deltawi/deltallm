@@ -20,6 +20,7 @@ Brand names and marks belong to their respective owners.
 | [deepseek.svg](deepseek.svg) | [deepseek-color.svg](https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/deepseek-color.svg) |
 | [lmstudio.svg](lmstudio.svg) | [lmstudio.svg](https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/lmstudio.svg) |
 | [minimax.svg](minimax.svg) | [minimax-color.svg](https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/minimax-color.svg) |
+| [mistral.svg](mistral.svg) | [mistral-color.svg](https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/mistral-color.svg) |
 | [qwen.svg](qwen.svg) | [qwen-color.svg](https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/qwen-color.svg) |
 | [tencent.svg](tencent.svg) | [tencentcloud-color.svg](https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/tencentcloud-color.svg) |
 | [together.svg](together.svg) | [together-color.svg](https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/together-color.svg) |

@@ -10,6 +10,7 @@ import geminiLogo from '../assets/provider-logos/gemini.svg?no-inline';
 import groqLogo from '../assets/provider-logos/groq.svg?no-inline';
 import lmstudioLogo from '../assets/provider-logos/lmstudio.svg?no-inline';
 import minimaxLogo from '../assets/provider-logos/minimax.svg?no-inline';
+import mistralLogo from '../assets/provider-logos/mistral.svg?no-inline';
 import ollamaLogo from '../assets/provider-logos/ollama.svg?no-inline';
 import openaiLogo from '../assets/provider-logos/openai.svg?no-inline';
 import openrouterLogo from '../assets/provider-logos/openrouter.svg?no-inline';
@@ -33,6 +34,7 @@ export const PROVIDER_LOGOS: Record<string, string> = {
   groq: groqLogo,
   lmstudio: lmstudioLogo,
   minimax: minimaxLogo,
+  mistral: mistralLogo,
   ollama: ollamaLogo,
   openai: openaiLogo,
   openrouter: openrouterLogo,

@@ -1,0 +1,64 @@
+{
+  "provider": "mistral",
+  "model": "mistral-small-latest",
+  "api_base": "https://api.mistral.ai/v1",
+  "success": {
+    "id": "cmpl-mistral-fixture",
+    "object": "chat.completion",
+    "created": 1792368000,
+    "model": "mistral-small-latest",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Sunny."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14
+    }
+  },
+  "tool": {
+    "id": "cmpl-mistral-fixture",
+    "object": "chat.completion",
+    "created": 1792368000,
+    "model": "mistral-small-latest",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "AbCdEf123",
+              "type": "function",
+              "function": {
+                "name": "weather",
+                "arguments": "{\"city\":\"Paris\"}"
+              }
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14
+    }
+  },
+  "stream": [
+    "data: {\"id\":\"cmpl-mistral-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1792368000,\"model\":\"mistral-small-latest\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"cmpl-mistral-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1792368000,\"model\":\"mistral-small-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sun\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"cmpl-mistral-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1792368000,\"model\":\"mistral-small-latest\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ny.\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"cmpl-mistral-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1792368000,\"model\":\"mistral-small-latest\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14}}",
+    "data: [DONE]"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "provider": "mistral",
+  "last_verified_at": "2026-10-19",
+  "source_type": "official_docs",
+  "sources": [
+    {"label": "Mistral models", "url": "https://docs.mistral.ai/models"},
+    {"label": "Mistral function calling", "url": "https://docs.mistral.ai/studio/conversations/function-calling"},
+    {"label": "Mistral embeddings", "url": "https://docs.mistral.ai/api/endpoint/embeddings"},
+    {"label": "Codestral Embed", "url": "https://docs.mistral.ai/resources/cookbooks/mistral-embeddings-code_embedding"}
+  ],
+  "models": [
+    {"id": "mistral-large-latest", "supported_modes": ["chat"]},
+    {"id": "mistral-medium-latest", "supported_modes": ["chat"]},
+    {"id": "mistral-small-latest", "supported_modes": ["chat"]},
+    {"id": "codestral-latest", "supported_modes": ["chat"]},
+    {"id": "mistral-embed", "supported_modes": ["embedding"]},
+    {"id": "codestral-embed", "supported_modes": ["embedding"]}
+  ]
+}

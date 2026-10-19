@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AuthSsoConfig, ModelDeploymentDetail, Principal } from '../src/lib/api';
+import { normalizeProvider, providerDisplayName } from '../src/lib/providers';
 import {
   EMPTY_FORM,
   buildModelPayload,
@@ -29,6 +30,14 @@ function chatForm(overrides: Partial<ModelFormValues> = {}): ModelFormValues {
     ...overrides,
   };
 }
+
+test('Mistral uses the named provider label and model prefix', () => {
+  assert.equal(providerDisplayName('mistral'), 'Mistral AI');
+  assert.equal(providerDisplayName('azure'), 'Azure OpenAI');
+  assert.equal(providerDisplayName('azure_openai'), 'Azure OpenAI');
+  assert.equal(providerDisplayName(null), 'Unknown');
+  assert.equal(normalizeProvider(null, 'mistral/mistral-small-latest'), 'mistral');
+});
 
 test('model identity keeps the friendly name separate from the callable API id', () => {
   assert.equal(suggestApiModelSlug('Customer Support — Arabic'), 'customer-support-arabic');
@@ -65,7 +74,7 @@ test('model edit form displays the friendly name and retains the immutable API i
   assert.equal(form.api_namespace_locked, true);
 });
 
-for (const provider of ['deepseek', 'zai', 'qwen', 'tencent', 'minimax']) {
+for (const provider of ['deepseek', 'zai', 'qwen', 'tencent', 'minimax', 'mistral']) {
   test(`${provider} model edits retain the named credential and upstream model ID`, () => {
     const model: ModelDeploymentDetail = {
       deployment_id: `dep-${provider}`,
