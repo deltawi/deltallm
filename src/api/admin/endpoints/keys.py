@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 
 from src.api.admin.accounting_budget import apply_accounting_balances
 from src.api.admin.key_coding_agent import (
@@ -43,6 +43,14 @@ from src.api.admin.key_access_policy import (
     _target_scope_permission_sets as _target_scope_permission_sets,
 )
 from src.auth.roles import Permission
+from src.db.identity.key_creation import (
+    KeyCreateRecord,
+    KeyCreationRepository,
+    KeyCredentialConflict,
+)
+from src.middleware.platform_auth import get_configured_master_key
+from src.services.identity.keys.key_material import InvalidKeyMaterial, prepare_key_material
+from src.models.key_creation import KeyCreateRequest
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import (
     db_or_503,
@@ -543,34 +551,25 @@ async def _insert_key_row(
     budget_duration: str | None = None,
     coding_agent: dict[str, str | None] | None = None,
 ) -> None:
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_verificationtoken (
-            id, token, key_name, user_id, team_id, owner_account_id, owner_service_account_id,
-            spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires,
-            budget_duration, budget_reset_at, metadata, created_at, updated_at
+    await KeyCreationRepository(db).create(
+        KeyCreateRecord(
+            token_hash=token_hash,
+            key_name=key_name,
+            user_id=user_id,
+            team_id=team_id,
+            owner_account_id=owner_account_id,
+            owner_service_account_id=owner_service_account_id,
+            max_budget=max_budget,
+            rpm_limit=rpm_limit,
+            tpm_limit=tpm_limit,
+            rph_limit=rph_limit,
+            rpd_limit=rpd_limit,
+            tpd_limit=tpd_limit,
+            expires=expires,
+            budget_duration=budget_duration,
+            budget_reset_at=first_budget_reset_at(budget_duration),
+            metadata_json=coding_agent_metadata_json(coding_agent),
         )
-        VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13::timestamp,
-            $14, $15::timestamp, $16::jsonb, NOW(), NOW()
-        )
-        """,
-        token_hash,
-        key_name,
-        user_id,
-        team_id,
-        owner_account_id,
-        owner_service_account_id,
-        max_budget,
-        rpm_limit,
-        tpm_limit,
-        rph_limit,
-        rpd_limit,
-        tpd_limit,
-        expires,
-        budget_duration,
-        first_budget_reset_at(budget_duration),
-        coding_agent_metadata_json(coding_agent),
     )
 
 
@@ -679,11 +678,15 @@ async def list_keys(
 @router.post("/ui/api/keys")
 async def create_key(
     request: Request,
-    payload: dict[str, Any],
+    payload: KeyCreateRequest,
+    http_response: Response,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
+    supplied_key = payload.key.get_secret_value() if payload.key is not None else None
+    payload = payload.model_dump(exclude_unset=True)
+    http_response.headers["Cache-Control"] = "no-store"
     _reject_legacy_models_field(payload)
     scope = get_auth_scope(
         request,
@@ -761,9 +764,14 @@ async def create_key(
             require_owner=True,
         )
 
-    raw_key = f"sk-{secrets.token_urlsafe(24)}"
     key_service = request.app.state.key_service
-    token_hash = key_service.hash_key(raw_key)
+    try:
+        material = prepare_key_material(
+            supplied_key, hasher=key_service, master_key=get_configured_master_key(request)
+        )
+    except InvalidKeyMaterial as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    raw_key, token_hash = material.raw_key, material.token_hash
     audit_action = (
         AuditAction.ADMIN_KEY_SELF_CREATE if self_service_only else AuditAction.ADMIN_KEY_CREATE
     )
@@ -910,6 +918,8 @@ async def create_key(
         )
         return response
     except Exception as exc:
+        if isinstance(exc, KeyCredentialConflict):
+            exc = HTTPException(status_code=409, detail="API key value is unavailable")
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
@@ -921,7 +931,7 @@ async def create_key(
             status="error",
             error=exc,
         )
-        raise
+        raise exc from None
 
 
 @router.put("/ui/api/keys/{token_hash}")

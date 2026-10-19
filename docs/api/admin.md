@@ -481,6 +481,38 @@ top-level `default_prompt` field. An unchanged value is kept without a new check
 
 `GET /ui/api/keys` and `PUT /ui/api/keys/{token_hash}` return `last_used_at` for each key. The value is an ISO 8601 UTC time, or `null` when no use is recorded. The gateway writes this value in batches about once per minute, so the value can be up to one minute old.
 
+`POST /ui/api/keys` also accepts optional `key` to keep an existing application
+credential. Omit it or send `null` to generate a random secret. A supplied value
+must start with `sk-`, contain 16 to 8192 printable ASCII characters without
+spaces, and differ from the active master key. DeltaLLM uses the exact value;
+it does not trim or change it. An empty string or invalid value returns `400`.
+The existing owner, team, and self-service rules still apply.
+Supplied values are available through this API only. The Admin UI continues
+to generate keys and has no input for an existing secret.
+
+```json
+{
+  "key_name": "Imported application",
+  "team_id": "team-123",
+  "owner_service_account_id": "service-account-123",
+  "key": "sk-existing-application-secret-1234"
+}
+```
+
+The response contains `raw_key` once and the salted hash in `token`.
+It has `Cache-Control: no-store`. Lists and later reads do not return the
+secret. An active or previously issued value returns `409` with
+`"API key value is unavailable"`, without owner or tenant details. Repeating a
+successful create does not update the existing key. Key hash history is kept
+after deletion and regeneration, so a retired credential cannot become a new
+key. Legacy retired credentials can be refused only when their hash is still
+present in retained records at upgrade time.
+
+For a LiteLLM migration, copy the original active secret, then apply the
+required owner, team, access, budget, and expiry settings in DeltaLLM. A
+LiteLLM hash cannot replace the original secret. The create URL remains
+`/ui/api/keys`; this feature does not add a `/key/generate` alias.
+
 `POST /ui/api/keys` and `PUT /ui/api/keys/{token_hash}` accept these optional fields:
 
 - `budget_duration`: a budget period, such as `"1h"`, `"1d"` or `"1mo"`. The key spend then resets at each period. The first reset is at the next UTC boundary, for example the next 00:00 UTC for `"1d"`. If you change the period, the reset time starts again. Send `null` to remove the period.

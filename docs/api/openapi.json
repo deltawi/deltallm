@@ -2356,6 +2356,26 @@
         "type": "object"
       },
       "JsonValue": {},
+      "KeyCreateRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          }
+        },
+        "title": "KeyCreateRequest",
+        "type": "object"
+      },
       "KeyRevocationStatus": {
         "properties": {
           "enforcement": {
@@ -21943,9 +21963,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Payload",
-                "type": "object"
+                "$ref": "#/components/schemas/KeyCreateRequest"
               }
             }
           },
