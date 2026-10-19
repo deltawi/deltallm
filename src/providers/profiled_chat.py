@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable, Mapping
 
 import httpx
@@ -40,6 +41,33 @@ _CHAT_PARAMETERS = frozenset(
         "response_format",
     }
 )
+
+
+def _normalize_mistral_tool_arguments(message: object) -> object:
+    if not isinstance(message, Mapping):
+        return message
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return message
+    normalized: list[object] | None = None
+    for index, call in enumerate(calls):
+        if not isinstance(call, Mapping):
+            continue
+        function = call.get("function")
+        if not isinstance(function, Mapping) or not isinstance(function.get("arguments"), dict):
+            continue
+        # Mistral accepts object arguments. OpenAI clients require JSON strings,
+        # while string deltas must retain their exact fragment boundaries.
+        if normalized is None:
+            normalized = list(calls)
+        normalized[index] = {
+            **call,
+            "function": {
+                **function,
+                "arguments": json.dumps(function["arguments"], separators=(",", ":")),
+            },
+        }
+    return {**message, "tool_calls": normalized} if normalized is not None else message
 
 
 class ProfiledChatAdapter(OpenAIAdapter):
@@ -129,10 +157,16 @@ class ProfiledChatAdapter(OpenAIAdapter):
                 # A native failure must not commit a pre-output stream or emit
                 # a successful terminal frame after partial output.
                 raise map_standard_provider_status_error(503)
-            if reason == "model_length":
+            updated = {**choice, "finish_reason": "length"} if reason == "model_length" else choice
+            for field in ("message", "delta"):
+                message = choice.get(field)
+                normalized_message = _normalize_mistral_tool_arguments(message)
+                if normalized_message is not message:
+                    updated = {**updated, field: normalized_message}
+            if updated is not choice:
                 if normalized is None:
                     normalized = list(choices)
-                normalized[index] = {**choice, "finish_reason": "length"}
+                normalized[index] = updated
         return normalized if normalized is not None else choices
 
     async def translate_stream(

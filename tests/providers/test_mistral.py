@@ -89,6 +89,50 @@ async def test_mistral_model_length_maps_to_length_without_mutating_response(con
     assert response["choices"][0]["finish_reason"] == "model_length"
 
 
+async def test_mistral_object_tool_arguments_become_json_strings(contract):
+    response = deepcopy(contract["tool"])
+    arguments = {"city": "Paris", "options": {"units": "C", "days": [1, 2]}}
+    response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = arguments
+    async with httpx.AsyncClient() as client:
+        adapter = ProfiledChatAdapter(client, CHAT_PROVIDER_PROFILES["mistral"])
+        result = await adapter.translate_success_response(
+            httpx.Response(200, json=response), "alias"
+        )
+    call = result.choices[0].message.tool_calls[0]
+    assert json.loads(call["function"]["arguments"]) == arguments
+    assert call["id"] == "AbCdEf123"
+    assert response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == arguments
+
+
+@pytest.mark.parametrize("arguments", [{"city": "Paris"}, {}, '{"city":'])
+async def test_mistral_stream_tool_arguments_keep_openai_string_contract(contract, arguments):
+    call = deepcopy(contract["tool"]["choices"][0]["message"]["tool_calls"][0])
+    call["index"] = 0
+    call["function"]["arguments"] = arguments
+    frame = json.loads(contract["stream"][0][6:])
+    frame["choices"][0]["delta"] = {"tool_calls": [call]}
+    terminal = json.loads(contract["stream"][-2][6:])
+    terminal["choices"][0]["finish_reason"] = "tool_calls"
+
+    async def upstream():
+        yield "data: " + json.dumps(frame)
+        yield "data: " + json.dumps(terminal)
+        yield "data: [DONE]"
+
+    async with httpx.AsyncClient() as client:
+        adapter = ProfiledChatAdapter(client, CHAT_PROVIDER_PROFILES["mistral"])
+        lines = [line async for line in adapter.translate_stream(upstream())]
+    assert lines[-1] == "data: [DONE]"
+    result = json.loads(lines[0][6:])["choices"][0]["delta"]["tool_calls"][0]
+    assert result["id"] == call["id"]
+    assert result["index"] == 0
+    actual = result["function"]["arguments"]
+    if isinstance(arguments, dict):
+        assert json.loads(actual) == arguments
+    else:
+        assert actual == arguments
+
+
 @pytest.mark.parametrize("after_output", [False, True])
 async def test_mistral_error_finish_reason_is_a_stream_failure(contract, after_output):
     terminal = json.loads(contract["stream"][-2][6:])

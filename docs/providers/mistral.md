@@ -53,6 +53,8 @@ Mistral sends stream usage without OpenAI's `stream_options` field. DeltaLLM
 removes this field from upstream requests. Clients can still request a final
 usage chunk with `stream_options: {"include_usage": true}`.
 Tool messages keep the tool-call ID that Mistral returns.
+If Mistral returns tool arguments as a JSON object, DeltaLLM converts them to
+the JSON string that OpenAI clients require. String fragments stay unchanged.
 After output starts, a stream failure cannot start a retry or failover.
 Mistral's `model_length` finish reason becomes OpenAI's `length`.
 The native `error` finish reason is a provider failure. Before output starts,

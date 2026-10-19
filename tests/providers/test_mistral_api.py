@@ -106,6 +106,47 @@ async def test_mistral_model_length_is_returned_without_retry(client, configured
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("stream", [False, True])
+async def test_mistral_object_tool_arguments_use_openai_response_format(
+    client, configured_app, contract, stream
+):
+    native = deepcopy(contract["tool"])
+    call = native["choices"][0]["message"]["tool_calls"][0]
+    arguments = {"city": "Paris", "days": [1, 2]}
+    call["function"]["arguments"] = arguments
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        if not stream:
+            return httpx.Response(200, json=native)
+        frame = json.loads(contract["stream"][0][6:])
+        frame["choices"][0]["delta"] = {"tool_calls": [{**call, "index": 0}]}
+        terminal = json.loads(contract["stream"][-2][6:])
+        terminal["choices"][0]["finish_reason"] = "tool_calls"
+        frames = ["data: " + json.dumps(frame), "data: " + json.dumps(terminal), "data: [DONE]"]
+        return httpx.Response(200, text="\n\n".join(frames) + "\n\n")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as upstream:
+        configured_app.state.http_client = upstream
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {configured_app.state._test_key}"},
+            json=chat_contract.request_body(stream=stream),
+        )
+    assert response.status_code == 200, response.text
+    assert len(calls) == 1
+    if stream:
+        assert "[DONE]" in response.text
+        frame = next(line for line in response.text.splitlines() if line.startswith("data: "))
+        message = json.loads(frame[6:])["choices"][0]["delta"]
+    else:
+        message = response.json()["choices"][0]["message"]
+    actual = message["tool_calls"][0]
+    assert actual["id"] == call["id"]
+    assert json.loads(actual["function"]["arguments"]) == arguments
+
+
 @pytest.mark.parametrize("after_output", [False, True])
 async def test_mistral_native_stream_error_respects_retry_boundary(
     client, configured_app, contract, after_output
