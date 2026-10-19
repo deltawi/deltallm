@@ -33,6 +33,7 @@ from src.providers.resolution import (
 
 if TYPE_CHECKING:
     from src.providers.anthropic_messages import NativeMessagesRequest
+    from src.providers.chat_upstream import ChatUpstream
 
 _CONTEXT_IDENTIFIERS = frozenset(
     {
@@ -203,6 +204,24 @@ class AnthropicAdapter(ProviderAdapter):
         from src.providers.anthropic_messages import AnthropicNativeMessagesAdapter
 
         return AnthropicNativeMessagesAdapter(self, native)
+
+    async def count_native_message_tokens(
+        self,
+        *,
+        upstream: ChatUpstream,
+        params: Mapping[str, object],
+        native: NativeMessagesRequest,
+        timeout: httpx.Timeout,
+    ) -> int:
+        from src.providers.anthropic_messages import count_native_message_tokens
+
+        return await count_native_message_tokens(
+            client=self.http_client,
+            upstream=upstream,
+            params=params,
+            native=native,
+            timeout=timeout,
+        )
 
     def complete_output_count(self, payload: object) -> int | None:
         usage = payload.get("usage") if isinstance(payload, Mapping) else None

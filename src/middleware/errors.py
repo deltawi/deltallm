@@ -33,7 +33,7 @@ from src.telemetry.request_failures import (
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC_MESSAGES_PATH = "/v1/messages"
+_ANTHROPIC_MESSAGES_PATHS = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
 
 
 def serialize_proxy_error(exc: ProxyError) -> dict[str, object]:
@@ -129,7 +129,7 @@ def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:
 
 
 def _uses_anthropic_error_dialect(request: Request) -> bool:
-    return request.url.path.rstrip("/") == _ANTHROPIC_MESSAGES_PATH
+    return request.url.path.rstrip("/") in _ANTHROPIC_MESSAGES_PATHS
 
 
 def _proxy_error_response_for_request(request: Request, exc: ProxyError) -> JSONResponse:

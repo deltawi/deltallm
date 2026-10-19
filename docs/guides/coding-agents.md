@@ -34,3 +34,6 @@ Notes:
   prompt from the Anthropic prompt cache, and DeltaLLM bills cache reads at this price.
 - If the model also has deployments with other providers, those deployments use the
   translation hop. On those deployments, thinking and prompt caching are not available.
+- Claude Code counts tokens with `POST /v1/messages/count_tokens`. DeltaLLM asks
+  Anthropic for the count, or returns an estimate for other providers. DeltaLLM does not
+  bill these calls. See [Count tokens](../api/messages.md#count-tokens).

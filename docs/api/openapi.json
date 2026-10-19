@@ -46663,6 +46663,53 @@
         ]
       }
     },
+    "/v1/messages/count_tokens": {
+      "post": {
+        "operationId": "count_message_tokens_v1_messages_count_tokens_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count Message Tokens",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
     "/v1/models": {
       "get": {
         "operationId": "models_v1_models_get",

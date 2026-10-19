@@ -22,7 +22,8 @@ Send the DeltaLLM key in one of these headers:
 - `x-api-key: YOUR_API_KEY` (the Anthropic SDK default)
 
 If a request has both headers, DeltaLLM uses `Authorization`.
-DeltaLLM accepts `x-api-key` only on `/v1/messages` and `/v1/models`.
+DeltaLLM accepts `x-api-key` only on `/v1/messages`, `/v1/messages/count_tokens`, and
+`/v1/models`.
 
 ## Example
 
@@ -118,6 +119,55 @@ other unknown fields.
 The translation hop rejects content that it cannot carry with a `400 invalid_request_error`.
 This includes `image` and `document` blocks and server tools such as `web_search`.
 
+## Count tokens
+
+`POST /v1/messages/count_tokens` returns the number of input tokens in a Messages
+request. Claude Code uses it to manage its context window. The body is a Messages request
+without `max_tokens` and other generation settings:
+
+```bash
+curl http://localhost:8000/v1/messages/count_tokens \
+  -H "x-api-key: YOUR_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "system": "You are a helpful assistant.",
+    "messages": [{"role": "user", "content": "Hello from DeltaLLM"}]
+  }'
+```
+
+```json
+{"input_tokens": 18}
+```
+
+DeltaLLM uses the same authentication and model access checks as `/v1/messages`. The
+count does not call a model. DeltaLLM does not bill it, and it does not use the key's rate
+limits or budget.
+
+How DeltaLLM gets the count:
+
+| Deployments of the model | Count |
+| --- | --- |
+| One or more `provider: anthropic` deployments | DeltaLLM sends the body to Anthropic's `count_tokens` endpoint of the deployment with the lowest `priority` value. The body and the `anthropic-beta` and `anthropic-version` headers go unchanged, except `model` (the upstream model) and `metadata` (removed). |
+| Other providers, or Anthropic does not answer | DeltaLLM returns a local estimate. |
+
+The `x-deltallm-token-count` response header tells you which source gave the count:
+`provider` or `estimate`.
+
+The local estimate counts three characters of text for each token, plus a fixed cost
+of 1,600 tokens for each image or PDF. Most tokenizers give 3.5 to 4 characters for each
+token, so the estimate is usually higher than the real count. Use it only for context
+checks.
+
+If Anthropic rejects the body as invalid, DeltaLLM returns that `invalid_request_error`
+message. If Anthropic times out, is unavailable, or returns an account error, DeltaLLM
+tries the next Anthropic deployment (at most two), then returns the estimate. DeltaLLM
+waits at most 10 seconds for each count, or less if the deployment `timeout` is lower.
+
+The count does not include changes that prompt templates or guardrails make to the
+request on `/v1/messages`.
+
 ## Errors
 
 Errors use the Anthropic error envelope:
@@ -183,6 +233,5 @@ in that mode does not prove that billing was persisted. See the shared
   change the token price, and DeltaLLM pricing has no field for them.
 - DeltaLLM does not bill Anthropic server tools such as `web_search`. Anthropic charges
   the deployment's account for them.
-- `/v1/messages/count_tokens` is not available. Claude Code then estimates context size.
 - Amazon Bedrock Claude deployments use the translation hop.
 - Anthropic `anthropic-ratelimit-*` response headers are not forwarded.

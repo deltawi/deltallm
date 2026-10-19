@@ -186,6 +186,18 @@ class AnthropicMessagesRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class AnthropicCountTokensRequest(BaseModel):
+    """`/v1/messages/count_tokens` body: a Messages request without generation settings."""
+
+    model_config = ConfigDict(extra="allow")
+
+    model: str = Field(..., min_length=1)
+    messages: list[AnthropicMessage]
+    system: str | list[dict[str, Any]] | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: dict[str, Any] | None = None
+
+
 class EmbeddingRequest(BaseModel):
     model: str
     input: str | list[str] | list[int] | list[list[int]]

@@ -197,7 +197,11 @@ async def _reject(scope: Scope, receive: Receive, send: Send, status: int, code:
         status_code=status,
         headers=headers,
     )
-    if get_route_path(scope).rstrip("/") in {"/v1/messages", "/messages"}:
+    if get_route_path(scope).rstrip("/") in {
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+        "/messages",
+    }:
         response = anthropic_error_response(
             status_code=status, message="Gateway request admission failed", headers=headers
         )
