@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from json import JSONDecodeError
 from typing import Any
 
@@ -32,12 +33,15 @@ _REQUEST_BODY_DOC = {
 async def read_responses_request(request: Request) -> tuple[ResponsesRequest, dict[str, Any]]:
     """Parse the raw body once; the native hop forwards it and the view reads it."""
 
+    # Always consume the body: the selector's disconnect watch expects the endpoint
+    # to have read it, as FastAPI does for a declared body parameter.
+    raw = await request.body()
     request_data = getattr(request.state, "request_data", None)
     if isinstance(request_data, dict):
         body = request_data
     else:
         try:
-            body = await request.json()
+            body = json.loads(raw)
         except (JSONDecodeError, UnicodeDecodeError) as exc:
             raise InvalidRequestError(message="Invalid JSON body") from exc
     if not isinstance(body, dict):

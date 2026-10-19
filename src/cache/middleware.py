@@ -579,7 +579,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
         if RESPONSE_VALIDATION_HEADER in response.headers:
             return
 
-        if response_data is None or "error" in response_data:
+        # A Responses API body always has an `error` key; it is null on success.
+        if response_data is None or response_data.get("error") is not None:
             return
 
         entry = CacheEntry(

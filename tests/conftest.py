@@ -1520,6 +1520,33 @@ def mock_native_response(model: str) -> dict[str, Any]:
     }
 
 
+CHAT_ONLY_API_BASE = "https://chat-only.test/v1"
+
+
+def use_chat_only_base(app: Any, model_group: str = "gpt-4o-mini") -> None:
+    """Send /v1/responses for the group through chat translation, not native Responses.
+
+    The default test deployment uses the OpenAI base, which serves Responses natively.
+    Tests that feed chat completion frames to /v1/responses need the translation hop.
+    """
+
+    registry = app.state.router.deployment_registry
+    registry.replace(
+        {
+            **registry.snapshot(),
+            model_group: [
+                type(deployment)(
+                    deployment_id=deployment.deployment_id,
+                    model_name=deployment.model_name,
+                    deltallm_params={**deployment.deltallm_params, "api_base": CHAT_ONLY_API_BASE},
+                    model_info=dict(deployment.model_info),
+                )
+                for deployment in registry[model_group]
+            ],
+        }
+    )
+
+
 class MockHTTPClient:
     def __init__(self) -> None:
         self.post_calls = 0

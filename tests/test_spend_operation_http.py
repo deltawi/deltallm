@@ -195,6 +195,7 @@ async def test_secondary_failure_inside_cache_middleware_returns_controlled_503(
 async def test_real_client_close_at_terminal_keeps_one_reserved_receipt(test_app, endpoint):
     import httpx
     from tests.test_stream_accounting_commit import (
+        TERMINAL_FRAMES,
         configured_stream,
         loopback_gateway,
         request_body,
@@ -209,7 +210,7 @@ async def test_real_client_close_at_terminal_keeps_one_reserved_receipt(test_app
                 ) as response:
                     assert response.status_code == 200
                     async for line in response.aiter_lines():
-                        if line in ("data: [DONE]", "event: message_stop"):
+                        if line in ("data: [DONE]", *TERMINAL_FRAMES.values()):
                             operations.accept.assert_awaited_once()
                             break
                     else:

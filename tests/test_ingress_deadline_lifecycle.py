@@ -10,6 +10,7 @@ from src.callbacks import CustomLogger
 from src.config import GeneralSettings, Settings
 from src.guardrails.presidio import PresidioGuardrail
 from src.ingress import initialize_ingress
+from tests.conftest import use_chat_only_base
 
 pytestmark = [pytest.mark.app, pytest.mark.asyncio]
 
@@ -125,6 +126,8 @@ async def test_stream_deadline_keeps_lease_to_abort_and_closes_provider_once(tes
         return httpx.Response(200, stream=SlowStream())
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as provider:
+        # The provider frames are chat chunks, so /v1/responses uses translation.
+        use_chat_only_base(test_app)
         test_app.state.http_client.stream = provider.stream
         async with loopback_gateway(test_app) as base_url:
             async with httpx.AsyncClient(base_url=base_url, timeout=5) as client:

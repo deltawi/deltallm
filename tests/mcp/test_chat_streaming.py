@@ -296,10 +296,12 @@ async def test_responses_stream_runs_mcp_tool(client, test_app) -> None:
     )
 
     assert response.status_code == 200, response.text
+    # Responses frames carry an `event:` line before their `data:` line.
+    data_lines = [line for line in response.text.splitlines() if line.startswith("data: ")]
     deltas = [
         event["delta"]
-        for event in _data(_events(response.text))
-        if event.get("object") == "response.output_text.delta"
+        for event in _data(data_lines)
+        if event.get("type") == "response.output_text.delta"
     ]
     assert "".join(deltas) == "Let me search. It is a gateway."
     assert gateway.tool_calls == [("docs.search", {"query": "delta"})]

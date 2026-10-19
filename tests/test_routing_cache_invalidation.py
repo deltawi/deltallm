@@ -62,6 +62,9 @@ async def test_deployment_retarget_invalidates_cache_and_rollback_reuses_it(
     ]:
         registry = deepcopy(test_app.state.model_registry)
         registry["gpt-4o-mini"][0]["deltallm_params"]["model"] = "openai/" + model
+        if endpoint == "/v1/responses":
+            # The labelled answers are chat completions, so use the translation hop.
+            registry["gpt-4o-mini"][0]["deltallm_params"]["api_base"] = "https://chat-only.test/v1"
         test_app.state.model_registry = registry
         generation = _publish(test_app, [_group()])
         fingerprints.append(generation.routing_fingerprints["gpt-4o-mini"])
