@@ -108,7 +108,7 @@ def build_messages_policy_view(
     anthropic_beta: str | None = None,
     anthropic_version: str | None = None,
 ) -> MessagesPolicyView:
-    _reject_provider_account_references(body)
+    reject_provider_account_references(body)
     builder = _ViewBuilder()
     if isinstance(payload.system, str) and payload.system:
         builder.add({"role": "system", "content": payload.system}, [("system",)])
@@ -167,7 +167,7 @@ _FILE_REFERENCE_MESSAGE = (
 )
 
 
-def _reject_provider_account_references(body: dict[str, Any]) -> None:
+def reject_provider_account_references(body: dict[str, Any]) -> None:
     for name in _PROVIDER_ACCOUNT_FIELDS:
         if body.get(name) is not None:
             raise InvalidRequestError(
@@ -376,14 +376,14 @@ def _anthropic_tool_choice_to_chat(tool_choice: dict[str, Any]) -> Any:
 
 # Anthropic charges a different token price for these options, and DeltaLLM pricing has
 # no matching field. The native hop sends the request without them.
-_PRICE_CHANGING_FIELDS = ("speed", "inference_geo")
+PRICE_CHANGING_FIELDS = ("speed", "inference_geo")
 
 
 def _upstream_safe_body(body: dict[str, Any]) -> dict[str, Any]:
     metadata = body.get("metadata")
-    if metadata is None and not any(name in body for name in _PRICE_CHANGING_FIELDS):
+    if metadata is None and not any(name in body for name in PRICE_CHANGING_FIELDS):
         return body
-    result = {key: value for key, value in body.items() if key not in _PRICE_CHANGING_FIELDS}
+    result = {key: value for key, value in body.items() if key not in PRICE_CHANGING_FIELDS}
     # DeltaLLM reads its own controls (prompt_ref, cache, tags) from metadata; the
     # Messages API accepts only user_id there.
     if isinstance(metadata, dict) and "user_id" in metadata:
@@ -391,6 +391,19 @@ def _upstream_safe_body(body: dict[str, Any]) -> dict[str, Any]:
     else:
         result.pop("metadata", None)
     return result
+
+
+def count_tokens_upstream_body(body: dict[str, Any]) -> dict[str, Any]:
+    """The `count_tokens` body without the fields that only DeltaLLM reads.
+
+    `count_tokens` does not accept `metadata`, where DeltaLLM reads its own controls.
+    """
+
+    return {
+        key: value
+        for key, value in body.items()
+        if key != "metadata" and key not in PRICE_CHANGING_FIELDS
+    }
 
 
 # Request fields that the native hop reads from the raw body. A policy change to one of

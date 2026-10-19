@@ -67,7 +67,11 @@ class RequestDeadlineMiddleware:
                     },
                     status_code=error.status_code,
                 )
-                if get_route_path(scope).rstrip("/") in {"/messages", "/v1/messages"}:
+                if get_route_path(scope).rstrip("/") in {
+                    "/messages",
+                    "/v1/messages",
+                    "/v1/messages/count_tokens",
+                }:
                     response = anthropic_error_response(
                         status_code=error.status_code, message=error.message
                     )

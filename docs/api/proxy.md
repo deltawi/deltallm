@@ -37,6 +37,7 @@ Chat Completions accepts `max_tokens` or `max_completion_tokens`. Supply one. Wh
 |----------|---------|
 | `POST /v1/chat/completions` | Chat completions, including streaming |
 | `POST /v1/messages` | Anthropic Messages API-compatible subset, see [Anthropic Messages](messages.md) |
+| `POST /v1/messages/count_tokens` | Input-token count for a Messages request, see [Count tokens](messages.md#count-tokens) |
 | `POST /v1/completions` | Legacy prompt-style completions |
 | `POST /v1/responses` | Responses API compatible subset |
 | `POST /v1/embeddings` | Text embeddings |

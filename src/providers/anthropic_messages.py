@@ -20,6 +20,7 @@ from src.models.errors import InvalidRequestError, ProxyError, RoutingFailureAct
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic import map_anthropic_stream_error
 from src.providers.base import (
+    NativeTokenCountUnavailable,
     ProviderAdapter,
     ProviderErrorDetails,
     invalid_provider_response_error,
@@ -354,6 +355,49 @@ def _forwardable_client_error_message(details: ProviderErrorDetails) -> str | No
         # This text is about the deployment's Anthropic account, not the client request.
         return None
     return "".join(char if char.isprintable() else " " for char in details.message)
+
+
+async def count_native_message_tokens(
+    *,
+    client: httpx.AsyncClient,
+    upstream: ChatUpstream,
+    params: Mapping[str, object],
+    native: NativeMessagesRequest,
+    timeout: httpx.Timeout,
+) -> int:
+    """Ask an Anthropic deployment's `count_tokens` endpoint for the body's input tokens.
+
+    A client error that only describes the request is raised as InvalidRequestError, as on
+    `/v1/messages`. Any other failure raises NativeTokenCountUnavailable.
+    """
+
+    url = f"{upstream.api_base}{upstream.endpoint}/count_tokens"
+    body = dict(native.body)
+    body["model"] = resolve_upstream_model(params) or body.get("model")
+    try:
+        response = await client.post(
+            url, headers=native.upstream_headers(upstream.headers), json=body, timeout=timeout
+        )
+    except httpx.HTTPError as exc:
+        raise NativeTokenCountUnavailable from exc
+    if response.status_code >= 400:
+        error = httpx.HTTPStatusError(
+            f"Upstream count_tokens call failed with status {response.status_code}",
+            request=httpx.Request("POST", url),
+            response=response,
+        )
+        message = _forwardable_client_error_message(provider_error_details(error))
+        if message is not None:
+            raise InvalidRequestError(message=message)
+        raise NativeTokenCountUnavailable
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise NativeTokenCountUnavailable from exc
+    count = payload.get("input_tokens") if isinstance(payload, Mapping) else None
+    if not is_valid_provider_token_count(count):
+        raise NativeTokenCountUnavailable
+    return count
 
 
 class _NativeStreamRelay:

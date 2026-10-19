@@ -33,6 +33,7 @@ from src.providers.token_receipt import ProviderTokenReceipt, TokenReceiptObserv
 
 if TYPE_CHECKING:
     from src.providers.anthropic_messages import NativeMessagesRequest
+    from src.providers.chat_upstream import ChatUpstream
 
 _MAX_CLASSIFICATION_MESSAGE_CHARS = 2048
 _PROVIDER_ERROR_READ_CHUNK_BYTES = 8192
@@ -397,6 +398,10 @@ def sanitize_provider_proxy_error(provider_error: ProxyError) -> ProxyError:
     )
 
 
+class NativeTokenCountUnavailable(Exception):
+    """A provider token-count endpoint did not answer; the caller can estimate instead."""
+
+
 class ProviderAdapter(ABC):
     provider_name: str
     # When True, the executor passes translate_stream the raw response bytes
@@ -477,6 +482,21 @@ class ProviderAdapter(ABC):
 
     def native_messages_adapter(self, native: NativeMessagesRequest) -> ProviderAdapter | None:
         """Return a per-attempt adapter that sends `/v1/messages` bodies natively."""
+        return None
+
+    async def count_native_message_tokens(
+        self,
+        *,
+        upstream: ChatUpstream,
+        params: Mapping[str, object],
+        native: NativeMessagesRequest,
+        timeout: httpx.Timeout,
+    ) -> int | None:
+        """Count the input tokens of a `/v1/messages` body with the provider's own endpoint.
+
+        Return None when the provider has no such endpoint. Raise
+        NativeTokenCountUnavailable when the endpoint cannot answer.
+        """
         return None
 
     @abstractmethod

@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 # Anthropic SDKs and Claude Code send the key as `x-api-key`. Accept it only on the
 # Anthropic-compatible routes, and only when `Authorization` is absent.
-_X_API_KEY_PATHS = frozenset({"/v1/messages", "/v1/models"})
+_X_API_KEY_PATHS = frozenset({"/v1/messages", "/v1/messages/count_tokens", "/v1/models"})
 
 
 def request_authorization(request: HTTPConnection) -> str | None:
