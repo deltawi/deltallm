@@ -23,9 +23,19 @@ from src.telemetry.event_identity import get_or_create_billing_event_id
 if TYPE_CHECKING:
     from src.config_runtime.dynamic import DynamicConfigManager
 
-# Anthropic SDKs and Claude Code send the key as `x-api-key`. Accept it only on the
-# Anthropic-compatible routes, and only when `Authorization` is absent.
-_X_API_KEY_PATHS = frozenset({"/v1/messages", "/v1/messages/count_tokens", "/v1/models"})
+# Anthropic SDKs and Claude Code send the key as `x-api-key`, as do LiteLLM's
+# model info examples. Accept it only on those routes, and only when
+# `Authorization` is absent.
+_X_API_KEY_PATHS = frozenset(
+    {
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+        "/v1/models",
+        "/model/info",
+        "/v1/model/info",
+        "/model_group/info",
+    }
+)
 
 
 def request_authorization(request: HTTPConnection) -> str | None:

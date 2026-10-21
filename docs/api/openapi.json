@@ -11614,6 +11614,146 @@
         ]
       }
     },
+    "/model/info": {
+      "get": {
+        "description": "Per-deployment metadata for every model the caller can call, LiteLLM-compatible.\n\nProvider keys, endpoints and credentials are never included.",
+        "operationId": "model_info_model_info_get",
+        "parameters": [
+          {
+            "description": "Return only the deployment with this id.",
+            "in": "query",
+            "name": "litellm_model_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return only the deployment with this id.",
+              "title": "Litellm Model Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Model Info Model Info Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Info",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/model_group/info": {
+      "get": {
+        "description": "One aggregated entry per public model name the caller can call, LiteLLM-compatible.",
+        "operationId": "model_group_info_endpoint_model_group_info_get",
+        "parameters": [
+          {
+            "description": "Return only this public model name.",
+            "in": "query",
+            "name": "model_group",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return only this public model name.",
+              "title": "Model Group"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Model Group Info Endpoint Model Group Info Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Group Info Endpoint",
+        "tags": [
+          "models"
+        ]
+      }
+    },
     "/spend/logs": {
       "get": {
         "operationId": "get_spend_logs_spend_logs_get",
@@ -46710,6 +46850,76 @@
         ]
       }
     },
+    "/v1/model/info": {
+      "get": {
+        "description": "Per-deployment metadata for every model the caller can call, LiteLLM-compatible.\n\nProvider keys, endpoints and credentials are never included.",
+        "operationId": "model_info_v1_model_info_get",
+        "parameters": [
+          {
+            "description": "Return only the deployment with this id.",
+            "in": "query",
+            "name": "litellm_model_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return only the deployment with this id.",
+              "title": "Litellm Model Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Model Info V1 Model Info Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Info",
+        "tags": [
+          "models"
+        ]
+      }
+    },
     "/v1/models": {
       "get": {
         "operationId": "models_v1_models_get",
@@ -46756,6 +46966,66 @@
           }
         },
         "summary": "Models",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/{model_id}": {
+      "get": {
+        "operationId": "retrieve_model_v1_models__model_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retrieve Model V1 Models  Model Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retrieve Model",
         "tags": [
           "models"
         ]

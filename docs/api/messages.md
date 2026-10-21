@@ -22,8 +22,8 @@ Send the DeltaLLM key in one of these headers:
 - `x-api-key: YOUR_API_KEY` (the Anthropic SDK default)
 
 If a request has both headers, DeltaLLM uses `Authorization`.
-DeltaLLM accepts `x-api-key` only on `/v1/messages`, `/v1/messages/count_tokens`, and
-`/v1/models`.
+DeltaLLM accepts `x-api-key` only on `/v1/messages`, `/v1/messages/count_tokens`,
+`/v1/models`, and the [model info](proxy.md#model-info) endpoints.
 
 ## Example
 
