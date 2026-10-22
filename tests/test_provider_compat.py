@@ -23,6 +23,7 @@ from src.providers.azure import AzureOpenAIAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.base import (
     INVALID_PROVIDER_RESPONSE_MESSAGE,
+    provider_rejection,
     MAX_PROVIDER_ERROR_BODY_BYTES,
     PROVIDER_ERROR_BODY_TRUNCATED_EXTENSION,
     bound_provider_error_response_body,
@@ -36,6 +37,12 @@ from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
 from src.upstream_http import build_upstream_http_client
+
+# The gateway's own rejection messages; tests assert the classification separately.
+_PROVIDER_REJECTION = (
+    "^(Provider rejected request|The request is longer than the model's context window"
+    "|The provider's content policy rejected the request)$"
+)
 
 _OMITTED = object()
 
@@ -310,7 +317,7 @@ async def test_openai_adapter_sanitizes_unclassified_provider_error_message() ->
         )
         exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
         mapped = adapter.map_error(exc)
-        assert str(mapped) == "Provider rejected request"
+        assert str(mapped) == provider_rejection(mapped.failure_classification)[0]
         assert mapped.failure_classification is FailureClassification.GENERIC
         assert mapped.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
         assert "tool_choice" not in str(mapped)
@@ -528,7 +535,7 @@ async def test_openai_compatible_stream_classifies_filter_before_output(adapter_
             "data: [DONE]",
         ]
 
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             async for _ in adapter.translate_stream(_line_stream(lines)):
                 pass
 
@@ -937,7 +944,7 @@ async def test_provider_error_mapper_registry_reuses_adapter_classification(
         mapped = registry.map_error("azure", error)
 
         assert isinstance(mapped, InvalidRequestError)
-        assert str(mapped) == "Provider rejected request"
+        assert str(mapped) == provider_rejection(mapped.failure_classification)[0]
         assert mapped.failure_classification is FailureClassification.CONTENT_POLICY
         assert "provider-owned sensitive detail" not in str(mapped)
     finally:
@@ -972,7 +979,7 @@ async def test_provider_error_mapper_registry_limits_openai_rules_to_compatible_
 
         assert isinstance(mapped, InvalidRequestError)
         assert mapped.failure_classification is FailureClassification.GENERIC
-        assert str(mapped) == "Provider rejected request"
+        assert str(mapped) == provider_rejection(mapped.failure_classification)[0]
         assert "sk-upstream" not in str(mapped)
         assert "custom.provider.invalid" not in str(mapped)
     finally:
@@ -986,7 +993,7 @@ async def test_openai_compatible_adapter_classifies_content_filter_finish_reason
 ) -> None:
     adapter = adapter_type(httpx.AsyncClient())
     try:
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             await adapter.translate_response(
                 {
                     "id": "chatcmpl-filtered",
@@ -1103,7 +1110,7 @@ async def test_provider_adapters_return_typed_sanitized_classified_failures(
         mapped = adapter.map_error(exc)
 
         assert isinstance(mapped, InvalidRequestError)
-        assert str(mapped) == "Provider rejected request"
+        assert str(mapped) == provider_rejection(mapped.failure_classification)[0]
         assert mapped.failure_classification is expected
         assert "sk-upstream" not in str(mapped)
         assert "internal.provider.example" not in str(mapped)
@@ -1124,7 +1131,7 @@ async def test_provider_adapter_malformed_error_body_is_sanitized_generic() -> N
 
         mapped = adapter.map_error(exc)
 
-        assert str(mapped) == "Provider rejected request"
+        assert str(mapped) == provider_rejection(mapped.failure_classification)[0]
         assert mapped.failure_classification is FailureClassification.GENERIC
     finally:
         await adapter.http_client.aclose()
@@ -1155,7 +1162,7 @@ async def test_unread_streaming_provider_error_is_bounded_and_classified() -> No
 
         assert isinstance(mapped, InvalidRequestError)
         assert mapped.failure_classification is FailureClassification.CONTEXT_WINDOW
-        assert str(mapped) == "Provider rejected request"
+        assert str(mapped) == provider_rejection(mapped.failure_classification)[0]
         assert "sk-upstream" not in str(mapped)
     finally:
         await adapter.http_client.aclose()
@@ -1485,7 +1492,7 @@ async def test_anthropic_adapter_classifies_documented_stop_reason(
             request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
         )
 
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             await adapter.translate_success_response(response, "anthropic/claude")
 
         assert error_info.value.failure_classification is expected
@@ -1556,7 +1563,7 @@ async def test_anthropic_stream_classified_stop_before_output_is_typed(
         ]
         translated = adapter.translate_stream(_line_stream(lines)).__aiter__()
 
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             await anext(translated)
 
         assert error_info.value.failure_classification is expected
@@ -1605,7 +1612,7 @@ async def test_anthropic_adapter_stream_error_is_typed_and_sanitized() -> None:
             '"message":"prompt is too long sk-upstream"}}',
         ]
 
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             async for _ in adapter.translate_stream(_line_stream(lines)):
                 pass
 
@@ -1781,7 +1788,7 @@ async def test_gemini_adapter_classifies_documented_policy_response(
 ) -> None:
     adapter = GeminiAdapter(httpx.AsyncClient())
     try:
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             await adapter.translate_response(
                 response_payload,
                 model_name="gemini/gemini-2.5-flash",
@@ -1923,7 +1930,7 @@ async def test_bedrock_adapter_classifies_documented_stop_reason(
 ) -> None:
     adapter = BedrockAdapter(httpx.AsyncClient())
     try:
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             await adapter.translate_response(
                 {
                     "requestId": "req_blocked",
@@ -1992,7 +1999,7 @@ async def test_bedrock_adapter_sanitizes_provider_error_message() -> None:
         )
         exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
         mapped = adapter.map_error(exc)
-        assert str(mapped) == "Provider rejected request"
+        assert str(mapped) == provider_rejection(mapped.failure_classification)[0]
         assert mapped.failure_classification is FailureClassification.GENERIC
     finally:
         await adapter.http_client.aclose()
@@ -2068,7 +2075,7 @@ async def test_bedrock_adapter_stream_stop_failure_is_not_reported_as_done() -> 
         )
         translated = adapter.translate_stream(_byte_stream([frames])).__aiter__()
 
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             await anext(translated)
 
         assert error_info.value.failure_classification is FailureClassification.CONTENT_POLICY
@@ -2299,7 +2306,7 @@ async def test_bedrock_adapter_translate_stream_raises_on_exception_event() -> N
             {":message-type": "exception", ":exception-type": "validationException"},
             {"message": "Malformed input request"},
         )
-        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+        with pytest.raises(InvalidRequestError, match=_PROVIDER_REJECTION) as error_info:
             async for _ in adapter.translate_stream(_byte_stream([frame])):
                 pass
         assert error_info.value.failure_classification is FailureClassification.GENERIC

@@ -31,6 +31,7 @@ from src.providers.base import (
     map_standard_provider_error,
     map_standard_provider_status_error,
     provider_error_details,
+    provider_rejection_error,
     validate_provider_success_payload,
 )
 from src.providers.healthcheck import is_provider_healthy
@@ -136,8 +137,7 @@ def _map_stream_error(exception_type: str, message: str) -> ProxyError:
                 message=message,
             )
         )
-        return InvalidRequestError(
-            message="Provider rejected request",
+        return provider_rejection_error(
             affects_deployment_health=False,
             failure_classification=classification or FailureClassification.GENERIC,
             routing_failure_action=(

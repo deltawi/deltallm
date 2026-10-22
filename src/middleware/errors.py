@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from collections.abc import Mapping
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -15,10 +16,14 @@ from src.db.catalog.managed_assets import ManagedAssetAudienceNotFoundError
 from src.guardrails.exceptions import GuardrailViolationError
 from src.models.errors import (
     ApprovalRequiredError,
+    AuthenticationError,
     AuthenticationUnavailableError,
+    BudgetExceededError,
     InvalidRequestError,
+    PermissionDeniedError,
     ProxyError,
     RateLimitError,
+    ServiceUnavailableError,
 )
 from src.middleware.error_responses import (
     anthropic_error_payload as anthropic_error_payload,
@@ -98,12 +103,26 @@ def _unhandled_exception_context(request: Request, exc: BaseException) -> dict[s
     }
 
 
+# OpenAI and Anthropic SDKs retry 408, 409, 429 and 5xx by default unless this header says no.
+SHOULD_RETRY_HEADER = "x-should-retry"
+
+
 def _retry_after_headers(exc: ProxyError) -> dict[str, str]:
+    headers: dict[str, str] = {}
     # Provider 5xx hints are for batch retry, not interactive clients.
     if isinstance(exc, (RateLimitError, AuthenticationUnavailableError, OutputUsageUnknownError)):
         if exc.retry_after is not None:
-            return {"Retry-After": str(exc.retry_after)}
-    return {}
+            headers["Retry-After"] = str(exc.retry_after)
+    if not _is_retryable(exc):
+        headers[SHOULD_RETRY_HEADER] = "false"
+    return headers
+
+
+def _is_retryable(exc: ProxyError) -> bool:
+    # A spent budget or a pending approval does not clear within an SDK's retry window.
+    if isinstance(exc, (BudgetExceededError, ApprovalRequiredError)):
+        return False
+    return exc.status_code in {408, 429} or exc.status_code >= 500
 
 
 def proxy_error_response(exc: ProxyError) -> JSONResponse:
@@ -126,6 +145,74 @@ def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:
 
 def _uses_anthropic_error_dialect(request: Request) -> bool:
     return request.url.path.rstrip("/") in _ANTHROPIC_MESSAGES_PATHS
+
+
+def _uses_openai_error_dialect(request: Request) -> bool:
+    return request.url.path.startswith("/v1/") and not _uses_anthropic_error_dialect(request)
+
+
+def _http_error_type(status_code: int) -> str:
+    if status_code == 401:
+        return AuthenticationError.error_type
+    if status_code == 403:
+        return PermissionDeniedError.error_type
+    if status_code == 429:
+        return RateLimitError.error_type
+    if status_code == 503:
+        return ServiceUnavailableError.error_type
+    if status_code >= 500:
+        return ProxyError.error_type
+    return InvalidRequestError.error_type
+
+
+def http_error_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: object,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
+    """Render an HTTP-level failure in the dialect of the surface that was called."""
+    response_headers = dict(headers or {})
+    if _uses_anthropic_error_dialect(request):
+        return anthropic_error_response(
+            status_code=status_code, message=str(detail), headers=response_headers
+        )
+    if _uses_openai_error_dialect(request):
+        if status_code < 500 and status_code not in {408, 429}:
+            response_headers.setdefault(SHOULD_RETRY_HEADER, "false")
+        message = detail if isinstance(detail, str) and detail else "Request failed"
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "message": message,
+                    "type": _http_error_type(status_code),
+                    "param": None,
+                    "code": None,
+                }
+            },
+            headers=response_headers,
+        )
+    return JSONResponse(
+        status_code=status_code, content={"detail": detail}, headers=response_headers
+    )
+
+
+def openai_validation_error(exc: RequestValidationError) -> InvalidRequestError:
+    """Describe the first invalid field the way OpenAI does: a 400 that names the parameter."""
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    location = [str(part) for part in first.get("loc", ()) if part != "body"]
+    param = ".".join(location) or None
+    if first.get("type") == "json_invalid":
+        return InvalidRequestError(message="The request body is not valid JSON")
+    if first.get("type") == "missing" and param:
+        return InvalidRequestError(message=f"Missing required parameter: '{param}'", param=param)
+    detail = str(first.get("msg") or "Invalid request")
+    if param:
+        return InvalidRequestError(message=f"Invalid value for '{param}': {detail}", param=param)
+    return InvalidRequestError(message=detail)
 
 
 def _proxy_error_response_for_request(request: Request, exc: ProxyError) -> JSONResponse:
@@ -169,11 +256,12 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(request: Request, exc: StarletteHTTPException) -> Response:
-        if _uses_anthropic_error_dialect(request):
-            return anthropic_error_response(
+        if _uses_anthropic_error_dialect(request) or _uses_openai_error_dialect(request):
+            return http_error_response(
+                request,
                 status_code=exc.status_code,
-                message=str(exc.detail),
-                headers=dict(exc.headers or {}),
+                detail=exc.detail,
+                headers=exc.headers,
             )
         return await fastapi_http_exception_handler(request, exc)
 
@@ -189,12 +277,20 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def request_validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        # Both inference dialects answer validation failures with 400, as their APIs do.
+        dialect_status = (
+            400
+            if _uses_anthropic_error_dialect(request) or _uses_openai_error_dialect(request)
+            else 422
+        )
         try:
-            await maybe_log_request_validation_failure(request, exc)
+            await maybe_log_request_validation_failure(request, exc, status_code=dialect_status)
         except SpendPersistenceUnavailable as persistence_error:
             return _proxy_error_response_for_request(request, persistence_error)
         if _uses_anthropic_error_dialect(request):
             return anthropic_proxy_error_response(InvalidRequestError(message="Invalid request"))
+        if _uses_openai_error_dialect(request):
+            return proxy_error_response(openai_validation_error(exc))
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
     @app.exception_handler(ManagedAssetAudienceNotFoundError)

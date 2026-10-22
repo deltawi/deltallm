@@ -270,7 +270,8 @@ async def test_invalid_multimodal_request_does_not_consume_rate_quota(
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     response = await client.post(path, headers=headers, **request_kwargs)
 
-    assert response.status_code == 422
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
     assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
 
 

@@ -341,6 +341,7 @@ async def test_embeddings_custom_provider_does_not_inherit_openai_classification
 
     assert response.status_code == 400, response.text
     assert response.json()["error"]["message"] == "Provider rejected request"
+    assert response.json()["error"]["code"] == "provider_rejected_request"
     assert "sk-upstream" not in response.text
     assert attempts == ["Bearer primary-key"]
     health = await test_app.state.router_state_backend.get_health(primary.deployment_id)
@@ -437,7 +438,8 @@ async def test_embeddings_rejects_empty_input_before_provider_call(client, test_
         json={"model": "text-embedding-3-small", "input": []},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
     assert test_app.state.http_client.post_calls == 0
 
 

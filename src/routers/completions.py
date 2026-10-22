@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Request
 
 from src.middleware.auth import require_api_key
 from src.models.requests import CompletionsRequest
-from src.routers.chat import handle_chat_like_request
+from src.routers.chat import handle_chat_like_request, openai_stream_error_frame
 from src.routers.text_adapters import (
     chat_response_to_completions_response,
     completions_to_chat_request,
@@ -23,5 +23,6 @@ async def completions(request: Request, payload: CompletionsRequest):
         response_transform=chat_response_to_completions_response,
         stream_line_transform=stream_chat_to_completions_line,
         stream_response_object="text_completion",
+        stream_error_transform=openai_stream_error_frame,
         enable_stream_cache=False,
     )

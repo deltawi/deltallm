@@ -360,7 +360,7 @@ async def test_local_context_fallback_transient_unavailability_returns_service_u
 
 
 @pytest.mark.asyncio
-async def test_local_context_fallback_unknown_capacity_preserves_unavailable_error():
+async def test_local_context_fallback_unknown_capacity_is_a_context_error():
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-primary")
     primary.model_info["max_tokens"] = 8_000
@@ -393,7 +393,7 @@ async def test_local_context_fallback_unknown_capacity_preserves_unavailable_err
         RequestTokenDemand(input_tokens=9_000, requested_output_tokens=1_000),
     )
 
-    with pytest.raises(ServiceUnavailableError) as exc_info:
+    with pytest.raises(InvalidRequestError) as exc_info:
         await require_initial_deployment(
             router=planner,
             failover_manager=manager,
@@ -401,7 +401,8 @@ async def test_local_context_fallback_unknown_capacity_preserves_unavailable_err
             request_context=request_context,
         )
 
-    assert exc_info.value.code == NO_HEALTHY_DEPLOYMENTS_CODE
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "context_length_exceeded"
     assert request_context["route_decision"]["reason"] == "context_capacity_unknown"
 
 

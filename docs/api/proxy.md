@@ -144,7 +144,8 @@ Bounded identity bodies can also supply provider-specific classifications.
 Before response commit, DeltaLLM uses the sanitized classification for retry and failover.
 
 After a streaming response sends content, DeltaLLM does not retry it.
-A provider failure closes the OpenAI-compatible stream without a `[DONE]` marker.
+A provider failure sends a final `data: {"error": {...}}` frame and closes the stream without a
+`[DONE]` marker. The OpenAI SDKs raise an error on that frame.
 Clients must treat a missing terminal marker as an incomplete response.
 
 #### Streaming accounting

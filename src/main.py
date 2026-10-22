@@ -4,7 +4,6 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 from src.bootstrap.status import BootstrapStatus, format_bootstrap_summary
 from src.bootstrap.audit import init_audit_runtime, shutdown_audit_runtime
@@ -41,7 +40,7 @@ from src.middleware.request_deadline import RequestDeadlineMiddleware
 from src.ingress import initialize_ingress
 from src.middleware.request_timing import RequestTimingMiddleware
 from src.api.v1.router import v1_router
-from src.middleware.errors import register_exception_handlers
+from src.middleware.errors import http_error_response, register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
 from src.middleware.external_auth import (
     require_unmixed_external_auth,
@@ -142,8 +141,8 @@ def create_app(
                 require_unmixed_external_auth(request)
                 require_external_browser_request(request)
             except HTTPException as exc:
-                return JSONResponse(
-                    status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers
+                return http_error_response(
+                    request, status_code=exc.status_code, detail=exc.detail, headers=exc.headers
                 )
         await attach_platform_auth_context(request)
         response = await call_next(request)

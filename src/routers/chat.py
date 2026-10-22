@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
 import logging
@@ -42,6 +43,7 @@ from src.chat.stream_response import (
 )
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
+from src.middleware.errors import serialize_proxy_error
 from src.mcp.orchestrator import (
     MCPChatOrchestrator,
     MCPRequestContext,
@@ -74,7 +76,14 @@ logger = logging.getLogger(__name__)
 
 @router.post("/chat/completions", dependencies=[Depends(require_api_key)])
 async def chat_completions(request: Request, payload: ChatCompletionRequest):
-    return await handle_chat_like_request(request, payload)
+    return await handle_chat_like_request(
+        request, payload, stream_error_transform=openai_stream_error_frame
+    )
+
+
+def openai_stream_error_frame(exc: ProxyError) -> str:
+    """The frame OpenAI sends when a stream fails after it started; SDKs raise APIError on it."""
+    return "data: " + json.dumps(serialize_proxy_error(exc), separators=(",", ":"))
 
 
 async def handle_chat_like_request(

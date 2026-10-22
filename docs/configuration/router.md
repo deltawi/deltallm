@@ -225,6 +225,8 @@ Known insufficient capacity enters the existing `context_window_fallbacks` chain
 The initiating route group's context policy applies to each deployment in that chain.
 This includes fallback groups without a context block.
 If no configured context fallback is eligible, the gateway returns `400` with code `context_length_exceeded`.
+If the only fallbacks have unknown capacity, which the policy skips, the gateway also returns `400` with code `context_length_exceeded`.
+If no deployment of the requested model has a known capacity, it returns `400` with code `context_capacity_unknown`.
 If a capable deployment exists but is unhealthy or in cooldown, the existing no-healthy-deployments `503` behavior applies.
 
 The filter adds no SQL, Redis, or network calls.
