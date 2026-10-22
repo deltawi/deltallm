@@ -12,6 +12,12 @@ import {
   type ModelFormValues,
 } from '../src/components/modelFormShared';
 import {
+  EMPTY_REQUEST_SHAPING,
+  parseParamValue,
+  validateRequestShaping,
+  type RequestShapingForm,
+} from '../src/components/models/requestShaping';
+import {
   formatOptionalBudget,
   formatOptionalLimit,
   hasSandboxSelfRegistration,
@@ -47,7 +53,7 @@ test('model identity keeps the friendly name separate from the callable API id',
     api_namespace: 'ale-smi-k7m4q',
     api_model_slug: 'customer-support-arabic',
     api_model_id: 'ale-smi-k7m4q/customer-support-arabic',
-  }), []);
+  }), EMPTY_REQUEST_SHAPING);
 
   assert.equal(payload.display_name, 'Customer Support — Arabic');
   assert.equal(payload.model_name, 'ale-smi-k7m4q/customer-support-arabic');
@@ -89,8 +95,8 @@ for (const provider of ['deepseek', 'zai', 'qwen', 'tencent', 'minimax', 'mistra
       },
       model_info: { mode: 'chat' },
     };
-    const { form, defaultParams } = formFromModel(model);
-    const payload = buildModelPayload(form, defaultParams, model.model_info);
+    const { form, shaping } = formFromModel(model);
+    const payload = buildModelPayload(form, shaping, model.model_info);
     assert.equal(payload.named_credential_id, `credential-${provider}`);
     assert.equal(payload.deltallm_params.provider, provider);
     assert.equal(payload.deltallm_params.model, 'vendor/model-version');
@@ -133,7 +139,7 @@ test('buildModelPayload sets scheduler capacity and preserves unknown model_info
       batch_capacity_capacity_fraction: '0.25',
       priority: '3',
     }),
-    [],
+    EMPTY_REQUEST_SHAPING,
     {
       provider_private_metadata: { region: 'iad' },
       batch_capacity: {
@@ -155,7 +161,7 @@ test('buildModelPayload sets scheduler capacity and preserves unknown model_info
 test('unrelated model-form saves preserve selector capability qualification', () => {
   const capabilities = { tools: true, streaming: true, image: false, json_schema: true };
   const existing = { chat_capabilities: capabilities, provider_private_metadata: { region: 'eu' } };
-  const payload = buildModelPayload(chatForm(), [], existing);
+  const payload = buildModelPayload(chatForm(), EMPTY_REQUEST_SHAPING, existing);
   assert.deepEqual(payload.model_info.chat_capabilities, capabilities);
   assert.deepEqual(payload.model_info.provider_private_metadata, existing.provider_private_metadata);
   assert.deepEqual(existing.chat_capabilities, capabilities);
@@ -182,14 +188,14 @@ test('buildModelPayload preserves existing scheduler capacity on unrelated saves
       },
     },
   };
-  const { form, defaultParams } = formFromModel(existingModel);
+  const { form, shaping } = formFromModel(existingModel);
 
   const payload = buildModelPayload(
     {
       ...form,
       tags: 'batch, production',
     },
-    defaultParams,
+    shaping,
     existingModel.model_info,
   );
 
@@ -205,7 +211,7 @@ test('buildModelPayload preserves existing scheduler capacity on unrelated saves
 test('buildModelPayload clears scheduler capacity when all scheduler fields are blank', () => {
   const payload = buildModelPayload(
     chatForm(),
-    [],
+    EMPTY_REQUEST_SHAPING,
     {
       vendor_metadata: { owner: 'infra' },
       batch_capacity: {
@@ -255,7 +261,7 @@ test('embedding edits preserve configured max input capacity', () => {
       max_context_window: '8192',
       max_input_tokens: '8000',
     }),
-    [],
+    EMPTY_REQUEST_SHAPING,
     {
       max_tokens: 8192,
       max_input_tokens: 8000,
@@ -273,7 +279,7 @@ test('invalid nonblank context capacity cannot erase existing model metadata', (
   assert.throws(
     () => buildModelPayload(
       chatForm({ max_context_window: '0' }),
-      [],
+      EMPTY_REQUEST_SHAPING,
       { max_tokens: 128000, provider_private_metadata: { region: 'iad' } },
     ),
     /Context Window must be a positive safe integer/,
@@ -283,7 +289,7 @@ test('invalid nonblank context capacity cannot erase existing model metadata', (
 test('blank context capacity intentionally clears existing metadata', () => {
   const payload = buildModelPayload(
     chatForm({ max_context_window: '', max_input_tokens: '', max_output_tokens: '' }),
-    [],
+    EMPTY_REQUEST_SHAPING,
     { max_tokens: 128000, max_input_tokens: 120000, max_output_tokens: 8000 },
   );
   const serializedModelInfo = JSON.parse(JSON.stringify(payload.model_info)) as Record<string, unknown>;
@@ -312,8 +318,8 @@ test('legacy non-positive context capacity loads as unknown and is removed on ed
     },
   } as ModelDeploymentDetail;
 
-  const { form, defaultParams } = formFromModel(existingModel);
-  const payload = buildModelPayload(form, defaultParams, existingModel.model_info);
+  const { form, shaping } = formFromModel(existingModel);
+  const payload = buildModelPayload(form, shaping, existingModel.model_info);
   const serializedModelInfo = JSON.parse(JSON.stringify(payload.model_info)) as Record<string, unknown>;
 
   assert.equal(form.max_context_window, '');
@@ -341,8 +347,8 @@ test('legacy digit-string context capacity is normalized on edit', () => {
     },
   } as ModelDeploymentDetail;
 
-  const { form, defaultParams } = formFromModel(existingModel);
-  const payload = buildModelPayload(form, defaultParams, existingModel.model_info);
+  const { form, shaping } = formFromModel(existingModel);
+  const payload = buildModelPayload(form, shaping, existingModel.model_info);
 
   assert.equal(form.max_context_window, '8192');
   assert.equal(form.max_input_tokens, '8000');
@@ -371,8 +377,8 @@ test('opaque owner-managed credential is retained unless an editor replaces it',
     model_info: { mode: 'chat' },
   } as ModelDeploymentDetail;
 
-  const { form, defaultParams } = formFromModel(existingModel);
-  const payload = buildModelPayload(form, defaultParams, existingModel.model_info);
+  const { form, shaping } = formFromModel(existingModel);
+  const payload = buildModelPayload(form, shaping, existingModel.model_info);
 
   assert.equal(form.keep_existing_named_credential, true);
   assert.equal('named_credential_id' in payload, false);
@@ -421,9 +427,93 @@ test('Realtime model edits retain the profile and exact cached audio price', () 
       input_cost_per_second: 0.0001, input_cost_per_audio_token_cache_hit: '0.000000000000000123' },
   });
   assert.equal(form.mode, 'realtime');
-  const payload = buildModelPayload(form, []);
+  const payload = buildModelPayload(form, EMPTY_REQUEST_SHAPING);
   assert.equal(payload.model_info.realtime_profile, 'transcription');
   assert.equal(payload.model_info.realtime_usage_type, 'duration');
   assert.equal(payload.model_info.input_cost_per_audio_token_cache_hit, '0.000000000000000123');
   assert.equal(payload.model_info.input_cost_per_second, '0.0001');
+});
+
+test('request shaping round-trips through the model payload', () => {
+  const shaping: RequestShapingForm = {
+    params: [
+      { action: 'default', key: 'temperature', value: '0.2' },
+      { action: 'override', key: 'chat_template_kwargs', value: '{"enable_thinking":false}' },
+      { action: 'drop', key: 'logit_bias', value: '' },
+      { action: 'default', key: '', value: 'ignored' },
+    ],
+    headers: [
+      { action: 'session', name: 'x-opencode-session', value: '' },
+      { action: 'forward', name: 'x-opencode-project', value: '' },
+      { action: 'set', name: 'X-Project', value: 'acme' },
+    ],
+    outboundProxy: 'corp',
+  };
+  const payload = buildModelPayload(chatForm(), shaping);
+  const params = payload.deltallm_params as Record<string, unknown>;
+  assert.deepEqual(payload.model_info?.default_params, { temperature: 0.2 });
+  assert.deepEqual(params.override_params, { chat_template_kwargs: { enable_thinking: false } });
+  assert.deepEqual(params.drop_params, ['logit_bias']);
+  assert.equal(params.session_header, 'x-opencode-session');
+  assert.deepEqual(params.forward_headers, ['x-opencode-project']);
+  assert.deepEqual(params.extra_headers, { 'X-Project': 'acme' });
+  assert.equal(params.outbound_proxy, 'corp');
+
+  const { shaping: loaded } = formFromModel({
+    deployment_id: 'dep-shaped',
+    model_name: 'shaped',
+    provider: 'openai',
+    deltallm_params: { ...params },
+    model_info: { ...payload.model_info },
+  });
+  assert.equal(loaded.outboundProxy, 'corp');
+  assert.equal(loaded.params.length, 3);
+  assert.equal(loaded.headers.length, 3);
+});
+
+test('empty request shaping clears stored fields on save', () => {
+  const params = buildModelPayload(chatForm(), EMPTY_REQUEST_SHAPING).deltallm_params as Record<string, unknown>;
+  for (const key of ['override_params', 'drop_params', 'forward_headers', 'extra_headers', 'session_header', 'outbound_proxy']) {
+    assert.equal(params[key], null, key);
+  }
+});
+
+test('non-chat models keep only defaults and the proxy', () => {
+  const params = buildModelPayload(
+    { ...chatForm(), mode: 'embedding' },
+    {
+      params: [{ action: 'override', key: 'dimensions', value: '256' }],
+      headers: [{ action: 'set', name: 'x-a', value: 'b' }],
+      outboundProxy: 'corp',
+    },
+  ).deltallm_params as Record<string, unknown>;
+  assert.equal(params.override_params, null);
+  assert.equal(params.extra_headers, null);
+  assert.equal(params.outbound_proxy, 'corp');
+});
+
+test('request shaping validation mirrors the gateway rules', () => {
+  const check = (shaping: Partial<RequestShapingForm>, chat = true) =>
+    validateRequestShaping({ ...EMPTY_REQUEST_SHAPING, ...shaping }, { chat });
+  assert.equal(check({ headers: [{ action: 'forward', name: 'x-opencode-project', value: '' }] }), null);
+  assert.match(check({ headers: [{ action: 'forward', name: 'Authorization', value: '' }] }) ?? '', /never forwarded/);
+  assert.match(check({ headers: [{ action: 'set', name: 'x-session-token', value: 'a' }] }) ?? '', /never forwarded/);
+  assert.match(check({ params: [{ action: 'override', key: 'max_tokens', value: '1' }] }) ?? '', /billing/);
+  assert.match(check({ params: [{ action: 'override', key: 'top_k', value: '1' }] }, false) ?? '', /chat models only/);
+  assert.match(
+    check({ params: [{ action: 'override', key: 'top_k', value: '1' }, { action: 'drop', key: 'top_k', value: '' }] }) ?? '',
+    /both/,
+  );
+  assert.match(
+    check({ headers: [{ action: 'session', name: 'x-a', value: '' }, { action: 'session', name: 'x-b', value: '' }] }) ?? '',
+    /Only one/,
+  );
+});
+
+test('parameter values keep their JSON types', () => {
+  assert.equal(parseParamValue('0.5'), 0.5);
+  assert.equal(parseParamValue('true'), true);
+  assert.deepEqual(parseParamValue('{"a":1}'), { a: 1 });
+  assert.equal(parseParamValue('high'), 'high');
+  assert.equal(parseParamValue('{oops'), '{oops');
 });

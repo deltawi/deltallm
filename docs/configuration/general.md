@@ -77,6 +77,9 @@ general_settings:
   upstream_http_max_connections: 500
   upstream_http_max_keepalive_connections: 100
   upstream_http_keepalive_expiry_seconds: 60
+  # Startup-only named egress proxies that deployments pick with outbound_proxy.
+  upstream_proxies:
+    corp-egress: os.environ/CORP_EGRESS_PROXY_URL
   redis_url: os.environ/REDIS_URL
   redis_host: localhost
   redis_port: 6379

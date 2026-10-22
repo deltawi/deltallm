@@ -109,6 +109,9 @@ Unknown groups have a null available member count.
 | `DELETE` | `/ui/api/models/{deployment_id}` | Delete a deployment |
 | `GET` | `/ui/api/provider-presets` | List provider presets for the UI |
 | `POST` | `/ui/api/provider-models/discover` | Discover provider model suggestions for the UI |
+| `GET` | `/ui/api/models/outbound-proxies` | List the names of the configured outbound proxies (never the URLs) |
+
+Model create and update payloads accept the request shaping fields `override_params`, `drop_params`, `forward_headers`, `extra_headers`, `session_header` and `outbound_proxy` inside `deltallm_params`. An invalid rule or an unknown proxy name returns `400`. See [Request shaping](../configuration/request-shaping.md).
 
 Model create and update payloads accept custom upstream auth-header overrides inside `deltallm_params` for these OpenAI-compatible providers:
 

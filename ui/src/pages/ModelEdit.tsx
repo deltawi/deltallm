@@ -62,7 +62,7 @@ export default function ModelEdit() {
     );
   }
 
-  const { form: initialValues, defaultParams: initialDefaultParams } = formFromModel(model);
+  const { form: initialValues, shaping: initialShaping } = formFromModel(model);
   const handleSubmit = async (payload: ModelPayload) => {
     setError(null);
     setSaving(true);
@@ -116,7 +116,7 @@ export default function ModelEdit() {
       ) : null}
       <ModelForm
         initialValues={initialValues}
-        initialDefaultParams={initialDefaultParams}
+        initialShaping={initialShaping}
         initialModelInfo={model.model_info}
         allowInlineCredentials={isPlatformAdmin}
         namedCredentialDefaultAccess={{ grants: [] }}

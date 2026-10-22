@@ -462,6 +462,8 @@ model_list:
 
 User-supplied request values still take priority over these defaults.
 
+To fix a value the client cannot change, remove a field, send headers or use an outbound proxy, see [Request shaping](request-shaping.md).
+
 ## Provider Prefix Fallback
 
 For new deployments, set `deltallm_params.provider`. Provider prefixes in `deltallm_params.model` remain supported for legacy config/import fallback, but they are not the source of truth when `provider` is present. The admin UI/API requires an explicit provider for created or updated deployments.
@@ -509,6 +511,7 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 
 ## Related Pages
 
+- [Request shaping](request-shaping.md)
 - [Router Settings](router.md)
 - [Send your first request](../getting-started/quickstart.md)
 - [Models UI](../admin-ui/models.md)
