@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from enum import StrEnum
 from typing import Protocol
@@ -48,6 +48,8 @@ class ChatUpstream:
     endpoint: str = field(repr=False)
     headers: Mapping[str, str] = field(repr=False)
     timeout: float | None
+    # Operator proxy name from the deployment; None uses the shared default pool.
+    outbound_proxy: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
@@ -59,6 +61,22 @@ def resolve_chat_upstream_from_registry(
     *,
     default_openai_base_url: str,
     is_stream: bool = False,
+) -> ChatUpstream:
+    upstream = _resolve_chat_upstream(
+        adapters, params, default_openai_base_url=default_openai_base_url, is_stream=is_stream
+    )
+    proxy = params.get("outbound_proxy")
+    if isinstance(proxy, str) and proxy:
+        return replace(upstream, outbound_proxy=proxy)
+    return upstream
+
+
+def _resolve_chat_upstream(
+    adapters: ChatAdapterLookup,
+    params: Mapping[str, object],
+    *,
+    default_openai_base_url: str,
+    is_stream: bool,
 ) -> ChatUpstream:
     provider = resolve_provider(params)
     adapter = adapters.resolve(provider)

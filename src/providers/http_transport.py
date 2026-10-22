@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 
 import httpcore2
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Request extension naming the operator proxy a deployment's call must use.
+OUTBOUND_PROXY_EXTENSION = "deltallm_outbound_proxy"
+# The same choice for every call inside a block, such as one deployment's health probe.
+SCOPED_OUTBOUND_PROXY: ContextVar[str | None] = ContextVar(
+    "deltallm_outbound_proxy", default=None
+)
 
 
 # Specific exceptions must precede their parents. Provider/router code continues
@@ -79,7 +87,18 @@ class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
     This adapter only translates public request, response and exception types.
     """
 
-    def __init__(self, *, limits: httpx.Limits, proxy: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        limits: httpx.Limits,
+        proxy: str | None = None,
+        named_proxies: Mapping[str, UpstreamHTTPTransport] | None = None,
+        owns_named: bool = False,
+    ) -> None:
+        # Operator-named proxy pools, shared by the client's transports. A call that
+        # names one without a pool fails closed and never falls back to this pool.
+        self._named_proxies = named_proxies or {}
+        self._owns_named = owns_named
         ssl_context = httpx.create_ssl_context()
         core_proxy = None
         if proxy is not None:
@@ -105,14 +124,26 @@ class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
         )
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        name = request.extensions.get(OUTBOUND_PROXY_EXTENSION) or SCOPED_OUTBOUND_PROXY.get()
+        if name is not None:
+            named = self._named_proxies.get(name)
+            if named is None:
+                raise httpx.ProxyError("Outbound proxy is not configured", request=request)
+            return await named._send(request)
+        return await self._send(request)
+
+    async def _send(self, request: httpx.Request) -> httpx.Response:
         if not isinstance(request.stream, httpx.AsyncByteStream):
             raise TypeError("Provider requests require an async byte stream")
+        extensions = request.extensions
+        if OUTBOUND_PROXY_EXTENSION in extensions:
+            extensions = {k: v for k, v in extensions.items() if k != OUTBOUND_PROXY_EXTENSION}
         core_request = httpcore2.Request(
             method=request.method,
             url=_core_url(request.url),
             headers=request.headers.raw,
             content=request.stream,
-            extensions=request.extensions,
+            extensions=extensions,
         )
         with _httpx_errors(request):
             response = await self._pool.handle_async_request(core_request)
@@ -124,5 +155,10 @@ class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
         )
 
     async def aclose(self) -> None:
-        with _httpx_errors():
-            await self._pool.aclose()
+        try:
+            with _httpx_errors():
+                await self._pool.aclose()
+        finally:
+            if self._owns_named:
+                for named in self._named_proxies.values():
+                    await named.aclose()

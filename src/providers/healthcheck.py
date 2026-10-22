@@ -12,7 +12,7 @@ from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES, ChatProviderProf
 from src.providers.chat_discovery import fetch_chat_models
 from src.providers.discovery_runtime import DiscoveryUnavailable, ProviderDiscoveryRuntime
 from src.upstream_auth import build_openai_compatible_auth_headers
-from src.upstream_http import build_health_check_request_timeout
+from src.upstream_http import build_health_check_request_timeout, outbound_proxy_scope
 
 
 @dataclass
@@ -81,6 +81,28 @@ async def probe_provider_health(
     health_check_timeout_seconds: float | int | None = None,
     discovery_runtime: ProviderDiscoveryRuntime | None = None,
 ) -> HealthProbeResult:
+    # A deployment behind an operator proxy is probed through the same proxy.
+    proxy = params.get("outbound_proxy")
+    with outbound_proxy_scope(proxy if isinstance(proxy, str) else None):
+        return await _probe_provider_health(
+            http_client,
+            params,
+            default_openai_base_url=default_openai_base_url,
+            general_settings=general_settings,
+            health_check_timeout_seconds=health_check_timeout_seconds,
+            discovery_runtime=discovery_runtime,
+        )
+
+
+async def _probe_provider_health(
+    http_client: httpx.AsyncClient,
+    params: dict[str, Any],
+    *,
+    default_openai_base_url: str,
+    general_settings: Any | None,
+    health_check_timeout_seconds: float | int | None,
+    discovery_runtime: ProviderDiscoveryRuntime | None,
+) -> HealthProbeResult:
     provider = resolve_provider(params)
     if provider in {"unknown", ""}:
         provider = "openai"
@@ -90,7 +112,11 @@ async def probe_provider_health(
         health_check_timeout_seconds=health_check_timeout_seconds,
     )
     profile = CHAT_PROVIDER_PROFILES.get(provider)
-    if profile is not None:
+    # Discovery uses the direct control pool, so a proxied deployment takes the
+    # OpenAI-compatible probe below on the shared upstream client.
+    if profile is not None and (
+        profile.discovery == "catalog" or not params.get("outbound_proxy")
+    ):
         return await _probe_chat_profile(discovery_runtime, profile, params, request_timeout)
 
     if provider == "anthropic":
@@ -229,7 +255,9 @@ async def probe_provider_health(
         return HealthProbeResult(healthy=False, error="Provider API key is missing")
 
     api_base = str(
-        params.get("api_base") or (default_openai_base_url if provider == "openai" else "")
+        params.get("api_base")
+        or (profile.api_base if profile is not None else "")
+        or (default_openai_base_url if provider == "openai" else "")
     ).rstrip("/")
     if not api_base:
         return HealthProbeResult(healthy=False, error="API base URL is missing")

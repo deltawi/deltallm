@@ -1312,3 +1312,70 @@ async def test_auto_follow_sync_ignores_malformed_metadata() -> None:
 
     assert changed == 0
     assert binding_repository.bindings == []
+
+
+def _shaped_model(**shaping):  # noqa: ANN003, ANN202
+    return {
+        "model_name": "opencode-go-model",
+        "deltallm_params": {
+            "provider": "openai",
+            "model": "kimi-k2",
+            "api_base": "https://opencode.ai/zen/go/v1",
+            "api_key": "provider-key",
+            **shaping,
+        },
+        "model_info": {"mode": "chat"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_model_accepts_request_shaping(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.upstream_proxy_names = frozenset({"corp"})
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json=_shaped_model(
+            session_header="x-opencode-session",
+            forward_headers=["x-opencode-project"],
+            extra_headers={"X-Project": "acme"},
+            override_params={"thinking": {"budget_tokens": 1024}},
+            drop_params=["logit_bias"],
+            outbound_proxy="corp",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    params = response.json()["deltallm_params"]
+    assert params["session_header"] == "x-opencode-session"
+    # Nested names such as budget_tokens are not masked like credentials.
+    assert params["override_params"] == {"thinking": {"budget_tokens": 1024}}
+    assert params["outbound_proxy"] == "corp"
+
+    proxies = await client.get(
+        "/ui/api/models/outbound-proxies", headers={"Authorization": "Bearer mk-test"}
+    )
+    assert proxies.json() == {"data": ["corp"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("shaping", "message"),
+    [
+        ({"forward_headers": ["Authorization"]}, "never sent"),
+        ({"extra_headers": {"X-Api-Key": "secret"}}, "never sent"),
+        ({"override_params": {"max_tokens": 9000}}, "billing"),
+        ({"outbound_proxy": "unknown"}, "not configured"),
+    ],
+)
+async def test_create_model_rejects_unsafe_request_shaping(client, test_app, shaping, message):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.upstream_proxy_names = frozenset({"corp"})
+
+    response = await client.post(
+        "/ui/api/models", headers={"Authorization": "Bearer mk-test"}, json=_shaped_model(**shaping)
+    )
+
+    assert response.status_code == 400
+    assert message in response.text

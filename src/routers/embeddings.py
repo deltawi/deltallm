@@ -49,7 +49,11 @@ from src.telemetry.spend_operation import (
     durable_provider_call,
     operation_pricing,
 )
-from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
+from src.upstream_http import (
+    build_upstream_request_timeout_for_request,
+    configured_timeout_seconds,
+    upstream_proxy_kwargs,
+)
 from src.routers.routing_decision import (
     capture_attempted_deployment,
     capture_initial_route_decision,
@@ -233,6 +237,7 @@ async def _execute_embedding(
         timeout=build_upstream_request_timeout_for_request(
             request, configured_timeout_seconds(params.get("timeout"))
         ),
+        **upstream_proxy_kwargs(deployment.deltallm_params.get("outbound_proxy")),
     )
     if response.status_code >= 400:
         status_error = httpx.HTTPStatusError(

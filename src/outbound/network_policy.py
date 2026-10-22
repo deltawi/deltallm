@@ -28,6 +28,22 @@ _HARD_DENIED_METADATA_ADDRESSES = frozenset(
 )
 
 
+_HARD_DENIED_METADATA_HOSTNAMES = frozenset({"metadata.google.internal", "metadata"})
+
+
+def is_metadata_host(hostname: str) -> bool:
+    """True for a literal cloud metadata address or a well-known metadata hostname."""
+    normalized = hostname.strip().strip("[]").rstrip(".").lower()
+    if normalized in _HARD_DENIED_METADATA_HOSTNAMES:
+        return True
+    try:
+        address = ip_address(normalized.split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = address.ipv4_mapped if isinstance(address, IPv6Address) else None
+    return (mapped or address) in _HARD_DENIED_METADATA_ADDRESSES
+
+
 class OutboundPolicyError(ValueError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)

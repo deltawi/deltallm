@@ -373,6 +373,8 @@ async def _init_infrastructure_runtime(
     )
     app.state.upstream_http_settings = cfg.general_settings
     app.state.http_client = http_client
+    # Pools exist only for proxies configured at startup; calls naming another fail closed.
+    app.state.upstream_proxy_names = frozenset(cfg.general_settings.upstream_proxies)
     app.state.control_http_client = control_http_client
     app.state.openai_adapter = OpenAIAdapter(http_client)
     app.state.azure_openai_adapter = AzureOpenAIAdapter(http_client)

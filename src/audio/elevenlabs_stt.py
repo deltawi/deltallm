@@ -12,7 +12,10 @@ from src.audio.transcription_formats import render_srt, render_vtt
 from src.providers.base import parse_provider_json_response, validate_provider_success_payload
 from src.providers.resolution import resolve_upstream_model
 from src.router.router import Deployment
-from src.upstream_http import build_upstream_request_timeout_for_request
+from src.upstream_http import (
+    build_upstream_request_timeout_for_request,
+    upstream_proxy_kwargs,
+)
 
 ELEVENLABS_STT_FORM_DEFAULT_KEYS = {
     "tag_audio_events",
@@ -81,6 +84,7 @@ async def execute_elevenlabs_stt(
         files={"file": (filename, file_content, content_type)},
         data=form_data,
         timeout=build_upstream_request_timeout_for_request(request, timeout_seconds),
+        **upstream_proxy_kwargs(deployment.deltallm_params.get("outbound_proxy")),
     )
     if response.status_code >= 400:
         status_error = httpx.HTTPStatusError(

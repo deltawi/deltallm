@@ -45,6 +45,7 @@ class DeploymentCapacityContract:
             CONTROL_HTTP_MAX_CONNECTIONS,
             build_upstream_http_limits,
             environment_proxy_pool_count,
+            upstream_proxy_pool_count,
         )
 
         if resolve_capacity_settings(config.general_settings, settings) != self.settings:
@@ -60,7 +61,8 @@ class DeploymentCapacityContract:
             postgresql=database,
             redis_critical=critical,
             redis_cache=cache,
-            upstream_http=(limits.max_connections or 0) * (1 + proxies),
+            upstream_http=(limits.max_connections or 0)
+            * (1 + proxies + upstream_proxy_pool_count(config.general_settings)),
             control_http=CONTROL_HTTP_MAX_CONNECTIONS * (1 + proxies),
             # Optional SDK/callback transports are an explicit operator reserve,
             # not a counted application-owned pool. Do not claim runtime parity.

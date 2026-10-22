@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -8,7 +10,11 @@ from httpx._utils import get_environment_proxies
 from src.request_deadline import current_request_deadline
 
 from src.providers.error_body import bound_provider_error_response_body
-from src.providers.http_transport import UpstreamHTTPTransport
+from src.providers.http_transport import (
+    OUTBOUND_PROXY_EXTENSION,
+    SCOPED_OUTBOUND_PROXY,
+    UpstreamHTTPTransport,
+)
 
 
 DEFAULT_UPSTREAM_HTTP_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -100,19 +106,55 @@ def environment_proxy_pool_count() -> int:
     return sum(proxy is not None for proxy in get_environment_proxies().values())
 
 
+def upstream_proxy_pool_count(general_settings: Any) -> int:
+    """Count the operator-named proxy pools of the shared upstream client."""
+    return len(getattr(general_settings, "upstream_proxies", None) or {})
+
+
+def upstream_proxy_kwargs(proxy_name: str | None) -> dict[str, dict[str, str]]:
+    """Request kwargs that route one call through a named proxy; empty for direct calls."""
+    return {"extensions": {OUTBOUND_PROXY_EXTENSION: proxy_name}} if proxy_name else {}
+
+
+@contextmanager
+def outbound_proxy_scope(proxy_name: str | None) -> Iterator[None]:
+    """Route every upstream call made inside the block through one deployment's proxy.
+
+    For code paths with many calls, such as health probes. A request extension wins.
+    """
+    token = SCOPED_OUTBOUND_PROXY.set(proxy_name or None)
+    try:
+        yield
+    finally:
+        SCOPED_OUTBOUND_PROXY.reset(token)
+
+
 def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
+    from src.outbound.upstream_proxies import upstream_proxy_urls
+
     limits = build_upstream_http_limits(general_settings)
+    # Each named proxy is one more bounded pool; the capacity contract counts them.
+    named = {
+        name: UpstreamHTTPTransport(limits=limits, proxy=url)
+        for name, url in upstream_proxy_urls(
+            getattr(general_settings, "upstream_proxies", None)
+        ).items()
+    }
     # An explicit transport disables HTTPX's automatic environment proxy mounts.
     # Keep its existing parser and NO_PROXY rules, and keep the capacity contract
-    # of one bounded pool for each configured direct/proxy transport.
+    # of one bounded pool for each configured direct/proxy transport. Every
+    # transport also routes calls that name an operator proxy, and fails closed
+    # when the name has no pool.
     mounts = {
-        pattern: None if proxy is None else UpstreamHTTPTransport(limits=limits, proxy=proxy)
+        pattern: None
+        if proxy is None
+        else UpstreamHTTPTransport(limits=limits, proxy=proxy, named_proxies=named)
         for pattern, proxy in get_environment_proxies().items()
     }
     return httpx.AsyncClient(
         timeout=build_upstream_http_timeout(general_settings),
         limits=limits,
-        transport=UpstreamHTTPTransport(limits=limits),
+        transport=UpstreamHTTPTransport(limits=limits, named_proxies=named, owns_named=True),
         mounts=mounts,
         event_hooks={"response": [bound_provider_error_response_body]},
     )

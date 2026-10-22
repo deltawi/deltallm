@@ -284,3 +284,16 @@ def test_chart_rejects_realtime_capacity_that_only_covers_http(override, message
         "dependencyCapacity.extended." + override,
     )
     assert message in error
+
+
+def test_named_upstream_proxies_add_upstream_pools_only():
+    result = report(
+        "--set",
+        "dependencyCapacity.extended.enabled=true",
+        "--set",
+        "dependencyCapacity.extended.providerDomains.local-mock.rpm=9100",
+        "--set",
+        "config.general_settings.upstream_proxies.corp=http://egress.internal:3128",
+    )
+    assert result.roles["api"].pools.upstream_http == 1000
+    assert result.roles["api"].pools.control_http == 100
