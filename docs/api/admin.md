@@ -508,7 +508,8 @@ after deletion and regeneration, so a retired credential cannot become a new
 key. Legacy retired credentials can be refused only when their hash is still
 present in retained records at upgrade time.
 
-For a LiteLLM migration, copy the original active secret, then apply the
+For a LiteLLM migration, see [Move from LiteLLM](../guides/migrate-from-litellm.md) for the
+configuration import. To keep a key, copy the original active secret, then apply the
 required owner, team, access, budget, and expiry settings in DeltaLLM. A
 LiteLLM hash cannot replace the original secret. The create URL remains
 `/ui/api/keys`; this feature does not add a `/key/generate` alias.
