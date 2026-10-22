@@ -57,6 +57,29 @@ Chat Completions accepts `max_tokens` or `max_completion_tokens`. Supply one. Wh
 | `GET /v1/batches/{batch_id}` | Inspect one batch |
 | `POST /v1/batches/{batch_id}/cancel` | Cancel a batch |
 
+## Response cost
+
+Successful non-streaming answers from Chat Completions, Completions, Responses, Messages,
+Embeddings, Images, Audio and Rerank carry the cost DeltaLLM recorded for the request, in USD:
+
+```http
+x-deltallm-response-cost: 0.000412
+```
+
+It is the same amount the request log and spend reports show for the request, after tier pricing.
+Cache hits carry the amount charged for the hit. The header is left out when the model has no
+price configured. Streaming answers do not carry it, because headers are sent before the answer
+ends; read their cost from request logs or the Usage page.
+
+```python
+response = client.chat.completions.with_raw_response.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(response.headers.get("x-deltallm-response-cost"))
+completion = response.parse()
+```
+
 ## Text Endpoints
 
 ### Chat Completions
