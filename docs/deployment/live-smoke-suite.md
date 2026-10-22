@@ -21,6 +21,9 @@ tier access, organization and team scope, key authentication, routing, and provi
    The test user is an organization member and a team admin of this team. The test user gets a
    new random password on each run. The password stays in memory only.
 5. The test user signs in and creates an API key, `<prefix>-key`. The key expires after six hours.
+   When password sign-in is off (`general_settings.password_login_enabled: false`), the test user
+   cannot sign in. Then the suite uses the master key to create the key, with the test user as
+   the owner. The key has the same team and organization, so the model checks do not change.
 6. It waits until `/v1/models` for that key lists every model that the test organization can
    use (30 seconds maximum).
 7. It calls each model once, with the call that agrees with its mode:

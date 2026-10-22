@@ -222,6 +222,30 @@ def delete_suite_keys(admin: GatewayClient, names: ResourceNames, team_id: str) 
     return deleted
 
 
+def password_sign_in_enabled(admin: GatewayClient) -> bool:
+    """Read `password_login_enabled`. Gateways without this setting allow password sign-in."""
+
+    settings = _get_or_none(admin, "/ui/api/settings/sso-sign-in", "read sign-in settings")
+    return settings is None or settings.get("password_login_enabled") is not False
+
+
+def _key_body(user: TestUser, names: ResourceNames, scope: SuiteScope) -> dict[str, Any]:
+    expires = (datetime.now(tz=UTC) + KEY_LIFETIME).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "key_name": names.key_name,
+        "team_id": scope.team_id,
+        "owner_account_id": user.account_id,
+        "expires": expires,
+    }
+
+
+def _test_key(created: dict[str, Any], action: str) -> TestKey:
+    raw_key = created.get("raw_key")
+    if not raw_key:
+        raise GatewayError(action, 200, "response has no key")
+    return TestKey(token=str(created["token"]), raw_key=str(raw_key))
+
+
 def create_key_as_user(
     base_url: str,
     user: TestUser,
@@ -253,23 +277,27 @@ def create_key_as_user(
         if not session_token:
             raise GatewayError("sign in as test user", 200, "no session cookie in the response")
         session.clear_cookies()
-        expires = (datetime.now(tz=UTC) + KEY_LIFETIME).strftime("%Y-%m-%dT%H:%M:%SZ")
         created = session.json(
             "POST",
             "/ui/api/keys",
             "create API key as test user",
             headers={"Cookie": f"{SESSION_COOKIE_NAME}={session_token}"},
-            json={
-                "key_name": names.key_name,
-                "team_id": scope.team_id,
-                "owner_account_id": user.account_id,
-                "expires": expires,
-            },
+            json=_key_body(user, names, scope),
         )
-    raw_key = created.get("raw_key")
-    if not raw_key:
-        raise GatewayError("create API key as test user", 200, "response has no key")
-    return TestKey(token=str(created["token"]), raw_key=str(raw_key))
+    return _test_key(created, "create API key as test user")
+
+
+def create_key_for_user(
+    admin: GatewayClient, user: TestUser, names: ResourceNames, scope: SuiteScope
+) -> TestKey:
+    """Create the test user's key with the master key, for gateways with password sign-in off.
+
+    The key has the same owner, team, and organization as a key that the test user creates.
+    """
+
+    action = "create API key for test user"
+    created = admin.json("POST", "/ui/api/keys", action, json=_key_body(user, names, scope))
+    return _test_key(created, action)
 
 
 def delete_key(admin: GatewayClient, token: str) -> None:

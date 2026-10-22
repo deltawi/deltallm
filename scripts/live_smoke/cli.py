@@ -244,19 +244,28 @@ class SmokeRun:
             lambda: provisioning.delete_suite_keys(admin, names, scope.team_id),
             lambda count: f"{count} removed",
         )
-        key = self.step(
-            "API key created by test user",
-            lambda: provisioning.create_key_as_user(
-                self.config.base_url,
-                user,
-                names,
-                scope,
-                timeout=self.config.request_timeout,
-                transport=self.transport,
-            ),
-            lambda _: "created",
+        key, _ = self.step(
+            "API key for test user",
+            lambda: self._create_key(admin, user, scope),
+            lambda result: result[1],
         )
         return self._select_targets(catalog), key
+
+    def _create_key(
+        self, admin: GatewayClient, user: provisioning.TestUser, scope: provisioning.SuiteScope
+    ) -> tuple[provisioning.TestKey, str]:
+        if not provisioning.password_sign_in_enabled(admin):
+            key = provisioning.create_key_for_user(admin, user, self.names, scope)
+            return key, "password sign-in is off, so the master key created it for the test user"
+        key = provisioning.create_key_as_user(
+            self.config.base_url,
+            user,
+            self.names,
+            scope,
+            timeout=self.config.request_timeout,
+            transport=self.transport,
+        )
+        return key, "created by the test user"
 
     def _select_targets(self, catalog: list[CallableTarget]) -> list[CallableTarget]:
         if not self.config.models:
