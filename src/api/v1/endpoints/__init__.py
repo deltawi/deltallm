@@ -8,6 +8,7 @@ from src.api.v1.endpoints.embeddings import router as embeddings_router
 from src.api.v1.endpoints.files import router as files_router
 from src.api.v1.endpoints.health import router as health_router
 from src.api.v1.endpoints.images import router as images_router
+from src.api.v1.endpoints.key_info import router as key_info_router
 from src.api.v1.endpoints.metrics import router as metrics_router
 from src.api.v1.endpoints.mcp import router as mcp_router
 from src.api.v1.endpoints.messages import router as messages_router
@@ -29,6 +30,7 @@ __all__ = [
     "global_router",
     "health_router",
     "images_router",
+    "key_info_router",
     "metrics_router",
     "mcp_router",
     "messages_router",

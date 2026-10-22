@@ -47,6 +47,7 @@ Chat Completions accepts `max_tokens` or `max_completion_tokens`. Supply one. Wh
 | `POST /v1/rerank` | Reranking |
 | `GET /v1/models` | Available public model names |
 | `GET /v1/models/{model}` | One model, if your key can call it |
+| `GET /v1/key` | Budget, spend and limits of the calling key, see [Key information](#key-information) |
 | `GET /model/info`, `GET /v1/model/info` | Per-deployment prices, context window, mode and capabilities (LiteLLM-compatible) |
 | `GET /model_group/info` | The same details aggregated per public model name (LiteLLM-compatible) |
 | `POST /v1/files` | Upload batch input files |
@@ -79,6 +80,44 @@ response = client.chat.completions.with_raw_response.create(
 print(response.headers.get("x-deltallm-response-cost"))
 completion = response.parse()
 ```
+
+## Key information
+
+```text
+GET /v1/key
+```
+
+An application can read its own key's budget, spend and limits with the key itself. No admin
+session or master key is needed, and the response never contains the secret.
+
+```bash
+curl http://localhost:8000/v1/key \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```json
+{
+  "object": "key",
+  "name": "billing-service",
+  "team_id": "team-1",
+  "organization_id": "org-1",
+  "created_at": "2026-10-01T00:00:00+00:00",
+  "expires_at": null,
+  "budget": {
+    "max_budget": 10.0,
+    "spend": 2.5,
+    "remaining": 7.5,
+    "duration": "1mo",
+    "reset_at": "2026-11-01T00:00:00+00:00"
+  },
+  "limits": {"rpm": 60, "tpm": 100000, "output_tpm": null, "rph": null, "rpd": null, "tpd": null}
+}
+```
+
+Amounts are in USD. `remaining` is `null` when the key has no budget. These are the key's own
+budget and limits. Team, organization and tier limits still apply on top; the `x-ratelimit-*`
+headers on each answer report the limits that applied to that request. A master key, JWT or
+custom credential gets `400`, because it is not a DeltaLLM API key.
 
 ## Text Endpoints
 
