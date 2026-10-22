@@ -465,7 +465,7 @@ export default function ModelForm({
   const supportsBatchCapacity = mode === 'chat' || mode === 'embedding';
   const defaultParamHint = defaultParameterHint(form.provider, mode);
   const paramCount = activeParamCount(shaping);
-  const networkCount = activeNetworkCount(shaping);
+  const networkCount = activeNetworkCount(shaping, { chat: mode === 'chat' });
   const updateShaping = (next: RequestShapingForm) => {
     setShaping(next);
     if (validationError) setValidationError(null);

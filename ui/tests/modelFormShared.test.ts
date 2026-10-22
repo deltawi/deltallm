@@ -499,6 +499,11 @@ test('request shaping validation mirrors the gateway rules', () => {
   assert.match(check({ headers: [{ action: 'forward', name: 'Authorization', value: '' }] }) ?? '', /never forwarded/);
   assert.match(check({ headers: [{ action: 'set', name: 'x-session-token', value: 'a' }] }) ?? '', /never forwarded/);
   assert.match(check({ params: [{ action: 'override', key: 'max_tokens', value: '1' }] }) ?? '', /billing/);
+  assert.match(
+    check({ params: [{ action: 'override', key: 'generationConfig', value: '{"maxOutputTokens":9}' }] }) ?? '',
+    /maxOutputTokens/,
+  );
+  assert.match(check({ params: [{ action: 'drop', key: 'inferenceConfig.maxTokens', value: '' }] }) ?? '', /billing/);
   assert.match(check({ params: [{ action: 'override', key: 'top_k', value: '1' }] }, false) ?? '', /chat models only/);
   assert.match(
     check({ params: [{ action: 'override', key: 'top_k', value: '1' }, { action: 'drop', key: 'top_k', value: '' }] }) ?? '',

@@ -38,6 +38,26 @@ const PROTECTED_PARAMS = new Set([
   'model', 'messages', 'input', 'prompt', 'stream', 'stream_options', 'n',
   'max_tokens', 'max_completion_tokens', 'max_output_tokens',
 ]);
+// Provider-native limit names inside objects, such as generationConfig.maxOutputTokens.
+const PROTECTED_NESTED_KEYS = new Set([
+  'max_tokens', 'max_output_tokens', 'max_completion_tokens', 'maxtokens', 'maxoutputtokens', 'candidatecount', 'stream',
+]);
+
+function protectedNestedKey(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = protectedNestedKey(item);
+      if (found) return found;
+    }
+  } else if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      if (PROTECTED_NESTED_KEYS.has(key.toLowerCase())) return key;
+      const found = protectedNestedKey(item);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 export function headerNameBlocked(name: string): boolean {
   const lowered = name.trim().toLowerCase();
@@ -102,8 +122,12 @@ export function validateRequestShaping(shaping: RequestShapingForm, { chat }: { 
     if (!key) continue;
     if (rule.action !== 'default') {
       if (!chat) return 'Override and Drop apply to chat models only.';
-      if (PROTECTED_PARAMS.has(key.split('.')[0])) {
-        return `"${key}" controls admission and billing, so it cannot be overridden or dropped.`;
+      const [top, ...nested] = key.split('.');
+      const nestedKey = rule.action === 'override'
+        ? protectedNestedKey(parseParamValue(rule.value))
+        : nested.find((segment) => PROTECTED_NESTED_KEYS.has(segment.toLowerCase())) ?? null;
+      if (PROTECTED_PARAMS.has(top) || nestedKey) {
+        return `"${nestedKey ?? key}" controls admission and billing, so it cannot be overridden or dropped.`;
       }
       if (rule.action === 'override' && key.includes('.')) {
         return `Override "${key}" with an object value on its top-level name instead.`;
@@ -177,6 +201,7 @@ export function activeParamCount(shaping: RequestShapingForm): number {
   return shaping.params.filter((rule) => rule.key.trim()).length;
 }
 
-export function activeNetworkCount(shaping: RequestShapingForm): number {
-  return shaping.headers.filter((rule) => rule.name.trim()).length + (shaping.outboundProxy ? 1 : 0);
+export function activeNetworkCount(shaping: RequestShapingForm, { chat }: { chat: boolean }): number {
+  const headers = chat ? shaping.headers.filter((rule) => rule.name.trim()).length : 0;
+  return headers + (shaping.outboundProxy ? 1 : 0);
 }
