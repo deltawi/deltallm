@@ -18,8 +18,8 @@ idna==3.20
     #   httpx2
 jiter==0.17.0
     # via openai
-openai==3.28.0
-    # via -r tests/openai_sdk/requirements.in
+openai==3.31.0
+    # via -r requirements.in
 pydantic==2.14.1
     # via openai
 pydantic-core==2.50.1
