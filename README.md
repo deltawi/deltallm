@@ -162,6 +162,9 @@ production high-availability reference.
 | Kubernetes | Multi-instance production, ingress, autoscaling, and managed infrastructure | [Kubernetes guide](docs/deployment/kubernetes.md) |
 | Local development | Backend, UI, and contributor workflow from the repository | [Installation guide](docs/getting-started/installation.md) |
 
+Moving from LiteLLM? The import tool converts a LiteLLM `config.yaml` and lists each setting
+that it could not import. See [Move from LiteLLM](docs/guides/migrate-from-litellm.md).
+
 ## Documentation
 
 - [Getting started](docs/getting-started/index.md)

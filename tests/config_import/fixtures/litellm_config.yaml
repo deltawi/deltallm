@@ -1,0 +1,111 @@
+# A LiteLLM proxy config that uses the most common sections.
+environment_variables:
+  LANGFUSE_HOST: https://cloud.langfuse.com
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 600
+      temperature: 0.2
+    model_info:
+      id: gpt-4o-primary
+      input_cost_per_token: 0.0000025
+      output_cost_per_token: 0.00001
+      cache_read_input_token_cost: 0.00000125
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/gpt-4o-eastus
+      api_base: https://contoso-east.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2024-10-21"
+      timeout: 30.5
+      order: 2
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 4096
+    model_info:
+      max_input_tokens: 200000
+      cache_creation_input_token_cost: 0.00000375
+  - model_name: claude-bedrock
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-5-v1:0
+      aws_region_name: us-west-2
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+  - model_name: llama-local
+    litellm_params:
+      model: ollama_chat/llama3.2
+      api_base: http://ollama:11434
+  - model_name: qwen-vllm
+    litellm_params:
+      model: hosted_vllm/Qwen/Qwen3-8B
+      api_base: http://vllm:8000
+      api_key: os.environ/VLLM_API_KEY
+  - model_name: grok
+    litellm_params:
+      model: xai/grok-4
+      api_key: sk-literal-test-secret
+  - model_name: embeddings
+    litellm_params:
+      model: text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: embedding
+  - model_name: gemini-vertex
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      vertex_project: my-project
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+
+router_settings:
+  routing_strategy: usage-based-routing-v2
+  num_retries: 2
+  timeout: 120
+  redis_host: os.environ/REDIS_HOST
+  redis_port: 6379
+  redis_password: os.environ/REDIS_PASSWORD
+  fallbacks:
+    - gpt-4o: ["claude-sonnet"]
+  enable_weighted_failover: true
+
+litellm_settings:
+  drop_params: true
+  num_retries: 5
+  request_timeout: 300
+  fallbacks:
+    - gpt-4o: ["claude-sonnet", "claude-bedrock"]
+  context_window_fallbacks:
+    - claude-sonnet: ["gemini-vertex"]
+  success_callback: ["langfuse", "datadog"]
+  cache: true
+  cache_params:
+    type: redis
+    ttl: 600
+
+guardrails:
+  - guardrail_name: pii-mask
+    litellm_params:
+      guardrail: presidio
+      mode: pre_call
+      default_on: true
+      pii_entities_config:
+        EMAIL_ADDRESS: MASK
+        PHONE_NUMBER: MASK
+  - guardrail_name: aporia
+    litellm_params:
+      guardrail: aporia
+      mode: during_call
+
+general_settings:
+  master_key: sk-1234
+  database_url: os.environ/DATABASE_URL
+  database_connection_pool_limit: 10
+  alerting: ["slack"]
+  store_model_in_db: true
+  proxy_batch_write_at: 60
