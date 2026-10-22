@@ -775,6 +775,7 @@ class ModelHotReloadManager:
             "named_credential_repository": self.named_credential_repository,
             "secret_resolver": getattr(self.dynamic_config, "secret_resolver", None),
             "allow_db_error_fallback": False,
+            "egress_guard": getattr(self.app.state, "user_egress_guard", None),
         }
         signature = inspect.signature(load_model_registry)
         supported_kwargs = {

@@ -7,6 +7,7 @@ from fastapi import Request
 
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
+from src.client_address import request_client_ip
 from src.billing.accounting.accounting_protocol import AccountingOperationHandle
 from src.services.audit.audit_service import (
     AuditEventInput,
@@ -26,17 +27,6 @@ def audit_action_for_path(path: str) -> str:
     if path == "/v1/messages":
         return "MESSAGES_REQUEST"
     return "TEXT_GENERATION_REQUEST"
-
-
-def request_client_ip(request: Request) -> str | None:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        first_hop = forwarded_for.split(",", 1)[0].strip()
-        if first_hop:
-            return first_hop
-    if request.client and request.client.host:
-        return request.client.host
-    return None
 
 
 async def emit_text_audit_event(

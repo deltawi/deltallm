@@ -33,6 +33,11 @@ from src.services.models.model_admin_listing import ModelSortKey, SortDirection,
 from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated
+from src.outbound.user_egress import (
+    UserEgressDenied,
+    restricted_egress,
+    user_egress_denied_message,
+)
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,
@@ -87,6 +92,7 @@ from src.services.models.model_identity import (
 from src.services.access.model_visibility import get_tier_policy_mode_from_app
 from src.services.models.named_credentials import (
     canonicalize_named_credential_provider,
+    is_platform_named_credential,
     merge_named_credential_params,
     redact_connection_config,
     resolve_named_credential_record,
@@ -1363,6 +1369,27 @@ async def discover_models_for_provider(
         },
         named_credential,
     )
+    # An admin-created credential's URL is trusted even when a user runs discovery with it.
+    user_owned = not principal.is_platform_admin and not is_platform_named_credential(
+        raw_named_credential
+    )
+    guard = getattr(request.app.state, "user_egress_guard", None)
+    discovery_url = str(merged_params.get("api_base") or "").strip()
+    if user_owned and guard is not None and discovery_url:
+        try:
+            await guard.check_url(discovery_url)
+        except UserEgressDenied as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=user_egress_denied_message(exc.reason),
+            ) from None
+    with restricted_egress(user_owned):
+        return await _discover_models(request, payload, merged_params)
+
+
+async def _discover_models(
+    request: Request, payload: ProviderModelDiscoveryRequest, merged_params: dict[str, Any]
+) -> dict[str, Any]:
     return await discover_provider_models(
         request.app.state.control_http_client,
         discovery_runtime=request.app.state.provider_discovery_runtime,

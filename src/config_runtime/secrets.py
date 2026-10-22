@@ -9,6 +9,27 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+_SECRET_REFERENCE_PREFIXES = (
+    "os.environ/",
+    "aws.secretsmanager/",
+    "gcp.secretmanager/",
+    "azure.keyvault/",
+)
+
+
+def is_secret_reference(value: Any) -> bool:
+    """Return whether a value names an env var or cloud secret instead of holding one."""
+    return isinstance(value, str) and value.strip().startswith(_SECRET_REFERENCE_PREFIXES)
+
+
+def contains_secret_reference(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(contains_secret_reference(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_secret_reference(item) for item in value)
+    return is_secret_reference(value)
+
+
 @dataclass
 class SecretRef:
     provider: str

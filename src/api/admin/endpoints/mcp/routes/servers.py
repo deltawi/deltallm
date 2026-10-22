@@ -28,6 +28,8 @@ from src.db.mcp.mcp import MCPRepository, MCPServerRecord
 from src.mcp.exceptions import MCPError
 from src.mcp.oauth import OAUTH2_AUTH_MODE
 from src.middleware.admin import require_authenticated
+from src.outbound.user_egress import UserEgressDenied, user_egress_denied_message
+from src.services.access.managed_asset_access import is_creator_callable_key
 
 from src.api.admin.endpoints.mcp.dependencies import (
     _db_or_503,
@@ -350,6 +352,21 @@ async def list_mcp_servers(
     }
 
 
+async def _require_allowed_server_target(request: Request, server_key: str, base_url: str) -> None:
+    """A creator's server URL must pass the user egress policy; platform servers are trusted."""
+
+    guard = getattr(request.app.state, "user_egress_guard", None)
+    if guard is None or not is_creator_callable_key(server_key):
+        return
+    try:
+        await guard.check_url(base_url)
+    except UserEgressDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=user_egress_denied_message(exc.reason),
+        ) from None
+
+
 @router.post("/ui/api/mcp-servers", dependencies=[Depends(require_authenticated)])
 async def create_mcp_server(
     request: Request,
@@ -418,6 +435,7 @@ async def create_mcp_server(
         owner_scope_type, owner_scope_id = "global", None
 
     base_url = _validate_url(payload.get("base_url"))
+    await _require_allowed_server_target(request, server_key, base_url)
     auth_config = (
         await build_oauth2_auth_config(
             request, base_url=base_url, requested=payload.get("auth_config"), existing=None
@@ -773,6 +791,8 @@ async def update_mcp_server(
             )
     auth_mode = _normalize_auth_mode(payload.get("auth_mode", existing.auth_mode))
     base_url = _validate_url(payload.get("base_url", existing.base_url))
+    if base_url != existing.base_url.rstrip("/"):
+        await _require_allowed_server_target(request, existing.server_key, base_url)
     auth_config = (
         await build_oauth2_auth_config(
             request, base_url=base_url, requested=payload.get("auth_config"), existing=existing

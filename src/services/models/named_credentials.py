@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, status
 
+from src.config_runtime.secrets import is_secret_reference
 from src.db.catalog.named_credentials import NamedCredentialRecord
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
@@ -48,6 +50,7 @@ _NON_SECRET_CONNECTION_KEYS = {
 }
 
 _MASK = "***REDACTED***"
+_AWS_REGION_PATTERN = re.compile(r"^[a-z]{2}(-[a-z0-9]+){1,3}-[0-9]{1,2}$")
 _BEDROCK_FIELDS = {
     "api_base",
     "region",
@@ -180,6 +183,13 @@ def _validate_connection_config(provider: str, connection_config: dict[str, Any]
         )
 
     if provider == "bedrock":
+        region = connection_config.get("region")
+        if region is not None and not _AWS_REGION_PATTERN.fullmatch(str(region)):
+            # The region becomes part of the Bedrock hostname.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="bedrock region must look like us-east-1",
+            )
         access_key = str(connection_config.get("aws_access_key_id") or "").strip()
         secret_key = str(connection_config.get("aws_secret_access_key") or "").strip()
         session_token = str(connection_config.get("aws_session_token") or "").strip()
@@ -302,14 +312,30 @@ def merge_named_credential_params(
     return resolved
 
 
+PLATFORM_CREDENTIAL_NAME_SCOPE = "platform"
+
+
+def is_platform_named_credential(named_credential: NamedCredentialRecord | None) -> bool:
+    """Platform credentials are admin-created; their references and URLs are trusted."""
+    return (
+        named_credential is not None
+        and named_credential.name_scope == PLATFORM_CREDENTIAL_NAME_SCOPE
+    )
+
+
 def resolve_named_credential_connection_config(
     connection_config: dict[str, Any] | None,
     *,
     secret_resolver: "SecretResolver | None" = None,
+    allow_secret_references: bool = True,
 ) -> dict[str, Any]:
     raw = dict(connection_config or {})
     if not raw:
         return {}
+    if not allow_secret_references:
+        # Only platform credentials may name env vars or cloud secrets. A reference
+        # stored on any other credential is dropped, never resolved or sent upstream.
+        return {key: value for key, value in raw.items() if not is_secret_reference(value)}
     if secret_resolver is None:
         return raw
     resolver = secret_resolver
@@ -332,6 +358,7 @@ def resolve_named_credential_record(
         connection_config=resolve_named_credential_connection_config(
             named_credential.connection_config,
             secret_resolver=secret_resolver,
+            allow_secret_references=is_platform_named_credential(named_credential),
         ),
         metadata=dict(named_credential.metadata) if named_credential.metadata is not None else None,
         created_by_account_id=named_credential.created_by_account_id,

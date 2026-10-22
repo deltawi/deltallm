@@ -80,11 +80,13 @@ async def _load_model_registry_compat(
     source_mode: str,
     named_credential_repository: Any | None,
     secret_resolver: Any | None,
+    egress_guard: Any | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], str]:
     kwargs = {
         "source_mode": source_mode,
         "named_credential_repository": named_credential_repository,
         "secret_resolver": secret_resolver,
+        "egress_guard": egress_guard,
     }
     signature = inspect.signature(loader)
     supported_kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
@@ -115,6 +117,7 @@ async def init_routing_runtime(
         source_mode=cfg.general_settings.model_deployment_source,
         named_credential_repository=getattr(app.state, "named_credential_repository", None),
         secret_resolver=getattr(dynamic_config_manager, "secret_resolver", None),
+        egress_guard=getattr(app.state, "user_egress_guard", None),
     )
     logger.info("loaded model registry from %s source", model_registry_source)
 

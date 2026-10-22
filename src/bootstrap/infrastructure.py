@@ -73,6 +73,7 @@ from src.upstream_http import (
     build_upstream_http_client,
 )
 from src.outbound.network_policy import OutboundNetworkPolicy
+from src.outbound.user_egress import UserEgressGuard
 from src.providers.discovery_runtime import ProviderDiscoveryRuntime
 from src.mcp.oauth.http import MCPOAuthHTTP
 
@@ -345,19 +346,24 @@ async def _init_infrastructure_runtime(
     dynamic_config_manager.subscribe(ui_branding_asset_service.on_config_change)
     app.state.ui_branding_asset_service = ui_branding_asset_service
 
-    http_client = build_upstream_http_client(cfg.general_settings)
+    # Provider discovery and user-owned upstreams (creator credentials, creator MCP
+    # servers) share one policy: the operator's provider_discovery_* settings.
+    provider_policy = OutboundNetworkPolicy(
+        allow_http=cfg.general_settings.provider_discovery_allow_http,
+        allowed_ports=cfg.general_settings.provider_discovery_allowed_ports,
+        allowed_private_cidrs=cfg.general_settings.provider_discovery_allowed_private_cidrs,
+        resolution_timeout_seconds=2.0,
+    )
+    user_egress_guard = UserEgressGuard(provider_policy)
+    app.state.user_egress_guard = user_egress_guard
+    http_client = build_upstream_http_client(cfg.general_settings, egress_guard=user_egress_guard)
     resources.push_async_callback(http_client.aclose)
-    control_transport = build_control_http_transport()
+    control_transport = build_control_http_transport(egress_guard=user_egress_guard)
     control_http_client = build_control_http_client(transport=control_transport)
     resources.push_async_callback(control_http_client.aclose)
     app.state.provider_discovery_runtime = ProviderDiscoveryRuntime(
         transport=control_transport,
-        policy=OutboundNetworkPolicy(
-            allow_http=cfg.general_settings.provider_discovery_allow_http,
-            allowed_ports=cfg.general_settings.provider_discovery_allowed_ports,
-            allowed_private_cidrs=cfg.general_settings.provider_discovery_allowed_private_cidrs,
-            resolution_timeout_seconds=2.0,
-        ),
+        policy=provider_policy,
     )
     # MCP OAuth discovery, registration, token and revocation calls go to
     # operator-configured servers and to URLs found in their metadata, so they

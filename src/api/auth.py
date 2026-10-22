@@ -22,6 +22,7 @@ from src.middleware.platform_auth import (
     requires_mfa_verification,
 )
 from src.models.errors import RateLimitError
+from src.client_address import request_client_ip
 from src.auth.roles import PlatformRole, TeamRole
 from src.auth.email_domains import email_domain
 from src.auth.sign_in_settings import password_login_enabled
@@ -81,6 +82,7 @@ _AUTH_FORGOT_PASSWORD_EMAIL_LIMIT_PER_MINUTE = 5
 _AUTH_TOKEN_VALIDATE_IP_LIMIT_PER_MINUTE = 30
 _AUTH_RESET_PASSWORD_IP_LIMIT_PER_MINUTE = 10
 _AUTH_MFA_VERIFY_IP_LIMIT_PER_MINUTE = 20
+_AUTH_MFA_VERIFY_ACCOUNT_LIMIT_PER_MINUTE = 5
 _AUTH_MASTER_LOGIN_IP_LIMIT_PER_MINUTE = 20
 _AUTH_SERVICE_UNAVAILABLE_HEADERS = {
     "Cache-Control": "no-store",
@@ -177,14 +179,7 @@ def _client_ip(request: Request) -> str:
             ).address
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid forwarding data") from exc
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        first_hop = forwarded_for.split(",", 1)[0].strip()
-        if first_hop:
-            return first_hop
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    return request_client_ip(request) or "unknown"
 
 
 def _token_service_for_db(service: Any, db_client: Any) -> Any:
@@ -892,6 +887,14 @@ async def mfa_verify(request: Request, payload: MFAVerifyRequest) -> dict[str, b
             )
         if context.mfa_verified:
             return {"mfa_verified": True}
+        # A 6-digit code must not be guessable by spreading attempts over addresses.
+        await _enforce_auth_rate_limit(
+            request,
+            scope="auth_mfa_verify_account",
+            entity_id=str(context.account_id),
+            limit_per_minute=_AUTH_MFA_VERIFY_ACCOUNT_LIMIT_PER_MINUTE,
+            detail="Too many MFA verification attempts; please try again later",
+        )
 
         session_token = request.cookies.get(SESSION_COOKIE_NAME)
         if not session_token:

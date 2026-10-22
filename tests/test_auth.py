@@ -1530,3 +1530,47 @@ async def test_unverified_mfa_session_is_blocked_for_scope_endpoints(client, tes
 
     assert response.status_code == 403
     assert response.json()["detail"] == "MFA verification required"
+
+
+@pytest.mark.asyncio
+async def test_mfa_verify_is_rate_limited_per_account(client, test_app):
+    class StubLimitCounter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        async def check_rate_limit(self, scope: str, entity_id: str, limit: int):
+            self.calls.append((scope, entity_id, limit))
+            if scope == "auth_mfa_verify_account":
+                raise RateLimitError(retry_after=30)
+
+    class StubIdentityService:
+        async def get_context_for_session(self, token: str, **_kwargs):
+            if token != "session-token":
+                return None
+            return PlatformAuthContext(
+                account_id="acct-1",
+                email="user@example.com",
+                role="org_user",
+                mfa_enabled=True,
+                mfa_verified=False,
+                permissions=[],
+                organization_memberships=[],
+                team_memberships=[],
+                force_password_change=False,
+            )
+
+        async def verify_mfa_for_session(self, *, session_token: str, code: str) -> bool:
+            raise AssertionError("a limited account must not reach code verification")
+
+    limiter = StubLimitCounter()
+    test_app.state.limit_counter = limiter
+    test_app.state.platform_identity_service = StubIdentityService()
+
+    response = await client.post(
+        "/auth/mfa/verify",
+        cookies={"deltallm_session": "session-token"},
+        json={"code": "123456"},
+    )
+
+    assert response.status_code == 429
+    assert ("auth_mfa_verify_account", "acct-1", 5) in limiter.calls

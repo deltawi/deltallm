@@ -41,6 +41,25 @@ Typical connection fields include:
 
 Responses always redact secret-bearing values. You can read metadata and connection summaries, but not the raw stored secret back out of the API. For custom upstream auth, compact summaries may show labels such as `X-API-Key` or `Authorization (Token)`.
 
+## Rules for creator credentials
+
+Credentials that a creator account owns (not a platform administrator) follow stricter rules:
+
+- **Enter values, not references.** `os.environ/...`, `aws.secretsmanager/...`,
+  `gcp.secretmanager/...` and `azure.keyvault/...` references are read from the gateway's own
+  environment and secret managers, so only platform credentials and the config file may use them.
+  A creator credential that contains one is rejected with `400`.
+- **Only the owner moves a credential.** A team member with the `editor` role can rotate the
+  secret, but only the owner or a platform administrator can change `api_base`, `api_version`,
+  `auth_header_name`, `auth_header_format` or `region`. This keeps a shared key from being sent
+  to a different host.
+- **The endpoint must be reachable under the user egress policy.** `api_base` must use HTTPS on
+  an allowed port and resolve to a public address. The check runs when you save, and again on
+  every connection, so a DNS change cannot point the credential at a private address later.
+  Operators can allow reviewed private networks; see
+  [User-owned upstream URLs](../security/hardening.md#user-owned-upstream-urls).
+- A Bedrock `region` must look like `us-east-1`.
+
 ## Custom Upstream Auth Headers
 
 For these OpenAI-compatible providers, named credentials can override the default `Authorization: Bearer ...` upstream auth behavior:

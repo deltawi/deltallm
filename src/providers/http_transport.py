@@ -10,6 +10,8 @@ import logging
 import httpcore2
 import httpx
 
+from src.outbound.user_egress import GuardedNetworkBackend, UserEgressDenied, UserEgressGuard
+
 logger = logging.getLogger(__name__)
 
 # Request extension naming the operator proxy a deployment's call must use.
@@ -94,11 +96,13 @@ class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
         proxy: str | None = None,
         named_proxies: Mapping[str, UpstreamHTTPTransport] | None = None,
         owns_named: bool = False,
+        egress_guard: UserEgressGuard | None = None,
     ) -> None:
         # Operator-named proxy pools, shared by the client's transports. A call that
         # names one without a pool fails closed and never falls back to this pool.
         self._named_proxies = named_proxies or {}
         self._owns_named = owns_named
+        self._egress_guard = egress_guard
         ssl_context = httpx.create_ssl_context()
         core_proxy = None
         if proxy is not None:
@@ -121,9 +125,21 @@ class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
             http1=True,
             http2=False,
             retries=0,
+            # A proxy resolves the target itself; proxied calls rely on the request check.
+            network_backend=(
+                GuardedNetworkBackend(
+                    httpcore2.AnyIOBackend(),
+                    egress_guard,
+                    connect_error=httpcore2.ConnectError,
+                )
+                if egress_guard is not None and core_proxy is None
+                else None
+            ),
         )
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Checked before proxy routing: a proxy resolves the target itself.
+        await self._check_user_egress(request)
         name = request.extensions.get(OUTBOUND_PROXY_EXTENSION) or SCOPED_OUTBOUND_PROXY.get()
         if name is not None:
             named = self._named_proxies.get(name)
@@ -131,6 +147,18 @@ class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
                 raise httpx.ProxyError("Outbound proxy is not configured", request=request)
             return await named._send(request)
         return await self._send(request)
+
+    async def _check_user_egress(self, request: httpx.Request) -> None:
+        guard = self._egress_guard
+        if guard is None or not guard.is_restricted(
+            request.url.host, request.url.port or (443 if request.url.scheme == "https" else 80)
+        ):
+            return
+        try:
+            await guard.check_url(str(request.url))
+        except UserEgressDenied as exc:
+            logger.warning("Provider transport blocked user-owned target; reason=%s", exc.reason)
+            raise httpx.ConnectError(f"user egress denied: {exc.reason}", request=request) from None
 
     async def _send(self, request: httpx.Request) -> httpx.Response:
         if not isinstance(request.stream, httpx.AsyncByteStream):

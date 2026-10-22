@@ -4,12 +4,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+import httpcore
 import httpx
 from httpx._utils import get_environment_proxies
 
 from src.request_deadline import current_request_deadline
 
 from src.providers.error_body import bound_provider_error_response_body
+from src.outbound.user_egress import GuardedNetworkBackend, UserEgressGuard
 from src.providers.http_transport import (
     OUTBOUND_PROXY_EXTENSION,
     SCOPED_OUTBOUND_PROXY,
@@ -129,7 +131,9 @@ def outbound_proxy_scope(proxy_name: str | None) -> Iterator[None]:
         SCOPED_OUTBOUND_PROXY.reset(token)
 
 
-def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
+def build_upstream_http_client(
+    general_settings: Any, *, egress_guard: UserEgressGuard | None = None
+) -> httpx.AsyncClient:
     from src.outbound.upstream_proxies import upstream_proxy_urls
 
     limits = build_upstream_http_limits(general_settings)
@@ -148,22 +152,28 @@ def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
     mounts = {
         pattern: None
         if proxy is None
-        else UpstreamHTTPTransport(limits=limits, proxy=proxy, named_proxies=named)
+        else UpstreamHTTPTransport(
+            limits=limits, proxy=proxy, named_proxies=named, egress_guard=egress_guard
+        )
         for pattern, proxy in get_environment_proxies().items()
     }
     return httpx.AsyncClient(
         timeout=build_upstream_http_timeout(general_settings),
         limits=limits,
-        transport=UpstreamHTTPTransport(limits=limits, named_proxies=named, owns_named=True),
+        transport=UpstreamHTTPTransport(
+            limits=limits, named_proxies=named, owns_named=True, egress_guard=egress_guard
+        ),
         mounts=mounts,
         event_hooks={"response": [bound_provider_error_response_body]},
     )
 
 
-def build_control_http_transport() -> httpx.AsyncHTTPTransport:
+def build_control_http_transport(
+    *, egress_guard: UserEgressGuard | None = None
+) -> httpx.AsyncHTTPTransport:
     # Pinned IP origins must never reuse another hostname's TLS connection.
     # Keep CA environment support; proxies belong to client mounts, not this pool.
-    return httpx.AsyncHTTPTransport(
+    transport = httpx.AsyncHTTPTransport(
         http1=True,
         http2=False,
         retries=0,
@@ -173,6 +183,13 @@ def build_control_http_transport() -> httpx.AsyncHTTPTransport:
             keepalive_expiry=CONTROL_HTTP_KEEPALIVE_EXPIRY_SECONDS,
         ),
     )
+    if egress_guard is not None:
+        # HTTPX does not expose the network backend; its pool owns exactly one.
+        pool = transport._pool
+        pool._network_backend = GuardedNetworkBackend(
+            httpcore.AnyIOBackend(), egress_guard, connect_error=httpcore.ConnectError
+        )
+    return transport
 
 
 def build_control_http_client(

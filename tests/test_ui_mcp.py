@@ -2508,3 +2508,53 @@ async def test_scoped_team_developer_cannot_run_mcp_health_check(client, test_ap
 
     response = await client.post(f"/ui/api/mcp-servers/{server.mcp_server_id}/health-check")
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_creator_mcp_server_url_must_pass_user_egress_policy(client, test_app) -> None:
+    from src.outbound.network_policy import OutboundNetworkPolicy
+    from src.outbound.user_egress import UserEgressGuard
+
+    async def resolve(host, port):  # noqa: ANN001, ANN202
+        del port
+        return ("10.0.0.7",) if host == "internal.example.com" else ("93.184.216.34",)
+
+    repository = _FakeMCPRepository()
+    access_repository = _FakeManagedAssetAccessRepository(test_app)
+    test_app.state.mcp_repository = repository
+    test_app.state.managed_asset_access_repository = access_repository
+    test_app.state.creator_mcp_access_service = CreatorMCPAccessService(
+        access_repository,  # type: ignore[arg-type]
+        repository,
+    )
+    test_app.state.mcp_registry_service = _FakeMCPRegistryService(repository)
+    query_client = _FakeBindingPolicyListQueryClient()
+    query_client.bindings = []
+    query_client.policies = []
+    test_app.state.prisma_manager = type("PrismaManager", (), {"client": query_client})()
+    test_app.state.platform_identity_service = _IdentityService(_asset_user_context("mcp-owner"))
+    test_app.state.user_egress_guard = UserEgressGuard(OutboundNetworkPolicy(resolver=resolve))
+    cookies = {"deltallm_session": "mcp-asset-session"}
+
+    private = await client.post(
+        "/ui/api/mcp-servers",
+        cookies=cookies,
+        json={"server_key": "private", "name": "Private", "base_url": "https://internal.example.com"},
+    )
+    assert private.status_code == 400
+    assert "not allowed for user-owned connections" in private.json()["detail"]
+
+    created = await client.post(
+        "/ui/api/mcp-servers",
+        cookies=cookies,
+        json={"server_key": "public", "name": "Public", "base_url": "https://mcp.example.com"},
+    )
+    assert created.status_code == 200
+    server_id = created.json()["mcp_server_id"]
+
+    moved = await client.patch(
+        f"/ui/api/mcp-servers/{server_id}",
+        cookies=cookies,
+        json={"base_url": "https://internal.example.com"},
+    )
+    assert moved.status_code == 400

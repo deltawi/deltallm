@@ -48,7 +48,9 @@ When you create or edit a server, the key fields are:
 - **Name**: human-readable label in the UI
 - **Description**: optional operator context
 - **Transport**: currently `streamable_http`
-- **Base URL**: upstream MCP endpoint
+- **Base URL**: upstream MCP endpoint. For a server that a creator account owns, the URL must
+  pass the [user egress policy](../security/hardening.md#user-owned-upstream-urls): HTTPS, an
+  allowed port, and a public address, checked on save and on every connection.
 - **Enabled**: hides or exposes the server at runtime
 - **Auth Mode**: `none`, `bearer`, `basic`, `header_map`, or **OAuth 2.0 (per user)**
 - **Forwarded Headers Allowlist**: which caller-supplied headers DeltaLLM may forward
