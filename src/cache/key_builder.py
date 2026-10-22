@@ -9,6 +9,8 @@ from src.models.requests import ChatCompletionRequest
 # Server-owned key dimension: the raw `/v1/responses` body, which holds native-hop fields
 # that the canonical chat request does not.
 RESPONSES_BODY_KEY_FIELD = "responses_body"
+# Server-owned key dimension: chat parameters the request model does not declare.
+CHAT_EXTRA_PARAMS_KEY_FIELD = "chat_extra_params"
 
 DEFAULT_CACHE_KEY_FIELDS = {
     "model",
@@ -72,6 +74,10 @@ class CacheKeyBuilder:
             normalized["guided_json"] = request_data["guided_json"]
         if request_data.get(RESPONSES_BODY_KEY_FIELD) is not None:
             normalized[RESPONSES_BODY_KEY_FIELD] = request_data[RESPONSES_BODY_KEY_FIELD]
+        if request_data.get(CHAT_EXTRA_PARAMS_KEY_FIELD):
+            normalized[CHAT_EXTRA_PARAMS_KEY_FIELD] = self._normalize(
+                request_data[CHAT_EXTRA_PARAMS_KEY_FIELD]
+            )
         as_string = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
         if self.salt:
             as_string = f"{self.salt}:{as_string}"

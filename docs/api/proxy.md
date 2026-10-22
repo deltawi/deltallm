@@ -67,6 +67,47 @@ POST /v1/chat/completions
 
 This is the main endpoint most applications should start with.
 
+#### Request parameters
+
+DeltaLLM forwards the chat parameters you send, including ones it does not
+declare itself, such as `seed`, `reasoning_effort`, `logprobs`, `top_logprobs`,
+`parallel_tool_calls`, `service_tier` or vendor fields like vLLM's
+`chat_template_kwargs` (sent with an SDK's `extra_body`):
+
+```python
+client.chat.completions.create(
+    model="gpt-5-mini",
+    messages=[{"role": "user", "content": "Hello"}],
+    reasoning_effort="low",
+    seed=7,
+    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+)
+```
+
+Where they go depends on the deployment's provider:
+
+| Provider | Parameters DeltaLLM does not declare |
+| --- | --- |
+| OpenAI, Azure OpenAI, and other OpenAI-compatible servers (vLLM, Ollama, Groq, OpenRouter, ...) | Sent to the provider unchanged. The provider rejects ones it does not know. |
+| DeepSeek, Mistral, Qwen, Z.ai, MiniMax, Tencent | Left out. Their declared parameters are checked as before. |
+| Anthropic, Gemini, Bedrock | Left out. These requests are translated from the declared fields. |
+
+Parameters you leave out are not sent. The provider's own defaults apply, or the
+model's configured `default_params` when an operator set them. An operator can
+remove a parameter for one model with `drop_params`, or force a value with
+`override_params`. See [Request shaping](../configuration/request-shaping.md).
+
+The response cache keys on these parameters too, so answers for different
+`reasoning_effort` or `seed` values are cached separately.
+
+#### Usage details
+
+When the provider reports them, chat answers keep `usage.prompt_tokens_details`
+(for example `cached_tokens`) and `usage.completion_tokens_details` (for example
+`reasoning_tokens`), plus answer fields such as `service_tier` and
+`message.refusal`. These breakdowns are informational. They do not change how
+DeltaLLM prices the request.
+
 Chat requests also support DeltaLLM-managed MCP tools through `tools: [{ "type": "mcp", ... }]` on non-streaming requests. See [MCP Gateway & Tooling](mcp.md).
 
 OpenAI-compatible client-managed tool histories may omit assistant `content`, or set it to

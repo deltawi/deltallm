@@ -17,6 +17,7 @@ from src.batch.selector_checkpoint import (
 )
 from src.batch.selector_identity import batch_selector_operation_id
 from src.cache.execution_eligibility import ResponseCacheEligibility, ResponseCacheOutcome
+from src.models.request_serialization import dump_declared_request_fields
 from src.models.requests import ChatCompletionRequest
 from src.router.execution import RequestDeadline
 from src.router.runtime_generation import RoutingRuntimeGeneration
@@ -102,7 +103,7 @@ class BatchSelectorExecution:
         self._fingerprint = sha256(
             json.dumps(
                 {
-                    "payload": payload.model_dump(mode="json"),
+                    "payload": dump_declared_request_fields(payload),
                     "principal": principal.model_dump(mode="json"),
                 },
                 sort_keys=True,

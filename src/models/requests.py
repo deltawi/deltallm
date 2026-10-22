@@ -95,6 +95,11 @@ class ResponseFormat(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    # Chat parameters are an open list (seed, reasoning_effort, logprobs, vendor fields
+    # sent through an SDK's extra_body, ...). OpenAI-compatible hops forward the ones the
+    # client sent; other adapters build their bodies from the declared fields.
+    model_config = ConfigDict(extra="allow")
+
     model: str
     messages: list[ChatRequestMessage]
     temperature: float | None = Field(default=1.0, ge=0, le=2)

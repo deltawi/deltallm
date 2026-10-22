@@ -44,6 +44,7 @@ from src.billing.accounting.journal.accounting_terminal_preparation import (
 from src.billing.pricing.frozen_pricing import freeze_operation_pricing
 from src.billing.charges.provider_allowance import conservative_provider_allowance
 from src.billing.pricing.tier_pricing import resolve_deployment_tier_pricing
+from src.models.request_serialization import dump_declared_request_fields
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
 from src.providers.resolution import resolve_provider
@@ -251,7 +252,7 @@ class NativeBatchBilling:
             owner_token=uuid4(),
             request_fingerprint=request_fingerprint(
                 operation_kind="batch",
-                payload=payload.model_dump(mode="json"),
+                payload=dump_declared_request_fields(payload),
             ),
             attribution=attribution,
             allowance=allowance,
@@ -395,5 +396,7 @@ def _same_subject(
         and owner.owner_account_id == auth.owner_account_id
         and owner.end_user_id == payload.user
         and reservation.request_fingerprint
-        == request_fingerprint(operation_kind="batch", payload=payload.model_dump(mode="json"))
+        == request_fingerprint(
+            operation_kind="batch", payload=dump_declared_request_fields(payload)
+        )
     )

@@ -104,6 +104,9 @@ class ProfiledChatAdapter(OpenAIAdapter):
                 "type": canonical_request.tool_choice.type,
             }
         payload.pop("metadata", None)
+        # Vendor profiles accept only declared parameters; undeclared client fields stay out.
+        for parameter in canonical_request.model_extra or {}:
+            payload.pop(parameter, None)
         for parameter, neutral in (("n", 1), ("presence_penalty", 0), ("frequency_penalty", 0)):
             if parameter in payload and payload[parameter] not in (None, neutral):
                 raise InvalidRequestError(message=f"Parameter '{parameter}' is not supported")
