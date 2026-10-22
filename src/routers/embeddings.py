@@ -73,6 +73,7 @@ from src.services.audit.audit_service import (
 from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
 from src.billing.accounting.accounting_protocol import AccountingOperationHandle
+from src.routers.response_cost import record_response_cost, response_cost_headers
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 
@@ -374,6 +375,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             cache_hit=cache_hit,
             pricing_view="provider",
         )
+        record_response_cost(request, customer_billing.billing)
         request_cost = customer_billing.billing.cost
         provider_cost = (
             None
@@ -503,7 +505,11 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             completion_tokens=int(usage.get("completion_tokens", 0) or 0),
             metadata=audit_metadata,
         )
-        return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
+        return JSONResponse(
+            status_code=200,
+            content=data,
+            headers={**route_decision_headers(request), **response_cost_headers(request)},
+        )
     except httpx.HTTPError as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
         failure_provider = str(failure_target.provider or api_provider)

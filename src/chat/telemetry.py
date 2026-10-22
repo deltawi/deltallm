@@ -32,6 +32,7 @@ from src.telemetry.request_failures import (
 )
 from src.telemetry.spend_operation import billing_write_context, operation_pricing
 from src.routers.routing_decision import attach_route_decision, resolve_failure_target
+from src.routers.response_cost import record_response_cost
 
 
 def _append_route_decision_metadata(request: Request, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -406,6 +407,7 @@ async def emit_nonstream_success(
         usage=payload_data.get("usage") if isinstance(payload_data.get("usage"), dict) else None,
         cache_hit=getattr(request.state, "cache_hit", False),
     )
+    record_response_cost(request, customer_billing.billing)
     request_cost = customer_billing.billing.cost
     provider_cost = (
         None
