@@ -462,6 +462,18 @@ async def load_managed_asset_resources_in_batches(
     return resources
 
 
+def is_creator_callable_key(key: str) -> bool:
+    """Whether a callable key (such as an MCP server key) sits in a creator namespace."""
+
+    normalized = str(key or "").strip()
+    return bool(
+        len(normalized) > 73
+        and normalized.startswith("creator-")
+        and normalized[72] == "-"
+        and all(character in "0123456789abcdef" for character in normalized[8:72])
+    )
+
+
 def namespace_creator_callable_key(key: str, principal: AssetPrincipal) -> str:
     """Give every creator a collision-proof runtime namespace.
 
@@ -471,12 +483,7 @@ def namespace_creator_callable_key(key: str, principal: AssetPrincipal) -> str:
     """
 
     normalized = str(key or "").strip()
-    has_creator_namespace = bool(
-        len(normalized) > 73
-        and normalized.startswith("creator-")
-        and normalized[72] == "-"
-        and all(character in "0123456789abcdef" for character in normalized[8:72])
-    )
+    has_creator_namespace = is_creator_callable_key(normalized)
     if principal.is_platform_admin:
         if has_creator_namespace:
             raise PermissionError("creator callable-key namespaces are reserved")

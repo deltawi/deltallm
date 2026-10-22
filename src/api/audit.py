@@ -10,6 +10,7 @@ from src.audit.actions import AuditAction, normalize_audit_action
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
 from src.auth.roles import Permission, has_platform_permission
+from src.client_address import request_client_ip
 from src.db.audit.repository import AuditRepository
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.audit.audit_service import (
@@ -41,14 +42,7 @@ _SENSITIVE_KEYS = {
 
 
 def _client_ip(request: Request) -> str | None:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        first_hop = forwarded_for.split(",", 1)[0].strip()
-        if first_hop:
-            return first_hop
-    if request.client and request.client.host:
-        return request.client.host
-    return None
+    return request_client_ip(request)
 
 
 def redact_sensitive(value: Any) -> Any:

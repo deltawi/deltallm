@@ -15,6 +15,7 @@ from src.billing.pricing.tier_pricing import (
     resolve_token_billing_result,
 )
 from src.cache.pricing import cache_pricing_snapshot_from_deployment
+from src.client_address import request_client_ip
 from src.callbacks import build_standard_logging_payload
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.embedding_preflight import run_embedding_preflight
@@ -135,14 +136,7 @@ def _embedding_input_count(value: str | list[str] | list[int] | list[list[int]])
 
 
 def _request_client_ip(request: Request) -> str | None:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        first_hop = forwarded_for.split(",", 1)[0].strip()
-        if first_hop:
-            return first_hop
-    if request.client and request.client.host:
-        return request.client.host
-    return None
+    return request_client_ip(request)
 
 
 async def _emit_embedding_audit_event(

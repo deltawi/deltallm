@@ -136,6 +136,42 @@ class OutboundNetworkPolicy:
             return True
         return self._is_explicitly_allowed(address)
 
+    async def _allowed_addresses(self, hostname: str, port: int) -> set[IPAddress]:
+        try:
+            literal = ip_address(hostname.split("%", 1)[0])
+        except ValueError:
+            try:
+                async with asyncio.timeout(self.resolution_timeout_seconds):
+                    raw_addresses = await self.resolver(hostname, port)
+            except TimeoutError:
+                raise OutboundResolutionError("dns_resolution_timeout") from None
+        else:
+            raw_addresses = (str(literal),)
+
+        addresses: set[IPAddress] = set()
+        try:
+            for raw_address in raw_addresses:
+                addresses.add(ip_address(str(raw_address).split("%", 1)[0]))
+        except ValueError as exc:
+            raise OutboundResolutionError("dns_resolution_invalid") from exc
+        if not addresses:
+            raise OutboundResolutionError("dns_resolution_empty")
+        if not all(self._address_is_allowed(address) for address in addresses):
+            raise OutboundPolicyError("resolved_address_not_allowed")
+
+        return addresses
+
+    async def resolve_host(self, hostname: str, port: int, *, attempt_count: int = 1) -> IPAddress:
+        """Check one connection target (no URL): the port and every resolved address."""
+
+        if port not in self.allowed_ports:
+            raise OutboundPolicyError("port_not_allowed")
+        if not hostname:
+            raise OutboundPolicyError("hostname_invalid")
+        addresses = await self._allowed_addresses(hostname, port)
+        ordered = sorted(addresses, key=lambda value: (value.version, value.packed))
+        return ordered[(max(1, int(attempt_count)) - 1) % len(ordered)]
+
     async def resolve(
         self,
         url: str,
@@ -158,27 +194,7 @@ class OutboundNetworkPolicy:
         if effective_port not in self.allowed_ports:
             raise OutboundPolicyError("port_not_allowed")
 
-        try:
-            literal = ip_address(hostname.split("%", 1)[0])
-        except ValueError:
-            try:
-                async with asyncio.timeout(self.resolution_timeout_seconds):
-                    raw_addresses = await self.resolver(hostname, effective_port)
-            except TimeoutError:
-                raise OutboundResolutionError("dns_resolution_timeout") from None
-        else:
-            raw_addresses = (str(literal),)
-
-        addresses: set[IPAddress] = set()
-        try:
-            for raw_address in raw_addresses:
-                addresses.add(ip_address(str(raw_address).split("%", 1)[0]))
-        except ValueError as exc:
-            raise OutboundResolutionError("dns_resolution_invalid") from exc
-        if not addresses:
-            raise OutboundResolutionError("dns_resolution_empty")
-        if not all(self._address_is_allowed(address) for address in addresses):
-            raise OutboundPolicyError("resolved_address_not_allowed")
+        addresses = await self._allowed_addresses(hostname, effective_port)
 
         ordered = sorted(addresses, key=lambda value: (value.version, value.packed))
         selected = ordered[(max(1, int(attempt_count)) - 1) % len(ordered)]

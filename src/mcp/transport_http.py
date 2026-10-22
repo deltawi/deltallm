@@ -14,6 +14,8 @@ from .auth import build_effective_mcp_upstream_headers
 from .exceptions import MCPAuthError, MCPInvalidResponseError, MCPTransportError
 from .models import MCPRequestEnvelope, MCPServerConfig, MCPToolCallResult, MCPToolSchema
 from .capabilities import extract_tool_schemas
+from src.outbound.user_egress import restricted_egress
+from src.services.access.managed_asset_access import is_creator_callable_key
 from src.upstream_http import build_upstream_request_timeout
 
 _request_ids = count(1)
@@ -265,30 +267,32 @@ class StreamableHTTPMCPClient:
         if envelope.request_id is not None:
             body["id"] = envelope.request_id
         try:
-            async with self.http_client.stream(
-                "POST",
-                server.base_url.rstrip("/"),
-                json=body,
-                headers=headers,
-                timeout=build_upstream_request_timeout(
-                    self.general_settings,
-                    max(1.0, float(server.request_timeout_ms) / 1000.0),
-                ),
-            ) as response:
-                if response.status_code in {401, 403}:
-                    raise MCPAuthError(
-                        f"MCP server rejected request with status {response.status_code}"
+            # A creator's server URL was typed by its owner: check every connection.
+            with restricted_egress(is_creator_callable_key(server.server_key)):
+                async with self.http_client.stream(
+                    "POST",
+                    server.base_url.rstrip("/"),
+                    json=body,
+                    headers=headers,
+                    timeout=build_upstream_request_timeout(
+                        self.general_settings,
+                        max(1.0, float(server.request_timeout_ms) / 1000.0),
+                    ),
+                ) as response:
+                    if response.status_code in {401, 403}:
+                        raise MCPAuthError(
+                            f"MCP server rejected request with status {response.status_code}"
+                        )
+                    if response.status_code == 404 and session_id:
+                        raise _StaleMCPSessionError(session_id)
+                    if response.status_code >= 400:
+                        raise MCPTransportError(await _http_error_message(response))
+                    if not expect_response:
+                        return _MCPTransportResponse(result={}, headers=response.headers)
+                    payload = await _decode_response_payload(response, request_id=envelope.request_id)
+                    return _MCPTransportResponse(
+                        result=_result_from_payload(payload), headers=response.headers
                     )
-                if response.status_code == 404 and session_id:
-                    raise _StaleMCPSessionError(session_id)
-                if response.status_code >= 400:
-                    raise MCPTransportError(await _http_error_message(response))
-                if not expect_response:
-                    return _MCPTransportResponse(result={}, headers=response.headers)
-                payload = await _decode_response_payload(response, request_id=envelope.request_id)
-                return _MCPTransportResponse(
-                    result=_result_from_payload(payload), headers=response.headers
-                )
         except httpx.HTTPError as exc:
             raise MCPTransportError(str(exc)) from exc
 

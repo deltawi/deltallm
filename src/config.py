@@ -629,6 +629,8 @@ class GeneralSettings(
     spend_reporting_execution_timeout_seconds: float = Field(default=60.0, gt=0)
     spend_reporting_redis_timeout_seconds: float = Field(default=0.5, gt=0)
     spend_reporting_v2_enabled: bool = True
+    # Proxies whose X-Forwarded-For is believed. None means loopback and private ranges.
+    trusted_proxy_cidrs: list[str] | None = Field(default=None, max_length=64)
     provider_discovery_allow_http: bool = Field(default=False, strict=True)
     provider_discovery_allowed_ports: list[int] = Field(
         default_factory=lambda: [443], min_length=1, max_length=64
@@ -1039,6 +1041,19 @@ class GeneralSettings(
         from src.outbound.upstream_proxies import normalize_upstream_proxies
 
         return normalize_upstream_proxies(value)
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def validate_trusted_proxy_cidrs(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        try:
+            networks = [ip_network(str(cidr).strip(), strict=False) for cidr in value]
+        except ValueError:
+            raise ValueError("trusted_proxy_cidrs requires valid IPv4 or IPv6 CIDRs") from None
+        if any(network.prefixlen == 0 for network in networks):
+            raise ValueError("trusted_proxy_cidrs cannot trust every address")
+        return list(dict.fromkeys(str(network) for network in networks))
 
     @field_validator("provider_discovery_allowed_private_cidrs", "mcp_oauth_allowed_private_cidrs")
     @classmethod

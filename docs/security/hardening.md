@@ -23,8 +23,19 @@ Expose only routes required by each listener:
 - Terminate TLS with a trusted certificate and redirect or reject plaintext traffic.
 - Configure an explicit host allowlist and request-body/time limits at the reverse proxy.
 - Strip client-supplied forwarding headers and set them only at the trusted proxy. The application
-  uses `X-Forwarded-Proto` when deciding whether login cookies are secure and reads forwarding
-  headers for client-address metadata.
+  uses `X-Forwarded-Proto` when deciding whether login cookies are secure.
+- The client address used for sign-in, MFA, password-reset and master-key rate limits, and for
+  audit records, comes from `X-Forwarded-For` only when the direct peer is a trusted proxy. The
+  chain is read from the right, so entries a client adds itself are ignored. By default loopback
+  and private ranges are trusted proxies. If your proxy runs elsewhere, or other workloads share
+  its private network, set the exact ranges:
+
+    ```yaml
+    general_settings:
+      trusted_proxy_cidrs: ["10.42.0.0/16"]
+    ```
+
+- MFA codes are also limited per account (5 attempts a minute), whatever address they come from.
 - Browser auth cookies are HTTP-only and `SameSite=Lax`; their `Secure` attribute depends on the
   request being recognized as HTTPS. Verify this from the deployed public URL.
 - Do not treat CORS, UI navigation, or hidden routes as authorization. The application does not
@@ -102,6 +113,7 @@ Expose only routes required by each listener:
   policy as batch webhooks: HTTPS only, port 443, no private or metadata addresses, no redirects,
   a 10 second timeout, and a 256 KiB response limit. Use `mcp_oauth_allowed_ports` and
   `mcp_oauth_allowed_private_cidrs` only for reviewed authorization servers.
+- See [User-owned upstream URLs](#user-owned-upstream-urls) for URLs that non-admin users enter.
 - Disable message-content logging when content retention is not required:
 
 ```yaml
@@ -111,6 +123,33 @@ deltallm_settings:
 
 - Apply retention and access controls to PostgreSQL, object storage, Prometheus labels, tracing,
   provider logs, backups, and support bundles.
+
+## User-owned upstream URLs
+
+Creator accounts can enter their own provider `api_base` (in a provider credential) and their
+own MCP server URL. DeltaLLM sends those requests from inside your network, so it applies an
+outbound policy to them:
+
+- HTTPS only, port 443, and only public addresses. Private, loopback, link-local and cloud
+  metadata addresses are refused.
+- The URL is checked when it is saved. Every connection to it is checked again, and the
+  connection goes to the exact address that passed, so a later DNS change cannot redirect it.
+- Provider model discovery by a non-admin user follows the same rules.
+- A creator deployment whose saved URL no longer passes is left out of routing, with a warning
+  in the log.
+
+The policy uses the `provider_discovery_*` settings. Widen them only for reviewed targets:
+
+```yaml
+general_settings:
+  provider_discovery_allow_http: false
+  provider_discovery_allowed_ports: [443]
+  provider_discovery_allowed_private_cidrs: []   # for example ["10.20.0.0/16"]
+```
+
+Deployments, credentials and MCP servers that a platform administrator creates are not limited
+by this policy, including a platform credential that a creator uses for their own model or for
+discovery. Use a network policy for those (the Helm chart's `networkPolicy`).
 
 ## Verification before exposure
 

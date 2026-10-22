@@ -15,6 +15,8 @@ from src.api.admin.endpoints.common import (
 from src.api.admin.endpoints.managed_assets import parse_asset_access_input
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
+from src.config_runtime.secrets import contains_secret_reference
+from src.outbound.user_egress import UserEgressDenied, user_egress_denied_message
 from src.db.catalog.managed_assets import ManagedAssetAccessRepository
 from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.catalog.model_deployments import ModelDeploymentRepository
@@ -81,6 +83,73 @@ def _principal_for_request(request: Request) -> AssetPrincipal:
         organization_ids=frozenset(scope.org_ids),
         is_platform_admin=scope.is_platform_admin,
     )
+
+
+# Fields that decide where the stored secret is sent. Moving them moves the secret.
+_CONNECTION_TARGET_FIELDS = (
+    "api_base",
+    "api_version",
+    "auth_header_name",
+    "auth_header_format",
+    "region",
+)
+
+
+def _reject_secret_references(principal: AssetPrincipal, payload: dict[str, Any]) -> None:
+    if principal.is_platform_admin:
+        return
+    if contains_secret_reference(payload.get("connection_config")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "connection_config cannot reference environment variables or secret managers; "
+                "enter the value itself"
+            ),
+        )
+
+
+def _require_target_change_allowed(
+    principal: AssetPrincipal,
+    policy: AssetAccessPolicy,
+    existing: NamedCredentialRecord,
+    connection_config: dict[str, Any],
+) -> None:
+    if principal.is_platform_admin:
+        return
+    owner_account_id = policy.asset.owner_account_id
+    if owner_account_id and owner_account_id == principal.account_id:
+        return
+    changed = [
+        field
+        for field in _CONNECTION_TARGET_FIELDS
+        if connection_config.get(field) != existing.connection_config.get(field)
+    ]
+    if changed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Only the credential owner can change where it connects: "
+                + ", ".join(changed)
+            ),
+        )
+
+
+async def _require_allowed_target(
+    request: Request, principal: AssetPrincipal, connection_config: dict[str, Any]
+) -> None:
+    if principal.is_platform_admin:
+        return
+    api_base = str(connection_config.get("api_base") or "").strip()
+    guard = getattr(request.app.state, "user_egress_guard", None)
+    if not api_base or guard is None:
+        return
+    try:
+        await guard.check_url(api_base)
+    except UserEgressDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=user_egress_denied_message(exc.reason),
+        ) from None
 
 
 def _not_found() -> HTTPException:
@@ -323,7 +392,9 @@ async def create_named_credential(request: Request, payload: dict[str, Any]) -> 
     repository = _repository_or_503(request)
     access_repository = _access_repository_or_503(request)
     principal = _principal_for_request(request)
+    _reject_secret_references(principal, payload)
     name, provider, connection_config, metadata = normalize_named_credential_payload(payload)
+    await _require_allowed_target(request, principal, connection_config)
 
     name_scope = _credential_name_scope(principal)
     existing = await repository.get_by_name(name, name_scope=name_scope)
@@ -437,9 +508,13 @@ async def update_named_credential(
     if existing is None:
         raise _not_found()
 
+    _reject_secret_references(principal, payload)
     name, provider, connection_config, metadata = normalize_named_credential_payload(
         payload, existing=existing
     )
+    _require_target_change_allowed(principal, policy, existing, connection_config)
+    if connection_config.get("api_base") != existing.connection_config.get("api_base"):
+        await _require_allowed_target(request, principal, connection_config)
     by_name = await repository.get_by_name(name, name_scope=existing.name_scope)
     if by_name is not None and by_name.credential_id != credential_id:
         raise HTTPException(

@@ -8,12 +8,14 @@ from src.providers.resolution import resolve_provider_connection_defaults
 from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
 from src.services.models.named_credentials import (
+    is_platform_named_credential,
     merge_named_credential_params,
     resolve_named_credential_record,
 )
 
 if TYPE_CHECKING:
     from src.config_runtime.secrets import SecretResolver
+    from src.outbound.user_egress import UserEgressGuard
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,14 @@ def resolve_runtime_deltallm_params(
             getattr(settings, "openai_base_url", None) if allow_platform_defaults else None
         ),
     )
+
+
+def _effective_upstream_url(params: dict[str, Any]) -> str:
+    api_base = str(params.get("api_base") or "").strip()
+    if api_base or str(params.get("provider") or "").strip().lower() != "bedrock":
+        return api_base
+    region = str(params.get("region") or "us-east-1").strip()
+    return f"https://bedrock-runtime.{region}.amazonaws.com"
 
 
 def _credential_secret_resolution_failed(
@@ -154,12 +164,15 @@ async def build_model_registry_from_records(
     named_credential_repository: NamedCredentialRepository | None = None,
     *,
     secret_resolver: "SecretResolver | None" = None,
+    egress_guard: "UserEgressGuard | None" = None,
 ) -> dict[str, list[dict[str, Any]]]:
     named_credentials = await _named_credentials_by_id(
         named_credential_repository,
         [record.named_credential_id for record in records if record.named_credential_id],
     )
     model_registry: dict[str, list[dict[str, Any]]] = {}
+    creator_targets: list[str] = []
+    platform_targets: list[str] = []
     for record in records:
         raw_named_credential = named_credentials.get(record.named_credential_id or "")
         named_credential = resolve_named_credential_record(
@@ -176,6 +189,33 @@ async def build_model_registry_from_records(
                 record.deployment_id,
             )
             continue
+        runtime_params = resolve_runtime_deltallm_params(
+            record.deltallm_params,
+            settings,
+            named_credential=named_credential,
+            allow_platform_defaults=record.governance_source != "creator",
+        )
+        api_base = _effective_upstream_url(runtime_params)
+        # Creators cannot set connection fields inline, so the URL is the credential's.
+        if record.governance_source == "creator" and not is_platform_named_credential(
+            raw_named_credential
+        ):
+            # Fail closed: a URL the guard cannot parse cannot be checked at connect time.
+            violation = (
+                egress_guard.static_violation(api_base)
+                if egress_guard is not None and api_base
+                else None
+            )
+            if violation is not None:
+                logger.warning(
+                    "excluding creator deployment %s because its URL is not allowed reason=%s",
+                    record.deployment_id,
+                    violation,
+                )
+                continue
+            creator_targets.append(api_base)
+        elif api_base:
+            platform_targets.append(api_base)
         model_registry.setdefault(record.model_name, []).append(
             {
                 "deployment_id": record.deployment_id,
@@ -188,14 +228,13 @@ async def build_model_registry_from_records(
                 "credential_binding_state": record.credential_binding_state,
                 "routing_state_incarnation": record.routing_state_incarnation
                 or record.deployment_id,
-                "deltallm_params": resolve_runtime_deltallm_params(
-                    record.deltallm_params,
-                    settings,
-                    named_credential=named_credential,
-                    allow_platform_defaults=record.governance_source != "creator",
-                ),
+                "deltallm_params": runtime_params,
                 "model_info": dict(record.model_info or {}),
             }
+        )
+    if egress_guard is not None:
+        egress_guard.replace_origins(
+            "models", restricted_urls=creator_targets, trusted_urls=platform_targets
         )
     return model_registry
 
@@ -218,6 +257,7 @@ async def load_model_registry(
     named_credential_repository: NamedCredentialRepository | None = None,
     secret_resolver: "SecretResolver | None" = None,
     allow_db_error_fallback: bool = True,
+    egress_guard: "UserEgressGuard | None" = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], str]:
     if source_mode == "config_only":
         return await build_model_registry_from_config(
@@ -244,6 +284,7 @@ async def load_model_registry(
                 settings,
                 named_credential_repository=named_credential_repository,
                 secret_resolver=secret_resolver,
+                egress_guard=egress_guard,
             ), "db"
         if source_mode == "db_only":
             raise RuntimeError(
