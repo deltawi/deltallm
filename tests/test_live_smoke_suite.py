@@ -60,7 +60,11 @@ class FakeGateway:
         self.org_members: set[tuple[str, str]] = set()
         self.team_members: set[tuple[str, str]] = set()
         self.sessions: dict[str, str] = {}
+        # None: a gateway without the sign-in settings API.
+        self.password_login: bool | None = True
         self.keys: dict[str, dict[str, Any]] = {}
+        # (who created the key, owner account ID)
+        self.key_creators: list[tuple[str, str]] = []
         self.files: dict[str, str] = {}
         self.batches: dict[str, dict[str, Any]] = {}
         self.cancelled: list[str] = []
@@ -115,6 +119,9 @@ class FakeGateway:
         return json.loads(request.content or b"{}")
 
     def _login(self, request: httpx.Request) -> httpx.Response:
+        if self.password_login is False:
+            detail = "Password sign-in is turned off. Sign in with SSO."
+            return httpx.Response(403, json={"detail": detail})
         body = self._body(request)
         account = self.accounts.get(body["email"])
         if account is None or account["password"] != body["password"]:
@@ -129,12 +136,17 @@ class FakeGateway:
         return response
 
     def _create_key(self, request: httpx.Request) -> httpx.Response:
-        cookie = request.headers.get("cookie", "")
-        match = re.search(r"deltallm_session=([^;]+)", cookie)
-        account_id = self.sessions.get(match.group(1)) if match else None
-        if account_id is None:
-            return httpx.Response(401, json={"detail": "Authentication required"})
         body = self._body(request)
+        if request.headers.get("authorization") == f"Bearer {MASTER_KEY}":
+            account_id = body["owner_account_id"]
+            self.key_creators.append(("master", account_id))
+        else:
+            cookie = request.headers.get("cookie", "")
+            match = re.search(r"deltallm_session=([^;]+)", cookie)
+            account_id = self.sessions.get(match.group(1)) if match else None
+            if account_id is None:
+                return httpx.Response(401, json={"detail": "Authentication required"})
+            self.key_creators.append(("user", account_id))
         if (account_id, body["team_id"]) not in self.team_members:
             return httpx.Response(403, json={"detail": "not a team member"})
         if not body.get("expires"):
@@ -147,6 +159,8 @@ class FakeGateway:
     def _admin(self, request: httpx.Request, path: str) -> httpx.Response:
         method = request.method
         query = parse_qs(request.url.query.decode())
+        if path == "/ui/api/settings/sso-sign-in" and self.password_login is not None:
+            return httpx.Response(200, json={"password_login_enabled": self.password_login})
         if path == "/ui/api/callable-targets" and self.callable_targets_empty:
             return httpx.Response(200, json={"data": [], "pagination": {"has_more": False}})
         if path == "/ui/api/models":
@@ -527,6 +541,37 @@ def test_full_run_passes_and_leaves_no_key() -> None:
     assert "PASS batch: chat batch on chat-a" in output
     assert "PASS batch: embedding batch on embed-a" in output
     assert MASTER_KEY not in output
+
+
+def _test_user_id(gateway: FakeGateway) -> str:
+    return gateway.accounts["live-smoke-user@example.com"]["account_id"]
+
+
+@pytest.mark.parametrize("password_login", [True, None])
+def test_test_user_creates_the_key_when_password_sign_in_is_on(
+    password_login: bool | None,
+) -> None:
+    gateway = FakeGateway()
+    gateway.password_login = password_login
+
+    code, output = run_suite(gateway, "--no-batch")
+
+    assert code == 0, output
+    assert "API key for test user: created by the test user" in output
+    assert gateway.key_creators == [("user", _test_user_id(gateway))]
+
+
+def test_master_key_creates_the_test_key_when_password_sign_in_is_off() -> None:
+    gateway = FakeGateway()
+    gateway.password_login = False
+
+    code, output = run_suite(gateway)
+
+    assert code == 0, output
+    assert "password sign-in is off, so the master key created it for the test user" in output
+    assert gateway.key_creators == [("master", _test_user_id(gateway))]
+    assert "PASS batch: chat batch on chat-a" in output
+    assert gateway.keys == {}
 
 
 def test_empty_callable_target_list_falls_back_to_model_and_route_group_lists() -> None:
