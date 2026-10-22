@@ -1,0 +1,554 @@
+# Certify these values before external auth is enabled. Include all other clients.
+externalAuthCapacity:
+  maximumApiPods: 15
+  otherReservedConnections: 0
+  postgresConnectionBudget: 0
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 2
+revisionHistoryLimit: 10
+minReadySeconds: 5
+terminationGracePeriodSeconds: 90
+
+managedLifecycle:
+  enabled: true
+  production: false
+  exitMarginSeconds: 10
+
+image:
+  repository: deltallm/deltallm
+  pullPolicy: IfNotPresent
+  tag: "v0.5.1"
+  digest: ""
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# Router Redis keys moved from an unscoped schema to the v1 application and
+# environment namespace. Upgrades from an unmarked legacy release must
+# explicitly confirm that every old API and worker pod has been drained and
+# stopped before Recreate starts v1 pods. Later v1 upgrades detect the marker.
+routerStateSchemaCutover:
+  enabled: true
+  acknowledged: false
+
+service:
+  type: ClusterIP
+  port: 4000
+  annotations: {}
+  labels: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+probes:
+  startup:
+    enabled: true
+    path: /health/readiness
+    failureThreshold: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+  liveness:
+    path: /health/liveliness
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    successThreshold: 2
+    path: /health/readiness
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+autoscaling:
+  admittedInflight:
+    enabled: false
+    targetAverageValue: 70
+  scaleDownStabilizationSeconds: 300
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
+  allowDns: true
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+command: []
+args: []
+env: []
+envFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+api:
+  # Per-role config overrides for the API/UI/gateway Deployment.
+  # When batchWorker.enabled=true, Helm automatically disables batch
+  # background loops for API pods unless explicitly overridden here.
+  config: {}
+
+batchWorker:
+  enabled: false
+  # Local batch artifact storage is unsafe when API and worker run in separate pods.
+  # Set only for single-node/dev split-mode experiments.
+  allowUnsafeLocalStorage: false
+  replicaCount: 1
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  command: []
+  args: []
+  env: []
+  envFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 4000
+    annotations: {}
+    labels: {}
+  serviceMonitor:
+    enabled: true
+    namespace: ""
+    interval: ""
+    scrapeTimeout: ""
+    labels: {}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  autoscaling:
+    scaleDownStabilizationSeconds: 300
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  # Per-role config overrides for the batch worker Deployment.
+  # Shared config.general_settings is used first, then worker-safe defaults
+  # are filled for missing keys, then this map is applied last.
+  config: {}
+
+# Dedicated compatibility projection and expired-reservation recovery role.
+# API pods retain reservation/finalization microbatchers but do not run this loop.
+accountingWorker:
+  enabled: false
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    scaleDownStabilizationSeconds: 300
+    oldestEventAge:
+      enabled: false
+      metricName: deltallm_accounting_projection_oldest_event_age_seconds
+      targetAverageValue: "5"
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  command: []
+  args: []
+  env: []
+  envFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  # This role does not serve gateway traffic. Keep its control/foreground pools
+  # small while preserving dedicated admission and worker pools for projection.
+  config:
+    general_settings:
+      db_pool_size: 4
+      db_foreground_pool_size: 1
+      telemetry_db_pool_size: 5
+      telemetry_worker_db_pool_size: 5
+
+# Native signed RPC role. Fixed replicas and rollout overlap count in capacity.
+accountingRequest:
+  enabled: false
+  replicaCount: 1
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  command: []
+  args: []
+  env: []
+  envFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  config: {}
+
+dependencyWait:
+  enabled: true
+  timeoutSeconds: 180
+  periodSeconds: 2
+
+secret:
+  existingSecret: ""
+  keys:
+    masterKey: master-key
+    saltKey: salt-key
+    batchWebhookEncryptionKey: batch-webhook-encryption-key
+    mcpOAuthEncryptionKey: mcp-oauth-encryption-key
+  values:
+    masterKey: ""
+    saltKey: ""
+    # URL-safe base64 encoding of exactly 32 random bytes. Keep this stable
+    # for as long as pending webhook deliveries may need to be decrypted.
+    batchWebhookEncryptionKey: ""
+    # URL-safe base64 encoding of exactly 32 random bytes. Required only when
+    # an MCP server uses OAuth 2.0 (per user). If you change it, users must
+    # connect their accounts again.
+    mcpOAuthEncryptionKey: ""
+
+runtime:
+  accounting:
+    existingSecret:
+      name: ""
+      signingKey: accounting-rpc-signing-secret
+  database:
+    url: ""
+    existingSecret:
+      name: ""
+      urlKey: DATABASE_URL
+  redis:
+    url: ""
+    existingSecret:
+      name: ""
+      urlKey: REDIS_URL
+
+config:
+  # Selector-enabled chat members require model_info.chat_capabilities and context limits.
+  # Classifiers additionally require explicit provider prices and positive RPM/TPM limits.
+  # Activate only with spend_ingestion_mode: outbox and its enabled worker; see router docs.
+  model_list: []
+  router_settings:
+    routing_strategy: simple-shuffle
+    # One retry on the same deployment, then fail over to the next one.
+    num_retries: 1
+    retry_after: 1
+    timeout: 600
+    # A deployment rests for cooldown_time seconds after more than allowed_fails
+    # rate-limit, server, or timeout errors within five minutes.
+    cooldown_time: 60
+    allowed_fails: 2
+    enable_pre_call_checks: false
+    model_group_alias: {}
+    response_validation:
+      enabled: true
+      on_exhausted: return_response
+      json_healing: false
+  deltallm_settings:
+    fallbacks: []
+    context_window_fallbacks: []
+    content_policy_fallbacks: []
+    guardrails: []
+    success_callback: []
+    failure_callback: []
+    callbacks: []
+    callback_settings: {}
+    turn_off_message_logging: false
+  # Every general setting not listed here is rendered from the chart's
+  # files/config-defaults.yaml (the gateway's built-in defaults), so each ConfigMap
+  # stays explicit. Override any of them below; values here win. All settings:
+  # docs/configuration/general-settings-reference.md
+  general_settings:
+    # -------------------------------------------------------------------------
+    # Features. Which to turn on, what each needs, and ready-made profiles:
+    # docs/deployment/feature-switches.md. values-production.yaml turns on what
+    # production requires; the chart refuses a production render without it.
+    # -------------------------------------------------------------------------
+    # hybrid serves config.model_list plus models added in the Admin UI; production
+    # requires db_only with model_deployment_bootstrap_from_config: false.
+    model_deployment_source: hybrid
+    model_deployment_bootstrap_from_config: true
+    # Probes each provider's model list every health_check_interval seconds (no tokens).
+    background_health_checks: true
+    health_check_interval: 300
+    # Durable spend and audit writes. outbox adds telemetry_db_pool_size and
+    # telemetry_worker_db_pool_size connections per process; the Model Selector and
+    # Realtime require spend outbox.
+    spend_ingestion_mode: legacy
+    spend_ingestion_worker_enabled: true
+    spend_operation_intents_enabled: false
+    audit_ingestion_mode: legacy
+    audit_ingestion_worker_enabled: true
+    # Response cache. A hit is currently charged like a miss. Use redis with more
+    # than one pod.
+    cache_enabled: false
+    cache_backend: memory
+    # Batch API. With replicaCount > 1 or batchWorker.enabled, use s3 storage.
+    embeddings_batch_enabled: false
+    embeddings_batch_storage_backend: local
+    batch_webhook_enabled: false
+    # Ingress admission and preflight capacity. Size them from
+    # docs/deployment/ingress-admission.md before turning them on.
+    gateway_ingress_enabled: false
+    gateway_ingress_max_active: 100
+    gateway_ingress_max_waiters: 0
+    gateway_ingress_health_max_active: 4
+    gateway_ingress_control_max_active: 16
+    gateway_preflight_capacity_enabled: false
+    # redis_degraded_mode: fail_closed   # production; default fail_open
+    budget_enforcement_query_mode: legacy
+    tier_policy_mode: disabled
+    # Organization deletion requests. Startup fails while the deletion readiness check
+    # finds missing migrations or unowned records, so enable only after it passes and
+    # every API and worker replica reports the backend's current lifecycle
+    # protocol version (v2 for this rollout).
+    organization_deletion_requests_enabled: false
+    # Opt-in manual OpenAI Realtime sessions; requires spend outbox + Redis.
+    realtime:
+      enabled: false
+      default_transcription_model: null
+      max_connections: 64
+      global_max_connections: 256
+      organization_max_connections: 64
+      max_turns: 100
+      max_output_tokens: 4096
+      max_message_bytes: 1048576
+      max_input_bytes: 67108864
+      max_client_events: 10000
+      max_server_events: 100000
+      handshake_seconds: 10
+      session_seconds: 300
+      idle_seconds: 60
+      write_seconds: 10
+      health_seconds: 5
+      cleanup_seconds: 5
+    external_auth:
+      enabled: false
+      deployment_protocol: null
+      integrations: []
+      allowed_origins: []
+      trusted_proxy_cidrs: []
+      cleanup_batch_size: 1000
+      cleanup_interval_seconds: 5
+    api_key_auth_cache_ttl_seconds: 300
+
+    # -------------------------------------------------------------------------
+    # Connection pools. The chart reads these to size PostgreSQL
+    # and Redis connections per process; change them together
+    # with dependencyCapacity (docs/deployment/dependency-capacity.md).
+    # -------------------------------------------------------------------------
+    db_pool_size: 20
+    db_foreground_pool_size: 8
+    telemetry_db_pool_size: 5
+    telemetry_worker_db_pool_size: 5
+    spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
+    redis_critical_max_connections: 64
+    redis_bulk_max_connections: 16
+    redis_cache_max_connections: 16
+    upstream_http_max_connections: 500
+    deployment_capacity_path: null
+    deployment_capacity_role: api
+
+    # -------------------------------------------------------------------------
+    # Accounting v2 (off). Read by the chart for the accounting roles; see
+    # docs/deployment/accounting-v2.md before changing.
+    # -------------------------------------------------------------------------
+    accounting_protocol_enabled: false
+    accounting_execution_mode: assigned
+    accounting_request_url: null
+    accounting_rpc_signing_secret: null
+    accounting_rpc_max_connections: 16
+    accounting_protocol_generation: 1
+    accounting_hot_path_db_pool_size: 2
+    accounting_grants_enabled: true
+    accounting_projection_worker_enabled: false
+    accounting_projection_max_concurrent_partitions: 4
+
+s3:
+  enabled: false
+  bucket: ""
+  region: us-east-1
+  prefix: deltallm-logs/
+  compression: ""
+  accessKeyId: ""
+  secretAccessKey: ""
+  existingSecret:
+    name: ""
+    accessKeyIdKey: aws-access-key-id
+    secretAccessKeyKey: aws-secret-access-key
+
+prometheus:
+  customMetrics:
+    enabled: false # Externally managed Prometheus Adapter APIService.
+  podAnnotations:
+    enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+migrationJob:
+  enabled: false
+  external: false
+  annotations: {}
+  hook:
+    enabled: false
+    deletePolicy: before-hook-creation,hook-succeeded
+  backoffLimit: 0
+  activeDeadlineSeconds: 330
+  timeoutSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  command: [python, -m, src.prisma_bootstrap]
+  args: [--schema, ./prisma/schema.prisma, --max-attempts, "30", --sleep-seconds, "2"]
+  env: []
+  envFrom: []
+
+postgresql:
+  enabled: false
+  image:
+    tag: latest
+  auth:
+    username: deltallm
+    password: ""
+    database: deltallm
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+
+redis:
+  enabled: false
+  image:
+    tag: latest
+  auth:
+    enabled: false
+    password: ""
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+
+# Declared deployment ceilings, not a change to PostgreSQL/Redis server limits.
+# Set these from provisioned service capacity before production deployment.
+dependencyCapacity:
+  apiProcessesPerPod: 1
+  batchWorkerProcessesPerPod: 1
+  accountingWorkerProcessesPerPod: 1
+  accountingRequestProcessesPerPod: 1
+  retiringGenerations: 1
+  postgresqlMaxConnections: 1000
+  postgresqlReservedConnections: 20
+  redisMaxClients: 2000
+  redisReservedClients: 64
+  # Governed deployment allocations. Physical limits must be verified by operators.
+  extended:
+    enabled: false
+    postgresqlMigrationConnections: 0
+    postgresqlOtherConnections: 0
+    redisOtherClients: 0
+    proxyPoolsPerClient: 0
+    auxiliaryHttpConnectionsPerProcess: 0
+    cacheRedis:
+      separate: false
+      maxClients: 2000
+      reservedClients: 64
+    fileDescriptors:
+      processLimit: 8192
+      engineLimit: 1024
+      inboundConnectionsPerProcess: 256
+      otherPerProcess: 128
+      headroomPerProcess: 256
+      maxPodsPerNode: 44
+      nodeLimit: 1048576
+      nodeReserved: 8192
+    providerDomains: {}
