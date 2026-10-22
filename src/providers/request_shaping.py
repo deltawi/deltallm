@@ -93,6 +93,20 @@ PROTECTED_PARAMS = frozenset(
     }
 )
 
+# Provider-native spellings of the same limits inside nested objects, such as
+# Gemini generationConfig.maxOutputTokens or Bedrock inferenceConfig.maxTokens.
+_PROTECTED_NESTED_KEYS = frozenset(
+    {
+        "max_tokens",
+        "max_output_tokens",
+        "max_completion_tokens",
+        "maxtokens",
+        "maxoutputtokens",
+        "candidatecount",
+        "stream",
+    }
+)
+
 
 class RequestShapingError(ValueError):
     pass
@@ -138,7 +152,27 @@ def _param_path(value: object, field_name: str) -> tuple[str, ...]:
         raise RequestShapingError(
             f"{field_name} cannot change '{segments[0]}': it controls admission and billing"
         )
+    if any(segment.lower() in _PROTECTED_NESTED_KEYS for segment in segments[1:]):
+        raise RequestShapingError(
+            f"{field_name} cannot change '{value}': it controls admission and billing"
+        )
     return segments
+
+
+def _protected_nested_key(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key).lower() in _PROTECTED_NESTED_KEYS:
+                return str(key)
+            found = _protected_nested_key(item)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _protected_nested_key(item)
+            if found is not None:
+                return found
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +215,11 @@ def parse_request_shaping(params: Mapping[str, Any]) -> RequestShaping | None:
         raise RequestShapingError("override_params must hold JSON values") from exc
     if len(encoded.encode("utf-8")) > MAX_OVERRIDE_BYTES:
         raise RequestShapingError("override_params is too large")
+    nested = _protected_nested_key(dict(overrides))
+    if nested is not None:
+        raise RequestShapingError(
+            f"override_params cannot change '{nested}': it controls admission and billing"
+        )
 
     drops_raw = raw["drop_params"] or []
     if not isinstance(drops_raw, (list, tuple)):

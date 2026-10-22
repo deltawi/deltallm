@@ -63,7 +63,7 @@ DeltaLLM rejects a deployment that breaks these rules, both in `config.yaml` and
 - Auth, credential and transport headers are never forwarded or set: `Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, `Api-Key`, `Host`, `Content-Length`, `Content-Type`, `Transfer-Encoding`, `Connection`, `X-Forwarded-*`, `X-Amz-*`, `X-Deltallm-*`, and any name that contains `auth`, `token`, `secret`, `key`, `cookie`, `credential`, `password` or `signature`.
 - A header that the provider request already sets (for example the provider's auth header) is never replaced.
 - Header values are at most 1024 bytes and cannot contain line breaks or control characters. A forwarded client value that breaks this rule is skipped.
-- `model`, `messages`, `input`, `prompt`, `stream`, `stream_options`, `n`, `max_tokens`, `max_completion_tokens` and `max_output_tokens` cannot be overridden or dropped. They control admission and billing.
+- `model`, `messages`, `input`, `prompt`, `stream`, `stream_options`, `n`, `max_tokens`, `max_completion_tokens` and `max_output_tokens` cannot be overridden or dropped. They control admission and billing. The same applies to provider limit fields inside objects, such as `generationConfig.maxOutputTokens` or `inferenceConfig.maxTokens`.
 - A field cannot be both overridden and dropped. At most 16 headers and 32 parameters per deployment.
 
 `override_params` values are visible to anyone who can read the deployment. Do not put secrets in them. Use [provider credentials](../admin-ui/named-credentials.md) or `api_key` instead.
