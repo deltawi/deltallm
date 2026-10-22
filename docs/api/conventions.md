@@ -50,9 +50,35 @@ Gateway/proxy errors use the OpenAI-style envelope:
 }
 ```
 
-Validation and some control-plane errors use FastAPI's `detail` envelope. Clients integrating
-with both proxy and Admin APIs must handle both documented forms. Error messages are sanitized;
-they do not expose provider credentials or raw upstream bodies.
+Every `/v1/*` route uses this envelope, including authentication failures and request
+validation. `/v1/messages` and `/v1/messages/count_tokens` use the Anthropic error format instead.
+A request that fails validation returns `400` with `invalid_request_error` and names the field in
+`param`:
+
+```json
+{
+  "error": {
+    "message": "Missing required parameter: 'messages'",
+    "type": "invalid_request_error",
+    "param": "messages",
+    "code": null
+  }
+}
+```
+
+Admin (`/ui/api/*`) and `/auth/*` errors use FastAPI's `detail` envelope, and their validation
+errors are `422`. Clients integrating with both proxy and Admin APIs must handle both forms.
+
+Error messages are sanitized; they never return provider credentials or the provider's own error
+text. When a provider rejects a request, `code` says why:
+
+| `code` | Meaning |
+| --- | --- |
+| `context_length_exceeded` | The request is longer than the model's context window |
+| `content_policy_violation` | The provider's content policy rejected the request |
+| `provider_rejected_request` | The provider rejected the request for another reason |
+| `unsupported_model_mode` | The model is configured for another kind of request, for example a chat model on `/v1/embeddings` |
+| `context_capacity_unknown` | The routing policy requires a known context window and no deployment of the model has one |
 
 Common statuses include:
 
@@ -64,11 +90,15 @@ Common statuses include:
 | `404` | Resource/model not found or intentionally non-enumerated |
 | `408` | Gateway deadline exceeded |
 | `409` | State conflict or an approval workflow is required |
-| `422` | Typed request validation failed |
+| `422` | Typed request validation failed on an Admin or `/auth/*` route (`/v1/*` answers `400`) |
 | `429` | Rate, concurrency, or budget admission rejected the request |
 | `503` | Required gateway dependency/capacity or an eligible deployment is unavailable |
 
 A `429` response can include `Retry-After` when the gateway has a bounded retry interval.
+
+Errors that a retry cannot fix carry `x-should-retry: false`: all `4xx` responses except `408` and
+rate-limit `429`s, plus budget-exceeded `429`s and approval-required `409`s. The OpenAI and Anthropic
+SDKs read this header and skip their automatic retries.
 
 ## Pagination
 
@@ -89,9 +119,10 @@ idempotency key. Never retry a non-idempotent mutation automatically after an am
 
 ## Correlation IDs
 
-Clients can provide a bounded `X-Request-ID`; DeltaLLM uses it for supported audit, request-log,
-and correlation fields. The current API does not guarantee that an arbitrary client value is
-returned as a response header or treated as an idempotency key.
+Every response carries an `X-Request-ID` header. Clients can provide a bounded `X-Request-ID`;
+DeltaLLM keeps a valid value, or replaces it with its own, and uses it for audit, request-log, and
+correlation fields. Log it with failures so an operator can find the request. It is not an
+idempotency key.
 
 ## Streaming
 
@@ -100,6 +131,11 @@ streams emit `data:` frames and finish with the documented `[DONE]` sentinel. A 
 over only before DeltaLLM has sent the first validated downstream chunk. After response bytes
 are sent, the gateway terminates on failure instead of silently replacing the stream with a
 different provider response.
+
+If a stream fails after it started, Chat Completions and Completions send one last
+`data: {"error": {...}}` frame with the same envelope as other errors, and no `[DONE]`. The
+OpenAI SDKs raise an `APIError` on that frame. Responses sends `response.failed`, and Messages
+sends an `error` event.
 
 Clients must handle cancellation, truncated streams, and timeouts. A successful HTTP status and
 initial frame do not guarantee that a long stream will finish.

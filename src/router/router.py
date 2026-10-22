@@ -9,6 +9,7 @@ from typing import Any, Sequence, cast
 from src.route_group_config import ModelMode
 from src.metrics import increment_router_context_decision
 from src.models.errors import (
+    InvalidRequestError,
     ModelNotFoundError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
     ServiceUnavailableError,
@@ -456,6 +457,18 @@ class Router:
             )
         ]
 
+    def _no_deployment_serves_mode(
+        self, model_group: str, request_context: dict[str, Any] | None
+    ) -> bool:
+        request_mode = str((request_context or {}).get(ROUTING_MODE_CONTEXT_KEY) or "")
+        request_mode = request_mode.strip().lower()
+        if not request_mode or model_group not in self.deployment_registry:
+            return False
+        deployments = self.deployment_registry[model_group]
+        return bool(deployments) and not any(
+            self._supports_request_mode(deployment, request_mode) for deployment in deployments
+        )
+
     @staticmethod
     def _supports_request_mode(deployment: Deployment, request_mode: str) -> bool:
         if not request_mode:
@@ -587,8 +600,31 @@ class Router:
         if deployment is None:
             decision = request_context.get("route_decision") if request_context else None
             reason = decision.get("reason") if isinstance(decision, dict) else None
-            if reason == "context_capacity_exceeded":
+            if reason == "context_capacity_exceeded" or (
+                reason == "context_capacity_unknown"
+                and decision.get("primary_rejection_reason") == "context_capacity_exceeded"
+            ):
                 raise context_capacity_error(model_group)
+            if reason == "context_capacity_unknown":
+                # The routing policy skips deployments without a known context window.
+                raise InvalidRequestError(
+                    message=(
+                        f"No deployment of model '{model_group}' has a known context window, "
+                        "and its routing policy requires one"
+                    ),
+                    code="context_capacity_unknown",
+                    affects_deployment_health=False,
+                )
+            if reason == "workload_mode_mismatch" or self._no_deployment_serves_mode(
+                model_group, request_context
+            ):
+                request_mode = str((request_context or {}).get(ROUTING_MODE_CONTEXT_KEY) or "")
+                # Retrying cannot help: the model is configured for another kind of request.
+                raise InvalidRequestError(
+                    message=f"Model '{model_group}' does not support {request_mode} requests",
+                    code="unsupported_model_mode",
+                    affects_deployment_health=False,
+                )
             if model_group in self.deployment_registry:
                 raise ServiceUnavailableError(
                     message=f"No healthy deployments available for model '{model_group}'",

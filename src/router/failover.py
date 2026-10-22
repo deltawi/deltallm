@@ -1296,10 +1296,9 @@ class FailoverManager:
                     routing_context,
                     context_plan.availability,
                 )
-            if context_plan.availability in {
-                _ClassifiedFallbackAvailability.TEMPORARILY_UNAVAILABLE,
-                _ClassifiedFallbackAvailability.CAPACITY_UNKNOWN,
-            }:
+            # Fallbacks whose capacity is unknown are skipped by policy, so none can take
+            # the request and retrying cannot help: that case is a 400, not a 503.
+            if context_plan.availability is _ClassifiedFallbackAvailability.TEMPORARILY_UNAVAILABLE:
                 raise ServiceUnavailableError(
                     message=f"No healthy deployments available for model '{model_group}'",
                     code=NO_HEALTHY_DEPLOYMENTS_CODE,

@@ -2879,7 +2879,10 @@ async def test_streaming_provider_4xx_body_is_classified_before_response_commit(
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["message"] == "Provider rejected request"
+    assert response.json()["error"]["message"] == (
+        "The request is longer than the model's context window"
+    )
+    assert response.json()["error"]["code"] == "context_length_exceeded"
     assert "sk-upstream" not in response.text
     assert context.exited is True
 

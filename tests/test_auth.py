@@ -446,7 +446,7 @@ async def test_auth_rejects_key_for_inactive_organization(client, test_app):
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Organization is not active"
+    assert response.json()["error"]["message"] == "Organization is not active"
 
 
 @pytest.mark.asyncio
@@ -469,7 +469,7 @@ async def test_inactive_api_key_does_not_fall_through_to_other_auth(client, test
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Organization is not active"
+    assert response.json()["error"]["message"] == "Organization is not active"
     assert handler.calls == 0
 
 
@@ -496,7 +496,7 @@ async def test_auth_fails_closed_when_lifecycle_store_is_unavailable(client, tes
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "Organization lifecycle state unavailable"
+    assert response.json()["error"]["message"] == "Organization lifecycle state unavailable"
 
 
 @pytest.mark.asyncio
@@ -545,7 +545,7 @@ async def test_auth_jwt_team_scope_is_resolved_and_denied_when_org_inactive(
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Organization is not active"
+    assert response.json()["error"]["message"] == "Organization is not active"
 
 
 @pytest.mark.asyncio

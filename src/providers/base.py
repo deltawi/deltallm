@@ -207,8 +207,7 @@ def reject_openai_compatible_failure_response(payload: object) -> None:
             continue
         finish_reason = choice.get("finish_reason")
         if isinstance(finish_reason, str) and finish_reason.strip().lower() == "content_filter":
-            raise InvalidRequestError(
-                message="Provider rejected request",
+            raise provider_rejection_error(
                 affects_deployment_health=False,
                 failure_classification=FailureClassification.CONTENT_POLICY,
             )
@@ -338,8 +337,7 @@ def map_standard_provider_status_error(
             affects_deployment_health=True,
             failure_classification=resolved_classification,
         )
-    return InvalidRequestError(
-        message="Provider rejected request",
+    return provider_rejection_error(
         affects_deployment_health=False,
         failure_classification=resolved_classification,
         routing_failure_action=(
@@ -347,6 +345,38 @@ def map_standard_provider_status_error(
             if 400 <= status_code < 500 and resolved_classification is FailureClassification.GENERIC
             else None
         ),
+    )
+
+
+_PROVIDER_REJECTIONS = {
+    FailureClassification.CONTEXT_WINDOW: (
+        "The request is longer than the model's context window",
+        "context_length_exceeded",
+    ),
+    FailureClassification.CONTENT_POLICY: (
+        "The provider's content policy rejected the request",
+        "content_policy_violation",
+    ),
+}
+
+
+def provider_rejection(classification: FailureClassification | None) -> tuple[str, str]:
+    """The gateway's own message and code for a provider rejection of this class."""
+    return _PROVIDER_REJECTIONS.get(
+        classification or FailureClassification.GENERIC,
+        ("Provider rejected request", "provider_rejected_request"),
+    )
+
+
+def provider_rejection_error(
+    *,
+    failure_classification: FailureClassification | None,
+    **kwargs: Any,
+) -> InvalidRequestError:
+    """A provider 4xx as a stable gateway error: the provider's own text is never returned."""
+    message, code = provider_rejection(failure_classification)
+    return InvalidRequestError(
+        message=message, code=code, failure_classification=failure_classification, **kwargs
     )
 
 
@@ -388,8 +418,7 @@ def sanitize_provider_proxy_error(provider_error: ProxyError) -> ProxyError:
             failure_classification=classification,
         )
     if isinstance(provider_error, InvalidRequestError):
-        return InvalidRequestError(
-            message="Provider rejected request",
+        return provider_rejection_error(
             affects_deployment_health=health_impact,
             failure_classification=classification,
             routing_failure_action=provider_error.routing_failure_action,

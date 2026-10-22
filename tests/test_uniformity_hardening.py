@@ -426,9 +426,10 @@ async def test_invalid_json_writes_request_log_without_audit_event(client, test_
         },
         content='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}',
     )
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert detail[0]["type"] == "json_invalid"
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["message"] == "The request body is not valid JSON"
 
     await _wait_for_spend_events(test_app)
     assert len(test_app.state.spend_tracking_service.events) == 1
@@ -436,7 +437,7 @@ async def test_invalid_json_writes_request_log_without_audit_event(client, test_
     assert last["status"] == "error"
     assert last["call_type"] == "completion"
     assert last["model"] == "(unknown)"
-    assert last["http_status_code"] == 422
+    assert last["http_status_code"] == 400
     assert last["error_type"] == "request_validation_error"
     assert (last.get("metadata") or {}).get("failure_stage") == "request_validation"
     assert ((last.get("metadata") or {}).get("error") or {}).get("code") == "json_invalid"
@@ -831,7 +832,7 @@ async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_met
         (
             {"promptFeedback": {"blockReason": "SAFETY"}},
             400,
-            "Provider rejected request",
+            "The provider's content policy rejected the request",
             0,
         ),
         (
@@ -844,7 +845,7 @@ async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_met
                 ]
             },
             400,
-            "Provider rejected request",
+            "The provider's content policy rejected the request",
             0,
         ),
         (

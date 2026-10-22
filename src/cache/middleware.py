@@ -24,7 +24,7 @@ from src.chat.preflight import run_text_preflight
 from src.chat.response_validation import RESPONSE_VALIDATION_HEADER
 from src.embedding_preflight import run_embedding_preflight
 from src.middleware.auth import authenticate_request
-from src.middleware.errors import proxy_error_response
+from src.middleware.errors import http_error_response, proxy_error_response
 from src.middleware.rate_limit import _release_rate_limits
 from src.metrics import increment_request, increment_spend, increment_usage
 from src.models.errors import ProxyError
@@ -149,9 +149,11 @@ class CacheMiddleware(BaseHTTPMiddleware):
         try:
             await authenticate_request(request)
         except HTTPException as exc:
-            headers = getattr(exc, "headers", None) or {}
-            return JSONResponse(
-                status_code=exc.status_code, content={"detail": exc.detail}, headers=headers
+            return http_error_response(
+                request,
+                status_code=exc.status_code,
+                detail=exc.detail,
+                headers=getattr(exc, "headers", None),
             )
         except ProxyError as exc:
             return await self._handle_proxy_error(request, exc)

@@ -11,7 +11,6 @@ from src.metrics.counters import (
 )
 from src.models.errors import (
     FailureClassification,
-    InvalidRequestError,
     ProxyError,
     RoutingFailureAction,
 )
@@ -21,6 +20,7 @@ from src.providers.base import (
     is_valid_provider_token_count,
     map_standard_provider_status_error,
     provider_error_details_from_payload,
+    provider_rejection_error,
     validate_provider_success_payload,
 )
 from src.providers.openai_stream_contract import inspect_openai_stream_choices
@@ -211,8 +211,7 @@ async def translate_openai_compatible_stream(
 
         classified_stop = _content_filter_stop(choices)
         if classified_stop and not emitted_output:
-            raise InvalidRequestError(
-                message="Provider rejected request",
+            raise provider_rejection_error(
                 affects_deployment_health=False,
                 failure_classification=FailureClassification.CONTENT_POLICY,
             )

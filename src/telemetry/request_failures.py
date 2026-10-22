@@ -183,7 +183,7 @@ async def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
 
 
 async def maybe_log_request_validation_failure(
-    request: Request, exc: RequestValidationError
+    request: Request, exc: RequestValidationError, *, status_code: int = 422
 ) -> None:
     if _request_log_already_emitted(request):
         return
@@ -211,7 +211,7 @@ async def maybe_log_request_validation_failure(
         "validation": _validation_metadata(errors),
     }
     if uses_optional_accounting_v2_diagnostics(request):
-        record_optional_accounting_v2_diagnostic(request, status_code=422)
+        record_optional_accounting_v2_diagnostic(request, status_code=status_code)
     else:
         await enqueue_request_log_write(
             request,
@@ -229,7 +229,7 @@ async def maybe_log_request_validation_failure(
                 call_type=(context.call_type if context is not None else route.call_type),
                 metadata=metadata,
                 cache_hit=False,
-                http_status_code=422,
+                http_status_code=status_code,
                 exc=None,
                 error_type="request_validation_error",
             ),
