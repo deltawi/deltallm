@@ -148,6 +148,8 @@ async def _execute_chat(
     if context is not None:
         await context.finish()
     canonical_payload = canonical.model_dump(mode="json")
+    # Provider fields pass through to the client, but this key is the gateway's own marker.
+    canonical_payload.pop(NATIVE_RESPONSE_KEY, None)
     native_response = served_native_response(adapter)
     if native_response is not None:
         canonical_payload[NATIVE_RESPONSE_KEY] = native_response

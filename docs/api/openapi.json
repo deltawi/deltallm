@@ -359,6 +359,7 @@
         "type": "object"
       },
       "ChatCompletionRequest": {
+        "additionalProperties": true,
         "properties": {
           "frequency_penalty": {
             "anyOf": [

@@ -45,7 +45,7 @@ from src.telemetry.spend_operation import billing_write_context
 
 from .backends.base import CacheBackend, CacheEntry
 from .execution_eligibility import ResponseCacheEligibility, ResponseCacheOutcome
-from .key_builder import RESPONSES_BODY_KEY_FIELD, CacheKeyBuilder
+from .key_builder import CHAT_EXTRA_PARAMS_KEY_FIELD, RESPONSES_BODY_KEY_FIELD, CacheKeyBuilder
 from .metrics import CacheMetricsProtocol, NoopCacheMetrics
 from .pricing import has_cache_hit_only_pricing, provider_cache_miss_usage
 
@@ -351,6 +351,10 @@ class CacheMiddleware(BaseHTTPMiddleware):
             routing_runtime=routing_runtime,
         )
         prepared_data = dict(prepared.request_data)
+        if endpoint == "/v1/chat/completions" and prepared.payload.model_extra:
+            # Undeclared chat parameters (reasoning_effort, logprobs, ...) reach the provider,
+            # so a cached answer must not be shared across different values.
+            prepared_data[CHAT_EXTRA_PARAMS_KEY_FIELD] = dict(prepared.payload.model_extra)
         if endpoint == "/v1/responses":
             # The native Responses hop sends fields that the chat view does not hold
             # (reasoning, text, include, provider items), so they are key dimensions too.

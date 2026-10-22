@@ -4,7 +4,15 @@ from typing import Any, Literal
 
 from src.models.output_limits import ModelOutputTokenLimits, OutputTokenLimit
 
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from .requests import AssistantChatMessage
 
@@ -13,16 +21,43 @@ class Usage(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    # Provider breakdowns (cached_tokens, reasoning_tokens, audio_tokens, ...) returned to
+    # the client unchanged. Chat charges read only the counters above and
+    # prompt_tokens_cached, never these objects.
+    prompt_tokens_details: dict[str, JsonValue] | None = None
+    completion_tokens_details: dict[str, JsonValue] | None = None
+
+    @field_validator("prompt_tokens_details", "completion_tokens_details", mode="before")
+    @classmethod
+    def ignore_malformed_details(cls, value: object) -> object:
+        # A provider's breakdown is informational; a malformed one must not fail the answer.
+        return value if isinstance(value, dict) else None
+
+    @model_serializer(mode="wrap")
+    def serialize_details(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data = handler(self)
+        for field in ("prompt_tokens_details", "completion_tokens_details"):
+            if data.get(field) is None:
+                data.pop(field, None)
+        return data
+
+
+class ResponseAssistantMessage(AssistantChatMessage):
+    # Answer-only fields such as refusal and annotations reach the client.
+    model_config = ConfigDict(extra="allow")
 
 
 class Choice(BaseModel):
     index: int
-    message: AssistantChatMessage
+    message: ResponseAssistantMessage
     finish_reason: Literal["stop", "length", "tool_calls", "content_filter"] | None = None
     logprobs: dict[str, Any] | None = None
 
 
 class ChatCompletionResponse(BaseModel):
+    # Top-level provider fields such as service_tier reach the client.
+    model_config = ConfigDict(extra="allow")
+
     id: str
     object: Literal["chat.completion"] = "chat.completion"
     created: int

@@ -208,6 +208,25 @@ async def test_chat_cache_hit(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_chat_cache_separates_undeclared_parameters(client, test_app):
+    _enable_cache(test_app)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "cache me"}]}
+
+    low = await client.post(
+        "/v1/chat/completions", headers=headers, json={**body, "reasoning_effort": "low"}
+    )
+    high = await client.post(
+        "/v1/chat/completions", headers=headers, json={**body, "reasoning_effort": "high"}
+    )
+
+    # test_chat_cache_hit covers the hit for an identical body.
+    assert low.headers["x-deltallm-cache-hit"] == "false"
+    assert high.headers["x-deltallm-cache-hit"] == "false"
+    assert test_app.state.http_client.post_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_cache_auth_capacity_failure_returns_bounded_service_unavailable(
     client, test_app, monkeypatch
 ):
