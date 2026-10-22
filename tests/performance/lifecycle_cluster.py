@@ -123,6 +123,43 @@ class LifecycleCluster:
             raise RuntimeError(f"{command[0]} failed; see command-{sequence:03}.log")
         return result
 
+    def load_image(self, image: str) -> None:
+        """Load one platform of the candidate image into every kind node.
+
+        A release candidate is pulled by its multi-platform digest. With the
+        containerd image store, `kind load docker-image` exports the full
+        index and imports it with --all-platforms, which fails because only
+        the runner's platform was pulled. Saving the runner platform alone
+        works with both image stores.
+        """
+        platform = self.run(
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Os}}/{{.Architecture}}",
+            image,
+            timeout=30,
+        ).stdout.strip()
+        if platform not in {"linux/amd64", "linux/arm64"}:
+            raise RuntimeError("Candidate image platform is not supported")
+        archive = str(Path(self.directory.name) / "candidate-image.tar")
+        try:
+            self.run(
+                "docker",
+                "image",
+                "save",
+                "--platform",
+                platform,
+                "-o",
+                archive,
+                image,
+                timeout=600,
+            )
+            self.run(self.kind, "load", "image-archive", archive, "--name", self.name, timeout=600)
+        finally:
+            Path(archive).unlink(missing_ok=True)
+
     def kubectl(self, *args: str, **options: object) -> subprocess.CompletedProcess[str]:
         return self.run(
             "kubectl", "--kubeconfig", self.kubeconfig, "-n", NAMESPACE, *args, **options
@@ -241,7 +278,7 @@ class LifecycleCluster:
                     "node-role.kubernetes.io/control-plane-",
                     timeout=30,
                 )
-            self.run(self.kind, "load", "docker-image", image, "--name", self.name, timeout=600)
+            self.load_image(image)
             self.kubectl("create", "namespace", NAMESPACE)
             self.event("cluster_created", image=image, node_image=NODE_IMAGE, nodes=self.nodes)
             yield self

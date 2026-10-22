@@ -122,6 +122,8 @@ def test_kind_nodeport_mapping_is_bounded_and_loopback_only(tmp_path, monkeypatc
         commands.append((command, options))
         if command[-1] == "version":
             return CompletedProcess(command, 0, "kind v0.31.0")
+        if command[:3] == ("docker", "image", "inspect"):
+            return CompletedProcess(command, 0, "linux/amd64\n")
         return CompletedProcess(command, 0, "")
 
     monkeypatch.setattr(cluster, "run", run)
@@ -309,3 +311,52 @@ async def test_retiring_pod_cannot_prove_dependency_readiness_recovery(
         with pytest.raises(TimeoutError, match="readiness did not recover"):
             await lifecycle_recovery.readiness_recovery(cluster, ["http://api-a", "http://api-b"])
         cluster.event.assert_not_called()
+
+
+def test_candidate_image_loads_only_the_runner_platform(tmp_path):
+    cluster = LifecycleCluster(tmp_path / "evidence", purpose="pr8")
+    commands = []
+
+    def run(*command, **options):
+        commands.append(command)
+        stdout = "linux/amd64\n" if command[:3] == ("docker", "image", "inspect") else ""
+        return CompletedProcess(command, 0, stdout, "")
+
+    cluster.run = run
+    archive = str(Path(cluster.directory.name) / "candidate-image.tar")
+    try:
+        cluster.load_image("deltallm-lifecycle:candidate")
+    finally:
+        cluster.directory.cleanup()
+
+    assert commands[1:] == [
+        (
+            "docker",
+            "image",
+            "save",
+            "--platform",
+            "linux/amd64",
+            "-o",
+            archive,
+            "deltallm-lifecycle:candidate",
+        ),
+        (cluster.kind, "load", "image-archive", archive, "--name", cluster.name),
+    ]
+    assert not Path(archive).exists()
+
+
+def test_candidate_image_with_unknown_platform_is_not_loaded(tmp_path):
+    cluster = LifecycleCluster(tmp_path / "evidence", purpose="pr8")
+    commands = []
+
+    def run(*command, **options):
+        commands.append(command)
+        return CompletedProcess(command, 0, "windows/amd64\n", "")
+
+    cluster.run = run
+    try:
+        with pytest.raises(RuntimeError, match="platform is not supported"):
+            cluster.load_image("deltallm-lifecycle:candidate")
+    finally:
+        cluster.directory.cleanup()
+    assert len(commands) == 1
