@@ -220,10 +220,17 @@ def test_sampler_measures_delay_and_cannot_rearm_after_shutdown() -> None:
     sampler.start()
     assert len(clock.timers) == 1
     assert value("deltallm_event_loop_samplers") == before + 1
-    before_gc = value("deltallm_python_gc_pause_seconds_count", generation="2")
-    sampler._observe_gc("start", {"generation": 2})
-    sampler._observe_gc("stop", {"generation": 2})
-    assert value("deltallm_python_gc_pause_seconds_count", generation="2") == before_gc + 1
+    # A real collection in this window would also reach the sampler callback.
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        before_gc = value("deltallm_python_gc_pause_seconds_count", generation="2")
+        sampler._observe_gc("start", {"generation": 2})
+        sampler._observe_gc("stop", {"generation": 2})
+        assert value("deltallm_python_gc_pause_seconds_count", generation="2") == before_gc + 1
+    finally:
+        if gc_was_enabled:
+            gc.enable()
     clock.now = 101.25
     clock.timers[0].callback()
     assert value("deltallm_event_loop_last_lag_seconds") == 0.25
