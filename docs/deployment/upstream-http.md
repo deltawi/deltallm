@@ -49,6 +49,17 @@ Before raising limits, check:
 
 For Helm deployments, set the values under `config.general_settings` and roll the deployment. Existing processes keep their current HTTP client and upstream HTTP settings snapshot until restart.
 
+## Named Outbound Proxies
+
+Each entry in `general_settings.upstream_proxies` adds a connection pool of `upstream_http_max_connections` per process. The pool opens connections only when a deployment that uses the proxy sends calls. The startup capacity contract and the Helm dependency-capacity check count these pools:
+
+```text
+upstream HTTP connections per process =
+  upstream_http_max_connections * (1 + environment proxy pools + named proxies)
+```
+
+Count the named proxies in the egress proxy's connection capacity as well. See [Request shaping](../configuration/request-shaping.md#outbound-proxies).
+
 ## Sizing Profiles
 
 | Profile | Suggested max connections | Suggested keep-alive | Notes |

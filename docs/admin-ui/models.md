@@ -267,6 +267,30 @@ Example inline deployment payload:
 
 For shared gateway credentials, [Provider credentials](named-credentials.md) remain the recommended workflow. If a deployment references a named credential and also carries overlapping connection fields locally, the named credential values win.
 
+## Parameters, Headers and Network
+
+The model form has two cards that change what DeltaLLM sends to the provider. A number next to the card title shows how many rules are set.
+
+**Parameters** has one row per body field:
+
+- **Default** fills a value the client left out (`model_info.default_params`).
+- **Override** always sends this value (`override_params`). Object values are merged.
+- **Drop** removes the field before the call (`drop_params`).
+
+Values keep their JSON type: `0.2` is a number, `true` a boolean and `{"enable_thinking": false}` an object. Override and Drop are available for chat models only.
+
+**Headers & Network** (named **Network** for non-chat models):
+
+- **Session ID** always sends the header: the client's value, or a stable ID for the conversation from the gateway.
+- **Forward** copies the header from the client request when present.
+- **Set** sends a fixed value.
+- **OpenCode Go** adds an `x-opencode-session` Session ID row.
+- **Outbound proxy** picks one of the proxies the operator defined in `general_settings.upstream_proxies`. Calls and health checks for this model then go through it.
+
+Auth and credential headers (Authorization, Cookie, API keys) are rejected when you save. See [Request shaping](../configuration/request-shaping.md) for all rules.
+
+![Headers & Network card](images/models-headers-network.png)
+
 ## Operational Notes
 
 - DeltaLLM validates provider and mode compatibility when you create or update a deployment
@@ -278,6 +302,7 @@ For shared gateway credentials, [Provider credentials](named-credentials.md) rem
 
 ## Related Pages
 
+- [Request shaping](../configuration/request-shaping.md)
 - [Provider credentials](named-credentials.md)
 - [Route Groups](route-groups.md)
 - [Model Deployments config reference](../configuration/models.md)

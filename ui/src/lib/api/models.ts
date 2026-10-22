@@ -224,6 +224,8 @@ export const models = {
   ) => apiFetch<ModelListResponse>(withQuery('/ui/api/models', params), { signal }),
   providerHealthSummary: (signal?: AbortSignal) =>
     apiFetch<ProviderHealthSummary>('/ui/api/models/provider-health-summary', { signal }),
+  outboundProxies: (signal?: AbortSignal) =>
+    apiFetch<{ data: string[] }>('/ui/api/models/outbound-proxies', { signal }),
   providerPresets: (signal?: AbortSignal) =>
     apiFetch<{ data: ProviderPreset[] }>('/ui/api/provider-presets', { signal }),
   discoverProviderModels: (payload: ProviderModelDiscoveryPayload, signal?: AbortSignal) =>

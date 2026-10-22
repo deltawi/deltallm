@@ -26665,6 +26665,73 @@
         ]
       }
     },
+    "/ui/api/models/outbound-proxies": {
+      "get": {
+        "operationId": "list_outbound_proxies_ui_api_models_outbound_proxies_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Outbound Proxies Ui Api Models Outbound Proxies Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Outbound Proxies",
+        "tags": [
+          "Models"
+        ]
+      }
+    },
     "/ui/api/models/provider-health-summary": {
       "get": {
         "operationId": "provider_health_summary_ui_api_models_provider_health_summary_get",

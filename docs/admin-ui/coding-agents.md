@@ -47,6 +47,16 @@ The **Your agent keys** list shows the coding-agent keys of the member, with the
 
 The setup text uses the address of the admin UI as the gateway address.
 
+## Use OpenCode Go through DeltaLLM
+
+OpenCode Go needs an `x-opencode-session` header on every call. To serve OpenCode Go models through DeltaLLM:
+
+1. Add a chat model with provider **OpenAI** (OpenAI-compatible), the API base `https://opencode.ai/zen/go/v1` and the OpenCode Go API key.
+2. Open **Headers & Network** and click **OpenCode Go**. This adds a Session ID row for `x-opencode-session`.
+3. Save, then select the model on this page.
+
+DeltaLLM forwards the session ID that OpenCode sends. When a client sends none, DeltaLLM sends a stable ID for each conversation. See [Request shaping](../configuration/request-shaping.md#example-opencode-go).
+
 ## Daily budget
 
 The key budget resets every day at 00:00 UTC. When the key spends its daily budget, the gateway refuses requests with that key until the next reset. The team and organization budgets also apply.

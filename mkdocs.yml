@@ -169,6 +169,7 @@ nav:
       - Configuration:
           - Overview: configuration/index.md
           - Model deployments: configuration/models.md
+          - Request shaping: configuration/request-shaping.md
           - Routing settings: configuration/router.md
           - Model router administration: configuration/model-router-admin.md
           - General settings guide: configuration/general.md

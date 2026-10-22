@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react';
 import RealtimeModelFields from './models/RealtimeModelFields';
 import Card from './Card';
-import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
+import { ChevronDown, ExternalLink } from 'lucide-react';
 import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
 import ProviderBadge from './ProviderBadge';
 import Button from './Button';
@@ -35,11 +35,36 @@ import {
   type ModelMode,
   type ModelPayload,
 } from './modelFormShared';
+import { HeadersNetworkCardBody, ParametersCardBody } from './models/RequestShapingCards';
+import {
+  EMPTY_REQUEST_SHAPING,
+  activeNetworkCount,
+  activeParamCount,
+  validateRequestShaping,
+  type RequestShapingForm,
+} from './models/requestShaping';
 
 let collapsibleIdCounter = 0;
 const MODEL_BATCH_CONFIG_DOCS_URL = 'https://deltallm.readthedocs.io/en/latest/admin-ui/models/#chat-batch-execution';
 
-function CollapsibleCard({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+function CountBadge({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{count}</span>
+  );
+}
+
+function CollapsibleCard({
+  title,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  badge?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const [id] = useState(() => `collapsible-${++collapsibleIdCounter}`);
   return (
@@ -51,7 +76,10 @@ function CollapsibleCard({ title, defaultOpen = false, children }: { title: stri
         aria-controls={id}
         className="flex items-center justify-between w-full px-5 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-inset rounded-xl"
       >
-        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+        <span className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+          {badge}
+        </span>
         <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && <div id={id} role="region" aria-label={title} className="px-5 pb-5">{children}</div>}
@@ -206,7 +234,7 @@ function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayload): s
 
 interface ModelFormProps {
   initialValues?: ModelFormValues;
-  initialDefaultParams?: { key: string; value: string }[];
+  initialShaping?: RequestShapingForm;
   initialModelInfo?: Record<string, unknown>;
   onSubmit: (payload: ModelPayload) => Promise<void>;
   onCancel: () => void;
@@ -313,7 +341,7 @@ function validateCapacityFraction(value: string): string | null {
 
 export default function ModelForm({
   initialValues,
-  initialDefaultParams,
+  initialShaping,
   initialModelInfo,
   onSubmit,
   onCancel,
@@ -337,7 +365,7 @@ export default function ModelForm({
       ? values
       : { ...values, credential_source: 'named' };
   });
-  const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>(initialDefaultParams || []);
+  const [shaping, setShaping] = useState<RequestShapingForm>(initialShaping || EMPTY_REQUEST_SHAPING);
   const [initialModelInfoSnapshot] = useState<Record<string, unknown>>(() => ({ ...(initialModelInfo || {}) }));
   const [validationError, setValidationError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
@@ -436,6 +464,12 @@ export default function ModelForm({
   const chatBatchingSyncMicrobatch = form.chat_batching_mode === 'sync_microbatch';
   const supportsBatchCapacity = mode === 'chat' || mode === 'embedding';
   const defaultParamHint = defaultParameterHint(form.provider, mode);
+  const paramCount = activeParamCount(shaping);
+  const networkCount = activeNetworkCount(shaping);
+  const updateShaping = (next: RequestShapingForm) => {
+    setShaping(next);
+    if (validationError) setValidationError(null);
+  };
 
   const clearValidation = (field?: RequiredField) => {
     if (validationError) setValidationError(null);
@@ -729,6 +763,11 @@ export default function ModelForm({
       );
       return;
     }
+    const shapingError = validateRequestShaping(shaping, { chat: mode === 'chat' });
+    if (shapingError) {
+      setValidationError(shapingError);
+      return;
+    }
     const payload = buildModelPayload(
       {
         ...form,
@@ -742,7 +781,7 @@ export default function ModelForm({
         named_credential_id: namedCredentialId,
         access_groups: accessGroupCommit?.value ?? form.access_groups,
       },
-      defaultParams,
+      shaping,
       initialModelInfoSnapshot,
     );
     await onSubmit(payload);
@@ -1481,53 +1520,23 @@ export default function ModelForm({
         </div>
       </CollapsibleCard>}
 
-      <CollapsibleCard title="Default Parameters">
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <p className="text-xs text-gray-400">{defaultParamHint.description}</p>
-            {defaultParamHint.details?.map((detail) => (
-              <p key={detail} className="text-xs text-gray-500">{detail}</p>
-            ))}
-          </div>
-          {defaultParams.map((param, idx) => (
-            <div key={idx} className="flex items-center gap-2">
-              <input
-                value={param.key}
-                onChange={(e) => {
-                  const updated = [...defaultParams];
-                  updated[idx] = { ...updated[idx], key: e.target.value };
-                  setDefaultParams(updated);
-                }}
-                placeholder={defaultParamHint.keyPlaceholder}
-                className={`flex-1 ${inputClass}`}
-              />
-              <input
-                value={param.value}
-                onChange={(e) => {
-                  const updated = [...defaultParams];
-                  updated[idx] = { ...updated[idx], value: e.target.value };
-                  setDefaultParams(updated);
-                }}
-                placeholder={defaultParamHint.valuePlaceholder}
-                className={`flex-1 ${inputClass}`}
-              />
-              <button
-                type="button"
-                onClick={() => setDefaultParams(defaultParams.filter((_, i) => i !== idx))}
-                className="p-2 hover:bg-red-50 rounded-lg"
-              >
-                <X className="w-4 h-4 text-red-400" />
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            onClick={() => setDefaultParams([...defaultParams, { key: '', value: '' }])}
-            className="flex items-center gap-1.5 text-sm text-brand-primary-ink hover:text-brand-primary-ink-hover font-medium"
-          >
-            <Plus className="w-3.5 h-3.5" /> Add Default Parameter
-          </button>
-        </div>
+      <CollapsibleCard title="Parameters" badge={<CountBadge count={paramCount} />}>
+        <ParametersCardBody
+          shaping={shaping}
+          onChange={updateShaping}
+          chat={mode === 'chat'}
+          description={defaultParamHint.description}
+          details={defaultParamHint.details}
+          keyPlaceholder={defaultParamHint.keyPlaceholder}
+          valuePlaceholder={defaultParamHint.valuePlaceholder}
+        />
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        title={mode === 'chat' ? 'Headers & Network' : 'Network'}
+        badge={<CountBadge count={networkCount} />}
+      >
+        <HeadersNetworkCardBody shaping={shaping} onChange={updateShaping} chat={mode === 'chat'} />
       </CollapsibleCard>
 
       {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}

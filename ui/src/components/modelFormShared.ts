@@ -9,6 +9,12 @@ import {
 } from 'lucide-react';
 import type { ModelDeploymentDetail, ModelWritePayload } from '../lib/api';
 import { normalizeProvider, supportsCustomUpstreamAuthProvider } from '../lib/providers';
+import {
+  EMPTY_REQUEST_SHAPING,
+  applyRequestShaping,
+  shapingFromModel,
+  type RequestShapingForm,
+} from './models/requestShaping';
 
 export type ModelMode =
   | 'chat'
@@ -366,7 +372,7 @@ function toModelMode(value: unknown): ModelMode {
 
 export function buildModelPayload(
   form: ModelFormValues,
-  defaultParams: { key: string; value: string }[],
+  shaping: RequestShapingForm = EMPTY_REQUEST_SHAPING,
   existingModelInfo: Record<string, unknown> = {},
 ): ModelPayload {
   const useNamedCredential = form.credential_source === 'named';
@@ -467,18 +473,7 @@ export function buildModelPayload(
     }
   }
 
-  const defaultParamsPayload: Record<string, string | number | boolean> = {};
-  for (const param of defaultParams) {
-    if (!param.key.trim()) {
-      continue;
-    }
-    const value = param.value.trim();
-    if (value === 'true') defaultParamsPayload[param.key.trim()] = true;
-    else if (value === 'false') defaultParamsPayload[param.key.trim()] = false;
-    else if (value !== '' && !Number.isNaN(Number(value))) defaultParamsPayload[param.key.trim()] = Number(value);
-    else defaultParamsPayload[param.key.trim()] = value;
-  }
-  model_info.default_params = Object.keys(defaultParamsPayload).length > 0 ? defaultParamsPayload : {};
+  applyRequestShaping(shaping, deltallm_params, model_info, { chat: form.mode === 'chat' });
 
   const payload: ModelPayload = {
     model_name: form.api_model_id.trim() || form.model_name.trim(),
@@ -499,7 +494,7 @@ export function buildModelPayload(
 
 export function formFromModel(
   model: ModelDeploymentDetail,
-): { form: ModelFormValues; defaultParams: { key: string; value: string }[] } {
+): { form: ModelFormValues; shaping: RequestShapingForm } {
   const lp = objectRecordOrEmpty(model.deltallm_params);
   const mi = objectRecordOrEmpty(model.model_info);
   const chatBatching = objectRecordOrEmpty(lp.chat_batching);
@@ -580,13 +575,7 @@ export function formFromModel(
     batch_output_cost_per_token: strOrEmpty(mi.batch_output_cost_per_token),
   };
 
-  const defaultParamsValue = mi.default_params;
-  const defaultParams =
-    defaultParamsValue && typeof defaultParamsValue === 'object'
-      ? Object.entries(defaultParamsValue).map(([key, value]) => ({ key, value: String(value) }))
-      : [];
-
-  return { form, defaultParams };
+  return { form, shaping: shapingFromModel(lp, mi) };
 }
 
 function toChatBatchingMode(value: unknown): ChatBatchingMode {
