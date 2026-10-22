@@ -54,7 +54,7 @@
 {{- $db = add $db $g.telemetry_worker_db_pool_size -}}
 {{- end -}}
 {{- end -}}
-{{- $pools := dict "postgresql" $db "redisCritical" $g.redis_critical_max_connections "redisCache" (add $g.redis_cache_max_connections $g.redis_bulk_max_connections) "upstreamHttp" (mul $g.upstream_http_max_connections (add 1 $extended.proxyPoolsPerClient)) "controlHttp" (mul 100 (add 1 $extended.proxyPoolsPerClient)) "auxiliaryHttp" $extended.auxiliaryHttpConnectionsPerProcess -}}
+{{- $pools := dict "postgresql" $db "redisCritical" $g.redis_critical_max_connections "redisCache" (add $g.redis_cache_max_connections $g.redis_bulk_max_connections) "upstreamHttp" (mul $g.upstream_http_max_connections (add 1 $extended.proxyPoolsPerClient (len (default (dict) $g.upstream_proxies)))) "controlHttp" (mul 100 (add 1 $extended.proxyPoolsPerClient)) "auxiliaryHttp" $extended.auxiliaryHttpConnectionsPerProcess -}}
 {{- $_ := set $pools "accountingHttp" 0 -}}
 {{- if $minimal -}}
 {{- $db = int $g.accounting_hot_path_db_pool_size -}}

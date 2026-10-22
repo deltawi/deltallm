@@ -16,6 +16,7 @@ from src.providers.chat_upstream import ChatUpstream
 from src.providers.error_body import provider_error_body_is_unavailable
 from src.providers.signing import apply_request_signing
 from src.providers.token_receipt import TokenReceiptObserver
+from src.upstream_http import upstream_proxy_kwargs
 
 logger = logging.getLogger(__name__)
 RESPONSE_CLOSE_GRACE_SECONDS = 0.05
@@ -109,6 +110,7 @@ async def execute_chat_hop(
             payload=payload,
             timeout=timeout,
             bounded=bounded,
+            proxy_kwargs=upstream_proxy_kwargs(upstream.outbound_proxy),
         )
     except Exception as exc:
         _handle_transport_error(exc, observer, output_observer, bounded, started)
@@ -161,6 +163,7 @@ async def _send(
     payload: dict[str, object],
     timeout: httpx.Timeout,
     bounded: BoundedChatResponse | None,
+    proxy_kwargs: dict[str, dict[str, str]],
 ) -> httpx.Response:
     if bounded is not None:
         try:
@@ -172,6 +175,7 @@ async def _send(
                 payload=payload,
                 timeout=timeout,
                 bound=bounded,
+                extensions=proxy_kwargs.get("extensions"),
             )
         except httpx.PoolTimeout:
             # Keep this proof of no dispatch until the hop observes zero output.
@@ -181,8 +185,10 @@ async def _send(
         except httpx.HTTPError:
             raise ChatHopError(ChatHopFailureCause.TRANSPORT_ERROR) from None
     if body is not None:
-        return await client.post(url, headers=headers, content=body, timeout=timeout)
-    return await client.post(url, headers=headers, json=payload, timeout=timeout)
+        return await client.post(
+            url, headers=headers, content=body, timeout=timeout, **proxy_kwargs
+        )
+    return await client.post(url, headers=headers, json=payload, timeout=timeout, **proxy_kwargs)
 
 
 async def _send_bounded(
@@ -194,6 +200,7 @@ async def _send_bounded(
     payload: dict[str, object],
     timeout: httpx.Timeout,
     bound: BoundedChatResponse,
+    extensions: dict[str, str] | None = None,
 ) -> httpx.Response:
     headers = {**headers, "Accept-Encoding": "identity"}
     request = client.build_request(
@@ -203,6 +210,7 @@ async def _send_bounded(
         content=body,
         json=payload if body is None else None,
         timeout=timeout,
+        extensions=extensions,
     )
     response = await client.send(request, stream=True, follow_redirects=False)
     try:

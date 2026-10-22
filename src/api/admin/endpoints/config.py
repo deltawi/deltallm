@@ -621,6 +621,12 @@ async def get_settings(
     }
 
 
+def app_config_proxy_names(request: Request) -> set[str]:
+    app_config = getattr(request.app.state, "app_config", None)
+    general = getattr(app_config, "general_settings", None)
+    return set(getattr(general, "upstream_proxies", None) or {})
+
+
 @router.put(
     "/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]
 )
@@ -651,6 +657,24 @@ async def update_settings(
                 detail={
                     "code": "restart_required",
                     "message": "general_settings.redis_bulk_url requires startup configuration",
+                },
+            )
+    if "upstream_proxies" in general_updates:
+        # Proxy URLs can carry credentials and are read only at startup; the page
+        # shows names with masked URLs and may send them back unchanged.
+        general_updates = dict(general_updates)
+        submitted = general_updates.pop("upstream_proxies")
+        unchanged = submitted is None or (
+            isinstance(submitted, dict)
+            and set(submitted) == app_config_proxy_names(request)
+            and all(value == "**********" for value in submitted.values())
+        )
+        if not unchanged:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "restart_required",
+                    "message": "general_settings.upstream_proxies requires startup configuration",
                 },
             )
     router_updates = (

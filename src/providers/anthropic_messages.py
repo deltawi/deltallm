@@ -35,6 +35,7 @@ from src.providers.resolution import (
     resolve_upstream_model,
 )
 from src.providers.token_receipt import ProviderTokenReceipt
+from src.upstream_http import upstream_proxy_kwargs
 
 _MAX_HEADER_VALUE_CHARS = 4096
 _FORWARDED_CLIENT_ERROR_STATUSES = frozenset({400, 413, 422})
@@ -372,7 +373,11 @@ async def count_native_message_tokens(
     body["model"] = resolve_upstream_model(params) or body.get("model")
     try:
         response = await client.post(
-            url, headers=native.upstream_headers(upstream.headers), json=body, timeout=timeout
+            url,
+            headers=native.upstream_headers(upstream.headers),
+            json=body,
+            timeout=timeout,
+            **upstream_proxy_kwargs(upstream.outbound_proxy),
         )
     except httpx.HTTPError as exc:
         raise NativeTokenCountUnavailable from exc

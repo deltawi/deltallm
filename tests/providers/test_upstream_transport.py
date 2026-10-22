@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import httpcore2
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from src.providers.http_transport import UpstreamHTTPTransport
 from src.upstream_http import build_upstream_http_client
@@ -282,3 +283,47 @@ async def test_factory_error_hook_still_bounds_provider_error_body(monkeypatch):
         assert len(response.content) == 65536
         assert response.extensions["deltallm_provider_error_body_truncated"]
         assert not client._transport._pool._requests
+
+
+async def test_named_proxy_routes_one_call_and_fails_closed_for_unknown_names(monkeypatch):
+    from src.upstream_http import outbound_proxy_scope, upstream_proxy_kwargs
+
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+    settings = SimpleNamespace(
+        upstream_http_max_connections=4,
+        upstream_http_max_keepalive_connections=2,
+        upstream_proxies={"corp": SecretStr("http://user:password@corp-proxy.example:3128")},
+    )
+    async with build_upstream_http_client(settings) as client:
+        direct_backend, proxy_backend = RecordingBackend(), RecordingBackend()
+        client._transport._pool._network_backend = direct_backend
+        named = client._transport._named_proxies["corp"]
+        assert named._pool._max_connections == 4
+        named._pool._network_backend = proxy_backend
+
+        await client.get("http://provider.example/models")
+        await client.get("http://provider.example/models", **upstream_proxy_kwargs("corp"))
+        with outbound_proxy_scope("corp"):
+            await client.get("http://provider.example/health")
+        assert direct_backend.addresses == [("provider.example", 80)]
+        assert proxy_backend.addresses == [("corp-proxy.example", 3128)]
+        sent = b"".join(b"".join(stream.writes) for stream in proxy_backend.streams)
+        assert b"Proxy-Authorization: Basic dXNlcjpwYXNzd29yZA==" in sent
+        assert b"deltallm_outbound_proxy" not in sent
+
+        with pytest.raises(httpx.ProxyError):
+            await client.get("http://provider.example/models", **upstream_proxy_kwargs("gone"))
+        with outbound_proxy_scope("gone"), pytest.raises(httpx.ProxyError):
+            await client.get("http://provider.example/models")
+        assert direct_backend.addresses == [("provider.example", 80)]
+    assert named._pool._connections == []
+
+
+def test_upstream_proxy_kwargs_is_empty_for_direct_calls():
+    from src.upstream_http import upstream_proxy_kwargs, upstream_proxy_pool_count
+
+    assert upstream_proxy_kwargs(None) == {}
+    assert upstream_proxy_pool_count(SimpleNamespace(upstream_proxies={"a": 1, "b": 2})) == 2
+    assert upstream_proxy_pool_count(None) == 0

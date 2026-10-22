@@ -22,6 +22,14 @@ if TYPE_CHECKING:
     from src.config_runtime.secrets import SecretResolver
 
 _NON_SECRET_CONNECTION_KEYS = {
+    # Request shaping never holds credentials: credential-like header names are
+    # rejected, and nested parameter names such as budget_tokens must stay readable.
+    "override_params",
+    "drop_params",
+    "forward_headers",
+    "extra_headers",
+    "session_header",
+    "outbound_proxy",
     "api_base",
     "api_version",
     "auth_header_format",

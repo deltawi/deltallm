@@ -39,6 +39,7 @@ from src.upstream_auth import (
     validate_auth_header_name,
 )
 from src.providers.healthcheck import probe_provider_health
+from src.providers.request_shaping import RequestShapingError, parse_request_shaping
 from src.providers.model_discovery import discover_provider_models
 from src.providers.resolution import (
     provider_presets,
@@ -837,11 +838,38 @@ async def _sync_auto_follow_org_bindings(app: Any) -> None:
     await reload_callable_target_grants_for_app(app)
 
 
-def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
+def _validate_model_config_or_400(model_config: dict[str, Any], request: Request) -> None:
     try:
         validate_provider_mode_compatibility(model_config)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    _validate_request_shaping_or_400(model_config.get("deltallm_params") or {}, request)
+
+
+def _configured_upstream_proxy_names(request: Request) -> frozenset[str]:
+    names = getattr(request.app.state, "upstream_proxy_names", None)
+    if names is not None:
+        return frozenset(names)
+    app_config = getattr(request.app.state, "app_config", None)
+    general = getattr(app_config, "general_settings", None)
+    return frozenset(getattr(general, "upstream_proxies", None) or {})
+
+
+def _validate_request_shaping_or_400(params: dict[str, Any], request: Request) -> None:
+    try:
+        shaping = parse_request_shaping(params)
+    except RequestShapingError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if shaping is None or shaping.outbound_proxy is None:
+        return
+    if shaping.outbound_proxy not in _configured_upstream_proxy_names(request):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"outbound_proxy '{shaping.outbound_proxy}' is not configured; "
+                "an operator defines proxies in general_settings.upstream_proxies"
+            ),
+        )
 
 
 def _normalize_model_info_or_400(
@@ -1356,6 +1384,12 @@ async def discover_models_for_provider(
     )
 
 
+@router.get("/ui/api/models/outbound-proxies", dependencies=[Depends(require_authenticated)])
+async def list_outbound_proxies(request: Request) -> dict[str, Any]:
+    # Names only: proxy URLs can carry credentials and stay in the operator config.
+    return {"data": sorted(_configured_upstream_proxy_names(request))}
+
+
 @router.get("/ui/api/models/identity", dependencies=[Depends(require_authenticated)])
 async def get_model_identity(request: Request) -> dict[str, Any]:
     principal = asset_principal_for_request(request)
@@ -1776,7 +1810,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         else None,
         "display_name": display_name,
     }
-    _validate_model_config_or_400(model_config)
+    _validate_model_config_or_400(model_config, request)
 
     hot_reload: ModelHotReloadManager | None = getattr(
         request.app.state, "model_hot_reload_manager", None
@@ -2128,7 +2162,7 @@ async def update_model(
         "clear_credential_binding": named_credential_id is None,
         "display_name": display_name,
     }
-    _validate_model_config_or_400(model_config)
+    _validate_model_config_or_400(model_config, request)
 
     if hot_reload is not None:
         try:

@@ -127,6 +127,19 @@ class DeltaLLMParams(BaseModel):
     stream_timeout: int | None = None
     max_tokens: int | None = None
     chat_batching: ChatBatchingConfig | None = None
+    override_params: dict[str, Any] | None = None
+    drop_params: list[str] | None = None
+    forward_headers: list[str] | None = None
+    extra_headers: dict[str, str] | None = None
+    session_header: str | None = None
+    outbound_proxy: str | None = None
+
+    @model_validator(mode="after")
+    def validate_request_shaping(self) -> "DeltaLLMParams":
+        from src.providers.request_shaping import parse_request_shaping
+
+        parse_request_shaping(self.model_dump(exclude_none=True))
+        return self
 
     @field_validator("auth_header_name")
     @classmethod
@@ -630,6 +643,8 @@ class GeneralSettings(
     upstream_http_max_connections: int = Field(default=500, gt=0)
     upstream_http_max_keepalive_connections: int = Field(default=100, ge=0)
     upstream_http_keepalive_expiry_seconds: float = Field(default=60.0, ge=0)
+    # Operator-defined outbound proxies; model deployments select one by name.
+    upstream_proxies: dict[str, SecretStr] = Field(default_factory=dict)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str | None = None
@@ -1018,6 +1033,13 @@ class GeneralSettings(
             raise ValueError(f"{info.field_name} requires unique ports")
         return value
 
+    @field_validator("upstream_proxies", mode="before")
+    @classmethod
+    def validate_upstream_proxies(cls, value: object) -> dict[str, SecretStr]:
+        from src.outbound.upstream_proxies import normalize_upstream_proxies
+
+        return normalize_upstream_proxies(value)
+
     @field_validator("provider_discovery_allowed_private_cidrs", "mcp_oauth_allowed_private_cidrs")
     @classmethod
     def validate_provider_discovery_cidrs(cls, value: list[str], info: ValidationInfo) -> list[str]:
@@ -1198,6 +1220,18 @@ class AppConfig(BaseModel):
         validation_alias=AliasChoices("deltallm_settings", "litellm_settings"),
     )
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
+
+    @model_validator(mode="after")
+    def validate_outbound_proxy_names(self) -> "AppConfig":
+        proxies = self.general_settings.upstream_proxies
+        for entry in self.model_list:
+            name = entry.deltallm_params.outbound_proxy
+            if name and name not in proxies:
+                raise ValueError(
+                    f"model '{entry.model_name}' names outbound proxy '{name}', "
+                    "which general_settings.upstream_proxies does not define"
+                )
+        return self
 
 
 class Settings(

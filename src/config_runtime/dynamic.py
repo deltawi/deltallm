@@ -77,6 +77,7 @@ _STARTUP_ONLY_GENERAL_SETTINGS = (
     | frozenset(
         {
             "realtime",
+            "upstream_proxies",
             "external_auth",
             "ui_mount",
             "spend_ingestion_worker_enabled",

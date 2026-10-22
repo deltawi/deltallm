@@ -8,6 +8,7 @@ import asyncio
 import httpx
 from fastapi import Request
 
+from src.chat.request_shaping import shape_chat_attempt
 from src.chat.stream_validation import validate_first_downstream_stream_frame
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
@@ -29,7 +30,10 @@ from src.providers.resolution import provider_supports_stream_usage_request, res
 from src.providers.signing import apply_request_signing
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
-from src.upstream_http import build_upstream_request_timeout_for_request
+from src.upstream_http import (
+    build_upstream_request_timeout_for_request,
+    upstream_proxy_kwargs,
+)
 
 
 @dataclass
@@ -108,6 +112,7 @@ async def _execute_chat(
     upstream_payload = await adapter.translate_request(upstream_request, params)
 
     _apply_default_params(adapter, upstream_payload, deployment.model_info)
+    upstream = shape_chat_attempt(request, payload, deployment, upstream, upstream_payload)
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
     )
@@ -209,18 +214,19 @@ async def _open_stream_with_first_chunk(
     upstream = bind_native_upstream(
         resolve_chat_upstream(request, params, is_stream=bool(payload.stream)), native
     )
-    adapter, api_base, endpoint, headers, timeout = (
-        upstream.adapter,
-        upstream.api_base,
-        upstream.endpoint,
-        upstream.headers,
-        upstream.timeout,
-    )
+    adapter = upstream.adapter
     upstream_request = _upstream_chat_request(payload)
     client_stream_usage_requested = _client_stream_usage_requested(payload)
     upstream_payload = await adapter.translate_request(upstream_request, params)
 
     _apply_default_params(adapter, upstream_payload, deployment.model_info)
+    upstream = shape_chat_attempt(request, payload, deployment, upstream, upstream_payload)
+    api_base, endpoint, headers, timeout = (
+        upstream.api_base,
+        upstream.endpoint,
+        upstream.headers,
+        upstream.timeout,
+    )
     context: OutputTokenContext | None = getattr(
         getattr(request, "state", None), "output_token_context", None
     )
@@ -251,6 +257,7 @@ async def _open_stream_with_first_chunk(
             headers=signed_headers,
             content=body_override,
             timeout=request_timeout,
+            **upstream_proxy_kwargs(upstream.outbound_proxy),
         )
     else:
         context_manager = request.app.state.http_client.stream(
@@ -259,6 +266,7 @@ async def _open_stream_with_first_chunk(
             headers=signed_headers,
             json=upstream_payload,
             timeout=request_timeout,
+            **upstream_proxy_kwargs(upstream.outbound_proxy),
         )
     upstream_started = perf_counter()
     if context is not None:

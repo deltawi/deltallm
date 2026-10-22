@@ -40,7 +40,11 @@ from src.providers.gemini import reject_gemini_failure_response
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
-from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
+from src.upstream_http import (
+    build_upstream_request_timeout_for_request,
+    configured_timeout_seconds,
+    upstream_proxy_kwargs,
+)
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
@@ -202,6 +206,7 @@ async def _execute_tts(
         timeout=build_upstream_request_timeout_for_request(
             request, configured_timeout_seconds(params.get("timeout"))
         ),
+        **upstream_proxy_kwargs(deployment.deltallm_params.get("outbound_proxy")),
     )
     if response.status_code >= 400:
         status_error = httpx.HTTPStatusError(
@@ -633,6 +638,7 @@ async def _execute_gemini_tts(
             request,
             configured_timeout_seconds(deployment.deltallm_params.get("timeout")),
         ),
+        **upstream_proxy_kwargs(deployment.deltallm_params.get("outbound_proxy")),
     )
     if response.status_code >= 400:
         status_error = httpx.HTTPStatusError(
@@ -697,6 +703,7 @@ async def _execute_elevenlabs_tts(
             request,
             configured_timeout_seconds(deployment.deltallm_params.get("timeout")),
         ),
+        **upstream_proxy_kwargs(deployment.deltallm_params.get("outbound_proxy")),
     )
     if response.status_code >= 400:
         status_error = httpx.HTTPStatusError(

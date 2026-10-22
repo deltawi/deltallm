@@ -13,6 +13,11 @@ from src.models.errors import (
     NO_HEALTHY_DEPLOYMENTS_CODE,
     ServiceUnavailableError,
 )
+from src.providers.request_shaping import (
+    RequestShaping,
+    RequestShapingError,
+    parse_request_shaping,
+)
 from src.providers.resolution import provider_supports_mode, resolve_provider
 from src.router.candidates import (
     DEFAULT_ATTEMPT_PERMIT_TTL_SECONDS,
@@ -95,8 +100,16 @@ class Deployment:
     named_credential_id: str | None = None
     route_group_key: str | None = None
     health_ref: DeploymentHealthRef = field(init=False)
+    request_shaping: RequestShaping | RequestShapingError | None = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
+        # Parsed once per deployment; an invalid config fails its calls closed.
+        try:
+            self.request_shaping = parse_request_shaping(self.deltallm_params)
+        except RequestShapingError as exc:
+            self.request_shaping = exc
         if self.health_incarnation is None:
             self.health_ref = DeploymentHealthRef(self.deployment_id)
             return

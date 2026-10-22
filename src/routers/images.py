@@ -45,7 +45,11 @@ from src.telemetry.spend_operation import (
     durable_provider_call,
     operation_pricing,
 )
-from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
+from src.upstream_http import (
+    build_upstream_request_timeout_for_request,
+    configured_timeout_seconds,
+    upstream_proxy_kwargs,
+)
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
@@ -130,6 +134,7 @@ async def _execute_image_generation(
         timeout=build_upstream_request_timeout_for_request(
             request, configured_timeout_seconds(params.get("timeout"))
         ),
+        **upstream_proxy_kwargs(deployment.deltallm_params.get("outbound_proxy")),
     )
     if response.status_code >= 400:
         status_error = httpx.HTTPStatusError(
