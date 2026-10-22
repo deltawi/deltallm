@@ -13,6 +13,7 @@ from src.api.v1.endpoints import (
     global_router,
     health_router,
     images_router,
+    key_info_router,
     metrics_router,
     mcp_router,
     messages_router,
@@ -41,6 +42,7 @@ v1_router.include_router(audio_speech_router)
 v1_router.include_router(audio_transcription_router)
 v1_router.include_router(rerank_router)
 v1_router.include_router(models_router)
+v1_router.include_router(key_info_router)
 v1_router.include_router(spend_router)
 v1_router.include_router(global_router)
 v1_router.include_router(auth_router)
