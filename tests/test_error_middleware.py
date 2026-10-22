@@ -13,7 +13,9 @@ from src.middleware.errors import (
     proxy_error_response,
     register_exception_handlers,
 )
+from src.providers.base import map_standard_provider_status_error, sanitize_provider_proxy_error
 from src.models.errors import (
+    AuthenticationUnavailableError,
     FailureClassification,
     InvalidRequestError,
     RateLimitError,
@@ -213,3 +215,37 @@ async def test_missing_managed_asset_audience_is_a_client_validation_error() -> 
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Selected team audience does not exist: missing-team"}
+
+
+@pytest.mark.parametrize("response_factory", [proxy_error_response, anthropic_proxy_error_response])
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+def test_provider_5xx_hint_is_not_sent_to_clients(response_factory, status_code):
+    error = sanitize_provider_proxy_error(
+        map_standard_provider_status_error(status_code, retry_after_header="3600")
+    )
+
+    response = response_factory(error)
+
+    assert response.status_code == 503
+    assert "retry-after" not in response.headers
+    assert error.retry_after == 3600
+
+
+@pytest.mark.parametrize("response_factory", [proxy_error_response, anthropic_proxy_error_response])
+def test_authentication_unavailable_response_keeps_short_retry_hint(response_factory):
+    response = response_factory(AuthenticationUnavailableError())
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+
+
+@pytest.mark.parametrize("response_factory", [proxy_error_response, anthropic_proxy_error_response])
+def test_output_usage_unknown_response_keeps_gateway_retry_hint(response_factory):
+    from src.services.admission.output_limit_redis import OutputUsageUnknownError
+    from src.services.admission.output_limit_types import OutputPolicy, OutputScope
+
+    policy = OutputPolicy((OutputScope("key_output_tpm", "test-key", 100),))
+    response = response_factory(OutputUsageUnknownError(policy, 0, reset=120, now=90))
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "30"

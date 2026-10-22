@@ -90,9 +90,11 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
         return _classify_http_status_error(exc)
 
     if isinstance(exc, ServiceUnavailableError):
-        if getattr(exc, "code", None) == NO_HEALTHY_DEPLOYMENTS_CODE:
+        if exc.code == NO_HEALTHY_DEPLOYMENTS_CODE:
             return BatchRetryDecision(
-                retryable=True, category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS
+                retryable=True,
+                category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS,
+                retry_after_seconds=_proxy_retry_after(exc),
             )
         return BatchRetryDecision(
             retryable=True,
@@ -190,7 +192,7 @@ def _classify_http_status_error(exc: httpx.HTTPStatusError) -> BatchRetryDecisio
 
 
 def _proxy_retry_after(exc: ProxyError) -> int | None:
-    retry_after = getattr(exc, "retry_after", None)
+    retry_after = exc.retry_after
     if retry_after is None:
         return None
     try:

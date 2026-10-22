@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from src.batch.retry import BatchResponseShapeError
+from src.providers.base import map_standard_provider_status_error
 
 from src.batch.backpressure import BatchModelGroupDeferral
 from src.batch.embedding_microbatch import (
@@ -2222,3 +2223,32 @@ async def test_worker_keeps_later_item_leases_alive_during_slow_isolation_fallba
 
     assert len(repo.completed_calls) == 2
     assert repo.failed_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [("30", 30), ("1200", 60), ("-1", 1), ("invalid", 1), (None, 1)],
+)
+async def test_batch_retry_delay_uses_normalized_503_retry_after(header, expected):
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    worker.config.retry_initial_seconds = 1
+    worker.config.retry_max_seconds = 60
+    worker.config.retry_jitter = False
+    error = map_standard_provider_status_error(503, retry_after_header=header)
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=error,
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is True
+    assert repo.failed_calls[0]["retry_delay_seconds"] == expected
+    assert repo.failed_calls[0]["error_body"]["retry_delay_seconds"] == expected
