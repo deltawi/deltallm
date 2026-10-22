@@ -67,6 +67,7 @@ from src.routers.routing_decision import (
     route_decision_headers,
     update_served_route_decision,
 )
+from src.routers.response_cost import response_cost_headers
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -620,7 +621,11 @@ async def handle_chat_like_request(
         return JSONResponse(
             status_code=200,
             content=response_payload,
-            headers={**route_decision_headers(request), **response_validation_headers},
+            headers={
+                **route_decision_headers(request),
+                **response_validation_headers,
+                **response_cost_headers(request),
+            },
         )
     except httpx.HTTPError as exc:
         provider_registry = request.app.state.provider_error_mapper_registry

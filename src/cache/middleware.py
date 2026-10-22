@@ -37,6 +37,7 @@ from src.models.requests import (
 from src.providers.resolution import provider_from_model, resolve_provider, resolve_upstream_model
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.routers.responses_request_view import build_responses_policy_view
+from src.routers.response_cost import record_response_cost, response_cost_headers
 from src.routers.text_adapters import completions_to_chat_request
 from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import enqueue_request_log_write, maybe_log_proxy_error
@@ -273,7 +274,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                     await self._record_cache_hit_accounting(
                         request, endpoint, model, cache_key, cached_entry
                     )
-                    return self._cached_json_response(cached_entry.response, cache_key)
+                    response = self._cached_json_response(cached_entry.response, cache_key)
+                    response.headers.update(response_cost_headers(request))
+                    return response
                 metrics.miss(endpoint=endpoint, model=model)
                 request.state.cache_hit = False
 
@@ -452,6 +455,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
             usage=usage,
             cache_hit=True,
         )
+        record_response_cost(request, customer_billing.billing)
         request_cost = customer_billing.billing.cost
         await reserve_cached_charge(
             request,

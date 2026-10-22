@@ -76,6 +76,7 @@ from src.services.admission.preflight_capacity import (
     acquire_preflight_capacity,
     release_preflight_capacity,
 )
+from src.routers.response_cost import record_response_cost, response_cost_headers
 
 router = APIRouter(prefix="/v1", tags=["audio"])
 
@@ -363,6 +364,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             usage=usage,
             model_info=pricing.provider_model_info,
         )
+        record_response_cost(request, billing)
         request_cost = billing.cost
         spend_metadata = attach_route_decision(
             attach_pricing_metadata(
@@ -470,7 +472,9 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         if effective_format == "wav":
             audio_bytes = finalize_wav_header(audio_bytes)
         return Response(
-            content=audio_bytes, media_type=content_type, headers=route_decision_headers(request)
+            content=audio_bytes,
+            media_type=content_type,
+            headers={**route_decision_headers(request), **response_cost_headers(request)},
         )
     except httpx.HTTPError as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)

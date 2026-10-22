@@ -74,6 +74,7 @@ from src.services.admission.preflight_capacity import (
     acquire_preflight_capacity,
     release_preflight_capacity,
 )
+from src.routers.response_cost import record_response_cost, response_cost_headers
 
 router = APIRouter(prefix="/v1", tags=["rerank"])
 
@@ -296,6 +297,7 @@ async def rerank(request: Request, payload: RerankRequest):
             usage=usage,
             pricing_view="provider",
         )
+        record_response_cost(request, customer_billing.billing)
         request_cost = customer_billing.billing.cost
         provider_cost = (
             None
@@ -407,7 +409,11 @@ async def rerank(request: Request, payload: RerankRequest):
                 request,
             ),
         )
-        return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
+        return JSONResponse(
+            status_code=200,
+            content=data,
+            headers={**route_decision_headers(request), **response_cost_headers(request)},
+        )
     except httpx.HTTPError as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
         failure_provider = str(failure_target.provider or api_provider)
