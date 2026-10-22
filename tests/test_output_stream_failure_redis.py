@@ -51,6 +51,12 @@ async def test_complete_usage_before_read_error_accounts_once_and_controls_next_
         )
         _refresh_runtime_registry(app)
         frames = final_events(actual)
+    elif endpoint == "/v1/responses":
+        # These frames are chat chunks, so use the translation hop, not native Responses.
+        app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]["api_base"] = (
+            "https://chat-only.test/v1"
+        )
+        _refresh_runtime_registry(app)
 
     class FailedStream(httpx.AsyncByteStream):
         closes = 0

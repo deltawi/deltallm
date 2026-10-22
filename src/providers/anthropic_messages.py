@@ -36,10 +36,6 @@ from src.providers.resolution import (
 )
 from src.providers.token_receipt import ProviderTokenReceipt
 
-# The served native response travels with the canonical result of one attempt. The HTTP
-# edge removes it before telemetry, so it is never logged or stored with the result.
-NATIVE_MESSAGES_RESPONSE_KEY = "__native_messages_response__"
-
 _MAX_HEADER_VALUE_CHARS = 4096
 _FORWARDED_CLIENT_ERROR_STATUSES = frozenset({400, 413, 422})
 _FORWARDED_CLIENT_ERROR_TYPES = frozenset({"invalid_request_error", "request_too_large"})
@@ -329,7 +325,7 @@ class AnthropicNativeMessagesAdapter(ProviderAdapter):
         mapped = self._inner.map_error(provider_error, details=details)
         if not isinstance(mapped, InvalidRequestError):
             return mapped
-        message = _forwardable_client_error_message(details)
+        message = forwardable_client_error_message(details)
         if message is None:
             return mapped
         # Anthropic clients recover from capability rejections by matching this text,
@@ -345,7 +341,7 @@ class AnthropicNativeMessagesAdapter(ProviderAdapter):
         return await self._inner.health_check(provider_config)
 
 
-def _forwardable_client_error_message(details: ProviderErrorDetails) -> str | None:
+def forwardable_client_error_message(details: ProviderErrorDetails) -> str | None:
     if details.status_code not in _FORWARDED_CLIENT_ERROR_STATUSES or not details.message:
         return None
     if not details.identifiers & _FORWARDED_CLIENT_ERROR_TYPES:
@@ -386,7 +382,7 @@ async def count_native_message_tokens(
             request=httpx.Request("POST", url),
             response=response,
         )
-        message = _forwardable_client_error_message(provider_error_details(error))
+        message = forwardable_client_error_message(provider_error_details(error))
         if message is not None:
             raise InvalidRequestError(message=message)
         raise NativeTokenCountUnavailable
@@ -554,9 +550,3 @@ def _block_index(event: Mapping[str, Any]) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise invalid_provider_response_error()
     return value
-
-
-def served_native_response(adapter: ProviderAdapter) -> dict[str, Any] | None:
-    if isinstance(adapter, AnthropicNativeMessagesAdapter):
-        return adapter.native_response
-    return None

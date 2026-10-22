@@ -10,6 +10,7 @@ to the gateway and check that the SDK can parse every answer into its own types.
 | --- | --- |
 | Models | `models.list` |
 | Chat | `chat.completions.create` (plain, streaming with `include_usage`, tools, `json_object`), `chat.completions.stream`, `chat.completions.parse` with a Pydantic schema, `with_raw_response` |
+| Responses | `responses.create` (plain, streaming, and a function tool round trip with `function_call_output`), `responses.stream` with `get_final_response`. Each call runs on the native hop and on the translation hop. See [OpenAI Responses](responses.md). |
 | Embeddings | `embeddings.create` with the SDK default (base64, decoded by the SDK) and with `encoding_format="float"` |
 | Audio | `audio.speech.create` (mp3, and wav through `with_streaming_response`), `audio.transcriptions.create` with `json`, `text` and `verbose_json` |
 | Files and batches | `files.create`, `files.retrieve`, `files.content`, `batches.create`, `batches.retrieve` until the batch completes, `batches.list`, `batches.cancel`, and parsing each output line as a `ChatCompletion` |
@@ -18,7 +19,7 @@ to the gateway and check that the SDK can parse every answer into its own types.
 The gateway runs with its real routes, authentication, routing, batch storage in PostgreSQL
 and the real batch worker. Only the provider behind the gateway is a fake OpenAI upstream.
 
-Not covered yet: the Responses API, images, rerank, `/v1/messages` (see
+Not covered yet: images, rerank, `/v1/messages` (see
 [Anthropic Messages](messages.md)), and Realtime, which has its own SDK test. DeltaLLM does
 not implement `audio.translations`, `files.list` or `files.delete`.
 

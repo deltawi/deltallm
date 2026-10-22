@@ -1466,6 +1466,87 @@ class MockHTTPStreamResponse:
         yield "data: [DONE]"
 
 
+class MockHTTPResponsesStreamResponse(MockHTTPStreamResponse):
+    """A native OpenAI Responses event stream for `provider: openai` deployments."""
+
+    async def aiter_lines(self):
+        response = {"id": "resp-1", "object": "response", "model": "gpt-4o-mini", "output": []}
+        usage = {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+        message = {
+            "type": "message",
+            "id": "msg-1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+        events = [
+            {"type": "response.created", "response": {**response, "status": "in_progress"}},
+            {"type": "response.output_item.added", "output_index": 0, "item": message},
+            {"type": "response.output_text.delta", "output_index": 0, "delta": "ok"},
+            {"type": "response.output_item.done", "output_index": 0, "item": message},
+            {
+                "type": "response.completed",
+                "response": {
+                    **response,
+                    "status": "completed",
+                    "output": [message],
+                    "usage": usage,
+                },
+            },
+        ]
+        for event in events:
+            yield f"event: {event['type']}"
+            yield f"data: {json.dumps(event)}"
+            yield ""
+
+
+def mock_native_response(model: str) -> dict[str, Any]:
+    return {
+        "id": "resp-test",
+        "object": "response",
+        "created_at": 1700000000,
+        "model": model,
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg-test",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
+CHAT_ONLY_API_BASE = "https://chat-only.test/v1"
+
+
+def use_chat_only_base(app: Any, model_group: str = "gpt-4o-mini") -> None:
+    """Send /v1/responses for the group through chat translation, not native Responses.
+
+    The default test deployment uses the OpenAI base, which serves Responses natively.
+    Tests that feed chat completion frames to /v1/responses need the translation hop.
+    """
+
+    registry = app.state.router.deployment_registry
+    registry.replace(
+        {
+            **registry.snapshot(),
+            model_group: [
+                type(deployment)(
+                    deployment_id=deployment.deployment_id,
+                    model_name=deployment.model_name,
+                    deltallm_params={**deployment.deltallm_params, "api_base": CHAT_ONLY_API_BASE},
+                    model_info=dict(deployment.model_info),
+                )
+                for deployment in registry[model_group]
+            ],
+        }
+    )
+
+
 class MockHTTPClient:
     def __init__(self) -> None:
         self.post_calls = 0
@@ -1490,6 +1571,9 @@ class MockHTTPClient:
             }
             return httpx.Response(200, json=payload)
 
+        if url.endswith("/responses"):
+            return httpx.Response(200, json=mock_native_response(json["model"]))
+
         if url.endswith("/embeddings"):
             payload = {
                 "object": "list",
@@ -1505,6 +1589,8 @@ class MockHTTPClient:
         self, method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int
     ):
         self.stream_calls += 1
+        if url.endswith("/responses"):
+            return MockHTTPResponsesStreamResponse()
         return MockHTTPStreamResponse()
 
 

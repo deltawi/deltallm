@@ -36,10 +36,8 @@ from src.models.requests import (
 )
 from src.providers.resolution import provider_from_model, resolve_provider, resolve_upstream_model
 from src.router.runtime_generation import pin_routing_runtime_generation
-from src.routers.text_adapters import (
-    completions_to_chat_request,
-    responses_to_chat_request,
-)
+from src.routers.responses_request_view import build_responses_policy_view
+from src.routers.text_adapters import completions_to_chat_request
 from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import enqueue_request_log_write, maybe_log_proxy_error
 from src.telemetry.cache_accounting import reserve_cached_charge
@@ -47,7 +45,7 @@ from src.telemetry.spend_operation import billing_write_context
 
 from .backends.base import CacheBackend, CacheEntry
 from .execution_eligibility import ResponseCacheEligibility, ResponseCacheOutcome
-from .key_builder import CacheKeyBuilder
+from .key_builder import RESPONSES_BODY_KEY_FIELD, CacheKeyBuilder
 from .metrics import CacheMetricsProtocol, NoopCacheMetrics
 from .pricing import has_cache_hit_only_pricing, provider_cache_miss_usage
 
@@ -339,7 +337,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
             payload = completions_to_chat_request(CompletionsRequest.model_validate(request_data))
             canonical_data = None
         elif endpoint == "/v1/responses":
-            payload = responses_to_chat_request(ResponsesRequest.model_validate(request_data))
+            payload = build_responses_policy_view(
+                ResponsesRequest.model_validate(request_data), request_data
+            ).canonical
             canonical_data = None
         else:
             return None
@@ -350,7 +350,14 @@ class CacheMiddleware(BaseHTTPMiddleware):
             request_data=canonical_data,
             routing_runtime=routing_runtime,
         )
-        return dict(prepared.request_data)
+        prepared_data = dict(prepared.request_data)
+        if endpoint == "/v1/responses":
+            # The native Responses hop sends fields that the chat view does not hold
+            # (reasoning, text, include, provider items), so they are key dimensions too.
+            prepared_data[RESPONSES_BODY_KEY_FIELD] = {
+                key: value for key, value in request_data.items() if key != "metadata"
+            }
+        return prepared_data
 
     def _should_cache(self, request: Request) -> bool:
         return request.method.upper() == "POST" and request.url.path in self.enabled_endpoints
@@ -572,7 +579,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
         if RESPONSE_VALIDATION_HEADER in response.headers:
             return
 
-        if response_data is None or "error" in response_data:
+        # A Responses API body always has an `error` key; it is null on success.
+        if response_data is None or response_data.get("error") is not None:
             return
 
         entry = CacheEntry(

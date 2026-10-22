@@ -15,6 +15,7 @@ from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.chat.stream_response import DeadlineStreamingResponse
 from src.router.execution import ManagedFailoverResult, RequestDeadline
+from tests.conftest import use_chat_only_base
 from tests.router.selection.test_realtime import configure
 from tests.router.selection.provider_fixtures import response_body
 
@@ -67,6 +68,13 @@ class ProviderStream(httpx.AsyncByteStream):
         self.closed.set()
 
 
+# Endpoints whose stream ends with their own event instead of `data: [DONE]`.
+TERMINAL_FRAMES = {
+    "/v1/messages": "event: message_stop",
+    "/v1/responses": "event: response.completed",
+}
+
+
 @asynccontextmanager
 async def configured_stream(test_app, *, selected=False, hold_eof=False, durable=True, fail=False):
     stream = ProviderStream(hold_eof=hold_eof)
@@ -85,6 +93,8 @@ async def configured_stream(test_app, *, selected=False, hold_eof=False, durable
         if selected:
             billing, _ = configure(test_app, upstream, independent=True)
         else:
+            # The provider frames are chat chunks, so /v1/responses uses translation.
+            use_chat_only_base(test_app)
             test_app.state.http_client.stream = upstream.stream
         test_app.state.spend_tracking_service = recorder
         yield recorder, stream, calls, billing
@@ -126,7 +136,11 @@ async def test_terminal_frame_follows_one_awaited_answer_write(
         async def observe(self, send):
             async def capture(message):
                 chunk = message.get("body", b"")
-                if b"data: [DONE]" in chunk or b"event: message_stop" in chunk:
+                if (
+                    b"data: [DONE]" in chunk
+                    or b"event: message_stop" in chunk
+                    or b"event: response.completed" in chunk
+                ):
                     observed.append(len(recorder.events))
                     assert releases == []  # Permit belongs to the final downstream frame.
                 await send(message)
@@ -244,7 +258,7 @@ async def test_terminal_guarantee_matches_real_spend_mode_on_write_failure(
                 headers={"Authorization": "Bearer sk-test"},
                 json=request_body(endpoint),
             )
-        terminal = "event: message_stop" if endpoint == "/v1/messages" else "data: [DONE]"
+        terminal = TERMINAL_FRAMES.get(endpoint, "data: [DONE]")
         assert response.status_code == 200  # Content was already sent before accounting.
         assert "answer" in response.text
         assert len(calls) == 1 and stream.closed.is_set()
@@ -383,7 +397,7 @@ async def test_real_http_close_at_done_keeps_answer_charge_without_waiting_for_p
                 ) as response:
                     assert response.status_code == 200
                     async for line in response.aiter_lines():
-                        if line in ("data: [DONE]", "event: message_stop"):
+                        if line in ("data: [DONE]", *TERMINAL_FRAMES.values()):
                             assert len(recorder.events) == 1
                             break  # Intentionally do not drain to EOF.
                     else:

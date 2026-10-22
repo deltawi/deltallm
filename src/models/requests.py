@@ -147,17 +147,27 @@ class CompletionsRequest(BaseModel):
 
 
 class ResponsesRequest(BaseModel):
+    # Responses fields are an open list: new capabilities add fields and item types that
+    # the native Responses hop forwards unchanged. Items and tools stay raw JSON here; the
+    # policy view reads them.
+    model_config = ConfigDict(extra="allow")
+
     model: str
-    input: str | list[dict[str, Any]] | list[str]
+    input: str | list[dict[str, Any] | str]
     instructions: str | None = None
-    temperature: float | None = Field(default=1.0, ge=0, le=2)
-    top_p: float | None = Field(default=1.0, ge=0, le=1)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, ge=0, le=1)
     max_output_tokens: int | None = Field(default=None, ge=1)
     stream: bool | None = False
     user: str | None = None
     metadata: dict[str, Any] | None = None
-    tools: list[ToolDefinition] | None = None
-    tool_choice: Literal["auto", "none", "required"] | ToolChoice | None = "auto"
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Literal["auto", "none", "required"] | dict[str, Any] | None = None
+    parallel_tool_calls: bool | None = None
+    reasoning: dict[str, Any] | None = None
+    text: dict[str, Any] | None = None
+    store: bool | None = None
+    include: list[str] | None = None
 
 
 class AnthropicMessage(BaseModel):

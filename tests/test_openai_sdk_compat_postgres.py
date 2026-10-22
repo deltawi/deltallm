@@ -33,6 +33,8 @@ pytestmark = pytest.mark.postgres
 
 SDK_CLIENT = Path(__file__).parent / "openai_sdk" / "sdk_client.py"
 UPSTREAM = "https://upstream.test/v1"
+# Deployments on this base send /v1/responses to the provider unchanged.
+NATIVE_RESPONSES_UPSTREAM = "https://api.openai.com/v1"
 EMBEDDING = [0.25, -0.5, 0.75]
 STRUCTURED = {"city": "Paris", "population": 2100000}
 USAGE = {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
@@ -42,7 +44,7 @@ WAV = b"RIFF" + struct.pack("<I", 36) + b"WAVEfmt " + bytes(24) + b"data" + byte
 def _completion(body: dict) -> dict:
     message: dict = {"role": "assistant", "content": "Hello from upstream"}
     finish = "stop"
-    if body.get("tools"):
+    if body.get("tools") and body["messages"][-1]["role"] != "tool":
         message = {
             "role": "assistant",
             "content": None,
@@ -89,6 +91,113 @@ def _completion_stream(body: dict) -> bytes:
     return "".join(events).encode()
 
 
+def _responses_output(body: dict) -> list[dict]:
+    answered = any(
+        isinstance(item, dict) and item.get("type") == "function_call_output"
+        for item in body.get("input") or []
+    )
+    if body.get("tools") and not answered:
+        return [
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            }
+        ]
+    return [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Hello from upstream", "annotations": []}],
+        }
+    ]
+
+
+def _response(body: dict, status: str = "completed") -> dict:
+    return {
+        "id": "resp_upstream",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": status,
+        "model": body["model"],
+        "output": _responses_output(body) if status == "completed" else [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {
+            "input_tokens": 5,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 7,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 12,
+        }
+        if status == "completed"
+        else None,
+    }
+
+
+def _response_stream(body: dict) -> bytes:
+    events: list[dict] = [
+        {"type": "response.created", "response": _response(body, "in_progress")},
+    ]
+    for index, item in enumerate(_responses_output(body)):
+        events.append({"type": "response.output_item.added", "output_index": index, "item": item})
+        if item["type"] == "message":
+            part = {"type": "output_text", "text": "", "annotations": []}
+            events.append(
+                {
+                    "type": "response.content_part.added",
+                    "item_id": item["id"],
+                    "output_index": index,
+                    "content_index": 0,
+                    "part": part,
+                }
+            )
+            for delta in ("Hello ", "from ", "upstream"):
+                events.append(
+                    {
+                        "type": "response.output_text.delta",
+                        "item_id": item["id"],
+                        "output_index": index,
+                        "content_index": 0,
+                        "delta": delta,
+                        "logprobs": [],
+                    }
+                )
+            events.append(
+                {
+                    "type": "response.output_text.done",
+                    "item_id": item["id"],
+                    "output_index": index,
+                    "content_index": 0,
+                    "text": "Hello from upstream",
+                    "logprobs": [],
+                }
+            )
+            events.append(
+                {
+                    "type": "response.content_part.done",
+                    "item_id": item["id"],
+                    "output_index": index,
+                    "content_index": 0,
+                    "part": item["content"][0],
+                }
+            )
+        events.append({"type": "response.output_item.done", "output_index": index, "item": item})
+    events.append({"type": "response.completed", "response": _response(body)})
+    return "".join(
+        f"event: {event['type']}\ndata: "
+        + json.dumps({**event, "sequence_number": number})
+        + "\n\n"
+        for number, event in enumerate(events)
+    ).encode()
+
+
 def _embeddings(body: dict) -> dict:
     inputs = body["input"] if isinstance(body["input"], list) else [body["input"]]
     vector: object = EMBEDDING
@@ -132,6 +241,9 @@ async def fake_openai(request: httpx.Request) -> httpx.Response:
         return _transcription(request)
     body = json.loads(request.content)
     if path == "/chat/completions":
+        if request.url.host == "api.openai.com":
+            # The native Responses deployment must not fall back to chat completions.
+            return httpx.Response(404, json={"error": {"message": "use /responses"}})
         if body.get("stream"):
             return httpx.Response(
                 200,
@@ -139,6 +251,16 @@ async def fake_openai(request: httpx.Request) -> httpx.Response:
                 headers={"content-type": "text/event-stream"},
             )
         return httpx.Response(200, json=_completion(body))
+    if path == "/responses":
+        if request.url.host != "api.openai.com":
+            return httpx.Response(404, json={"error": {"message": "no native responses here"}})
+        if body.get("stream"):
+            return httpx.Response(
+                200,
+                content=_response_stream(body),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json=_response(body))
     if path == "/embeddings":
         return httpx.Response(200, json=_embeddings(body))
     if path == "/audio/speech":
@@ -153,7 +275,7 @@ def _deployment(name: str, mode: str) -> dict:
         "deltallm_params": {
             "model": f"openai/{name}",
             "api_key": "provider-key",
-            "api_base": UPSTREAM,
+            "api_base": NATIVE_RESPONSES_UPSTREAM if name == "gpt-5-codex" else UPSTREAM,
         },
         "model_info": {
             "mode": mode,
@@ -170,6 +292,7 @@ def _deployment(name: str, mode: str) -> dict:
 async def _install_models(app, upstream: httpx.AsyncClient) -> None:
     models = {
         "gpt-4o-mini": "chat",
+        "gpt-5-codex": "chat",
         "text-embedding-3-small": "embedding",
         "tts-1": "audio_speech",
         "whisper-1": "audio_transcription",
@@ -315,6 +438,9 @@ async def run_sdk_check(python: str, base_url: str, key: str, check: str) -> dic
         "chat_stream",
         "chat_tools",
         "chat_structured",
+        "responses",
+        "responses_stream",
+        "responses_tools",
         "embeddings",
         "audio_speech",
         "audio_transcription",

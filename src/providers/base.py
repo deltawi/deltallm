@@ -34,6 +34,7 @@ from src.providers.token_receipt import ProviderTokenReceipt, TokenReceiptObserv
 if TYPE_CHECKING:
     from src.providers.anthropic_messages import NativeMessagesRequest
     from src.providers.chat_upstream import ChatUpstream
+    from src.providers.openai_responses import NativeResponsesRequest
 
 _MAX_CLASSIFICATION_MESSAGE_CHARS = 2048
 _PROVIDER_ERROR_READ_CHUNK_BYTES = 8192
@@ -497,6 +498,12 @@ class ProviderAdapter(ABC):
         Return None when the provider has no such endpoint. Raise
         NativeTokenCountUnavailable when the endpoint cannot answer.
         """
+        return None
+
+    def native_responses_adapter(
+        self, native: NativeResponsesRequest, *, api_base: str
+    ) -> ProviderAdapter | None:
+        """Return a per-attempt adapter that sends `/v1/responses` bodies natively."""
         return None
 
     @abstractmethod

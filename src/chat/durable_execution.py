@@ -6,7 +6,7 @@ from fastapi import Request
 
 from src.chat.executor import OpenedStream, execute_chat, open_stream_with_first_chunk
 from src.models.requests import ChatCompletionRequest
-from src.providers.anthropic_messages import NativeMessagesRequest
+from src.providers.native_hop import NativeRequest
 from src.router.router import Deployment
 from src.router.execution import ProviderAttemptSuccess
 from src.router.usage import normalize_router_usage
@@ -19,7 +19,7 @@ async def execute_durable_chat(
     payload: ChatCompletionRequest,
     deployment: Deployment,
     *,
-    native: NativeMessagesRequest | None = None,
+    native: NativeRequest | None = None,
 ) -> ProviderAttemptSuccess[tuple[dict[str, Any], float]]:
     result = await durable_provider_call(
         request,
@@ -42,7 +42,7 @@ async def open_durable_stream(
     payload: ChatCompletionRequest,
     deployment: Deployment,
     *,
-    native: NativeMessagesRequest | None = None,
+    native: NativeRequest | None = None,
 ) -> OpenedStream:
     return await durable_provider_call(
         request,

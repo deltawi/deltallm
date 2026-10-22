@@ -49,7 +49,7 @@ from src.mcp.orchestrator import (
 )
 from src.models.errors import ProxyError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
-from src.providers.anthropic_messages import NATIVE_MESSAGES_RESPONSE_KEY, NativeMessagesRequest
+from src.providers.native_hop import NATIVE_RESPONSE_KEY, NativeRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
 from src.router import ROUTING_MODE_CONTEXT_KEY, Deployment, require_initial_deployment
@@ -87,7 +87,7 @@ async def handle_chat_like_request(
     stream_error_transform: Callable[[ProxyError], str] | None = None,
     stream_response_object: str = "chat.completion.chunk",
     enable_stream_cache: bool = True,
-    native_messages: Callable[[ChatCompletionRequest], NativeMessagesRequest | None] | None = None,
+    native_request: Callable[[ChatCompletionRequest], NativeRequest | None] | None = None,
 ):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -112,7 +112,7 @@ async def handle_chat_like_request(
     callback_manager = preflight.callback_manager
     guardrail_middleware = preflight.guardrail_middleware
     # Built after hooks and guardrails so the native body carries their changes.
-    native = native_messages(payload) if native_messages is not None else None
+    native = native_request(payload) if native_request is not None else None
     has_mcp_tools = chat_request_has_mcp_tools(payload)
 
     router = routing_runtime.router
@@ -584,7 +584,7 @@ async def handle_chat_like_request(
         request.state.cache_store_deployment_model = (
             str(served_deployment.deltallm_params.get("model") or "") or None
         )
-        native_response = payload_data.pop(NATIVE_MESSAGES_RESPONSE_KEY, None)
+        native_response = payload_data.pop(NATIVE_RESPONSE_KEY, None)
         if native_response is not None:
             response_payload = native_response
         elif response_transform is not None:

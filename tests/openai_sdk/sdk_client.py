@@ -17,6 +17,10 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 CHAT_MODEL = "gpt-4o-mini"
+# The gateway sends /v1/responses for this model to the provider unchanged; it
+# translates the request to chat completions for CHAT_MODEL.
+NATIVE_RESPONSES_MODEL = "gpt-5-codex"
+RESPONSES_MODELS = (CHAT_MODEL, NATIVE_RESPONSES_MODEL)
 EMBEDDING_MODEL = "text-embedding-3-small"
 SPEECH_MODEL = "tts-1"
 TRANSCRIPTION_MODEL = "whisper-1"
@@ -30,7 +34,13 @@ class Answer(BaseModel):
 
 def check_models(client: OpenAI) -> None:
     ids = {model.id for model in client.models.list()}
-    assert {CHAT_MODEL, EMBEDDING_MODEL, SPEECH_MODEL, TRANSCRIPTION_MODEL} <= ids, ids
+    assert {
+        CHAT_MODEL,
+        NATIVE_RESPONSES_MODEL,
+        EMBEDDING_MODEL,
+        SPEECH_MODEL,
+        TRANSCRIPTION_MODEL,
+    } <= ids, ids
 
 
 def check_chat(client: OpenAI) -> None:
@@ -109,6 +119,59 @@ def check_chat_structured(client: OpenAI) -> None:
         model=CHAT_MODEL, messages=MESSAGES, response_format=Answer
     )
     assert parsed.choices[0].message.parsed == Answer(city="Paris", population=2100000)
+
+
+WEATHER_TOOL = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+
+
+def check_responses(client: OpenAI) -> None:
+    for model in RESPONSES_MODELS:
+        response = client.responses.create(model=model, input="Say hello")
+        assert response.object == "response" and response.status == "completed", model
+        assert response.output_text == "Hello from upstream", (model, response.output_text)
+        assert response.usage is not None and response.usage.total_tokens == 12, model
+
+
+def check_responses_stream(client: OpenAI) -> None:
+    for model in RESPONSES_MODELS:
+        stream = client.responses.create(model=model, input="Say hello", stream=True)
+        kinds, text = [], ""
+        for event in stream:
+            kinds.append(event.type)
+            if event.type == "response.output_text.delta":
+                text += event.delta
+        assert kinds[0] == "response.created", (model, kinds)
+        assert kinds[-1] == "response.completed", (model, kinds)
+        assert text == "Hello from upstream", (model, text)
+
+        with client.responses.stream(model=model, input="Say hello") as events:
+            final = events.get_final_response()
+        assert final.output_text == "Hello from upstream", model
+        assert final.usage is not None and final.usage.total_tokens == 12, model
+
+
+def check_responses_tools(client: OpenAI) -> None:
+    for model in RESPONSES_MODELS:
+        history: list = [{"role": "user", "content": "Weather in Paris?"}]
+        first = client.responses.create(model=model, input=history, tools=[WEATHER_TOOL])
+        calls = [item for item in first.output if item.type == "function_call"]
+        assert len(calls) == 1 and calls[0].name == "get_weather", (model, first.output)
+        assert json.loads(calls[0].arguments) == {"city": "Paris"}
+
+        history += [
+            calls[0].model_dump(exclude_none=True),
+            {"type": "function_call_output", "call_id": calls[0].call_id, "output": "18C"},
+        ]
+        second = client.responses.create(model=model, input=history, tools=[WEATHER_TOOL])
+        assert second.output_text == "Hello from upstream", (model, second.output)
 
 
 def check_embeddings(client: OpenAI) -> None:
@@ -241,6 +304,9 @@ CHECKS = {
     "chat_stream": check_chat_stream,
     "chat_tools": check_chat_tools,
     "chat_structured": check_chat_structured,
+    "responses": check_responses,
+    "responses_stream": check_responses_stream,
+    "responses_tools": check_responses_tools,
     "embeddings": check_embeddings,
     "audio_speech": check_audio_speech,
     "audio_transcription": check_audio_transcription,

@@ -7,7 +7,7 @@ import pytest
 
 from src.mcp.models import MCPToolCallResult
 from src.models.requests import ResponsesRequest
-from src.routers.text_adapters import responses_to_chat_request
+from src.routers.responses_request_view import build_responses_policy_view
 
 
 class _AlwaysBudgetExceeded:
@@ -120,29 +120,135 @@ async def test_responses_success(client, test_app):
     assert payload["output"][0]["content"][0]["text"] == "ok"
 
 
-def test_responses_to_chat_request_preserves_mcp_tools() -> None:
-    payload = ResponsesRequest.model_validate(
+CODEX_TOOL_HISTORY = {
+    "model": "gpt-4o-mini",
+    "stream": False,
+    "store": False,
+    "include": ["reasoning.encrypted_content"],
+    "reasoning": {"summary": "auto"},
+    "metadata": {"tenant": "internal"},
+    "tools": [
+        {"type": "function", "name": "exec_command", "parameters": {"type": "object"}},
         {
-            "model": "gpt-4o-mini",
-            "input": "hello",
-            "tools": [
-                {
-                    "type": "mcp",
-                    "server": "docs",
-                    "allowed_tools": ["search"],
-                    "require_approval": "never",
-                }
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [{"type": "function", "name": "spawn", "parameters": {"type": "object"}}],
+        },
+    ],
+    "input": [
+        {"type": "message", "role": "developer", "content": "Be brief."},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ls"}]},
+        {"type": "reasoning", "summary": [], "encrypted_content": "opaque"},
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "exec_command",
+            "arguments": '{"cmd": "ls"}',
+        },
+        {"type": "function_call_output", "call_id": "call_1", "output": "README.md"},
+    ],
+}
+
+
+async def _post_recorded_responses(client, test_app, monkeypatch, api_base: str | None):  # noqa: ANN001, ANN202
+    registry_store = test_app.state.router.deployment_registry
+    deployment = registry_store["gpt-4o-mini"][0]
+    params = {**deployment.deltallm_params}
+    if api_base is not None:
+        params["api_base"] = api_base
+    registry_store.replace(
+        {
+            **registry_store.snapshot(),
+            "gpt-4o-mini": [
+                type(deployment)(
+                    deployment_id=deployment.deployment_id,
+                    model_name=deployment.model_name,
+                    deltallm_params=params,
+                    model_info=dict(deployment.model_info),
+                )
             ],
-            "tool_choice": "auto",
         }
     )
+    sent: list[tuple[str, dict]] = []
+    http_client = test_app.state.http_client
+    original_post = http_client.post
 
-    canonical = responses_to_chat_request(payload)
+    async def recording_post(url, headers, json, timeout):  # noqa: ANN001, ANN202
+        sent.append((url, json))
+        return await original_post(url, headers=headers, json=json, timeout=timeout)
+
+    monkeypatch.setattr(http_client, "post", recording_post)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    response = await client.post("/v1/responses", headers=headers, json=CODEX_TOOL_HISTORY)
+    return response, sent
+
+
+@pytest.mark.asyncio
+async def test_responses_native_hop_forwards_codex_tool_history(client, test_app, monkeypatch):
+    response, sent = await _post_recorded_responses(client, test_app, monkeypatch, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["object"] == "response"
+    [(url, upstream)] = sent
+    assert url.endswith("/responses")
+    # Only model, stream and the DeltaLLM-owned metadata differ from the client body.
+    unchanged = {"model", "stream", "metadata"}
+    assert {key: value for key, value in upstream.items() if key not in unchanged} == {
+        key: value for key, value in CODEX_TOOL_HISTORY.items() if key not in unchanged
+    }
+    assert "metadata" not in upstream
+
+
+@pytest.mark.asyncio
+async def test_responses_translation_hop_sends_tool_history_as_chat(client, test_app, monkeypatch):
+    response, sent = await _post_recorded_responses(
+        client, test_app, monkeypatch, "https://chat-only.example/v1"
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["object"] == "response"
+    assert payload["output"][-1]["content"][0]["text"] == "ok"
+    [(url, upstream)] = sent
+    assert url.endswith("/chat/completions")
+    assert [message["role"] for message in upstream["messages"]] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert upstream["messages"][2]["tool_calls"][0]["function"]["name"] == "exec_command"
+    assert upstream["messages"][3]["tool_call_id"] == "call_1"
+    assert [tool["function"]["name"] for tool in upstream["tools"]] == [
+        "exec_command",
+        "multi_agent_v1__spawn",
+    ]
+
+
+def test_responses_policy_view_preserves_mcp_tools() -> None:
+    body = {
+        "model": "gpt-4o-mini",
+        "input": "hello",
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
+        "tool_choice": "auto",
+    }
+
+    view = build_responses_policy_view(ResponsesRequest.model_validate(body), body)
+    canonical = view.canonical
 
     assert canonical.tools is not None
     assert canonical.tools[0].type == "mcp"
     assert getattr(canonical.tools[0], "server", None) == "docs"
     assert canonical.tool_choice == "auto"
+    # Gateway MCP tools run in the canonical chat loop, so no native hop is offered.
+    assert view.native_request(canonical) is None
 
 
 @pytest.mark.asyncio
@@ -272,8 +378,15 @@ async def test_responses_stream_success(client, test_app):
     response = await client.post("/v1/responses", headers=headers, json=body)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert "data: [DONE]" in response.text
-    assert '"object":"response.output_text.delta"' in response.text
+    events = [
+        jsonlib.loads(line[len("data: ") :])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert [event["type"] for event in events][0] == "response.created"
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "ok"
+    assert "data: [DONE]" not in response.text
 
 
 @pytest.mark.asyncio

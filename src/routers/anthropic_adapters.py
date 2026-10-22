@@ -21,7 +21,9 @@ def chat_response_to_anthropic_response(chat_payload: dict[str, Any]) -> dict[st
     message = first_choice.get("message") or {}
     content = message.get("content")
     if isinstance(content, list):
-        text = "".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content)
+        text = "".join(
+            str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content
+        )
     else:
         text = str(content or "")
 
@@ -43,7 +45,9 @@ def chat_response_to_anthropic_response(chat_payload: dict[str, Any]) -> dict[st
             }
         )
 
-    stop_reason = _FINISH_REASON_TO_STOP_REASON.get(str(first_choice.get("finish_reason") or ""), "end_turn")
+    stop_reason = _FINISH_REASON_TO_STOP_REASON.get(
+        str(first_choice.get("finish_reason") or ""), "end_turn"
+    )
     usage = chat_payload.get("usage") or {}
     return {
         "id": str(chat_payload.get("id") or "") or f"msg_{uuid.uuid4().hex}",
@@ -150,7 +154,11 @@ class AnthropicStreamTranslator:
 
     def _text_delta_events(self, text: str) -> list[str]:
         events = self._open_text_block()
-        events.append(self._content_block_delta_event(self._open_block_index, {"type": "text_delta", "text": text}))
+        events.append(
+            self._content_block_delta_event(
+                self._open_block_index, {"type": "text_delta", "text": text}
+            )
+        )
         return events
 
     def _tool_call_delta_events(self, tool_call: dict[str, Any]) -> list[str]:
@@ -179,7 +187,11 @@ class AnthropicStreamTranslator:
         index = self._tool_call_blocks[openai_index]
         arguments_fragment = function.get("arguments")
         if isinstance(arguments_fragment, str) and arguments_fragment:
-            events.append(self._content_block_delta_event(index, {"type": "input_json_delta", "partial_json": arguments_fragment}))
+            events.append(
+                self._content_block_delta_event(
+                    index, {"type": "input_json_delta", "partial_json": arguments_fragment}
+                )
+            )
         return events
 
     def _content_block_start_event(self, index: int, block: dict[str, Any]) -> str:
@@ -213,6 +225,10 @@ class AnthropicStreamTranslator:
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
             "usage": self._usage,
         }
-        events.append(f"event: message_delta\ndata: {json.dumps(message_delta, separators=(',', ':'))}")
-        events.append(f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'}, separators=(',', ':'))}")
+        events.append(
+            f"event: message_delta\ndata: {json.dumps(message_delta, separators=(',', ':'))}"
+        )
+        events.append(
+            f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'}, separators=(',', ':'))}"
+        )
         return "\n\n".join(events)

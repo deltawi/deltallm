@@ -160,6 +160,7 @@ nav:
           - OpenAPI file: api/openapi.md
           - Model and file endpoints: api/proxy.md
           - OpenAI SDK compatibility: api/openai-sdk-compatibility.md
+          - OpenAI Responses: api/responses.md
           - Anthropic Messages: api/messages.md
           - MCP endpoints: api/mcp.md
           - Administration endpoints: api/admin.md
