@@ -18,6 +18,9 @@ to the gateway and check that the SDK can parse every answer into its own types.
 
 The gateway runs with its real routes, authentication, routing, batch storage in PostgreSQL
 and the real batch worker. Only the provider behind the gateway is a fake OpenAI upstream.
+To check a deployed gateway and its real providers with the SDK, run the
+[live smoke suite](../deployment/live-smoke-suite.md#check-with-the-openai-sdk) with
+`--openai-sdk`.
 
 Not covered yet: images, rerank, `/v1/messages` (see
 [Anthropic Messages](messages.md)), and Realtime, which has its own SDK test. DeltaLLM does

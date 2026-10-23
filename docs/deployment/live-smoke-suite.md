@@ -99,9 +99,44 @@ for each model and the total. The exit code is:
 | `--parallel` | `4` | Number of models that the suite calls at the same time (1 to 16). |
 | `--tts-voice` | `alloy` | Voice for speech models. |
 | `--image-size` | Provider default | Size for image models, for example `1024x1024`. |
+| `--openai-sdk` | Off | Also call each model with the official OpenAI Python SDK. See [Check with the OpenAI SDK](#check-with-the-openai-sdk). |
 | `--json-output PATH` | None | Also write the results to a JSON file. The file does not contain the master key or the test API key. |
 | `--cleanup` | Off | After the run, also delete the organization, test user, and tier. |
 | `--cleanup-only` | Off | Delete the test resources and do no checks. |
+
+## Check with the OpenAI SDK
+
+The model checks send plain HTTP requests. Most customers use the official
+[OpenAI Python SDK](https://github.com/openai/openai-python), which parses each answer into its
+own types. With `--openai-sdk`, the suite also calls each model with the SDK, after the HTTP
+checks and with the same test API key:
+
+| Mode | SDK call |
+| --- | --- |
+| `chat` | `chat.completions.create`, one normal call and one streaming call |
+| `embedding` | `embeddings.create` with the SDK default (base64, which the SDK changes back to floats) |
+| `audio_speech` | `audio.speech.create` |
+| `audio_transcription` | `audio.transcriptions.create` with one second of silence |
+| `image_generation` | `images.generate` |
+
+The SDK has no rerank call, so rerank models get only the HTTP check. The SDK lines start with
+`sdk`, for example `sdk chat stream`. A setup line shows the SDK version. The SDK does not
+retry failed calls.
+
+The gateway does not depend on the SDK. Install it for one run only. This command uses the SDK
+version that the [OpenAI SDK compatibility](../api/openai-sdk-compatibility.md) tests use:
+
+```bash
+uv run --with-requirements tests/openai_sdk/requirements.txt \
+  python -m scripts.live_smoke --base-url https://gateway.example.com --openai-sdk
+```
+
+To check the newest SDK, use `uv run --with openai` instead. Without the SDK, `--openai-sdk`
+stops the suite with exit code `2`.
+
+The [OpenAI SDK compatibility](../api/openai-sdk-compatibility.md) tests in CI use a fake
+provider. This pass uses the real providers of a deployment. Thus, it finds answers that the
+SDK cannot read, for example a stream chunk with an unusual shape from one provider.
 
 ## Run it again
 

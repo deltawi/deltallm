@@ -95,4 +95,5 @@ class SmokeConfig:
     batch_poll_interval: float = 3.0
     tts_voice: str = "alloy"
     image_size: str | None = None
+    openai_sdk: bool = False
     cleanup: bool = False

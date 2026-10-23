@@ -5,6 +5,9 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import importlib
+import importlib.util
+import sys
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -16,6 +19,11 @@ from scripts.live_smoke.probes import silent_wav
 
 MASTER_KEY = "sk-master-test-value"
 BASE_URL = "http://gateway.test"
+# The gateway does not depend on the OpenAI SDK. Run these tests with:
+# uv run --with-requirements tests/openai_sdk/requirements.txt pytest tests/test_live_smoke_suite.py
+needs_openai = pytest.mark.skipif(
+    importlib.util.find_spec("openai") is None, reason="needs the openai package"
+)
 
 
 @dataclass
@@ -68,6 +76,7 @@ class FakeGateway:
         self.files: dict[str, str] = {}
         self.batches: dict[str, dict[str, Any]] = {}
         self.cancelled: list[str] = []
+        self.sdk_calls: list[str] = []
         self.counter = 0
 
     # helpers -------------------------------------------------------------
@@ -429,6 +438,8 @@ class FakeGateway:
             model = body["model"]
         if model not in allowed:
             return httpx.Response(403, json={"error": {"message": "not allowed for this key"}})
+        if request.headers.get("user-agent", "").startswith("OpenAI/Python"):
+            self.sdk_calls.append(path)
         if model in self.failing:
             return httpx.Response(503, json={"error": {"message": "upstream down"}})
         if path == "/v1/chat/completions":
@@ -511,6 +522,29 @@ class FakeClock:
         self.now += seconds
 
 
+def sdk_transport(gateway: Callable[[httpx.Request], httpx.Response]) -> Any:
+    """A mock transport for the HTTP library that the installed OpenAI SDK uses."""
+
+    http = importlib.import_module("httpx2" if importlib.util.find_spec("httpx2") else "httpx")
+
+    def handle(request: Any) -> Any:
+        response = gateway(
+            httpx.Request(
+                request.method,
+                str(request.url),
+                headers=list(request.headers.multi_items()),
+                content=request.read(),
+            )
+        )
+        return http.Response(
+            response.status_code,
+            headers=list(response.headers.multi_items()),
+            content=response.content,
+        )
+
+    return http.MockTransport(handle)
+
+
 def run_suite(gateway: Callable[[httpx.Request], httpx.Response], *args: str) -> tuple[int, str]:
     out = io.StringIO()
     clock = FakeClock()
@@ -519,6 +553,7 @@ def run_suite(gateway: Callable[[httpx.Request], httpx.Response], *args: str) ->
         env={"DELTALLM_MASTER_KEY": f"{MASTER_KEY}\n"},
         out=out,
         transport=httpx.MockTransport(gateway),
+        sdk_transport=sdk_transport(gateway) if "--openai-sdk" in args else None,
         clock=clock,
         wait=clock.sleep,
     )
@@ -572,6 +607,56 @@ def test_master_key_creates_the_test_key_when_password_sign_in_is_off() -> None:
     assert gateway.key_creators == [("master", _test_user_id(gateway))]
     assert "PASS batch: chat batch on chat-a" in output
     assert gateway.keys == {}
+
+
+@needs_openai
+def test_openai_sdk_flag_calls_each_model_with_the_sdk() -> None:
+    gateway = FakeGateway()
+    assert run_suite(gateway, "--no-batch")[0] == 0
+    assert gateway.sdk_calls == []
+
+    code, output = run_suite(gateway, "--openai-sdk", "--no-batch")
+
+    assert code == 0, output
+    assert re.search(r"PASS setup: OpenAI SDK: openai \d", output)
+    for detail in ("chat", "chat stream", "embeddings", "speech", "transcription", "image"):
+        assert f"sdk {detail}" in output
+    assert set(gateway.sdk_calls) == {
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/images/generations",
+    }
+    # The SDK has no rerank call.
+    assert "PASS  rerank-a" in output and "sdk rerank" not in output
+    assert gateway.keys == {}
+
+
+@needs_openai
+def test_openai_sdk_failure_shows_the_gateway_error() -> None:
+    gateway = FakeGateway()
+    gateway.failing.add("chat-a")
+
+    code, output = run_suite(gateway, "--openai-sdk", "--no-batch", "--model", "chat-a")
+
+    assert code == 1
+    assert "FAIL  chat-a  chat  sdk chat: HTTP 503: upstream down" in output
+    assert "FAIL  chat-a  chat  sdk chat stream: HTTP 503: upstream down" in output
+    assert MASTER_KEY not in output
+
+
+def test_openai_sdk_flag_without_the_package_exits_2(monkeypatch, capsys) -> None:
+    monkeypatch.setitem(sys.modules, "openai", None)
+
+    code = main(
+        ["--base-url", BASE_URL, "--openai-sdk"],
+        env={"DELTALLM_MASTER_KEY": MASTER_KEY},
+        out=io.StringIO(),
+    )
+
+    assert code == 2
+    assert "uv run --with-requirements tests/openai_sdk/requirements.txt" in capsys.readouterr().err
 
 
 def test_empty_callable_target_list_falls_back_to_model_and_route_group_lists() -> None:
