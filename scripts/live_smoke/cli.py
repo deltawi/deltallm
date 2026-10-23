@@ -8,14 +8,15 @@ from __future__ import annotations
 
 import argparse
 from getpass import getpass
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
 import sys
 from time import monotonic, sleep
-from typing import TextIO, TypeVar
+from typing import Any, TextIO, TypeVar
 
 import httpx
 
@@ -34,7 +35,7 @@ from scripts.live_smoke.gateway_client import (
     describe_error,
 )
 from scripts.live_smoke.probes import probe_target, target_mode
-from scripts.live_smoke import provisioning
+from scripts.live_smoke import provisioning, sdk_probes
 from scripts.live_smoke.results import CheckResult, Recorder, Status
 from scripts.live_smoke.tier_sync import Catalog, CallableTarget, load_catalog, sync_tier
 
@@ -86,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parallel", type=int, default=4, help="Targets called at once (1-16)")
     parser.add_argument("--tts-voice", default="alloy", help="Voice for speech models")
     parser.add_argument("--image-size", help="Size for image models (default: provider default)")
+    parser.add_argument(
+        "--openai-sdk",
+        action="store_true",
+        help="Also call each model with the official OpenAI Python SDK (needs the openai package)",
+    )
     parser.add_argument("--json-output", type=Path, help="Also write results to this JSON file")
     cleanup = parser.add_mutually_exclusive_group()
     cleanup.add_argument(
@@ -133,6 +139,7 @@ def build_config(args: argparse.Namespace, master_key: str) -> SmokeConfig:
         batch_timeout=args.batch_timeout,
         tts_voice=args.tts_voice,
         image_size=args.image_size,
+        openai_sdk=args.openai_sdk,
         cleanup=args.cleanup,
     )
 
@@ -144,6 +151,7 @@ class SmokeRun:
         recorder: Recorder,
         *,
         transport: httpx.BaseTransport | None = None,
+        sdk_transport: Any | None = None,
         clock: Callable[[], float] = monotonic,
         wait: Callable[[float], None] = sleep,
     ) -> None:
@@ -151,6 +159,7 @@ class SmokeRun:
         self.names = config.names
         self.recorder = recorder
         self.transport = transport
+        self.sdk_transport = sdk_transport
         self.clock = clock
         self.wait = wait
 
@@ -177,9 +186,9 @@ class SmokeRun:
             try:
                 targets, key = self._setup(admin)
                 self.recorder.protect(key.raw_key)
-                with self.client(key.raw_key) as caller:
+                with self.client(key.raw_key) as caller, self._sdk(key.raw_key) as sdk:
                     self._wait_for_access(caller, targets)
-                    passed = self._probe_all(caller, targets)
+                    passed = self._probe_all(caller, targets, sdk)
                     if self.config.run_batch:
                         self._run_batches(caller, targets, passed)
             except SetupAborted:
@@ -267,6 +276,24 @@ class SmokeRun:
         )
         return key, "created by the test user"
 
+    @contextmanager
+    def _sdk(self, raw_key: str) -> Iterator[sdk_probes.SdkCaller | None]:
+        if not self.config.openai_sdk:
+            yield None
+            return
+        sdk = sdk_probes.SdkCaller(
+            sdk_probes.load_openai(),
+            self.config.base_url,
+            raw_key,
+            timeout=self.config.request_timeout,
+            transport=self.sdk_transport,
+        )
+        self.recorder.add(CheckResult("setup", "OpenAI SDK", Status.PASS, f"openai {sdk.version}"))
+        try:
+            yield sdk
+        finally:
+            sdk.close()
+
     def _select_targets(self, catalog: list[CallableTarget]) -> list[CallableTarget]:
         if not self.config.models:
             return catalog
@@ -301,10 +328,15 @@ class SmokeRun:
             detail = f"all {len(expected)} listed in /v1/models"
             self.recorder.add(CheckResult("setup", "key sees models", Status.PASS, detail))
 
-    def _probe_all(self, caller: GatewayClient, targets: list[CallableTarget]) -> set[str]:
+    def _probe_all(
+        self,
+        caller: GatewayClient,
+        targets: list[CallableTarget],
+        sdk: sdk_probes.SdkCaller | None,
+    ) -> set[str]:
         with ThreadPoolExecutor(max_workers=self.config.parallel) as pool:
             batches = list(
-                pool.map(lambda target: probe_target(caller, target, self.config), targets)
+                pool.map(lambda target: probe_target(caller, target, self.config, sdk), targets)
             )
         passed: set[str] = set()
         for target, results in zip(targets, batches, strict=True):
@@ -372,6 +404,7 @@ def main(
     env: Mapping[str, str] | None = None,
     out: TextIO | None = None,
     transport: httpx.BaseTransport | None = None,
+    sdk_transport: Any | None = None,
     clock: Callable[[], float] = monotonic,
     wait: Callable[[float], None] = sleep,
     prompt: Callable[[str], str] | None = None,
@@ -383,12 +416,21 @@ def main(
     try:
         master_key = read_master_key(os.environ if env is None else env, prompt)
         config = build_config(args, master_key)
+        if config.openai_sdk and not args.cleanup_only:
+            sdk_probes.load_openai()
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     recorder = Recorder(out)
     recorder.protect(master_key)
-    run = SmokeRun(config, recorder, transport=transport, clock=clock, wait=wait)
+    run = SmokeRun(
+        config,
+        recorder,
+        transport=transport,
+        sdk_transport=sdk_transport,
+        clock=clock,
+        wait=wait,
+    )
     print(f"DeltaLLM live smoke suite: {config.base_url}", file=out)
     if args.cleanup_only:
         cleanup_only(run)

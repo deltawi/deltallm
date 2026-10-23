@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 import io
 import json
 from time import perf_counter
+from typing import TYPE_CHECKING
 import wave
 
 import httpx
@@ -14,6 +16,9 @@ from scripts.live_smoke.config import PROBED_MODES, SmokeConfig
 from scripts.live_smoke.gateway_client import GatewayClient, GatewayError, error_text
 from scripts.live_smoke.results import CheckResult, Status
 from scripts.live_smoke.tier_sync import CallableTarget
+
+if TYPE_CHECKING:
+    from scripts.live_smoke.sdk_probes import SdkCaller
 
 PROMPT = "Reply with the single word: ok"
 
@@ -184,7 +189,10 @@ def target_mode(target: CallableTarget) -> str | None:
 
 
 def probe_target(
-    client: GatewayClient, target: CallableTarget, config: SmokeConfig
+    client: GatewayClient,
+    target: CallableTarget,
+    config: SmokeConfig,
+    sdk: SdkCaller | None = None,
 ) -> list[CheckResult]:
     mode = target_mode(target)
     if mode is None:
@@ -197,11 +205,16 @@ def probe_target(
     probes = PROBES_BY_MODE.get(mode)
     if probes is None:
         return [CheckResult("model", target.key, Status.SKIP, f"{mode} is not covered", mode=mode)]
+    calls: list[tuple[str, Callable[[], str]]] = [
+        (label, partial(probe, client, target.key, config)) for label, probe in probes
+    ]
+    if sdk is not None:
+        calls += sdk.calls(mode, target.key, config)
     results = []
-    for label, probe in probes:
+    for label, call in calls:
         started = perf_counter()
         try:
-            note = probe(client, target.key, config)
+            note = call()
         except (ProbeFailure, GatewayError) as exc:
             status, detail = Status.FAIL, f"{label}: {exc}"
         except Exception as exc:  # noqa: BLE001 - one broken target must not stop the run
