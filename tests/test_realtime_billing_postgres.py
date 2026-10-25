@@ -172,12 +172,14 @@ async def test_turn_timestamps_survive_duplicate_receipts_and_recovery(realtime_
 
 async def test_turn_reporting_uses_its_own_day_and_month(realtime_db):
     db, context = realtime_db
-    month = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    context = replace(context, started_at=month - timedelta(minutes=2))
+    # Straddle midnight today: the database stamps completion now, and a turn that
+    # started at the month boundary overflows latency_ms (int32) late in the month.
+    boundary = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    context = replace(context, started_at=boundary - timedelta(minutes=2))
     repository = RealtimeBillingRepository(db)
     events = []
     for index, started_at in enumerate(
-        (month - timedelta(seconds=1), month + timedelta(seconds=1))
+        (boundary - timedelta(seconds=1), boundary + timedelta(seconds=1))
     ):
         operation = await dispatch(db, context)
         await db.execute_raw(
@@ -201,13 +203,18 @@ async def test_turn_reporting_uses_its_own_day_and_month(realtime_db):
         "GROUP BY 1,2 ORDER BY 1",
         events,
     )
+    before = boundary - timedelta(seconds=1)
     assert rows == [
         {
-            "day": (month - timedelta(seconds=1)).date().isoformat(),
-            "month": (month - timedelta(seconds=1)).replace(day=1).date().isoformat(),
+            "day": before.date().isoformat(),
+            "month": before.replace(day=1).date().isoformat(),
             "count": 1,
         },
-        {"day": month.date().isoformat(), "month": month.date().isoformat(), "count": 1},
+        {
+            "day": boundary.date().isoformat(),
+            "month": boundary.replace(day=1).date().isoformat(),
+            "count": 1,
+        },
     ]
 
 
