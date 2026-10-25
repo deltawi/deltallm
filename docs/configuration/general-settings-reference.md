@@ -5,6 +5,8 @@ This reference is generated from `GeneralSettings` and covers all **425** declar
 
 The generated schema is the field-coverage source of truth. The [General settings guide](general.md) explains operational choices, precedence, and safe examples. A default shown here is not automatically a production recommendation.
 
+**Secret** settings are write-only through `/ui/api/settings`: reads return `**********` when the value is set and `null` when it is not, and writing the mask back keeps the current value.
+
 ## Authentication, identity, and sessions
 
 | Setting | Type | Default | Constraints | Handling |
@@ -73,7 +75,7 @@ The generated schema is the field-coverage source of truth. The [General setting
 | `accounting_rpc_max_connections` | integer | `16` | ≤ 256; ≥ 1 | Ordinary |
 | `accounting_rpc_signing_secret` | string or null | `null` | max length 4096; min length 32 | Secret |
 | `accounting_statement_timeout_ms` | integer | `250` | ≤ 2000; ≥ 10 | Ordinary |
-| `database_url` | string or null | `null` | — | May contain credentials |
+| `database_url` | string or null | `null` | — | Secret |
 | `spend_ingestion_batch_size` | integer | `100` | ≤ 500; ≥ 1 | Ordinary |
 | `spend_ingestion_cleanup_batch_size` | integer | `1000` | ≤ 100000; ≥ 1 | Ordinary |
 | `spend_ingestion_cleanup_interval_seconds` | number | `60.0` | ≤ 86400.0; ≥ 1.0 | Ordinary |
@@ -136,7 +138,7 @@ The generated schema is the field-coverage source of truth. The [General setting
 | `redis_password` | string or null | `null` | — | Secret |
 | `redis_port` | integer | `6379` | — | Ordinary |
 | `redis_socket_timeout_seconds` | number | `1.0` | ≤ 30; ≥ 0.001 | Ordinary |
-| `redis_url` | string or null | `null` | — | May contain credentials |
+| `redis_url` | string or null | `null` | — | Secret |
 
 ## Gateway and upstream capacity
 
@@ -329,12 +331,12 @@ The generated schema is the field-coverage source of truth. The [General setting
 | `embeddings_batch_retry_jitter` | boolean | `true` | — | Ordinary |
 | `embeddings_batch_retry_max_seconds` | integer | `300` | ≥ 1 | Ordinary |
 | `embeddings_batch_retry_multiplier` | number | `2.0` | ≥ 1.0 | Ordinary |
-| `embeddings_batch_s3_access_key_id` | string or null | `null` | — | Ordinary |
+| `embeddings_batch_s3_access_key_id` | string or null | `null` | — | Secret |
 | `embeddings_batch_s3_bucket` | string or null | `null` | — | Ordinary |
 | `embeddings_batch_s3_endpoint_url` | string or null | `null` | — | Ordinary |
 | `embeddings_batch_s3_prefix` | string | `"deltallm/batch-artifacts"` | — | Ordinary |
 | `embeddings_batch_s3_region` | string | `"us-east-1"` | — | Ordinary |
-| `embeddings_batch_s3_secret_access_key` | string or null | `null` | — | Ordinary |
+| `embeddings_batch_s3_secret_access_key` | string or null | `null` | — | Secret |
 | `embeddings_batch_s3_spool_max_bytes` | integer | `8388608` | > 0 | Ordinary |
 | `embeddings_batch_scheduler_backfill_enabled` | boolean | `false` | — | Ordinary |
 | `embeddings_batch_scheduler_backfill_interval_seconds` | number | `60.0` | > 0.0 | Ordinary |

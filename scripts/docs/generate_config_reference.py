@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.docs.generated_artifact import write_or_check
-from src.config import GeneralSettings
+from src.config import WRITE_ONLY_GENERAL_SETTINGS, GeneralSettings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = PROJECT_ROOT / "docs" / "configuration" / "general-settings-reference.md"
@@ -147,12 +147,10 @@ def _handling(name: str, annotation: object) -> str:
         return "Startup trust; excluded from settings API"
     if name == "ui_mount":
         return "Startup only; non-secret UI configuration"
-    if "SecretStr" in annotation_text or name in {"master_key", "salt_key"}:
+    if "SecretStr" in annotation_text or name in WRITE_ONLY_GENERAL_SETTINGS:
         return "Secret"
     if name.endswith(secret_suffixes):
         return "Secret"
-    if name in {"database_url", "redis_url"}:
-        return "May contain credentials"
     return "Ordinary"
 
 
@@ -185,6 +183,12 @@ def generate_reference() -> tuple[str, int]:
             "[General settings guide](general.md) explains operational choices, precedence, "
             "and safe examples. A default shown here is not automatically a production "
             "recommendation."
+        ),
+        "",
+        (
+            "**Secret** settings are write-only through `/ui/api/settings`: reads return "
+            "`**********` when the value is set and `null` when it is not, and writing the "
+            "mask back keeps the current value."
         ),
         "",
     ]
