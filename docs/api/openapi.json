@@ -244,7 +244,7 @@
       "Body_audio_transcriptions_v1_audio_transcriptions_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           },
@@ -309,7 +309,7 @@
       "Body_create_file_v1_files_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -323,7 +323,7 @@
       "Body_upload_ui_branding_asset_ui_api_branding_assets__asset_key__put": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }

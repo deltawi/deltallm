@@ -4,7 +4,7 @@ annotated-doc==0.0.4
     # via fastapi
 annotated-types==0.7.0
     # via pydantic
-anyio==4.12.1
+anyio==4.15.1
     # via
     #   httpcore2
     #   httpx
@@ -20,7 +20,7 @@ botocore==1.42.84
     # via
     #   boto3
     #   s3transfer
-certifi==2026.1.4
+certifi==2026.10.19
     # via
     #   httpcore
     #   httpx
@@ -34,11 +34,11 @@ colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   click
     #   uvicorn
-cryptography==46.0.5
+cryptography==50.0.2
     # via
     #   deltallm-core-api
     #   pyjwt
-fastapi==0.129.0
+fastapi==0.136.3
     # via deltallm-core-api
 h11==0.16.0
     # via
@@ -55,7 +55,7 @@ httpx==0.28.1
     # via
     #   deltallm-core-api
     #   prisma
-idna==3.11
+idna==3.20
     # via
     #   anyio
     #   httpx
@@ -83,20 +83,20 @@ pydantic==2.12.5
     #   pydantic-settings
 pydantic-core==2.41.5
     # via pydantic
-pydantic-settings==2.12.0
+pydantic-settings==2.16.0
     # via deltallm-core-api
-pyjwt==2.11.0
+pyjwt==2.15.1
     # via
     #   deltallm-core-api
     #   redis
 python-dateutil==2.9.0.post0
     # via botocore
-python-dotenv==1.2.1
+python-dotenv==1.2.4
     # via
     #   prisma
     #   pydantic-settings
     #   uvicorn
-python-multipart==0.0.22
+python-multipart==0.0.32
     # via deltallm-core-api
 pyyaml==6.0.3
     # via
@@ -112,19 +112,22 @@ sniffio==1.3.1
     # via deltallm-core-api
 socksio==1.0.0
     # via httpcore2
-starlette==0.52.1
-    # via fastapi
+starlette==1.8.0
+    # via
+    #   deltallm-core-api
+    #   fastapi
 tomlkit==0.14.0
     # via prisma
 truststore==0.10.4
     # via httpcore2
-typing-extensions==4.15.0
+typing-extensions==4.16.0
     # via
     #   anyio
     #   fastapi
     #   prisma
     #   pydantic
     #   pydantic-core
+    #   pydantic-settings
     #   starlette
     #   typing-inspection
 typing-inspection==0.4.2
@@ -132,7 +135,7 @@ typing-inspection==0.4.2
     #   fastapi
     #   pydantic
     #   pydantic-settings
-urllib3==2.6.3
+urllib3==2.8.0
     # via botocore
 uvicorn==0.40.0
     # via deltallm-core-api
