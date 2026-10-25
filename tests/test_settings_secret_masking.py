@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -48,6 +49,17 @@ def test_every_documented_secret_is_write_only():
     for name, field in GeneralSettings.model_fields.items():
         if _handling(name, field.annotation) == "Secret":
             assert name in WRITE_ONLY_GENERAL_SETTINGS | MASKED_BY_TYPE, name
+
+
+# Text settings whose names look secret but are public on purpose.
+PUBLIC_SECRET_LOOKING = {"deltallm_key_header_name", "sso_token_url", "jwt_public_key_url"}
+
+
+def test_new_secret_looking_text_settings_must_be_classified():
+    looks_secret = re.compile(r"key|secret|password|token|credential")
+    for name, field in GeneralSettings.model_fields.items():
+        if looks_secret.search(name) and re.search(r"\bstr\b|SecretStr", str(field.annotation)):
+            assert name in WRITE_ONLY_GENERAL_SETTINGS | PUBLIC_SECRET_LOOKING, name
 
 
 async def test_settings_read_masks_set_secrets_and_nulls_unset(client, test_app):
