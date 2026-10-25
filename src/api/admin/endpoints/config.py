@@ -30,10 +30,12 @@ from src.api.admin.endpoints.common import (
 from src.config import (
     AppConfig,
     DEFAULT_UI_INSTANCE_NAME,
+    SECRET_SETTING_MASK,
     UIBrandingPayload,
     UIBrandingResetPayload,
     UIBrandingSettings,
     UIBrandingUpdatePayload,
+    WRITE_ONLY_GENERAL_SETTINGS,
 )
 from src.config_runtime.dynamic import (
     DynamicConfigPostCommitApplyError,
@@ -612,6 +614,8 @@ async def get_settings(
     )
     if not scope.is_platform_admin:
         general.pop("master_key", None)
+    for name in WRITE_ONLY_GENERAL_SETTINGS.intersection(general):
+        general[name] = SECRET_SETTING_MASK if general[name] else None
 
     return {
         "general_settings": general,
@@ -619,6 +623,17 @@ async def get_settings(
         "deltallm_settings": to_json_value(app_config.deltallm_settings.model_dump()),
         "model_count": len(model_entries(request.app)),
     }
+
+
+def _mask_settings_payload_secrets(payload: dict[str, Any]) -> dict[str, Any]:
+    general = payload.get("general_settings")
+    if not isinstance(general, dict):
+        return payload
+    masked = {
+        name: SECRET_SETTING_MASK if name in WRITE_ONLY_GENERAL_SETTINGS and value else value
+        for name, value in general.items()
+    }
+    return {**payload, "general_settings": masked}
 
 
 def app_config_proxy_names(request: Request) -> set[str]:
@@ -649,9 +664,19 @@ async def update_settings(
     general_updates = (
         payload.get("general_settings") if isinstance(payload.get("general_settings"), dict) else {}
     )
+    unchanged_secrets = {
+        name
+        for name in WRITE_ONLY_GENERAL_SETTINGS.intersection(general_updates)
+        if general_updates[name] in (None, "", SECRET_SETTING_MASK)
+    }
+    if unchanged_secrets:
+        # The page echoes masked secrets back; that means "keep", never "store the mask".
+        general_updates = {
+            name: value for name, value in general_updates.items() if name not in unchanged_secrets
+        }
     if "redis_bulk_url" in general_updates:
         general_updates = dict(general_updates)
-        if general_updates.pop("redis_bulk_url") not in (None, "", "**********"):
+        if general_updates.pop("redis_bulk_url") not in (None, "", SECRET_SETTING_MASK):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
@@ -667,7 +692,7 @@ async def update_settings(
         unchanged = submitted is None or (
             isinstance(submitted, dict)
             and set(submitted) == app_config_proxy_names(request)
-            and all(value == "**********" for value in submitted.values())
+            and all(value == SECRET_SETTING_MASK for value in submitted.values())
         )
         if not unchanged:
             raise HTTPException(
@@ -725,14 +750,17 @@ async def update_settings(
             apply_runtime_log_level(level)
 
     response = await get_settings(request, authorization=authorization, x_master_key=x_master_key)
+    updated_secrets = sorted(WRITE_ONLY_GENERAL_SETTINGS.intersection(general_updates))
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
         action=AuditAction.ADMIN_SETTINGS_UPDATE,
         resource_type="app_settings",
-        request_payload=payload,
+        request_payload=_mask_settings_payload_secrets(payload),
         response_payload=response,
         before=before,
         after=response,
+        # Masked before/after look equal, so name the rotated secrets explicitly.
+        metadata={"updated_secret_fields": updated_secrets} if updated_secrets else None,
     )
     return response

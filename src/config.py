@@ -549,6 +549,35 @@ class UIBrandingUpdatePayload(BaseModel):
         return value.upper()
 
 
+# Shown as this mask when set and accepted back unchanged; never returned in clear.
+SECRET_SETTING_MASK = "**********"
+
+# Write-only general settings: the settings API masks them on read and treats an
+# echoed mask, null or "" on write as "keep the current value". redis_bulk_url and
+# upstream_proxies are secret too but startup-only, so the endpoint handles them apart.
+WRITE_ONLY_GENERAL_SETTINGS: frozenset[str] = frozenset(
+    {
+        "master_key",
+        "salt_key",
+        "database_url",
+        "redis_password",
+        "redis_url",
+        "sso_client_secret",
+        "platform_bootstrap_admin_password",
+        "slack_webhook_url",
+        "smtp_password",
+        "resend_api_key",
+        "resend_webhook_signing_secret",
+        "sendgrid_api_key",
+        "batch_webhook_encryption_key",
+        "mcp_oauth_encryption_key",
+        "accounting_rpc_signing_secret",
+        "embeddings_batch_s3_access_key_id",
+        "embeddings_batch_s3_secret_access_key",
+    }
+)
+
+
 class GeneralSettings(
     DatabaseAllocationSettings,
     SpendOperationSettings,

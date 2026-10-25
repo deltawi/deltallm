@@ -440,6 +440,8 @@ top-level `default_prompt` field. An unchanged value is kept without a new check
 | `GET` | `/ui/api/settings` | Read gateway settings |
 | `PUT` | `/ui/api/settings` | Update gateway settings |
 
+Secret settings such as `master_key`, `salt_key`, `database_url`, `redis_url` and provider or email API keys are write-only. `GET` returns `**********` when one is set and `null` when it is not, for every caller including platform admins. On `PUT`, sending `**********`, `null` or `""` for a secret keeps the current value, so a client can send back what it read; sending a new value replaces it. The [General settings index](../configuration/general-settings-reference.md) marks each secret field.
+
 ### MCP Management
 
 | Method | Endpoint | Purpose |
