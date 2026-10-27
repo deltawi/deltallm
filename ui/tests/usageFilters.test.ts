@@ -11,8 +11,11 @@ import {
   filterLabel,
   groupLabel,
   parseRequestWindow,
+  parseRequestWindowSelection,
   parseUsageFilters,
+  requestTimeRange,
   requestWindowSince,
+  validateRequestRange,
   resolveUsageView,
   usageFiltersKey,
   withoutUsageFilter,
@@ -130,4 +133,36 @@ test('an active filter always has a chip, even outside the usual set', () => {
   const allowed = ['model', 'provider', 'organization', 'team', 'user', 'api_key'] as const;
   assert.deepEqual(chipDimensions(['model', 'team'], [{ dimension: 'user', value: 'u1' }], allowed), ['model', 'team', 'user']);
   assert.deepEqual(chipDimensions(['model', 'api_key'], [], ['model', 'provider']), ['model']);
+});
+
+test('custom request windows send since and an exclusive until', () => {
+  const now = new Date('2026-10-13T09:15:42Z');
+  assert.equal(parseRequestWindowSelection('custom'), 'custom');
+  assert.equal(parseRequestWindowSelection('7d'), '7d');
+  assert.equal(parseRequestWindowSelection('nope'), '24h');
+
+  assert.deepEqual(requestTimeRange('1h', {}, now), { since: '2026-10-13T08:15:00.000Z' });
+  assert.deepEqual(requestTimeRange('custom', { from: '2026-10-01T08:00', to: '2026-10-02T17:30' }, now), {
+    since: '2026-10-01T08:00:00.000Z',
+    until: '2026-10-02T17:30:00.000Z',
+  });
+  assert.deepEqual(requestTimeRange('custom', { from: '2026-10-01T08:00' }, now), { since: '2026-10-01T08:00:00.000Z' });
+  // A bad custom window falls back to the last 24 hours.
+  assert.deepEqual(requestTimeRange('custom', { from: '2026-10-02T08:00', to: '2026-10-01T08:00' }, now), {
+    since: '2026-10-12T09:15:00.000Z',
+  });
+
+  assert.equal(validateRequestRange(null, null), 'Choose a start time.');
+  assert.equal(validateRequestRange('2026-10-01T08:00', 'tomorrow'), 'Enter a valid end time.');
+  assert.equal(validateRequestRange('2026-10-01T08:00', '2026-10-01T08:00'), 'The start must be before the end.');
+  assert.equal(validateRequestRange('2026-10-01T08:00', null), null);
+
+  const query = requestLogQuery({
+    view: 'platform',
+    since: '2026-10-01T08:00:00.000Z',
+    until: '2026-10-02T17:30:00.000Z',
+    filters: [],
+    limit: 25,
+  });
+  assert.equal(query.get('until'), '2026-10-02T17:30:00.000Z');
 });

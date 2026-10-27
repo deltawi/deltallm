@@ -143,8 +143,52 @@ export const REQUEST_WINDOWS: ReadonlyArray<{ key: RequestWindowKey; label: stri
   { key: '30d', label: '30d', hours: 24 * 30 },
 ];
 
+export type RequestWindowSelection = RequestWindowKey | 'custom';
+
 export function parseRequestWindow(value: string | null): RequestWindowKey {
   return REQUEST_WINDOWS.some((window) => window.key === value) ? (value as RequestWindowKey) : '24h';
+}
+
+export function parseRequestWindowSelection(value: string | null): RequestWindowSelection {
+  return value === 'custom' ? 'custom' : parseRequestWindow(value);
+}
+
+/** A custom bound typed as "YYYY-MM-DDTHH:mm" (UTC), or null. */
+export function parseUtcInput(value: string | null | undefined): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}:00Z`);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function utcInputValue(date: Date): string {
+  return date.toISOString().slice(0, 16);
+}
+
+/** Why a custom request window cannot be used, or null when it can. "to" is optional and means now. */
+export function validateRequestRange(from: string | null | undefined, to: string | null | undefined): string | null {
+  const since = parseUtcInput(from);
+  if (!since) return 'Choose a start time.';
+  if (!to) return null;
+  const until = parseUtcInput(to);
+  if (!until) return 'Enter a valid end time.';
+  return since < until ? null : 'The start must be before the end.';
+}
+
+/**
+ * The server time bounds for a request window. A custom window that is not valid falls back to
+ * the last 24 hours, so a bad link still shows rows.
+ */
+export function requestTimeRange(
+  window: RequestWindowSelection,
+  custom: { from?: string | null; to?: string | null },
+  now = new Date(),
+): { since: string; until?: string } {
+  if (window !== 'custom' || validateRequestRange(custom.from, custom.to)) {
+    return { since: requestWindowSince(window === 'custom' ? '24h' : window, now) };
+  }
+  const since = parseUtcInput(custom.from) as string;
+  const until = parseUtcInput(custom.to);
+  return until ? { since, until } : { since };
 }
 
 /** Start of a request window, rounded down to the minute so repeated loads share a cache entry. */

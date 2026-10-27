@@ -54,7 +54,7 @@ const testSources = [
   'tests/outputTpmRoute.test.tsx',
   'tests/fallbackEvents.test.ts',
   'tests/reportingRange.test.ts',
-  'tests/reportingRangeControl.test.ts',
+  'tests/reportingRangeControl.test.tsx',
   'tests/reportingRequest.test.ts',
   'tests/reportLoader.test.ts',
   'tests/usageFilters.test.ts',

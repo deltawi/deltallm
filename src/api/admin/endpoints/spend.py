@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 import logging
 from time import perf_counter
 from typing import Any, Literal
@@ -89,6 +89,20 @@ def _log_window_start(start_date: date | None, since: datetime | None) -> dateti
         since = since.replace(tzinfo=UTC)
     candidates = [value for value in (_date_start(start_date), since) if value is not None]
     return max(candidates) if candidates else None
+
+
+def _log_window_end(end_date: date | None, until: datetime | None) -> datetime | None:
+    """Return the earlier of the end date and ``until`` (exclusive; a naive ``until`` is UTC)."""
+
+    if until is not None:
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=UTC)
+        try:
+            until -= timedelta(microseconds=1)
+        except OverflowError as exc:
+            raise HTTPException(status_code=422, detail="until is too early") from exc
+    candidates = [value for value in (_date_end(end_date), until) if value is not None]
+    return min(candidates) if candidates else None
 
 
 def _decode_request_log_cursor(value: str) -> tuple[datetime, str]:
@@ -666,6 +680,7 @@ async def request_logs(
     request_id: str | None = Query(default=None, max_length=256),
     unassigned: list[str] | None = Query(default=None, max_length=6),
     since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     view: Literal["organization", "team", "self"] | None = Query(default=None),
@@ -708,13 +723,17 @@ async def request_logs(
         raise HTTPException(status_code=422, detail="cursor requires pagination_mode=cursor")
     if pagination_mode == "cursor" and "offset" in request.query_params:
         raise HTTPException(status_code=422, detail="offset cannot be used with cursor pagination")
+    window_start = _log_window_start(start_date, since)
+    window_end = _log_window_end(end_date, until)
+    if window_start is not None and window_end is not None and window_start > window_end:
+        raise HTTPException(status_code=422, detail="since must be before until")
     db = db_or_503(request)
     cache = await _reporting_cache(request)
     source = get_spend_read_source()
     queries = request_log_queries(
         filters=RequestLogFilters(
-            start=_log_window_start(start_date, since),
-            end=_date_end(end_date),
+            start=window_start,
+            end=window_end,
             usage=usage_filters,
             status=status,
             cache_hit=cache_hit,

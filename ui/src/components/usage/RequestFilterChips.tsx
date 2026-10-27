@@ -14,6 +14,7 @@ export interface RequestFlags {
 interface RequestFilterChipsProps {
   view: SpendView;
   sinceDate: string;
+  untilDate?: string;
   dimensions: readonly UsageDimension[];
   filters: readonly UsageFilterValue[];
   flags: RequestFlags;
@@ -25,6 +26,7 @@ interface RequestFilterChipsProps {
 function ValueMenu({
   view,
   sinceDate,
+  untilDate,
   dimension,
   filters,
   onPick,
@@ -32,6 +34,7 @@ function ValueMenu({
 }: {
   view: SpendView;
   sinceDate: string;
+  untilDate?: string;
   dimension: UsageDimension;
   filters: readonly UsageFilterValue[];
   onPick: (filter: UsageFilterValue) => void;
@@ -40,9 +43,9 @@ function ValueMenu({
   const ref = useRef<HTMLDivElement>(null);
   const others = filters.filter((filter) => filter.dimension !== dimension);
   const options = useReport(
-    `requests:values|${view}|${sinceDate}|${dimension}|${others.map((filter) => `${filter.dimension}=${filter.value}`).join('&')}`,
+    `requests:values|${view}|${sinceDate}|${untilDate ?? ''}|${dimension}|${others.map((filter) => `${filter.dimension}=${filter.value}`).join('&')}`,
     (load) => usageReports.breakdown(
-      { view, startDate: sinceDate, filters: others },
+      { view, startDate: sinceDate, endDate: untilDate, filters: others },
       { groupBy: dimension, sortBy: 'requests', limit: 8, offset: 0 },
       load,
     ),
@@ -102,7 +105,7 @@ function ValueMenu({
   );
 }
 
-export default function RequestFilterChips({ view, sinceDate, dimensions, filters, flags, onFilter, onFlags }: RequestFilterChipsProps) {
+export default function RequestFilterChips({ view, sinceDate, untilDate, dimensions, filters, flags, onFilter, onFlags }: RequestFilterChipsProps) {
   const [open, setOpen] = useState<UsageDimension | null>(null);
   return (
     <div className="flex flex-wrap items-center gap-2.5">
@@ -126,6 +129,7 @@ export default function RequestFilterChips({ view, sinceDate, dimensions, filter
               <ValueMenu
                 view={view}
                 sinceDate={sinceDate}
+                untilDate={untilDate}
                 dimension={dimension}
                 filters={filters}
                 onClose={() => setOpen(null)}

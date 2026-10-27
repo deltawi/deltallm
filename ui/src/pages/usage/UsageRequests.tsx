@@ -6,9 +6,9 @@ import { usageReports, type RequestLog, type UsageDimension, type UsageFilterVal
 import {
   allowedUsageDimensions,
   chipDimensions,
-  parseRequestWindow,
+  parseRequestWindowSelection,
   parseUsageFilters,
-  requestWindowSince,
+  requestTimeRange,
   usageFiltersKey,
   withoutUsageFilter,
   withUsageFilter,
@@ -48,7 +48,9 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
     [allowed, searchParams],
   );
   const flags = readFlags(searchParams);
-  const windowKey = parseRequestWindow(searchParams.get('window'));
+  const windowKey = parseRequestWindowSelection(searchParams.get('window'));
+  const customFrom = searchParams.get('from');
+  const customTo = searchParams.get('to');
   const requestId = searchParams.get('request_id')?.trim() ?? '';
   const [draft, setDraft] = useState(requestId);
   const [draftFor, setDraftFor] = useState(requestId);
@@ -59,8 +61,12 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
   }
   // The key names the window, not its start time, so a reload keeps the page
   // and the rows on screen. Each load computes the start time again.
-  const queryKey = `${view}|${windowKey}|${usageFiltersKey(filters)}|${flags.status ?? ''}|${flags.cacheHit ?? ''}|${requestId}`;
-  const sinceDate = useMemo(() => requestWindowSince(windowKey).slice(0, 10), [windowKey]);
+  const windowId = windowKey === 'custom' ? `custom:${customFrom ?? ''}:${customTo ?? ''}` : windowKey;
+  const queryKey = `${view}|${windowId}|${usageFiltersKey(filters)}|${flags.status ?? ''}|${flags.cacheHit ?? ''}|${requestId}`;
+  const valueRange = useMemo(() => {
+    const bounds = requestTimeRange(windowKey, { from: customFrom, to: customTo });
+    return { sinceDate: bounds.since.slice(0, 10), untilDate: bounds.until?.slice(0, 10) };
+  }, [customFrom, customTo, windowKey]);
   const [pages, setPages] = useState<{ key: string; cursors: Array<string | null> }>({ key: queryKey, cursors: [null] });
   const cursors = pages.key === queryKey ? pages.cursors : [null];
   const cursor = cursors[cursors.length - 1];
@@ -71,7 +77,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
     (options) => usageReports.requestLogs(
       {
         view,
-        since: requestWindowSince(windowKey),
+        ...requestTimeRange(windowKey, { from: customFrom, to: customTo }),
         filters,
         status: flags.status,
         cacheHit: flags.cacheHit,
@@ -150,7 +156,8 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
         </form>
         <RequestFilterChips
           view={view}
-          sinceDate={sinceDate}
+          sinceDate={valueRange.sinceDate}
+          untilDate={valueRange.untilDate}
           dimensions={chipDimensions(CHIP_DIMENSIONS, filters, allowed)}
           filters={filters}
           flags={flags}

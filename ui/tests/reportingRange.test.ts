@@ -6,11 +6,13 @@ import {
   failureRate,
   formatBucketLabel,
   formatBucketTick,
+  isCalendarRangeKey,
   millisecondsUntilNextUtcDay,
   normalizeReportingSeries,
   parseReportingRangeKey,
   reportingAutoRefreshOptions,
   reportingRangeInclusiveDays,
+  requestWindowForRange,
   resolveCustomReportingRange,
   resolveReportingRange,
   resolveReportingRangeQuery,
@@ -197,4 +199,52 @@ test('bucket labels and cadence describe the selected aggregation', () => {
 test('failure rate is safe for empty periods', () => {
   assert.equal(failureRate(1_399, 21_955).toFixed(1), '6.4');
   assert.equal(failureRate(0, 0), 0);
+});
+
+test('calendar presets cover today, yesterday, this month, and last month', () => {
+  assert.deepEqual(resolveReportingRange('today', NOW), {
+    key: 'today',
+    label: 'Today',
+    shortLabel: 'Today',
+    startDate: '2026-08-08',
+    endDate: '2026-08-08',
+    bucket: 'day',
+  });
+  const yesterday = resolveReportingRange('yesterday', NOW);
+  assert.equal(yesterday.startDate, '2026-08-07');
+  assert.equal(yesterday.endDate, '2026-08-07');
+  const month = resolveReportingRange('month', NOW);
+  assert.equal(month.startDate, '2026-08-01');
+  assert.equal(month.endDate, '2026-08-08');
+  const lastMonth = resolveReportingRange('last_month', new Date('2026-03-15T12:00:00Z'));
+  assert.equal(lastMonth.startDate, '2026-02-01');
+  assert.equal(lastMonth.endDate, '2026-02-28');
+  const january = resolveReportingRange('last_month', new Date('2026-01-03T12:00:00Z'));
+  assert.equal(january.startDate, '2025-12-01');
+  assert.equal(january.endDate, '2025-12-31');
+  assert.equal(parseReportingRangeKey('last_month'), 'last_month');
+  assert.equal(resolveReportingRangeQuery('month', null, null, NOW).startDate, '2026-08-01');
+  assert.equal(isCalendarRangeKey('month'), true);
+  assert.equal(isCalendarRangeKey('30d'), false);
+});
+
+test('the requests link keeps calendar and custom ranges as a custom window', () => {
+  assert.deepEqual(requestWindowForRange(resolveReportingRange('7d', NOW), NOW), { window: '7d' });
+  assert.deepEqual(requestWindowForRange(resolveReportingRange('6m', NOW), NOW), { window: '30d' });
+  assert.deepEqual(requestWindowForRange(resolveReportingRange('month', NOW), NOW), {
+    window: 'custom',
+    from: '2026-08-01T00:00',
+  });
+  assert.deepEqual(requestWindowForRange(resolveReportingRange('last_month', NOW), NOW), {
+    window: 'custom',
+    from: '2026-07-01T00:00',
+    to: '2026-08-01T00:00',
+  });
+  const custom = resolveCustomReportingRange('2026-07-10', '2026-07-12', NOW);
+  assert.ok(custom);
+  assert.deepEqual(requestWindowForRange(custom, NOW), {
+    window: 'custom',
+    from: '2026-07-10T00:00',
+    to: '2026-07-13T00:00',
+  });
 });

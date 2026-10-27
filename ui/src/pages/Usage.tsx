@@ -12,7 +12,14 @@ import {
   withReportingRangeQuery,
   type ReportingRangeKey,
 } from '../lib/reportingRange';
-import { parseRequestWindow, REQUEST_WINDOWS, resolveUsageView, type RequestWindowKey } from '../lib/usageFilters';
+import {
+  parseRequestWindowSelection,
+  REQUEST_WINDOWS,
+  resolveUsageView,
+  utcInputValue,
+  validateRequestRange,
+  type RequestWindowSelection,
+} from '../lib/usageFilters';
 import { navSectionLabel } from '../lib/navigation';
 import { useUtcReportingDay } from '../lib/useUtcReportingDay';
 import { HeaderTabBar, IndexShell } from '../components/admin/shells';
@@ -22,6 +29,14 @@ import { useAutoRefresh, type AutoRefreshMs } from '../lib/useAutoRefresh';
 import { Segmented } from '../components/usage/ReportBits';
 import UsageExplorer from './usage/UsageExplorer';
 import UsageRequests from './usage/UsageRequests';
+
+const REQUEST_WINDOW_OPTIONS: ReadonlyArray<{ key: RequestWindowSelection; label: string }> = [
+  ...REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label })),
+  { key: 'custom', label: 'Custom' },
+];
+
+const DATE_INPUT =
+  'control-field-md rounded-lg border border-gray-200 bg-white px-2 text-xs text-gray-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary';
 
 const VIEW_LABELS: Record<SpendView, string> = {
   platform: 'Platform',
@@ -42,6 +57,7 @@ function rangeSubtitle(startDate: string | undefined, endDate: string | undefine
     year: year ? 'numeric' : undefined,
     timeZone: 'UTC',
   }).format(new Date(`${value}T00:00:00Z`));
+  if (startDate === endDate) return format(endDate, true);
   return `${format(startDate, startDate.slice(0, 4) !== endDate.slice(0, 4))} to ${format(endDate, true)}`;
 }
 
@@ -74,7 +90,10 @@ export default function Usage() {
     ),
     [rangeParam, searchParams, utcDay],
   );
-  const windowKey = parseRequestWindow(searchParams.get('window'));
+  const windowKey = parseRequestWindowSelection(searchParams.get('window'));
+  const customFrom = searchParams.get('from');
+  const customTo = searchParams.get('to');
+  const customError = windowKey === 'custom' ? validateRequestRange(customFrom, customTo) : null;
 
   const [refreshToken, setRefreshToken] = useState(0);
   const [reloadToken, setReloadToken] = useState(0);
@@ -105,9 +124,30 @@ export default function Usage() {
     setSearchParams(next);
   };
 
+  const setWindow = (value: RequestWindowSelection) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('window', value);
+    if (value === 'custom') {
+      const now = new Date();
+      if (!next.get('from')) next.set('from', utcInputValue(new Date(now.getTime() - 24 * 3_600_000)));
+    } else {
+      next.delete('from');
+      next.delete('to');
+    }
+    setSearchParams(next);
+  };
+
+  // Typing a date changes the bound on each keystroke; replace the entry so Back leaves the custom window.
+  const setCustomBound = (key: 'from' | 'to', value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+
   const tabLink = (path: string) => {
     const next = new URLSearchParams();
-    const keep = ['view', 'range', 'start', 'end', 'window', 'model', 'provider', 'organization', 'team', 'user', 'api_key', 'unassigned'];
+    const keep = ['view', 'range', 'start', 'end', 'window', 'from', 'to', 'model', 'provider', 'organization', 'team', 'user', 'api_key', 'unassigned'];
     for (const key of keep) for (const value of searchParams.getAll(key)) next.append(key, value);
     for (const [key, value] of searchParams) if (key.endsWith('_label')) next.set(key, value);
     const suffix = next.toString();
@@ -151,12 +191,45 @@ export default function Usage() {
                 />
               )}
               {requestsPath ? (
-                <Segmented<RequestWindowKey>
-                  label="Time window"
-                  value={windowKey}
-                  options={REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label }))}
-                  onChange={(value) => setParam('window', value)}
-                />
+                <>
+                  {windowKey === 'custom' && (
+                    <span className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+                      <label className="sr-only" htmlFor="requests-from">From (UTC)</label>
+                      <input
+                        id="requests-from"
+                        type="datetime-local"
+                        value={customFrom ?? ''}
+                        aria-invalid={Boolean(customError) || undefined}
+                        aria-describedby={customError ? 'requests-range-error' : undefined}
+                        onChange={(event) => setCustomBound('from', event.target.value)}
+                        className={DATE_INPUT}
+                      />
+                      to
+                      <label className="sr-only" htmlFor="requests-to">To (UTC), empty means now</label>
+                      <input
+                        id="requests-to"
+                        type="datetime-local"
+                        value={customTo ?? ''}
+                        aria-invalid={Boolean(customError) || undefined}
+                        aria-describedby={customError ? 'requests-range-error' : undefined}
+                        onChange={(event) => setCustomBound('to', event.target.value)}
+                        className={DATE_INPUT}
+                      />
+                      UTC
+                      {customError && (
+                        <span id="requests-range-error" role="alert" className="text-rose-600">
+                          {customError} Showing the last 24 hours.
+                        </span>
+                      )}
+                    </span>
+                  )}
+                  <Segmented<RequestWindowSelection>
+                    label="Time window"
+                    value={windowKey}
+                    options={REQUEST_WINDOW_OPTIONS}
+                    onChange={setWindow}
+                  />
+                </>
               ) : (
                 <ReportingRangeControl
                   value={range.key}
@@ -164,6 +237,8 @@ export default function Usage() {
                   endDate={range.endDate}
                   ariaLabel="Usage period"
                   desktopBreakpoint="xl"
+                  allowCustom
+                  customLabel={range.label}
                   onPresetChange={(key: ReportingRangeKey) => setSearchParams(withReportingRangeQuery(searchParams, resolveReportingRange(key)))}
                   onCustomApply={(startDate, endDate) => {
                     const custom = resolveCustomReportingRange(startDate, endDate);
