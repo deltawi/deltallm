@@ -5,7 +5,7 @@ import KeyRevocationNotice from '../components/KeyRevocationNotice';
 import type { KeyRemovalResult } from '../lib/api/keyRevocations';
 import { useState, useEffect, useMemo } from 'react';
 import { useApi } from '../lib/hooks';
-import { keys, serviceAccounts, teams } from '../lib/api';
+import { keys, organizations, serviceAccounts, teams } from '../lib/api';
 import {
   assetAccessLoadErrorMessage,
   buildParentScopedAssetTargets,
@@ -16,16 +16,26 @@ import {
 } from '../lib/assetAccess';
 import type { ApiKey, ServiceAccount } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import DataTable from '../components/DataTable';
+import DataTable, { type TableSort } from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import { Plus, RefreshCw, Trash2, Pencil, Key, List } from 'lucide-react';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import ApiKeysMobileList from '../components/api-keys/ApiKeysMobileList';
+import ApiKeysFilterBar, { ApiKeysSortControl } from '../components/api-keys/ApiKeysFilterBar';
 import ApiKeyEditorDialog from '../components/api-keys/ApiKeyEditorDialog';
 import ApiKeySecretDialog from '../components/api-keys/ApiKeySecretDialog';
 import type { KeyTeamOption as TeamOption } from '../components/api-keys/ApiKeyDetailsFields';
 import { emptyKeyForm, keyMutationPayload, validateKeyForm, type KeyFormState } from '../lib/apiKeyForm';
 import { keyLastUsedDisplay } from '../lib/apiKeyLastUsed';
+import {
+  DEFAULT_KEY_LIST_SORT,
+  EMPTY_KEY_LIST_FILTERS,
+  activeKeyFilterCount,
+  isKeySortKey,
+  keyListQuery,
+  type KeyListFilters,
+  type KeyListSort,
+} from '../lib/apiKeyListFilters';
 import { navSectionLabel } from '../lib/navigation';
 
 type ViewTab = 'all' | 'my';
@@ -85,12 +95,16 @@ export default function ApiKeys() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [pageOffset, setPageOffset] = useState(0);
+  const [filters, setFilters] = useState<KeyListFilters>(EMPTY_KEY_LIST_FILTERS);
+  const [listSort, setListSort] = useState<KeyListSort>(DEFAULT_KEY_LIST_SORT);
   const pageSize = 10;
   const myKeysMode = viewTab === 'my';
+  const listQuery = useMemo(() => keyListQuery(filters, listSort), [filters, listSort]);
   const { data: result, loading, refetch } = useApi(
-    () => keys.list({ search, my_keys: myKeysMode || undefined, limit: pageSize, offset: pageOffset }),
-    [search, pageOffset, myKeysMode],
+    (signal) => keys.list({ search, my_keys: myKeysMode || undefined, ...listQuery, limit: pageSize, offset: pageOffset }, signal),
+    [search, pageOffset, myKeysMode, listQuery],
   );
+  const filtering = Boolean(search) || activeKeyFilterCount(filters) > 0;
   const items = result?.data || [];
   const pagination = result?.pagination;
   const { data: teamsResult } = useApi(() => teams.list({ limit: 500 }), []);
@@ -98,6 +112,24 @@ export default function ApiKeys() {
     () => (Array.isArray(teamsResult?.data) ? (teamsResult.data as TeamOption[]) : []),
     [teamsResult?.data],
   );
+
+  const { data: organizationsResult } = useApi(
+    () => (isAdmin ? organizations.list({ limit: 200 }) : Promise.resolve(null)),
+    [isAdmin],
+  );
+  const teamFilterOptions = useMemo(
+    () => teamsList.map((team) => ({ value: team.team_id, label: team.team_alias || team.team_id })),
+    [teamsList],
+  );
+  const organizationFilterOptions = useMemo(
+    () => (organizationsResult?.data ?? []).map((org) => ({ value: org.organization_id, label: org.organization_name || org.organization_id })),
+    [organizationsResult?.data],
+  );
+  const changeFilters = (next: KeyListFilters) => { setFilters(next); setPageOffset(0); };
+  const changeSort = (next: KeyListSort) => { setListSort(next); setPageOffset(0); };
+  const changeTableSort = (next: TableSort) => {
+    if (isKeySortKey(next.key)) changeSort({ key: next.key, direction: next.direction });
+  };
 
   const selfServiceTeams = useMemo(
     () => teamsList.filter((team) => team.self_service_keys_enabled),
@@ -432,13 +464,13 @@ export default function ApiKeys() {
   };
 
   const columns = [
-    { key: 'key_name', header: 'Name', render: (row: ApiKey) => <span className="font-medium">{row.key_name || '(unnamed)'}</span> },
+    { key: 'key_name', header: 'Name', sortKey: 'name', defaultDirection: 'asc' as const, render: (row: ApiKey) => <span className="font-medium">{row.key_name || '(unnamed)'}</span> },
     { key: 'token', header: 'Token', render: (row: ApiKey) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{maskKey(row.token)}</code> },
     { key: 'team', header: 'Team', render: (row: ApiKey) => <span className="text-sm">{row.team_alias || row.team_id}</span> },
     { key: 'owner', header: 'Owner', render: (row: ApiKey) => <span className="text-sm">{ownerLabel(row)}</span> },
     { key: 'status', header: 'Status', render: (row: ApiKey) => <KeyStatus row={row} /> },
-    { key: 'last_used_at', header: 'Last used', render: (row: ApiKey) => <LastUsed value={row.last_used_at} /> },
-    { key: 'budget', header: 'Budget', render: (row: ApiKey) => <BudgetBar spend={row.spend || 0} max_budget={row.max_budget} /> },
+    { key: 'last_used_at', header: 'Last used', sortKey: 'last_used', defaultDirection: 'desc' as const, render: (row: ApiKey) => <LastUsed value={row.last_used_at} /> },
+    { key: 'budget', header: 'Budget', sortKey: 'budget_used', defaultDirection: 'desc' as const, render: (row: ApiKey) => <BudgetBar spend={row.spend || 0} max_budget={row.max_budget} /> },
     { key: 'rpm_limit', header: 'RPM', render: (row: ApiKey) => row.rpm_limit != null ? <span className="text-xs font-medium">{Number(row.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     { key: 'output_tpm_limit', header: 'Output TPM', render: (row: ApiKey) => row.output_tpm_limit == null ? 'No limit' : row.output_tpm_limit.toLocaleString() },
     { key: 'tpm_limit', header: 'TPM', render: (row: ApiKey) => row.tpm_limit != null ? <span className="text-xs font-medium">{Number(row.tpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
@@ -507,6 +539,9 @@ export default function ApiKeys() {
     ? assetAccessLoadErrorMessage((editItem ? editAssetAccessError : null) || activeAssetAccessError)
     : null;
 
+  const emptyMessage = filtering
+    ? 'No keys match these filters'
+    : myKeysMode ? 'You have no personal keys yet' : 'No API keys created yet';
   const createTeamOptions = isSelfServiceCreate ? selfServiceTeams : teamsList;
   const createFormTitle = isSelfServiceCreate
     ? 'Create Personal Key'
@@ -537,28 +572,37 @@ export default function ApiKeys() {
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{pageError}</div>
       ) : null}
       toolbar={(
-        <div className="flex items-center gap-3 flex-wrap">
-          {isAdmin && (
-            <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
-              <button
-                onClick={() => { setViewTab('all'); setPageOffset(0); }}
-                className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'all' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
-              >
-                <List className="w-3.5 h-3.5" /> All Keys
-              </button>
-              <button
-                onClick={() => { setViewTab('my'); setPageOffset(0); }}
-                className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'my' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
-              >
-                <Key className="w-3.5 h-3.5" /> My Keys
-              </button>
-            </div>
-          )}
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search keys..."
-            className="control-field-md hidden md:block w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary sm:w-72"
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {isAdmin && (
+              <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
+                <button
+                  onClick={() => { setViewTab('all'); setPageOffset(0); }}
+                  className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'all' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+                >
+                  <List className="w-3.5 h-3.5" /> All Keys
+                </button>
+                <button
+                  onClick={() => { setViewTab('my'); setPageOffset(0); }}
+                  className={`control-segment inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${viewTab === 'my' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+                >
+                  <Key className="w-3.5 h-3.5" /> My Keys
+                </button>
+              </div>
+            )}
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search keys..."
+              className="control-field-md hidden md:block w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-brand-primary sm:w-72"
+            />
+            <ApiKeysSortControl sort={listSort} onSortChange={changeSort} />
+          </div>
+          <ApiKeysFilterBar
+            filters={filters}
+            onFiltersChange={changeFilters}
+            teams={teamFilterOptions}
+            organizations={organizationFilterOptions}
           />
         </div>
       )}
@@ -566,7 +610,7 @@ export default function ApiKeys() {
       {revocation && <KeyRevocationNotice key={revocation.invalidation_id} result={revocation} />}
       <div className="hidden md:block">
         <ContentCard>
-          <DataTable columns={columns} data={items} loading={loading} emptyMessage={myKeysMode ? 'You have no personal keys yet' : 'No API keys created yet'} pagination={pagination} onPageChange={setPageOffset} />
+          <DataTable columns={columns} data={items} loading={loading} emptyMessage={emptyMessage} pagination={pagination} onPageChange={setPageOffset} sort={listSort} onSortChange={changeTableSort} />
         </ContentCard>
       </div>
       <div className="md:hidden">
@@ -579,7 +623,7 @@ export default function ApiKeys() {
           searchValue={searchInput}
           onSearchChange={setSearchInput}
           currentUserId={currentUserId}
-          emptyMessage={myKeysMode ? 'You have no personal keys yet' : 'No API keys created yet'}
+          emptyMessage={emptyMessage}
           canEdit={isAdmin}
           canRegenerate={canRegenerate}
           canRevoke={canRevoke}

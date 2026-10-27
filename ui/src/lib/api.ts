@@ -3,6 +3,7 @@ export type { TeamRecord, TeamMemberRecord, TeamMemberCandidate } from './api/te
 export type * from './api/tierContracts';
 import type { OrganizationTierPolicyPreview, TierPolicySimulation, TierPolicySimulationPayload } from './api/tierContracts';
 import type { KeyRemovalResult } from './api/keyRevocations';
+import type { KeyLastUsedFilter, KeyOwnerFilter, KeySortDirection, KeySortKey, KeyStatusFilter } from './apiKeyListFilters';
 import type { Paginated, Pagination } from './api/pagination';
 import type { ManagedAssetAccess, ManagedAssetAccessInput } from './api/managedAssets';
 import type { MCPOAuthServerSettings } from './api/mcpOAuth';
@@ -949,7 +950,11 @@ export const mcpServers = {
 
 export const keys = {
   list: (
-    params?: { search?: string; team_id?: string; my_keys?: boolean; coding_agent?: boolean; limit?: number; offset?: number },
+    params?: {
+      search?: string; team_id?: string; organization_id?: string; my_keys?: boolean; coding_agent?: boolean;
+      owner?: KeyOwnerFilter; owner_account_id?: string; status?: KeyStatusFilter; last_used?: KeyLastUsedFilter;
+      sort_by?: KeySortKey; sort_direction?: KeySortDirection; limit?: number; offset?: number;
+    },
     signal?: AbortSignal,
   ) => apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params), { signal }),
   create: (payload: object, signal?: AbortSignal) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload, signal }),
