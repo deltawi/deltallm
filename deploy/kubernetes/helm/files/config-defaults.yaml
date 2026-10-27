@@ -133,6 +133,7 @@ general_settings:
   audit_ingestion_cleanup_batch_size: 1000
   audit_ingestion_cleanup_max_batches_per_run: 10
   audit_ingestion_cleanup_time_budget_seconds: 2
+  audit_payload_max_bytes: 1048576
   cache_ttl: 3600
   cache_max_size: 10000
   organization_lifecycle_auth_max_staleness_seconds: 3

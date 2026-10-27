@@ -15,6 +15,7 @@ from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.redis_namespace import build_redis_channel
 from src.services.audit.audit_retention import AuditRetentionConfig, AuditRetentionWorker
 from src.services.audit.audit_service import AuditIngestionConfig, AuditService
+from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
 
 
 @dataclass
@@ -161,6 +162,14 @@ async def _init_audit_runtime(app: Any, cfg: Any, runtime: AuditRuntime) -> Audi
                     settings,
                     "audit_ingestion_cleanup_time_budget_seconds",
                     2.0,
+                )
+            ),
+            payload_max_bytes=int(
+                _startup_setting(
+                    cfg.general_settings,
+                    settings,
+                    "audit_payload_max_bytes",
+                    DEFAULT_AUDIT_PAYLOAD_MAX_BYTES,
                 )
             ),
             worker_startup_timeout_seconds=float(

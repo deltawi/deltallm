@@ -767,6 +767,7 @@ Audit events are written to Postgres and can be queried via the Admin Audit API.
 | `audit_ingestion_cleanup_batch_size` | `1000` | Rows deleted by each audit cleanup query |
 | `audit_ingestion_cleanup_max_batches_per_run` | `10` | Maximum cleanup pages drained per maintenance run |
 | `audit_ingestion_cleanup_time_budget_seconds` | `2` | Wall-clock budget for one audit cleanup run |
+| `audit_payload_max_bytes` | `1048576` | Largest request/response payload kept in an audit event (approximate JSON size). Inline base64 data (images, audio, files) is always replaced by its media type, size and SHA-256; a payload still larger than this is replaced by an `omitted: payload_too_large` marker |
 | `audit_retention_worker_enabled` | `true` | Enable background audit retention cleanup loop |
 | `audit_retention_interval_seconds` | `86400` | Cleanup loop interval in seconds |
 | `audit_retention_scan_limit` | `500` | Max expired rows processed per cleanup pass |

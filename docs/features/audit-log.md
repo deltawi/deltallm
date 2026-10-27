@@ -146,6 +146,22 @@ Audit payloads are handled differently depending on the event type:
 - Redis invalidation removes stale policy-cache entries across replicas, but privacy correctness does not depend on Pub/Sub availability
 - when content storage is disabled, the event is still recorded but request and response bodies are omitted or marked redacted
 
+### Inline files and large payloads
+
+Before an audit event is accepted, DeltaLLM shrinks its request and response payloads. This keeps the
+write inside the short request-path database budget, so vision, OCR and audio requests are not refused
+with `audit_persistence_unavailable`:
+
+- inline base64 data (data URLs such as `data:image/png;base64,...`, and long raw base64 values such as
+  Anthropic `source.data`, `input_audio.data` or image `b64_json`) is replaced by a short marker:
+  `[omitted inline data: image/png, 5242904 chars, sha256=...]`. The SHA-256 is computed over the original
+  string, so you can still match a stored event to a known file. Remote URLs and normal text are kept as-is.
+- if a payload is still larger than `general_settings.audit_payload_max_bytes` (default 1 MiB, measured as
+  an approximate JSON size), it is replaced by
+  `{"omitted": "payload_too_large", "approx_size_bytes": ..., "max_bytes": ...}`.
+
+The audit event itself (actor, model, status, tokens, latency) is always recorded.
+
 ## Retention
 
 Audit retention runs in the background.
