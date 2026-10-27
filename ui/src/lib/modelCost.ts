@@ -70,16 +70,25 @@ const PRIMARY_BY_MODE: Record<string, Primary[]> = {
 };
 const DEFAULT_PRIMARY: Primary[] = [TOKENS, AUDIO_TOKENS, CHARACTERS, SECONDS, IMAGES, REQUESTS];
 
-export function summarizeModelCost(mode: string, modelInfo: object | null | undefined): ModelCostSummary {
+export type ModelPriceRow = { field: string; label: string; price: string; unit: string; perUnit: number };
+
+/** Every stored price, in display units, in a fixed order. */
+export function modelPriceRows(mode: string, modelInfo: object | null | undefined): ModelPriceRow[] {
   const info = (modelInfo || {}) as Record<string, unknown>;
-  const rates: ModelCostRate[] = [];
+  const rows: ModelPriceRow[] = [];
   for (const rate of RATE_FIELDS) {
     const value = readPrice(info, rate.field);
     if (value == null) continue;
     const label = mode === 'realtime' && (rate.field === 'input_cost_per_token' || rate.field === 'output_cost_per_token')
       ? `Text ${rate.label.toLowerCase()}` : rate.label;
-    rates.push({ label, value: `${fmtUnitPrice(value * rate.scale)} ${rate.unit}` });
+    rows.push({ field: rate.field, label, price: fmtUnitPrice(value * rate.scale), unit: rate.unit, perUnit: value });
   }
+  return rows;
+}
+
+export function summarizeModelCost(mode: string, modelInfo: object | null | undefined): ModelCostSummary {
+  const info = (modelInfo || {}) as Record<string, unknown>;
+  const rates: ModelCostRate[] = modelPriceRows(mode, info).map((row) => ({ label: row.label, value: `${row.price} ${row.unit}` }));
   const multiplier = readPrice(info, 'batch_price_multiplier');
   if (multiplier != null) rates.push({ label: 'Batch', value: `${Number((multiplier * 100).toFixed(2))}% of standard` });
 

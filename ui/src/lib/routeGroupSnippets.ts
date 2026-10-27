@@ -140,3 +140,8 @@ export function tokenPricePerMillion(info: Record<string, unknown> | null | unde
   };
   return `${format(input)} / ${format(output)}`;
 }
+
+/** Example requests for a single model deployment. */
+export function modelSnippets(modelName: string, mode: string, instanceName: string, base = gatewayBaseUrl()): Record<SnippetLanguage, string> {
+  return routeGroupSnippets(modelName, mode, instanceName, [], base);
+}

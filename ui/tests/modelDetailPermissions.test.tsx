@@ -50,7 +50,7 @@ for (const width of [375, 1024]) {
           </MemoryRouter>,
         ));
         assert.ok(document.body.textContent?.includes('Visible model'));
-        const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Check Health');
+        const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Check health');
         assert.equal(Boolean(button), admin);
         if (button) {
           button.focus();

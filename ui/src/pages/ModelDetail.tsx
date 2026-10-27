@@ -1,514 +1,43 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Box,
-  Brain,
-  CheckCircle2,
-  ChevronRight,
-  DollarSign,
-  Gauge,
-  Layers,
-  Pencil,
-  RefreshCw,
-  Route,
-  Scale,
-  Shield,
-  Tag,
-  Terminal,
-  Trash2,
-  TrendingUp,
-  Unplug,
-  Zap,
-} from 'lucide-react';
+import { Box, Code2, DollarSign, Gauge, Plug, RefreshCw, Settings } from 'lucide-react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession } from '../lib/authorization';
-import { ApiError, models, type DeploymentHealth, type ModelDeploymentDetail } from '../lib/api';
+import { ApiError, models } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
-import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
+import { sharingSummary } from '../lib/routeGroupSummary';
 import { MODE_OPTIONS } from '../components/modelFormShared';
-import { DetailMetricCard, EntityAvatar, IconTabs, PageShell, PanelCard } from '../components/admin/shells';
+import { EntityAvatar, IconTabs, PageShell } from '../components/admin/shells';
 import { navTrail } from '../lib/navigation';
-import { useBranding } from '../lib/brandingContext';
 import Button from '../components/Button';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { Skeleton } from '../components/usage/ReportBits';
 import { mutationOutcome } from '../lib/mutationOutcome';
-import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
 import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
+import ModelConnectionTab from '../components/models/detail/ModelConnectionTab';
+import ModelDetailMeta from '../components/models/detail/ModelDetailMeta';
+import ModelLimitsTab from '../components/models/detail/ModelLimitsTab';
+import ModelPricingTab from '../components/models/detail/ModelPricingTab';
+import ModelSettingsTab from '../components/models/detail/ModelSettingsTab';
+import UseModelDrawer from '../components/models/detail/UseModelDrawer';
+import type { ModelDetailTabId } from '../components/models/detail/modelDetailFormat';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const PROVIDER_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
-  openai:     { bg: 'bg-emerald-50',  text: 'text-emerald-700',  dot: 'bg-emerald-500'  },
-  anthropic:  { bg: 'bg-violet-50',   text: 'text-violet-700',   dot: 'bg-violet-500'   },
-  groq:       { bg: 'bg-orange-50',   text: 'text-orange-700',   dot: 'bg-orange-500'   },
-  azure:      { bg: 'bg-blue-50',     text: 'text-blue-700',     dot: 'bg-blue-500'     },
-  bedrock:    { bg: 'bg-amber-50',    text: 'text-amber-700',    dot: 'bg-amber-500'    },
-  gemini:     { bg: 'bg-sky-50',      text: 'text-sky-700',      dot: 'bg-sky-500'      },
-  mistral:    { bg: 'bg-rose-50',     text: 'text-rose-700',     dot: 'bg-rose-500'     },
-  cohere:     { bg: 'bg-indigo-50',   text: 'text-indigo-700',   dot: 'bg-indigo-500'   },
-};
-
-const TAB_LIST = [
-  { id: 'overview', label: 'Overview',  icon: Layers   },
-  { id: 'runtime',  label: 'Runtime',   icon: Zap      },
-  { id: 'routing',  label: 'Routing',   icon: Route    },
-  { id: 'costs',    label: 'Costs',     icon: DollarSign },
-  { id: 'usage',    label: 'API Usage', icon: Terminal },
+const TABS = [
+  { id: 'connection', label: 'Connection', icon: Plug },
+  { id: 'limits', label: 'Limits', icon: Gauge },
+  { id: 'pricing', label: 'Pricing', icon: DollarSign },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 
-type TabId = (typeof TAB_LIST)[number]['id'];
+const TABS_ID = 'model-tabs';
 
-// ─── Formatters ───────────────────────────────────────────────────────────────
-
-function formatInteger(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  const num = Number(value);
-  if (Number.isNaN(num)) return null;
-  return num.toLocaleString();
+function loadErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 403) return 'You do not have permission to view this model.';
+  if (error instanceof ApiError && error.status === 404) return 'Model not found.';
+  return 'Failed to load model details.';
 }
-
-function formatDurationSeconds(value: unknown): string | null {
-  const formatted = formatInteger(value);
-  return formatted ? `${formatted}s` : null;
-}
-
-function formatCost(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  const num = Number(value);
-  if (Number.isNaN(num)) return null;
-  if (num === 0) return '$0';
-  if (num < 0.0001) return `$${num.toExponential(2)}`;
-  return `$${num.toFixed(6)}`;
-}
-
-function formatCapacityFraction(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  const num = Number(value);
-  if (!Number.isFinite(num)) return null;
-  return num.toLocaleString(undefined, { maximumFractionDigits: 4 });
-}
-
-function formatUnixTimestamp(value: number | null | undefined): string | null {
-  if (!value) return null;
-  const date = new Date(value * 1000);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString();
-}
-
-function timeSince(ts: number | null | undefined): string | null {
-  if (!ts) return null;
-  const secs = Math.round(Date.now() / 1000 - ts);
-  if (secs < 60) return `${secs}s ago`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  return `${Math.floor(secs / 3600)}h ago`;
-}
-
-function modeSpecificItems(mode: string, model: ModelDeploymentDetail): Array<{ label: string; value: string | null }> {
-  const lp = model.deltallm_params || {};
-  const mi = model.model_info || {};
-  const batchCapacity = mi.batch_capacity && typeof mi.batch_capacity === 'object' ? mi.batch_capacity : {};
-  const schedulerCapacityItems = [
-    { label: 'Scheduler Max In-Flight', value: formatInteger(batchCapacity.max_in_flight) },
-    { label: 'Scheduler Max Claim Work Units', value: formatInteger(batchCapacity.max_claim_work_units) },
-    { label: 'Capacity Fraction', value: formatCapacityFraction(batchCapacity.capacity_fraction) },
-  ];
-
-  switch (mode) {
-    case 'chat':
-      return [
-        { label: 'Context Window',    value: formatInteger(mi.max_tokens) },
-        { label: 'Max Input Tokens',  value: formatInteger(mi.max_input_tokens) },
-        { label: 'Max Output Tokens', value: formatInteger(mi.max_output_tokens) },
-        { label: 'Per Request Cap',   value: formatInteger(lp.max_tokens) },
-        { label: 'Stream Timeout',    value: formatDurationSeconds(lp.stream_timeout) },
-        ...schedulerCapacityItems,
-      ];
-    case 'embedding':
-      return [
-        { label: 'Context Window', value: formatInteger(mi.max_tokens) },
-        { label: 'Vector Size',    value: formatInteger(mi.output_vector_size) },
-        { label: 'Batch Worker Upstream Max Inputs', value: formatInteger(mi.upstream_max_batch_inputs) || '—' },
-        ...schedulerCapacityItems,
-      ];
-    case 'image_generation':
-      return [{ label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) }];
-    case 'realtime':
-      return [
-        { label: 'Session', value: mi.realtime_profile === 'transcription' ? 'Transcription' : 'Conversation' },
-        { label: 'Usage', value: mi.realtime_usage_type === 'duration' ? 'Audio duration' : 'Tokens' },
-        { label: 'Input Text / Token', value: formatCost(mi.input_cost_per_token) },
-        { label: 'Output Text / Token', value: formatCost(mi.output_cost_per_token) },
-        { label: 'Input Audio / Token', value: formatCost(mi.input_cost_per_audio_token) },
-        { label: 'Output Audio / Token', value: formatCost(mi.output_cost_per_audio_token) },
-        { label: 'Cached Audio / Token', value: formatCost(mi.input_cost_per_audio_token_cache_hit) },
-        { label: 'Audio / Second', value: formatCost(mi.input_cost_per_second) },
-      ];
-    case 'audio_speech':
-      return [
-        { label: 'Cost / Character',      value: formatCost(mi.input_cost_per_character) },
-        { label: 'Output Cost / Char',    value: formatCost(mi.output_cost_per_character) },
-        { label: 'Input Cost / Second',   value: formatCost(mi.input_cost_per_second) },
-        { label: 'Output Cost / Second',  value: formatCost(mi.output_cost_per_second) },
-        { label: 'Input Audio Token',     value: formatCost(mi.input_cost_per_audio_token) },
-        { label: 'Output Audio Token',    value: formatCost(mi.output_cost_per_audio_token) },
-      ];
-    case 'audio_transcription':
-      return [
-        { label: 'Input Cost / Second',  value: formatCost(mi.input_cost_per_second) },
-        { label: 'Output Cost / Second', value: formatCost(mi.output_cost_per_second) },
-        { label: 'Input Audio Token',    value: formatCost(mi.input_cost_per_audio_token) },
-        { label: 'Input Cost / Token',   value: formatCost(mi.input_cost_per_token) },
-        { label: 'Output Cost / Token',  value: formatCost(mi.output_cost_per_token) },
-      ];
-    case 'rerank':
-      return [{ label: 'Cost / Token', value: formatCost(mi.input_cost_per_token) }];
-    default:
-      return [];
-  }
-}
-
-function formatDefaultParamValue(value: unknown): string {
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  if (typeof value === 'number') return String(value);
-  return String(value);
-}
-
-function primaryCost(mode: string, mi: Record<string, unknown>): string | null {
-  if (mode === 'image_generation') return formatCost(mi.input_cost_per_image);
-  if (mode === 'audio_speech') {
-    return (
-      formatCost(mi.input_cost_per_character)
-      || formatCost(mi.input_cost_per_audio_token)
-      || formatCost(mi.output_cost_per_second)
-      || formatCost(mi.input_cost_per_second)
-    );
-  }
-  if (mode === 'audio_transcription') return formatCost(mi.input_cost_per_second) || formatCost(mi.input_cost_per_audio_token);
-  return formatCost(mi.input_cost_per_token);
-}
-
-// ─── Small shared components ──────────────────────────────────────────────────
-
-function ProviderPill({ provider }: { provider: string }) {
-  const colors = PROVIDER_COLORS[provider] || { bg: 'bg-gray-100', text: 'text-gray-700', dot: 'bg-gray-400' };
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${colors.bg} ${colors.text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} />
-      {provider.charAt(0).toUpperCase() + provider.slice(1)}
-    </span>
-  );
-}
-
-function Field({
-  label,
-  value,
-  mono = false,
-  full = false,
-}: {
-  label: string;
-  value: React.ReactNode;
-  mono?: boolean;
-  full?: boolean;
-}) {
-  return (
-    <div className={`rounded-xl border border-gray-100 bg-white px-4 py-3 ${full ? 'col-span-2' : ''}`}>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</div>
-      <div className={`break-all text-sm text-gray-900 ${mono ? 'font-mono text-xs' : 'font-medium'}`}>{value}</div>
-    </div>
-  );
-}
-
-// ─── Tab content panels ───────────────────────────────────────────────────────
-
-const EMPTY_DEPLOYMENT_HEALTH: DeploymentHealth = {
-  healthy: false,
-  in_cooldown: false,
-  consecutive_failures: 0,
-  last_error: null,
-  last_error_at: null,
-  last_success_at: null,
-};
-
-function OverviewTab({ model }: { model: ModelDeploymentDetail }) {
-  const lp = model.deltallm_params || {};
-  const connectionSummary = model.connection_summary || {};
-  const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
-  const customAuthSummary = connectionSummary.custom_auth_label || connectionSummary.auth_header_name || null;
-  const credentialSource = model.credential_source === 'named' ? 'Named credential' : 'Inline credentials';
-  const credentialDetail = model.credential_source === 'named'
-    ? (model.credential_binding?.state === 'revoked'
-      ? 'Credential binding revoked — replacement required'
-      : (model.named_credential_name || 'Managed by named credential'))
-    : (model.inline_credentials_present ? 'Stored inline credential' : 'No inline credential configured');
-
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <Field label="Model Name"           value={model.display_name || model.model_name} />
-      <Field label="API Model ID"         value={model.api_model_id || model.model_name} mono />
-      <Field label="Deployment ID"        value={model.deployment_id} mono />
-      <Field label="Provider"             value={<ProviderPill provider={model.provider} />} />
-      <Field label="Provider Model"       value={lp.model || '—'} mono />
-      <Field label="Credential Source"    value={credentialSource} />
-      <Field label="Credential"           value={credentialDetail} full />
-      <Field label="API Base"             value={connectionSummary.api_base || lp.api_base || '—'} mono full />
-      {connectionSummary.api_version && <Field label="API Version" value={connectionSummary.api_version} mono />}
-      {connectionSummary.region && <Field label="Region" value={connectionSummary.region} mono />}
-      {customAuthSummary && <Field label="Custom Auth" value={customAuthSummary} mono />}
-      <Field label="Timeout"              value={formatDurationSeconds(lp.timeout) || '—'} />
-      <Field label="Consecutive Failures" value={String(health.consecutive_failures ?? 0)} />
-      <Field label="Last Success"         value={timeSince(health.last_success_at) || '—'} />
-      <Field label="Cooldown Active"      value={health.in_cooldown ? 'Yes' : 'No'} />
-      {health.last_error && (
-        <div className="col-span-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-red-400">Last Error</div>
-          <div className="text-sm text-red-800">{health.last_error}</div>
-          {health.last_error_at && (
-            <div className="mt-1 text-xs text-red-500">{formatUnixTimestamp(health.last_error_at)}</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RuntimeTab({ model }: { model: ModelDeploymentDetail }) {
-  const lp = model.deltallm_params || {};
-  const mi = model.model_info || {};
-  const mode = model.mode || mi.mode || 'chat';
-  const modeItems = modeSpecificItems(mode, model)
-    .filter((i) => i.value);
-  const defaults = mi.default_params && typeof mi.default_params === 'object'
-    ? Object.entries(mi.default_params)
-    : [];
-
-  if (modeItems.length === 0 && defaults.length === 0) {
-    return <p className="text-sm text-gray-500">No runtime settings configured.</p>;
-  }
-
-  return (
-    <div className="space-y-5">
-      {modeItems.length > 0 && (
-        <div>
-          <h3 className="mb-3 text-sm font-semibold text-gray-700">Runtime Settings</h3>
-          {mode === 'embedding' && (
-            <p className="mb-3 text-xs text-gray-500">
-              Batch worker settings apply only to compatible async embedding batch jobs. Synchronous{' '}
-              <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-gray-700">/v1/embeddings</code>
-              {' '}requests are unchanged.
-            </p>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            {modeItems.map((item) => (
-              <Field key={item.label} label={item.label} value={item.value!} />
-            ))}
-            {lp.timeout && (
-              <Field label="Request Timeout" value={formatDurationSeconds(lp.timeout)!} />
-            )}
-          </div>
-        </div>
-      )}
-      {defaults.length > 0 && (
-        <div>
-          <h3 className="mb-3 text-sm font-semibold text-gray-700">Default Parameters</h3>
-          <div className="grid grid-cols-2 gap-3">
-            {defaults.map(([k, v]) => (
-              <Field key={k} label={k} value={formatDefaultParamValue(v)} mono />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RoutingTab({ model }: { model: ModelDeploymentDetail }) {
-  const lp = model.deltallm_params || {};
-  const mi = model.model_info || {};
-  const rpmLimit = lp.rpm ?? mi.rpm_limit;
-  const tpmLimit = lp.tpm ?? mi.tpm_limit;
-  const weight = mi.weight ?? lp.weight;
-  const tags: string[] = Array.isArray(mi.tags) ? mi.tags : [];
-  const accessGroups: string[] = Array.isArray(mi.access_groups) ? mi.access_groups : [];
-  const totalWeight = 10;
-  const weightNum = Number(weight) || 0;
-
-  return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3">
-        {weight != null    && <Field label="Weight"    value={String(weight)} />}
-        {mi.priority != null && <Field label="Priority" value={String(mi.priority)} />}
-        {rpmLimit != null  && <Field label="RPM Limit" value={Number(rpmLimit).toLocaleString()} />}
-        {tpmLimit != null  && <Field label="TPM Limit" value={Number(tpmLimit).toLocaleString()} />}
-      </div>
-
-      {weightNum > 0 && (
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Weight distribution</span>
-            <span className="text-xs text-gray-400">{weightNum} / {totalWeight} total weight</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-gray-100">
-            <div
-              className="h-full rounded-full bg-blue-500 transition-all"
-              style={{ width: `${Math.min((weightNum / totalWeight) * 100, 100)}%` }}
-            />
-          </div>
-          <p className="mt-1.5 text-xs text-gray-400">
-            This deployment receives ~{Math.round((weightNum / totalWeight) * 100)}% of routed traffic.
-          </p>
-        </div>
-      )}
-
-      {tags.length > 0 && (
-        <div>
-          <h3 className="mb-3 text-sm font-semibold text-gray-700">Tags</h3>
-          <div className="flex flex-wrap gap-2">
-            {tags.map((tag: string) => (
-              <span
-                key={tag}
-                className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600"
-              >
-                <Tag className="h-3 w-3 text-gray-400" />
-                {tag}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {accessGroups.length > 0 && (
-        <div>
-          <h3 className="mb-3 text-sm font-semibold text-gray-700">Access Groups</h3>
-          <div className="flex flex-wrap gap-2">
-            {accessGroups.map((groupKey: string) => (
-              <span
-                key={groupKey}
-                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700"
-              >
-                <Shield className="h-3 w-3 text-emerald-500" />
-                {groupKey}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {weight == null && rpmLimit == null && tpmLimit == null && tags.length === 0 && accessGroups.length === 0 && (
-        <p className="text-sm text-gray-500">No routing configuration set.</p>
-      )}
-    </div>
-  );
-}
-
-function CostsTab({ model }: { model: ModelDeploymentDetail }) {
-  const mi = model.model_info || {};
-  const rows = [
-    { label: 'Input Cost / Token',        value: formatCost(mi.input_cost_per_token),           hint: 'Standard request' },
-    { label: 'Output Cost / Token',       value: formatCost(mi.output_cost_per_token),          hint: 'Standard request' },
-    { label: 'Cost / Image',              value: formatCost(mi.input_cost_per_image),            hint: 'Image generation' },
-    { label: 'Cost / Character',          value: formatCost(mi.input_cost_per_character),        hint: 'Audio speech' },
-    { label: 'Output Cost / Character',   value: formatCost(mi.output_cost_per_character),       hint: 'Audio speech' },
-    { label: 'Cost / Second',             value: formatCost(mi.input_cost_per_second),           hint: 'Audio' },
-    { label: 'Output Cost / Second',      value: formatCost(mi.output_cost_per_second),          hint: 'Audio' },
-    { label: 'Input Audio Token',         value: formatCost(mi.input_cost_per_audio_token),      hint: 'Audio' },
-    { label: 'Output Audio Token',        value: formatCost(mi.output_cost_per_audio_token),     hint: 'Audio' },
-    { label: 'Batch Price Multiplier',    value: mi.batch_price_multiplier != null ? `${mi.batch_price_multiplier}×` : null, hint: 'Batch discount' },
-    { label: 'Batch Input Cost / Token',  value: formatCost(mi.batch_input_cost_per_token),      hint: 'Batch pricing' },
-    { label: 'Batch Output Cost / Token', value: formatCost(mi.batch_output_cost_per_token),     hint: 'Batch pricing' },
-  ].filter((r) => r.value);
-
-  if (rows.length === 0) {
-    return <p className="text-sm text-gray-500">No pricing configured for this deployment.</p>;
-  }
-
-  const inputCost = Number(mi.input_cost_per_token);
-  const outputCost = Number(mi.output_cost_per_token);
-  const batchMult = Number(mi.batch_price_multiplier);
-
-  return (
-    <div className="space-y-4">
-      <div className="overflow-hidden rounded-2xl border border-gray-200">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50">
-              <th className="px-4 py-2.5 text-left text-[10px] font-semibold uppercase tracking-widest text-gray-400">Field</th>
-              <th className="px-4 py-2.5 text-left text-[10px] font-semibold uppercase tracking-widest text-gray-400">Rate</th>
-              <th className="px-4 py-2.5 text-left text-[10px] font-semibold uppercase tracking-widest text-gray-400">Note</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {rows.map((r) => (
-              <tr key={r.label} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-700">{r.label}</td>
-                <td className="px-4 py-3 font-mono text-xs text-gray-900">{r.value}</td>
-                <td className="px-4 py-3 text-xs text-gray-400">{r.hint}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {!Number.isNaN(inputCost) && inputCost > 0 && !Number.isNaN(outputCost) && outputCost > 0 && (
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm">
-          <div className="flex items-start gap-3">
-            <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
-            <div>
-              <div className="font-semibold text-blue-800">Estimated cost for 1M tokens</div>
-              <div className="mt-1 text-blue-700">
-                Input: <strong>${(inputCost * 1_000_000).toFixed(2)}</strong>
-                &nbsp;·&nbsp;
-                Output: <strong>${(outputCost * 1_000_000).toFixed(2)}</strong>
-              </div>
-              {!Number.isNaN(batchMult) && batchMult > 0 && (
-                <div className="mt-0.5 text-xs text-blue-500">
-                  Batch pricing available at {batchMult * 100}% of standard rates.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UsageTab({ modelName, mode }: { modelName: string; mode: string }) {
-  const { branding } = useBranding();
-  return (
-    <div className="space-y-4">
-      <ModelUsageExamplesCard modelName={modelName} mode={mode} />
-
-      <div className="rounded-2xl border border-gray-200 bg-white p-4">
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Quick Reference</h4>
-        <div className="space-y-2 text-sm text-gray-700">
-          <div className="flex items-start gap-2">
-            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-blue-400" />
-            <span>
-              Clients call{' '}
-              <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-900">{modelName}</code>.
-              {' '}{branding.instance_name} routes traffic transparently to the configured provider model.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-blue-400" />
-            <span>
-              Drop-in replacement for any OpenAI-compatible SDK — just swap{' '}
-              <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-900">base_url</code>
-              {' '}and{' '}
-              <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-900">api_key</code>.
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ModelDetail() {
   const { deploymentId } = useParams<{ deploymentId: string }>();
@@ -516,23 +45,15 @@ export default function ModelDetail() {
   const { pushToast } = useToast();
   const { session, authMode } = useAuth();
   const isPlatformAdmin = isPlatformAdminSession(authMode, session);
-  const { teamOptions, organizationOptions } = useManagedAssetAudienceOptions(
-    session,
-    isPlatformAdmin,
-  );
+  const audiences = useManagedAssetAudienceOptions(session, isPlatformAdmin);
 
-  const { data: model, loading, refetch } = useApi(
-    (signal) => models.get(deploymentId!, signal),
-    [deploymentId],
-  );
-  const canEdit = isPlatformAdmin || Boolean(model?.access?.capabilities.write);
-  const canDelete = isPlatformAdmin || Boolean(model?.access?.capabilities.delete);
-  const canRevokeCredential = Boolean(
-    model?.credential_binding?.state === 'active'
-    && model.credential_binding.can_revoke,
-  );
+  const detail = useApi((signal) => models.get(deploymentId!, signal), [deploymentId]);
+  const model = detail.data;
 
-  const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [activeTab, setActiveTab] = useState<ModelDetailTabId>('connection');
+  // A tab renders when it is first opened, then stays mounted so an open access editor survives a tab switch.
+  const [visited, setVisited] = useState<ReadonlySet<ModelDetailTabId>>(() => new Set(['connection']));
+  const [using, setUsing] = useState(false);
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [healthActionMessage, setHealthActionMessage] = useState<string | null>(null);
   const [healthActionError, setHealthActionError] = useState<string | null>(null);
@@ -540,6 +61,19 @@ export default function ModelDetail() {
   const [deleting, setDeleting] = useState(false);
   const [revokeCredentialOpen, setRevokeCredentialOpen] = useState(false);
   const [revokingCredential, setRevokingCredential] = useState(false);
+
+  const canEdit = isPlatformAdmin || Boolean(model?.access?.capabilities.write);
+  const canDelete = isPlatformAdmin || Boolean(model?.access?.capabilities.delete);
+  const canRevokeCredential = Boolean(
+    model?.credential_binding?.state === 'active'
+    && model.credential_binding.can_revoke,
+  );
+
+  const openTab = (tab: ModelDetailTabId) => {
+    setActiveTab(tab);
+    setVisited((current) => (current.has(tab) ? current : new Set([...current, tab])));
+  };
+  const openEditor = () => navigate(modelEditPath(deploymentId!));
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -570,13 +104,9 @@ export default function ModelDetail() {
     try {
       const result = await models.checkHealth(deploymentId!);
       setHealthActionMessage(result.message);
-      refetch();
+      detail.refetch();
     } catch (err: unknown) {
-      if (err instanceof ApiError) {
-        setHealthActionError(err.message);
-      } else {
-        setHealthActionError('Failed to run health check');
-      }
+      setHealthActionError(err instanceof ApiError ? err.message : 'Failed to run health check');
     } finally {
       setCheckingHealth(false);
     }
@@ -596,7 +126,7 @@ export default function ModelDetail() {
         message: outcome.message,
       });
       setRevokeCredentialOpen(false);
-      refetch();
+      detail.refetch();
     } catch (err: unknown) {
       pushToast({
         tone: 'error',
@@ -608,192 +138,99 @@ export default function ModelDetail() {
     }
   };
 
-  // ── Loading state ──
-  if (loading) {
-    return (
-      <div className="flex min-h-[400px] items-center justify-center p-6">
-        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
-      </div>
-    );
-  }
-
-  // ── Not found ──
+  const breadcrumbs = navTrail('/models');
+  // A refetch keeps the last loaded model on screen; only the first load shows the skeleton.
   if (!model) {
+    const failed = !!detail.error && !detail.loading;
     return (
-      <div className="p-6">
-        <button
-          onClick={() => navigate('/models')}
-          className="mb-4 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-700"
-        >
-          <ArrowLeft className="h-4 w-4" /> Back to Models
-        </button>
-        <p className="text-gray-500">Model not found.</p>
-      </div>
+      <PageShell breadcrumbs={breadcrumbs} avatar={<EntityAvatar icon={Box} />} title="Model">
+        {failed ? (
+          <div className="space-y-3">
+            <div role="alert" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{loadErrorMessage(detail.error)}</div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={detail.refetch}>Retry</Button>
+              <Button size="sm" variant="ghost" onClick={() => navigate('/models')}>Back to Models</Button>
+            </div>
+          </div>
+        ) : (
+          <div role="status" aria-label="Loading model" className="max-w-4xl space-y-3 rounded-xl border border-gray-200 bg-white px-4 py-4 shadow-sm">
+            <Skeleton className="h-4 w-56" />
+            <Skeleton className="h-3 w-80" />
+            <Skeleton className="h-24" />
+          </div>
+        )}
+      </PageShell>
     );
   }
 
-  const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
   const mode = mi.mode || model.mode || 'chat';
-  const modeOpt = MODE_OPTIONS.find((o) => o.value === mode);
-  const modeLabel = modeOpt?.label || mode;
-  const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
+  const modeLabel = MODE_OPTIONS.find((option) => option.value === mode)?.label || mode;
+  const modelName = model.api_model_id || model.model_name;
+  const title = model.display_name || model.model_name;
+  const access = model.access;
+  const sharing = access?.governance_source === 'platform'
+    ? 'Tier managed'
+    : access?.governance_source === 'creator'
+      ? sharingSummary(access, audiences.teamOptions, audiences.organizationOptions)
+      : null;
+  const defaults = mi.default_params && typeof mi.default_params === 'object' ? mi.default_params : {};
 
-  // Compact stat strip values
-  const rpmLimit = lp.rpm ?? mi.rpm_limit;
-  const tpmLimit = lp.tpm ?? mi.tpm_limit;
-  const weight = mi.weight ?? lp.weight;
-  const contextWindow = mi.max_tokens
-    ? `${(Number(mi.max_tokens) / 1000).toFixed(0)}K tok`
-    : null;
-  const inputCostDisplay = primaryCost(mode, mi);
+  function renderTab(id: ModelDetailTabId) {
+    switch (id) {
+      case 'connection':
+        return <ModelConnectionTab model={model!} canEdit={canEdit} onEdit={openEditor} />;
+      case 'limits':
+        return <ModelLimitsTab model={model!} mode={mode} />;
+      case 'pricing':
+        return <ModelPricingTab model={model!} mode={mode} canEdit={canEdit} onEdit={openEditor} />;
+      case 'settings':
+        return (
+          <ModelSettingsTab model={model!} modeLabel={modeLabel} sharing={sharing} canEdit={canEdit} canDelete={canDelete}
+            canRevokeCredential={canRevokeCredential} isPlatformAdmin={isPlatformAdmin} audiences={audiences}
+            onEdit={openEditor} onRevokeCredential={() => setRevokeCredentialOpen(true)} onDelete={() => setDeleteOpen(true)}
+            onAccessSaved={detail.refetch} />
+        );
+    }
+  }
 
   return (
     <>
       <PageShell
-        breadcrumbs={[...navTrail('/models'), { label: model.display_name || model.model_name }]}
+        breadcrumbs={[...breadcrumbs, { label: title }]}
         avatar={<EntityAvatar icon={Box} />}
-        title={model.display_name || model.model_name}
-        badges={(
-          <>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
-              <Brain className="h-3.5 w-3.5" />
-              {modeLabel}
-            </span>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                model.healthy ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-              }`}
-            >
-              {model.healthy
-                ? <><CheckCircle2 className="h-3.5 w-3.5" /> Healthy</>
-                : <><AlertTriangle className="h-3.5 w-3.5" /> Unhealthy</>}
-            </span>
-            {model.provider && <ProviderPill provider={model.provider} />}
-          </>
-        )}
-        description={lp.model ? (
-          <>
-            Routes to{' '}
-            <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-700">
-              {lp.model}
-            </code>
-            {model.provider && (
-              <> via <span className="font-medium capitalize">{model.provider}</span></>
-            )}
-          </>
-        ) : undefined}
-        meta={(
-          <div className="flex flex-wrap items-center gap-3">
-            <code className="break-all rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-500">{model.api_model_id || model.model_name}</code>
-            {model.access?.governance_source === 'creator' ? (
-              <ManagedAssetAccessSummary
-                access={model.access}
-                teamOptions={teamOptions}
-                organizationOptions={organizationOptions}
-              />
-            ) : model.access?.governance_source === 'platform' ? (
-              <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
-                Tier managed
-              </span>
-            ) : null}
-          </div>
-        )}
+        title={title}
+        badges={<span className="rounded-md bg-brand-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-brand-primary-ink">{modeLabel}</span>}
+        meta={<ModelDetailMeta model={model} mode={mode} sharing={sharing} onOpenTab={openTab} />}
         actions={(
           <>
-            {canRevokeCredential ? (
-              <Button variant="warning-outline" onClick={() => setRevokeCredentialOpen(true)}>
-                <Unplug className="h-4 w-4" /> Revoke Credential
-              </Button>
-            ) : null}
-            {canEdit && (
-              <Button variant="outline" onClick={handleCheckHealth} disabled={checkingHealth}>
-                <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} />
-                Check Health
-              </Button>
-            )}
             {canEdit ? (
-              <Button onClick={() => navigate(modelEditPath(deploymentId!))}>
-                <Pencil className="h-4 w-4" /> Edit
+              <Button size="sm" variant="outline" onClick={handleCheckHealth} disabled={checkingHealth}>
+                <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} aria-hidden="true" />
+                Check health
               </Button>
             ) : null}
-            {canDelete ? (
-              <Button variant="danger-outline" size="icon" aria-label="Delete model deployment" onClick={() => setDeleteOpen(true)}>
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            ) : null}
+            <Button size="sm" onClick={() => setUsing(true)}><Code2 className="h-4 w-4" aria-hidden="true" />Use this model</Button>
           </>
         )}
-        stats={(contextWindow || rpmLimit != null || tpmLimit != null || weight != null || inputCostDisplay) ? (
-          <>
-            {contextWindow && <DetailMetricCard icon={Layers} label="Context window" value={contextWindow} tone="blue" />}
-            {rpmLimit != null && <DetailMetricCard icon={Gauge} label="RPM limit" value={Number(rpmLimit).toLocaleString()} tone="violet" />}
-            {tpmLimit != null && (
-              <DetailMetricCard
-                icon={Gauge}
-                label="TPM limit"
-                value={Number(tpmLimit) >= 1_000_000
-                  ? `${(Number(tpmLimit) / 1_000_000).toFixed(1)}M`
-                  : Number(tpmLimit).toLocaleString()}
-                tone="violet"
-              />
-            )}
-            {weight != null && <DetailMetricCard icon={Scale} label="Weight" value={`${weight} / 10`} tone="gray" />}
-            {inputCostDisplay && <DetailMetricCard icon={DollarSign} label="Input cost" value={`${inputCostDisplay} / tok`} tone="green" />}
-          </>
-        ) : undefined}
-        tabs={(
-          <IconTabs
-            variant="header"
-            label="Model sections"
-            active={activeTab}
-            onChange={setActiveTab}
-            items={TAB_LIST.map(({ id, label, icon }) => ({ id, label, icon }))}
-          />
-        )}
-        notice={healthActionMessage || healthActionError || (!model.healthy && health.last_error) ? (
-          <div className="space-y-3">
-            {healthActionMessage && (
-              <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-                {healthActionMessage}
-              </div>
-            )}
-            {healthActionError && (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-                {healthActionError}
-              </div>
-            )}
-            {!model.healthy && health.last_error && !healthActionError && (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <div>
-                    <div className="font-medium">Why this deployment is unhealthy</div>
-                    <div className="mt-1">{health.last_error}</div>
-                    {health.last_error_at && (
-                      <div className="mt-1 text-xs text-red-700">
-                        Last failed check: {formatUnixTimestamp(health.last_error_at)}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
+        tabs={<IconTabs id={TABS_ID} label="Model sections" variant="header" active={activeTab} onChange={openTab} items={[...TABS]} />}
+        notice={healthActionMessage || healthActionError ? (
+          <div role="status" className={`rounded-xl border px-4 py-3 text-sm ${healthActionError ? 'border-red-200 bg-red-50 text-red-800' : 'border-green-200 bg-green-50 text-green-800'}`}>
+            {healthActionError || healthActionMessage}
           </div>
         ) : undefined}
       >
-        <PanelCard>
-          {activeTab === 'overview' && <OverviewTab model={model} />}
-          {activeTab === 'runtime' && <RuntimeTab model={model} />}
-          {activeTab === 'routing' && <RoutingTab model={model} />}
-          {activeTab === 'costs' && <CostsTab model={model} />}
-          {activeTab === 'usage' && <UsageTab modelName={model.api_model_id || model.model_name} mode={mode} />}
-        </PanelCard>
+        {TABS.map(({ id }) => (
+          <div key={id} role="tabpanel" id={`${TABS_ID}-panel-${id}`} aria-labelledby={`${TABS_ID}-tab-${id}`} hidden={activeTab !== id}>
+            {visited.has(id) ? renderTab(id) : null}
+          </div>
+        ))}
       </PageShell>
+      {using ? <UseModelDrawer modelName={modelName} mode={mode} defaults={defaults} healthy={model.healthy} onClose={() => setUsing(false)} /> : null}
       <ConfirmDialog
         open={revokeCredentialOpen}
         title="Revoke credential from this model"
-        description={`Stop "${model.display_name || model.model_name}" from using this credential? The model will remain visible, but requests will stop until an editor selects a replacement credential.`}
+        description={`Stop "${title}" from using this credential? The model will remain visible, but requests will stop until an editor selects a replacement credential.`}
         confirmLabel="Revoke Credential"
         destructive
         confirming={revokingCredential}
@@ -803,7 +240,7 @@ export default function ModelDetail() {
       <ConfirmDialog
         open={deleteOpen}
         title="Delete model deployment"
-        description={`Delete "${model.display_name || model.model_name}"? This cannot be undone.`}
+        description={`Delete "${title}"? This cannot be undone.`}
         confirmLabel="Delete Model"
         destructive
         confirming={deleting}

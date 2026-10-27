@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import Button from '../Button';
 import ConfirmDialog from '../ConfirmDialog';
 import ManagedAssetAccessPanel from '../ManagedAssetAccessPanel';
 import ToggleSwitch from '../ToggleSwitch';
+import { SettingsRow } from '../admin/shells';
 import { useToast } from '../ToastProvider';
 import { routeGroups, type RouteGroup } from '../../lib/api';
 import { ROUTE_GROUP_MODE_OPTIONS, routeGroupMutationOutcome } from '../../lib/routeGroups';
@@ -24,27 +25,6 @@ const fieldClass = 'control-field w-full rounded-lg border border-gray-200 bg-wh
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
-}
-
-function Row({ title, description, action, tone = 'default', children }: {
-  title: string;
-  description: ReactNode;
-  action?: ReactNode;
-  tone?: 'default' | 'danger';
-  children?: ReactNode;
-}) {
-  return (
-    <section className={`rounded-xl border bg-white shadow-sm ${tone === 'danger' ? 'border-red-200' : 'border-gray-200'}`}>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div className="min-w-0 flex-1 basis-64">
-          <h3 className={`text-sm font-semibold ${tone === 'danger' ? 'text-red-700' : 'text-gray-900'}`}>{title}</h3>
-          <p className="mt-0.5 text-xs text-gray-500">{description}</p>
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
 }
 
 interface RouteGroupSettingsTabProps {
@@ -155,7 +135,7 @@ export default function RouteGroupSettingsTab({
           </div>
         </section>
 
-        <Row
+        <SettingsRow
           title="Accept requests"
           description={<>When off, requests to <code className="font-mono">{group.group_key}</code> are rejected. Routing and models are kept.</>}
           action={(
@@ -167,7 +147,7 @@ export default function RouteGroupSettingsTab({
         />
 
         {access ? (
-          <Row
+          <SettingsRow
             title="Sharing"
             description={`${sharing ?? 'Private'}.${owner}`}
             action={access.capabilities.manage_access || isPlatformAdmin
@@ -189,11 +169,11 @@ export default function RouteGroupSettingsTab({
                 />
               </div>
             ) : null}
-          </Row>
+          </SettingsRow>
         ) : null}
 
         {canDelete ? (
-          <Row
+          <SettingsRow
             tone="danger"
             title="Delete group"
             description={<>Removes the group, its routing history and prompt link. Clients calling <code className="font-mono">{group.group_key}</code> will get errors.</>}
