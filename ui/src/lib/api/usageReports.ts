@@ -186,6 +186,8 @@ export interface RequestLogsResponse {
 export interface RequestLogQuery {
   view: SpendView;
   since?: string;
+  /** Exclusive end time. */
+  until?: string;
   filters: readonly UsageFilterValue[];
   status?: 'success' | 'error';
   cacheHit?: boolean;
@@ -236,6 +238,7 @@ export function requestLogQuery(params: RequestLogQuery): URLSearchParams {
   query.set('pagination_mode', 'cursor');
   query.set('limit', String(params.limit));
   if (params.since) query.set('since', params.since);
+  if (params.until) query.set('until', params.until);
   for (const filter of params.filters) {
     if (filter.unassigned) query.append('unassigned', filter.dimension);
     else if (filter.value) query.set(LOG_FILTER_PARAMS[filter.dimension], filter.value);

@@ -1,7 +1,7 @@
 import type { AuditCategory, AuditEvent, AuditEventContext, AuditEventQuery } from './api/audit';
 import type { UIAccess } from './authorization';
 import { parseLogTime, utcTimestamp } from './requestLogs';
-import { keyTail, REQUEST_WINDOWS, requestWindowSince, type RequestWindowKey } from './usageFilters';
+import { keyTail, parseUtcInput, REQUEST_WINDOWS, requestWindowSince, utcInputValue, type RequestWindowKey } from './usageFilters';
 
 // ---------------------------------------------------------------------------
 // Categories
@@ -728,16 +728,7 @@ export function parseAuditWindow(value: string | null): AuditWindow {
   return REQUEST_WINDOWS.some((window) => window.key === value) ? (value as RequestWindowKey) : '24h';
 }
 
-/** A custom bound typed as "YYYY-MM-DDTHH:mm" (UTC), or null. */
-export function parseUtcInput(value: string | null | undefined): string | null {
-  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
-  const date = new Date(`${value}:00Z`);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-export function utcInputValue(date: Date): string {
-  return date.toISOString().slice(0, 16);
-}
+export { parseUtcInput, utcInputValue };
 
 /** The server query for the filters and time window. A custom window without a start falls back to 24 hours. */
 export function auditQuery(

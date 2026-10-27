@@ -221,6 +221,35 @@ async def test_request_logs_since_narrows_the_start_date(client, test_app, monke
 
 
 @pytest.mark.asyncio
+async def test_request_logs_until_is_an_exclusive_end(client, test_app, monkeypatch):
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+
+    response = await client.get(
+        "/ui/api/logs?pagination_mode=cursor&since=2026-10-13T08:30:00Z"
+        "&until=2026-10-13T10:00:00Z&end_date=2026-10-20",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    query, params = fake_db.calls[0]
+    assert "start_time <= $" in query
+    assert params[0].isoformat() == "2026-10-13T08:30:00+00:00"
+    assert params[1].isoformat() == "2026-10-13T09:59:59.999999+00:00"
+
+
+@pytest.mark.asyncio
+async def test_request_logs_reject_since_after_until(client, test_app, monkeypatch):
+    _install(test_app, monkeypatch, PLATFORM)
+
+    response = await client.get(
+        "/ui/api/logs?since=2026-10-13T10:00:00Z&until=2026-10-13T10:00:00Z",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_request_logs_filter_unassigned_teams(client, test_app, monkeypatch):
     fake_db = _install(test_app, monkeypatch, PLATFORM)
 

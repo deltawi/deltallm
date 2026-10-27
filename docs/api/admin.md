@@ -729,6 +729,8 @@ Send `Cache-Control: no-cache` to load new data.
 Parameters:
 
 - `since`: ISO 8601 timestamp. The first row to include. A timestamp without an offset is UTC. When you also send `start_date`, the later value applies.
+- `until`: ISO 8601 timestamp. The end of the window, not included. A timestamp without an offset is UTC.
+  When you also send `end_date`, the earlier value applies. `since` must be before `until`, or the call returns 422.
 - `start_date` and `end_date`: dates in UTC.
 - `model`, `provider`, `organization_id`, `team_id`, `user_id`, `api_key`: exact values.
 - `unassigned=<dimension>`: rows without a value for that dimension (`model`, `provider`, `organization`, `team`, `user`, or `api_key`).

@@ -12,6 +12,14 @@ the [Spend API](../api/admin.md#spend), and [Budgets and Spend](../features/budg
 
 The Overview shows usage for one period. Use the period control at the top right to select the period.
 
+- **Presets**: 7 days, 30 days, 3 months, 6 months, year to date, and all time. Each one ends today.
+- **Custom**: opens a menu with the calendar ranges **Today**, **Yesterday**, **This month**, and **Last month**,
+  and a start date and an end date for any other range. Click **Apply range** to use the dates.
+  The button then shows the selected range, for example "Last month" or "Sep 1 – Sep 15, 2026".
+- On a narrow screen the period control is a list with the same choices.
+- Dates are whole days in UTC, and both the start and the end day are included. The end date cannot be in the future.
+- The chart uses daily bars up to 45 days, weekly bars up to about 7 months, and monthly bars for longer ranges.
+
 - **Filter bar**: filter by model, provider, organization, team, or API key. Each dimension has one filter.
   Click a row in the top table to add a filter. Click **x** on a filter chip to remove it.
 - **Tiles**: spend, requests, tokens, error rate, and cost per 1,000 requests.
@@ -31,7 +39,11 @@ It shows only to accounts that can see request logs (platform and organization r
 
 ![Requests view with the request panel](images/usage-requests.png)
 
-- Select a time window: 1 hour, 24 hours, 7 days, or 30 days.
+- Select a time window: 1 hour, 24 hours, 7 days, or 30 days. Or select **Custom** and enter a start
+  and an end date and time in UTC. The end is not included. Leave the end empty to show requests up to now.
+  If the start is empty or not before the end, the view shows the last 24 hours and says so.
+- **View matching requests** on the Overview opens this view with the same filters. A calendar or custom period
+  opens as a custom window with the same days. A period longer than 7 days without fixed dates opens the last 30 days.
 - Filter by status (success or error), cache (hit or miss), model, provider, team, or API key.
 - Type a full request ID in **Find a request ID** to find one request in the selected window.
 - **Duration** shows milliseconds below 1 second (`412 ms`). Above 1 second it shows seconds
@@ -63,6 +75,8 @@ make requests through the gateway slower:
   Each query has a time limit. When the limit is reached, the gateway returns HTTP 503 with `Retry-After`,
   and the panel shows a message with a **Retry** button.
 - A search by request ID reads only the selected time window. Use the shortest window that contains the request.
+- A custom period uses the same reporting cache, cache times, and limits as the presets. The cache time depends
+  on the length of the period: a longer period is cached longer.
 
 ## Access scope
 

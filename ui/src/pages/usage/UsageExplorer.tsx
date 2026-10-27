@@ -8,7 +8,7 @@ import {
   type UsageReportScope,
   type UsageSplit,
 } from '../../lib/api/usageReports';
-import type { ResolvedReportingRange } from '../../lib/reportingRange';
+import { requestWindowForRange, type ResolvedReportingRange } from '../../lib/reportingRange';
 import {
   allowedUsageDimensions,
   chipDimensions,
@@ -44,11 +44,6 @@ function useDebounced<T>(value: T, delayMs: number): T {
     return () => window.clearTimeout(timer);
   }, [delayMs, value]);
   return debounced;
-}
-
-/** Requests view window that best matches the explorer range. */
-function requestWindowFor(range: ResolvedReportingRange): string {
-  return range.key === '7d' ? '7d' : '30d';
 }
 
 interface UsageExplorerProps {
@@ -146,7 +141,10 @@ export default function UsageExplorer({ view, range, capabilities, refreshToken,
 
   const viewRequests = () => {
     const next = writeUsageFilters(new URLSearchParams(), filters);
-    next.set('window', requestWindowFor(range));
+    const requestWindow = requestWindowForRange(range);
+    next.set('window', requestWindow.window);
+    if (requestWindow.from) next.set('from', requestWindow.from);
+    if (requestWindow.to) next.set('to', requestWindow.to);
     if (searchParams.get('view')) next.set('view', searchParams.get('view') ?? '');
     navigate(`/usage/requests?${next.toString()}`);
   };

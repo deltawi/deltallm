@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { CalendarDays } from 'lucide-react';
 
+import Button from './Button';
 import {
+  CALENDAR_RANGE_OPTIONS,
   REPORTING_RANGE_OPTIONS,
   compactReportingRangeSelection,
+  isCalendarRangeKey,
   resolveReportingRange,
   todayIsoDate,
   validateCustomReportingRange,
@@ -65,6 +68,9 @@ export default function ReportingRangeControl({
   const maxDate = todayIsoDate();
   const validationError = validateCustomReportingRange(draftStartDate, draftEndDate);
   const visibility = breakpointClasses[desktopBreakpoint];
+  const calendarOption = CALENDAR_RANGE_OPTIONS.find((option) => option.key === value);
+  const customSelected = value === 'custom' || isCalendarRangeKey(value);
+  const customButtonLabel = calendarOption?.shortLabel ?? (value === 'custom' && customLabel ? customLabel : 'Custom');
 
   const restoreOpenerFocus = useCallback(() => {
     const opener = openerRef.current;
@@ -156,17 +162,17 @@ export default function ReportingRangeControl({
         {allowCustom && (
           <button
             type="button"
-            aria-pressed={value === 'custom' || customOpen}
+            aria-pressed={customSelected || customOpen}
             aria-expanded={customOpen}
             aria-controls={dialogId}
             disabled={disabled}
             onClick={(event) => openCustom(event.currentTarget)}
             className={`control-segment gap-1.5 rounded-md font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-50 ${
-              value === 'custom' || customOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'
+              customSelected || customOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'
             }`}
           >
-            <CalendarDays className="h-3.5 w-3.5" />
-            Custom
+            <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+            {customButtonLabel}
           </button>
         )}
       </div>
@@ -187,6 +193,13 @@ export default function ReportingRangeControl({
           {REPORTING_RANGE_OPTIONS.map((option) => (
             <option key={option.key} value={option.key}>{option.label}</option>
           ))}
+          {allowCustom && (
+            <optgroup label="Calendar">
+              {CALENDAR_RANGE_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>{option.label}</option>
+              ))}
+            </optgroup>
+          )}
           {allowCustom && value === 'custom' && (
             <option value="custom-current">Custom · {customLabel ?? 'applied range'}</option>
           )}
@@ -205,6 +218,23 @@ export default function ReportingRangeControl({
           <div className="mb-3">
             <p className="text-sm font-semibold text-gray-900">Custom reporting range</p>
             <p id={dialogDescriptionId} className="mt-0.5 text-xs text-gray-500">Dates are inclusive and use UTC.</p>
+          </div>
+
+          <div className="mb-3 flex flex-wrap gap-1.5" role="group" aria-label="Calendar ranges">
+            {CALENDAR_RANGE_OPTIONS.map((option) => (
+              <Button
+                key={option.key}
+                variant={value === option.key ? 'secondary' : 'outline'}
+                size="sm"
+                aria-pressed={value === option.key}
+                onClick={() => {
+                  handleSelection(option.key);
+                  restoreOpenerFocus();
+                }}
+              >
+                {option.label}
+              </Button>
+            ))}
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -242,21 +272,12 @@ export default function ReportingRangeControl({
           </div>
 
           <div className="mt-2 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => closeCustom(true)}
-              className="control-md rounded-lg font-medium text-gray-600 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
-            >
+            <Button variant="ghost" onClick={() => closeCustom(true)}>
               Cancel
-            </button>
-            <button
-              type="button"
-              disabled={Boolean(validationError)}
-              onClick={handleApply}
-              className="control-md rounded-lg bg-brand-primary font-medium text-brand-on-primary hover:bg-brand-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-            >
+            </Button>
+            <Button disabled={Boolean(validationError)} onClick={handleApply}>
               Apply range
-            </button>
+            </Button>
           </div>
         </div>
       )}

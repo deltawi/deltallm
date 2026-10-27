@@ -1,4 +1,6 @@
-export type ReportingRangeKey = '7d' | '30d' | '3m' | '6m' | 'ytd' | 'all';
+export type RollingRangeKey = '7d' | '30d' | '3m' | '6m' | 'ytd' | 'all';
+export type CalendarRangeKey = 'today' | 'yesterday' | 'month' | 'last_month';
+export type ReportingRangeKey = RollingRangeKey | CalendarRangeKey;
 export type ReportingRangeSelectionKey = ReportingRangeKey | 'custom';
 export type CompactReportingRangeSelection = ReportingRangeKey | 'custom-current' | 'custom-action';
 export type SpendBucket = 'day' | 'week' | 'month';
@@ -43,7 +45,16 @@ export const REPORTING_RANGE_OPTIONS: readonly ReportingRangeOption[] = [
   { key: 'all', label: 'All time', shortLabel: 'All time' },
 ] as const;
 
-const RANGE_KEYS = new Set<ReportingRangeKey>(REPORTING_RANGE_OPTIONS.map((option) => option.key));
+/** Calendar presets. They sit in the custom range menu, not in the preset bar. */
+export const CALENDAR_RANGE_OPTIONS: readonly ReportingRangeOption[] = [
+  { key: 'today', label: 'Today', shortLabel: 'Today' },
+  { key: 'yesterday', label: 'Yesterday', shortLabel: 'Yesterday' },
+  { key: 'month', label: 'This month', shortLabel: 'This month' },
+  { key: 'last_month', label: 'Last month', shortLabel: 'Last month' },
+] as const;
+
+const ALL_RANGE_OPTIONS: readonly ReportingRangeOption[] = [...REPORTING_RANGE_OPTIONS, ...CALENDAR_RANGE_OPTIONS];
+const RANGE_KEYS = new Set<ReportingRangeKey>(ALL_RANGE_OPTIONS.map((option) => option.key));
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -139,6 +150,10 @@ export function parseReportingRangeKey(value: string | null | undefined): Report
   return value && RANGE_KEYS.has(value as ReportingRangeKey) ? (value as ReportingRangeKey) : '30d';
 }
 
+export function isCalendarRangeKey(value: ReportingRangeSelectionKey): value is CalendarRangeKey {
+  return CALENDAR_RANGE_OPTIONS.some((option) => option.key === value);
+}
+
 export function compactReportingRangeSelection(
   value: ReportingRangeSelectionKey,
   customOpen: boolean,
@@ -148,23 +163,43 @@ export function compactReportingRangeSelection(
 }
 
 export function resolveReportingRange(key: ReportingRangeKey, now = new Date()): ResolvedReportingRange {
-  const option = REPORTING_RANGE_OPTIONS.find((candidate) => candidate.key === key) ?? REPORTING_RANGE_OPTIONS[1];
+  const option = ALL_RANGE_OPTIONS.find((candidate) => candidate.key === key) ?? REPORTING_RANGE_OPTIONS[1];
   const today = utcDay(now);
 
-  if (key === 'all') return { ...option, bucket: 'month' };
+  if (option.key === 'all') return { ...option, bucket: 'month' };
+  if (option.key === 'today' || option.key === 'yesterday') {
+    const day = isoDate(option.key === 'today' ? today : addUtcDays(today, -1));
+    return { ...option, startDate: day, endDate: day, bucket: 'day' };
+  }
+  if (option.key === 'month') {
+    return {
+      ...option,
+      startDate: isoDate(utcDate(today.getUTCFullYear(), today.getUTCMonth(), 1)),
+      endDate: isoDate(today),
+      bucket: 'day',
+    };
+  }
+  if (option.key === 'last_month') {
+    return {
+      ...option,
+      startDate: isoDate(utcDate(today.getUTCFullYear(), today.getUTCMonth() - 1, 1)),
+      endDate: isoDate(utcDate(today.getUTCFullYear(), today.getUTCMonth(), 0)),
+      bucket: 'day',
+    };
+  }
 
   let start: Date;
   let bucket: SpendBucket;
-  if (key === '7d') {
+  if (option.key === '7d') {
     start = addUtcDays(today, -6);
     bucket = 'day';
-  } else if (key === '30d') {
+  } else if (option.key === '30d') {
     start = addUtcDays(today, -29);
     bucket = 'day';
-  } else if (key === '3m') {
+  } else if (option.key === '3m') {
     start = subtractUtcMonthsClamped(today, 3);
     bucket = 'week';
-  } else if (key === '6m') {
+  } else if (option.key === '6m') {
     start = subtractUtcMonthsClamped(today, 6);
     bucket = 'week';
   } else {
@@ -249,6 +284,25 @@ export function reportingAutoRefreshOptions(
     return [off, REPORTING_AUTO_REFRESH_OPTIONS[60_000], REPORTING_AUTO_REFRESH_OPTIONS[300_000]];
   }
   return [off, REPORTING_AUTO_REFRESH_OPTIONS[300_000]];
+}
+
+/**
+ * Requests view window that best matches a reporting range. Calendar and custom ranges become a
+ * custom window from the start day to the day after the end (exclusive), or to now when the range
+ * ends today. Long rolling ranges fall back to the last 30 days.
+ */
+export function requestWindowForRange(
+  range: ResolvedReportingRange,
+  now = new Date(),
+): { window: string; from?: string; to?: string } {
+  if (range.key === '7d') return { window: '7d' };
+  if (range.key !== 'custom' && !isCalendarRangeKey(range.key)) return { window: '30d' };
+  const start = range.startDate ? parseIsoDate(range.startDate) : null;
+  const end = range.endDate ? parseIsoDate(range.endDate) : null;
+  if (!start || !end) return { window: '30d' };
+  const from = `${range.startDate}T00:00`;
+  if (end >= utcDay(now)) return { window: 'custom', from };
+  return { window: 'custom', from, to: `${isoDate(addUtcDays(end, 1))}T00:00` };
 }
 
 export function withReportingRangeQuery(
