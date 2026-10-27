@@ -38,7 +38,8 @@ from src.services.reporting.usage_filters import UsageFilterError, UsageFilters
 
 router = APIRouter(tags=["Spend"])
 
-_SCHEMA_VERSION = 1
+# 2: the "user" dimension groups by the person who owns the key.
+_SCHEMA_VERSION = 2
 _DIMENSION_PATTERN = "^(model|provider|organization|team|user|api_key)$"
 
 
