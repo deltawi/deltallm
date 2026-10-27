@@ -22,6 +22,18 @@ The Overview shows usage for one period. Use the period control at the top right
   the share of spend, spend, requests, tokens, and error rate. Use the pager and the search box to find a row.
 - **View matching requests**: opens the Requests view with the same filters.
 
+### Users
+
+The **Users** dimension shows spend for each person who owns the API key. DeltaLLM finds the person in this order:
+
+1. The platform account that owns the key. Keys that an administrator creates for a person use this owner.
+2. The runtime user of the key, if the key has no owner account. Older keys and keys from the API can use this.
+3. The service account that owns the key. The row shows the service account name and "(service account)".
+
+Requests that match none of these show as **No user**. The service account comes from the key's current owner, because spend events do not store it.
+
+The row shows the account email when your role can see user details. Otherwise it shows the ID. Click a row to filter the page and the Requests view to that person. The **User** field in the request panel uses the same person.
+
 The filters, the period, the metric, the split, and the tab are in the page URL. You can share a link to a filtered view.
 
 ## Requests

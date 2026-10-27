@@ -169,6 +169,93 @@ def legacy_cache_model_provider_overrides(registry: Mapping[str, Any]) -> dict[s
     }
 
 
+def _person_columns(source: SpendReadSource) -> tuple[str, str]:
+    return (
+        source.column("owner_account_column", table_alias="s"),
+        source.column("user_column", table_alias="s"),
+    )
+
+
+def person_key_sql(source: SpendReadSource, *, service_account_expr: str) -> str:
+    """The person a spend row belongs to.
+
+    The key's owner account wins. A key without an owner account falls back to its
+    runtime user, then to the service account that owns the key.
+    """
+
+    owner, user = _person_columns(source)
+    return f"COALESCE({owner}, {user}, {service_account_expr})"
+
+
+def person_filter_sql(source: SpendReadSource) -> str:
+    """Rows of one person, with ``{p}`` as the value placeholder.
+
+    Matches ``person_key_sql`` without a join. The service account keys come from one
+    uncorrelated lookup on the owner index.
+    """
+
+    owner, user = _person_columns(source)
+    return (
+        f"({owner} = {{p}} OR ({owner} IS NULL AND ({user} = {{p}} OR ({user} IS NULL"
+        " AND s.api_key IN (SELECT token FROM deltallm_verificationtoken"
+        " WHERE owner_service_account_id = {p})))))"
+    )
+
+
+def person_unassigned_sql(source: SpendReadSource) -> str:
+    owner, user = _person_columns(source)
+    return (
+        f"({owner} IS NULL AND {user} IS NULL AND NOT EXISTS ("
+        "SELECT 1 FROM deltallm_verificationtoken nvt"
+        " WHERE nvt.token = s.api_key AND nvt.owner_service_account_id IS NOT NULL))"
+    )
+
+
+def person_dimension_sql(
+    source: SpendReadSource, *, user_identity_labels_visible: bool
+) -> SpendDimensionSql:
+    """Group spend rows (alias ``s``) by person: owner account, runtime user or service account."""
+
+    owner, user = _person_columns(source)
+    service_join = (
+        "LEFT JOIN deltallm_verificationtoken pvt ON pvt.token = s.api_key"
+        f" AND {owner} IS NULL AND {user} IS NULL"
+    )
+    key = person_key_sql(source, service_account_expr="pvt.owner_service_account_id")
+    unassigned_search = f"({key} IS NULL AND 'unassigned user' ILIKE ${{i}})"
+    if not user_identity_labels_visible:
+        return SpendDimensionSql(
+            joins=(service_join,),
+            group_expr=key,
+            display_expr="NULL",
+            group_by_exprs=(key,),
+            search_clause=f"(COALESCE({key}, '') ILIKE ${{i}} OR {unassigned_search})",
+        )
+    # A runtime user ID can equal an account ID (self-service keys), so the account
+    # lookup uses the person key. That keeps one label for each key.
+    label = (
+        "COALESCE(NULLIF(TRIM(pa.email), ''), NULLIF(TRIM(u.user_email), ''),"
+        " NULLIF(TRIM(sa.name), '') || ' (service account)')"
+    )
+    return SpendDimensionSql(
+        joins=(
+            service_join,
+            f"LEFT JOIN deltallm_platformaccount pa ON pa.account_id = COALESCE({owner}, {user})",
+            f"LEFT JOIN deltallm_usertable u ON u.user_id = {user} AND {owner} IS NULL",
+            "LEFT JOIN deltallm_serviceaccount sa"
+            " ON sa.service_account_id = pvt.owner_service_account_id",
+        ),
+        group_expr=key,
+        display_expr=label,
+        group_by_exprs=(key, label),
+        search_clause=(
+            f"(COALESCE({key}, '') ILIKE ${{i}} OR COALESCE(pa.email, '') ILIKE ${{i}}"
+            " OR COALESCE(u.user_email, '') ILIKE ${i} OR COALESCE(sa.name, '') ILIKE ${i}"
+            f" OR {unassigned_search})"
+        ),
+    )
+
+
 def spend_dimension_sql(
     group_by: str,
     source: SpendReadSource,

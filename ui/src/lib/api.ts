@@ -94,6 +94,8 @@ export interface SpendLog {
   start_time?: string | null;
   end_time?: string | null;
   user?: string | null;
+  owner_account_id?: string | null;
+  runtime_user_id?: string | null;
   team_id?: string | null;
   end_user?: string | null;
   metadata?: Record<string, unknown> | null;

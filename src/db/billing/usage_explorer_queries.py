@@ -16,7 +16,11 @@ from src.billing.spend.spend_read import SpendReadSource
 from src.db.billing.spend_components import external_request_sql
 from src.db.billing.spend_dimensions import (
     SpendDimension,
+    SpendDimensionSql,
     canonical_provider_expr,
+    person_dimension_sql,
+    person_filter_sql,
+    person_unassigned_sql,
     search_clause_sql,
     search_pattern,
     spend_dimension_sql,
@@ -96,6 +100,31 @@ def _filter_column(
     return "s.model"
 
 
+def _groups_by_person(dimension: SpendDimension, source: SpendReadSource) -> bool:
+    """The usage "user" dimension means the person who owns the key, not the runtime user."""
+
+    return dimension == "user" and source.owner_account_column is not None
+
+
+def explorer_dimension_sql(
+    dimension: SpendDimension,
+    source: SpendReadSource,
+    *,
+    model_provider_overrides: dict[str, str] | None,
+    user_identity_labels_visible: bool,
+) -> SpendDimensionSql:
+    if _groups_by_person(dimension, source):
+        return person_dimension_sql(
+            source, user_identity_labels_visible=user_identity_labels_visible
+        )
+    return spend_dimension_sql(
+        dimension,
+        source,
+        model_provider_overrides=model_provider_overrides,
+        user_identity_labels_visible=user_identity_labels_visible,
+    )
+
+
 def apply_usage_filters(
     where: WhereBuilder,
     *,
@@ -104,12 +133,18 @@ def apply_usage_filters(
     model_provider_overrides: dict[str, str] | None = None,
 ) -> None:
     for dimension, value in filters.values:
+        if _groups_by_person(dimension, source):
+            where.add(person_filter_sql(source), value)
+            continue
         column = _filter_column(dimension, source, model_provider_overrides)
         if dimension == "provider":
             where.add(column + " = LOWER({p})", value)
         else:
             where.add(column + " = {p}", value)
     for dimension in sorted(filters.unassigned):
+        if _groups_by_person(dimension, source):
+            where.clauses.append(person_unassigned_sql(source))
+            continue
         where.clauses.append(
             f"{_filter_column(dimension, source, model_provider_overrides)} IS NULL"
         )
@@ -242,7 +277,7 @@ def usage_series_query(
             params=tuple(where.params),
         )
 
-    dimension = spend_dimension_sql(
+    dimension = explorer_dimension_sql(
         split_by,
         source,
         model_provider_overrides=model_provider_overrides,
@@ -320,7 +355,7 @@ def usage_breakdown_query(
         source=source,
         model_provider_overrides=model_provider_overrides,
     )
-    dimension = spend_dimension_sql(
+    dimension = explorer_dimension_sql(
         group_by,
         source,
         model_provider_overrides=model_provider_overrides,
