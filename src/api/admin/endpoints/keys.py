@@ -42,6 +42,17 @@ from src.api.admin.key_access_policy import (
     _scope_ids_with_any_permission as _scope_ids_with_any_permission,
     _target_scope_permission_sets as _target_scope_permission_sets,
 )
+from src.api.admin.key_listing import (
+    KeyLastUsedFilter,
+    KeyOwnerFilter,
+    KeySortKey,
+    KeyStatusFilter,
+    SortDirection,
+    append_key_list_filters,
+    budget_window_join,
+    key_list_order_sql,
+    needs_budget_window,
+)
 from src.auth.roles import Permission
 from src.db.identity.key_creation import (
     KeyCreateRecord,
@@ -580,6 +591,13 @@ async def list_keys(
     team_id: str | None = Query(default=None),
     my_keys: bool = Query(default=False),
     coding_agent: bool | None = Query(default=None),
+    organization_id: str | None = Query(default=None),
+    owner: KeyOwnerFilter | None = Query(default=None),
+    owner_account_id: str | None = Query(default=None),
+    status: KeyStatusFilter | None = Query(default=None),
+    last_used: KeyLastUsedFilter | None = Query(default=None),
+    sort_by: KeySortKey = Query(default="created_at"),
+    sort_direction: SortDirection = Query(default="desc"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -591,6 +609,7 @@ async def list_keys(
         x_master_key,
         any_permission=[Permission.KEY_READ, Permission.KEY_CREATE_SELF],
     )
+    native_accounting = getattr(request.app.state, "accounting_budget_reads", None) is not None
     db = db_or_503(request)
 
     clauses: list[str] = []
@@ -611,16 +630,33 @@ async def list_keys(
     if coding_agent is not None:
         presence = "IS NOT NULL" if coding_agent else "IS NULL"
         clauses.append(f"vt.metadata->'coding_agent' {presence}")
+    append_key_list_filters(
+        clauses,
+        params,
+        organization_id=organization_id,
+        owner=owner,
+        owner_account_id=owner_account_id,
+        status=status,
+        last_used=last_used,
+        native_accounting=native_accounting,
+    )
 
     join_sql = """
         LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
         LEFT JOIN deltallm_platformaccount pa ON vt.owner_account_id = pa.account_id
         LEFT JOIN deltallm_serviceaccount sa ON vt.owner_service_account_id = sa.service_account_id
+        LEFT JOIN deltallm_verificationtoken_last_used lu ON lu.token = vt.token
     """
+    # The count only needs the budget window when a filter reads it.
+    count_join_sql = join_sql
+    if needs_budget_window(native_accounting=native_accounting, status=status, sort_by=None):
+        count_join_sql += budget_window_join()
+    if needs_budget_window(native_accounting=native_accounting, status=status, sort_by=sort_by):
+        join_sql += budget_window_join()
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
     count_rows = await db.query_raw(
-        f"SELECT COUNT(*) AS total FROM deltallm_verificationtoken vt {join_sql} {where_sql}",
+        f"SELECT COUNT(*) AS total FROM deltallm_verificationtoken vt {count_join_sql} {where_sql}",
         *params,
     )
     total = int((count_rows[0] if count_rows else {}).get("total") or 0)
@@ -654,9 +690,8 @@ async def list_keys(
             vt.updated_at,
             lu.last_used_at
         FROM deltallm_verificationtoken vt {join_sql}
-        LEFT JOIN deltallm_verificationtoken_last_used lu ON lu.token = vt.token
         {where_sql}
-        ORDER BY vt.created_at DESC
+        {key_list_order_sql(sort_by, sort_direction, native_accounting=native_accounting)}
         LIMIT ${len(params) - 1} OFFSET ${len(params)}
         """,
         *params,

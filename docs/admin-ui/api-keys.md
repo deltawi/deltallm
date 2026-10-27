@@ -80,6 +80,23 @@ A failed clipboard operation shows an error so you can copy the displayed key ma
 - **RPH**: request throttle per hour
 - **RPD / TPD**: request and token throttles per day
 
+## Find keys
+
+Search by key name or hash. The filters under the search box narrow the list:
+
+| Filter | Choices |
+| --- | --- |
+| Organization | Shown when you can see more than one organization |
+| Team | Shown when you can see more than one team |
+| Owner | People, Service accounts, Unassigned |
+| Status | Active, Expiring in 7 days, Expired, Budget used up |
+| Last use | Used in last 7 or 30 days, Not used in 30+ or 90+ days, Never used |
+| Key type | Coding agent keys, Standard keys |
+
+Filters combine. **Clear filters** resets them. Search and filters work in the **All Keys** and **My Keys** views.
+
+Use **Sort by** to order the list by Created, Name, Last used, Expires, or Budget used, and the arrow button next to it to reverse the order. You can also select the **Name**, **Last used**, and **Budget** column headers. Keys without a value (never used, no expiry, no budget) are always listed last. **Budget used** is the key spend divided by its max budget for the current budget period.
+
 ## Last used
 
 The **Last used** column shows when a key last authenticated a request.
@@ -90,7 +107,7 @@ The **Last used** column shows when a key last authenticated a request.
 - A request with the master key, a JWT, or custom authentication does not change the value.
 - A regenerated key keeps its last used time. A deleted key removes it.
 
-Use this column to find keys that are not in use before you revoke them.
+Use this column, or the **Not used in 30+ days** filter, to find keys that are not in use before you revoke them.
 
 ## Key Asset Access
 

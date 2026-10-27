@@ -268,3 +268,41 @@ async def test_update_keeps_reset_time_until_period_changes(
     assert changed_params[15] is True
     assert json.loads(changed_params[16])["agent"] == "opencode"
     assert cleared_params[13:] == (None, None, True, None)
+
+
+@pytest.mark.asyncio
+async def test_list_sends_filters_and_sort_to_the_query(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
+    db = _install_key_db(
+        test_app,
+        {},
+        teams={"team-sandbox": _self_service_team()},
+        db_cls=_CodingAgentKeyDB,
+    )
+    _set_auth_context(monkeypatch, _admin_context())
+
+    response = await client.get(
+        "/ui/api/keys",
+        params={
+            "organization_id": "org-1",
+            "owner": "service_account",
+            "status": "expiring",
+            "last_used": "never",
+            "sort_by": "last_used",
+            "sort_direction": "asc",
+        },
+    )
+    default = await client.get("/ui/api/keys")
+    invalid = await client.get("/ui/api/keys", params={"sort_by": "spend"})
+
+    assert response.status_code == default.status_code == 200
+    query, default_query = db.list_queries
+    assert "t.organization_id = $" in query
+    assert "vt.owner_service_account_id is not null" in query
+    assert "vt.expires > now() and vt.expires <= now() + interval '7 days'" in query
+    assert "lu.last_used_at is null" in query
+    assert "order by lu.last_used_at asc nulls last" in query
+    assert "order by vt.created_at desc nulls last" in default_query
+    assert "deltallm_accounting_budget_windows" not in query
+    assert invalid.status_code == 422

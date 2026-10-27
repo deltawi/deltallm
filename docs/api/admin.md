@@ -527,6 +527,25 @@ LiteLLM hash cannot replace the original secret. The create URL remains
 
 The list and the update responses contain `budget_duration`, `budget_reset_at` and `coding_agent`. `GET /ui/api/keys?coding_agent=true` returns only keys with a `coding_agent` value, and `coding_agent=false` returns only keys without one.
 
+`GET /ui/api/keys` accepts these optional query parameters. They combine with each other and with the caller's key scope.
+
+| Parameter | Values | Effect |
+| --- | --- | --- |
+| `search` | text | Key name or hash contains the text |
+| `team_id` | team ID | Keys of one team |
+| `organization_id` | organization ID | Keys whose team belongs to the organization |
+| `owner` | `person`, `service_account`, `unassigned` | Owner kind |
+| `owner_account_id` | account ID | Keys owned by one person |
+| `status` | `active`, `expiring`, `expired`, `budget_exhausted` | `active` is not expired. `expiring` expires in the next 7 days. `budget_exhausted` has a max budget and spend at or above it in the current period. |
+| `last_used` | `active_7d`, `active_30d`, `inactive_30d`, `inactive_90d`, `never` | Used in the last 7 or 30 days, not used in 30 or 90 days (includes never used), or never used |
+| `coding_agent` | `true`, `false` | Keys with or without a `coding_agent` value |
+| `my_keys` | `true` | Keys owned by the caller |
+| `sort_by` | `created_at` (default), `name`, `last_used`, `expires`, `budget_used` | Sort order. `name` ignores case. `budget_used` is spend divided by `max_budget`. |
+| `sort_direction` | `desc` (default), `asc` | Sort direction. Keys without a value for the sort field are always last. |
+| `limit`, `offset` | numbers | Page size (1 to 500, default 100) and offset |
+
+Unknown values return `422`. `pagination.total` counts the keys that match the filters.
+
 ### Service Accounts
 
 | Method | Endpoint | Purpose |

@@ -84,7 +84,7 @@ export default function DataTable<T extends object>({
               {columns.map((col) => (
                 <th key={col.key} scope="col" aria-sort={sort && col.sortKey && sort.key === col.sortKey ? sort.direction === 'asc' ? 'ascending' : 'descending' : undefined} className={`text-left text-xs font-medium text-gray-500 py-2.5 px-3 first:pl-4 ${responsive ? 'bg-gray-50 whitespace-nowrap' : 'uppercase tracking-wider'} ${col.className || ''}`}>
                   {col.sortKey && onSortChange ? (
-                    <button type="button" aria-label={`Sort by ${col.header}`} className={`inline-flex items-center gap-1.5 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary ${sort?.key === col.sortKey ? 'text-brand-primary-ink' : ''}`} onClick={() => onSortChange({ key: col.sortKey!, direction: sort && sort.key === col.sortKey ? sort.direction === 'asc' ? 'desc' : 'asc' : col.defaultDirection || 'asc' })}>
+                    <button type="button" aria-label={`Sort by ${col.header}`} className={`inline-flex items-center gap-1.5 rounded [text-transform:inherit] focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary ${sort?.key === col.sortKey ? 'text-brand-primary-ink' : ''}`} onClick={() => onSortChange({ key: col.sortKey!, direction: sort && sort.key === col.sortKey ? sort.direction === 'asc' ? 'desc' : 'asc' : col.defaultDirection || 'asc' })}>
                       {col.header}
                       {sort?.key !== col.sortKey ? <ArrowUpDown className="h-3 w-3 text-gray-400" /> : sort?.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
                     </button>
