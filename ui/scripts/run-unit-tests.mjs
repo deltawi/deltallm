@@ -35,6 +35,7 @@ const testSources = [
   'tests/codingAgentSetup.test.ts',
   'tests/assetListPermissions.test.tsx',
   'tests/modelDetailPermissions.test.tsx',
+  'tests/modelDetailTabs.test.tsx',
   'tests/managedAssetAccessPanel.test.tsx',
   'tests/namedCredentialsApi.test.ts',
   'tests/namedCredentialEditing.test.tsx',

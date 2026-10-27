@@ -79,6 +79,22 @@ Models without a standard price are always last.
 
 ![Cost details on the Models list](images/models-cost-details.png)
 
+## Model Detail Page
+
+Open a model from the list to see its detail page. It uses the same layout as the [route group](route-groups.md) page.
+
+The line under the name shows the model's health, the model name clients send (with a copy button), the provider and provider model, the context window and RPM limit, the price, and how the model is shared. Click any part to open the tab that holds it.
+
+- **Connection**: provider, provider model, API base, credential, timeouts, [request shaping](../configuration/request-shaping.md) rules, and health. When the model is unhealthy, the last error and its time appear here.
+- **Limits**: context and output token caps, requests and tokens per minute, weight, priority, tags, access groups, default parameters, and batch worker settings. Realtime models also show how sessions run and are measured.
+- **Pricing**: every stored price in the units people compare, such as per 1M tokens, per minute of audio, or per image, next to the stored per-unit value.
+- **Settings**: names and identifiers, sharing, credential revoke, and delete. **Edit model** opens the full editor.
+
+**Check health** runs a health check now. **Use this model** opens example requests in cURL, Python and JavaScript, with links to the Playground and to API keys.
+Each tab loads when you first open it.
+
+![Model detail page](images/model-detail.png)
+
 ## Quick Success Workflow
 
 1. Open **Gateway > Models**
