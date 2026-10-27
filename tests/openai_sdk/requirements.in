@@ -1,4 +1,4 @@
 # Pinned official OpenAI Python SDK for the compatibility tests. Kept out of
 # uv.lock so the gateway never imports it; the nightly and release runs install
 # the newest release instead (see docs/api/openai-sdk-compatibility.md).
-openai==3.31.0
+openai==3.35.1
