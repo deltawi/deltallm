@@ -25,13 +25,16 @@ from src.db.billing.spend_dimensions import (
 )
 from src.db.billing.admin_request_logs import (
     RequestLogFilters,
+    RequestLogSort,
     RequestLogStatus,
     request_log_queries,
 )
 from src.services.reporting.request_log_cursor import (
     InvalidRequestLogCursor,
     decode_request_log_cursor,
+    decode_sorted_request_log_cursor,
     encode_request_log_cursor,
+    encode_sorted_request_log_cursor,
 )
 from src.services.reporting.spend_reporting_cache import reporting_cache_ttl
 from src.api.admin.spend_reporting_dependencies import (
@@ -110,6 +113,22 @@ def _decode_request_log_cursor(value: str) -> tuple[datetime, str]:
         return decode_request_log_cursor(value)
     except InvalidRequestLogCursor as exc:
         raise HTTPException(status_code=422, detail="Invalid request log cursor") from exc
+
+
+def _decode_sorted_request_log_cursor(value: str, sort: str) -> tuple[float | int, str]:
+    try:
+        return decode_sorted_request_log_cursor(value, sort)
+    except InvalidRequestLogCursor as exc:
+        raise HTTPException(status_code=422, detail="Invalid request log cursor") from exc
+
+
+# Sorting by cost or duration reads every matching row of the window.
+MAX_SORTED_LOG_WINDOW = timedelta(days=31)
+
+
+def _optional_text(value: str | None) -> str | None:
+    stripped = value.strip() if value else ""
+    return stripped or None
 
 
 def _legacy_cache_model_provider_overrides(request: Request) -> dict[str, str]:
@@ -678,6 +697,15 @@ async def request_logs(
     status: RequestLogStatus | None = Query(default=None),
     cache_hit: bool | None = Query(default=None),
     request_id: str | None = Query(default=None, max_length=256),
+    tag: str | None = Query(default=None, max_length=256),
+    end_user: str | None = Query(default=None, max_length=512),
+    call_type: str | None = Query(default=None, max_length=128),
+    deployment: str | None = Query(default=None, max_length=512),
+    http_status: int | None = Query(default=None, ge=100, le=599),
+    error_type: str | None = Query(default=None, max_length=256),
+    min_spend: float | None = Query(default=None, ge=0, le=1_000_000_000),
+    min_duration_ms: int | None = Query(default=None, ge=0, le=86_400_000),
+    sort: RequestLogSort = Query(default="newest"),
     unassigned: list[str] | None = Query(default=None, max_length=6),
     since: datetime | None = Query(default=None),
     until: datetime | None = Query(default=None),
@@ -727,6 +755,14 @@ async def request_logs(
     window_end = _log_window_end(end_date, until)
     if window_start is not None and window_end is not None and window_start > window_end:
         raise HTTPException(status_code=422, detail="since must be before until")
+    sorted_by_value = sort != "newest"
+    if sorted_by_value:
+        span_end = window_end or datetime.now(UTC)
+        if window_start is None or span_end - window_start > MAX_SORTED_LOG_WINDOW:
+            raise HTTPException(
+                status_code=422,
+                detail="Sorting by cost or duration needs a time window of 31 days or less",
+            )
     db = db_or_503(request)
     cache = await _reporting_cache(request)
     source = get_spend_read_source()
@@ -737,13 +773,25 @@ async def request_logs(
             usage=usage_filters,
             status=status,
             cache_hit=cache_hit,
-            request_id=request_id.strip() if request_id and request_id.strip() else None,
+            request_id=_optional_text(request_id),
+            tag=_optional_text(tag),
+            end_user=_optional_text(end_user),
+            call_type=_optional_text(call_type),
+            deployment=_optional_text(deployment),
+            http_status=http_status,
+            error_type=_optional_text(error_type),
+            min_spend=min_spend,
+            min_duration_ms=min_duration_ms,
         ),
         visibility=visibility,
         source=source,
         limit=limit if offset_pagination else limit + 1,
         offset=offset,
-        cursor=_decode_request_log_cursor(cursor) if cursor else None,
+        cursor=_decode_request_log_cursor(cursor) if cursor and not sorted_by_value else None,
+        sort=sort,
+        sort_cursor=(
+            _decode_sorted_request_log_cursor(cursor, sort) if cursor and sorted_by_value else None
+        ),
         model_provider_overrides=(
             _legacy_cache_model_provider_overrides(request) if provider else None
         ),
@@ -779,10 +827,15 @@ async def request_logs(
             next_cursor = None
             if has_more and page_logs and not offset_pagination:
                 last_row = page_logs[-1]
-                next_cursor = encode_request_log_cursor(
-                    last_row.get("start_time"),
-                    last_row.get("id"),
-                )
+                if sorted_by_value:
+                    next_cursor = encode_sorted_request_log_cursor(
+                        sort, last_row.get("sort_value"), last_row.get("id")
+                    )
+                else:
+                    next_cursor = encode_request_log_cursor(
+                        last_row.get("start_time"),
+                        last_row.get("id"),
+                    )
             pagination = {
                 "limit": limit,
                 "offset": offset,
@@ -794,7 +847,10 @@ async def request_logs(
             if total is not None:
                 pagination["total"] = total
             return {
-                "logs": [to_json_value(dict(row)) for row in page_logs],
+                "logs": [
+                    to_json_value({k: v for k, v in dict(row).items() if k != "sort_value"})
+                    for row in page_logs
+                ],
                 "pagination": pagination,
             }
 
@@ -808,6 +864,21 @@ async def request_logs(
         status=status,
         cache_hit=cache_hit,
         request_id=bool(request_id),
+        extra_filters=",".join(
+            name
+            for name, value in (
+                ("tag", tag),
+                ("end_user", end_user),
+                ("call_type", call_type),
+                ("deployment", deployment),
+                ("http_status", http_status),
+                ("error_type", error_type),
+                ("min_spend", min_spend),
+                ("min_duration_ms", min_duration_ms),
+            )
+            if value is not None
+        ),
+        sort=sort,
         cursor=bool(cursor),
         pagination_mode=pagination_mode,
         limit=limit,

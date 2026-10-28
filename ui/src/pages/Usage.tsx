@@ -155,7 +155,7 @@ export default function Usage() {
   };
 
   const subtitle = requestsPath
-    ? 'Requests · every call through the gateway · newest first · UTC'
+    ? 'Requests · every call through the gateway · UTC'
     : `${VIEW_LABELS[view]} · ${rangeSubtitle(range.startDate, range.endDate, range.label)} · UTC`;
 
   return (

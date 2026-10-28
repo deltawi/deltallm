@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Search } from 'lucide-react';
 import { FilterChip } from '../usage/UsageFilterChips';
 
@@ -8,13 +8,29 @@ interface ChipMenuProps {
   value?: string;
   onClear: () => void;
   width?: string;
+  /** Hide the "click a name in any row" tip when rows cannot set this filter. */
+  rowHint?: boolean;
   children: (close: () => void) => ReactNode;
 }
 
 /** A Usage-style "+ Label" chip that opens a small menu. The menu's content mounts only while open. */
-export default function ChipMenu({ label, value, onClear, width = 'w-64', children }: ChipMenuProps) {
+export default function ChipMenu({ label, value, onClear, width = 'w-64', rowHint = true, children }: ChipMenuProps) {
   const [open, setOpen] = useState(false);
+  // A chip near the right edge opens its menu to the left, so the menu stays on screen.
+  const [alignRight, setAlignRight] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setAlignRight(false);
+      return;
+    }
+    const chip = ref.current?.getBoundingClientRect();
+    const menu = menuRef.current?.getBoundingClientRect();
+    const viewport = document.documentElement.clientWidth;
+    if (chip && menu && viewport > 0) setAlignRight(chip.left + menu.width > viewport - 8 && chip.right - menu.width >= 8);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -36,7 +52,7 @@ export default function ChipMenu({ label, value, onClear, width = 'w-64', childr
   }, [open]);
 
   return (
-    <span ref={ref} className="relative" title={value === undefined ? 'You can also click a name in any row to filter by it' : undefined}>
+    <span ref={ref} className="relative" title={value === undefined && rowHint ? 'You can also click a name in any row to filter by it' : undefined}>
       <FilterChip
         label={label}
         value={value}
@@ -45,9 +61,10 @@ export default function ChipMenu({ label, value, onClear, width = 'w-64', childr
       />
       {open && (
         <div
+          ref={menuRef}
           role="menu"
           aria-label={`Filter by ${label.toLowerCase()}`}
-          className={`absolute left-0 top-full z-30 mt-1 grid max-h-80 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-lg ${width}`}
+          className={`absolute ${alignRight ? 'right-0' : 'left-0'} top-full z-30 mt-1 grid max-h-80 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-lg ${width}`}
         >
           {children(() => setOpen(false))}
         </div>

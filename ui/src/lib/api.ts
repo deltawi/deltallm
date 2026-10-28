@@ -84,6 +84,7 @@ export interface SpendLog {
   request_id: string;
   call_type: string;
   model: string;
+  deployment_model?: string | null;
   api_base?: string | null;
   api_key: string;
   spend: number;

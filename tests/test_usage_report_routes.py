@@ -332,3 +332,100 @@ async def test_explorer_rejects_a_start_date_without_a_previous_window(
 
     assert response.status_code == 422
     assert fake_db.calls == []
+
+
+@pytest.mark.asyncio
+async def test_request_logs_bind_detail_filters(client, test_app, monkeypatch):
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+
+    response = await client.get(
+        "/ui/api/logs?pagination_mode=cursor&tag=eval&end_user=cust-1&call_type=embedding"
+        "&deployment=azure-east&http_status=429&error_type=RateLimitError"
+        "&min_spend=0.25&min_duration_ms=5000&since=2026-10-13T08:30:00Z",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    query, params = fake_db.calls[0]
+    assert "s.request_tags @> ARRAY[$" in query
+    assert "s.end_user_id = $" in query
+    assert "s.call_type = $" in query
+    assert "s.deployment_model = $" in query
+    assert "s.http_status_code = $" in query
+    assert "s.error_type = $" in query
+    assert "s.spend >= $" in query
+    assert "ORDER BY start_time DESC, id DESC" in query
+    assert {"eval", "cust-1", "embedding", "azure-east", 429, "RateLimitError", 0.25, 5000} <= set(
+        params
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_logs_sort_by_cost_needs_a_bounded_window(client, test_app, monkeypatch):
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+
+    unbounded = await client.get("/ui/api/logs?pagination_mode=cursor&sort=cost", headers=HEADERS)
+    too_long = await client.get(
+        "/ui/api/logs?pagination_mode=cursor&sort=duration"
+        "&since=2026-08-01T00:00:00Z&until=2026-10-01T00:00:00Z",
+        headers=HEADERS,
+    )
+    bounded = await client.get(
+        "/ui/api/logs?pagination_mode=cursor&sort=cost"
+        "&since=2026-10-01T00:00:00Z&until=2026-10-08T00:00:00Z",
+        headers=HEADERS,
+    )
+
+    assert unbounded.status_code == 422
+    assert too_long.status_code == 422
+    assert bounded.status_code == 200
+    [(query, _)] = fake_db.calls
+    assert "ORDER BY s.spend DESC, id DESC" in query
+    assert "ORDER BY page.sort_value DESC, page.id DESC" in query
+
+
+@pytest.mark.asyncio
+async def test_request_logs_reject_a_cursor_from_another_sort(client, test_app, monkeypatch):
+    from src.services.reporting.request_log_cursor import (
+        encode_request_log_cursor,
+        encode_sorted_request_log_cursor,
+    )
+
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+    window = "&since=2026-10-01T00:00:00Z&until=2026-10-08T00:00:00Z"
+    time_cursor = encode_request_log_cursor("2026-10-02T00:00:00+00:00", "row-1")
+    cost_cursor = encode_sorted_request_log_cursor("cost", 1.5, "row-1")
+
+    wrong_kind = await client.get(
+        f"/ui/api/logs?pagination_mode=cursor&sort=cost&cursor={time_cursor}{window}",
+        headers=HEADERS,
+    )
+    wrong_sort = await client.get(
+        f"/ui/api/logs?pagination_mode=cursor&sort=duration&cursor={cost_cursor}{window}",
+        headers=HEADERS,
+    )
+    matching = await client.get(
+        f"/ui/api/logs?pagination_mode=cursor&sort=cost&cursor={cost_cursor}{window}",
+        headers=HEADERS,
+    )
+
+    assert wrong_kind.status_code == 422
+    assert wrong_sort.status_code == 422
+    assert matching.status_code == 200
+    query, params = fake_db.calls[-1]
+    assert "(s.spend, id) < ($1::double precision, $2)" in query
+    assert list(params[:2]) == [1.5, "row-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    ["http_status=42", "min_spend=-1", "min_duration_ms=-5", "sort=tokens"],
+)
+async def test_request_logs_reject_bad_detail_filters(client, test_app, monkeypatch, query):
+    fake_db = _install(test_app, monkeypatch, PLATFORM)
+
+    response = await client.get(f"/ui/api/logs?{query}", headers=HEADERS)
+
+    assert response.status_code == 422
+    assert fake_db.calls == []

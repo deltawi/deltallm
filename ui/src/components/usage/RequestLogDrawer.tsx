@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { X } from 'lucide-react';
-import type { RequestLog } from '../../lib/api/usageReports';
+import type { RequestLog, RequestLogDetails } from '../../lib/api/usageReports';
 import { fmtDuration, fmtSpendPrecise } from '../../lib/format';
 import {
+  callTypeLabel,
   logDurationMs,
   logKeyName,
   logProvider,
@@ -48,9 +49,10 @@ interface RequestLogDrawerProps {
   canOpenAudit: boolean;
   onClose: () => void;
   onFilterKey: (log: RequestLog) => void;
+  onFilterDetail: (details: RequestLogDetails) => void;
 }
 
-export default function RequestLogDrawer({ log, canOpenAudit, onClose, onFilterKey }: RequestLogDrawerProps) {
+export default function RequestLogDrawer({ log, canOpenAudit, onClose, onFilterKey, onFilterDetail }: RequestLogDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [copied, setCopied] = useState(false);
   const failed = log.status === 'error';
@@ -129,7 +131,28 @@ export default function RequestLogDrawer({ log, canOpenAudit, onClose, onFilterK
         <Field label="Cache">{log.cache_hit ? 'Hit' : 'Miss'}</Field>
         {(log.organization_name || log.organization_id) && <Field label="Organization">{log.organization_name || log.organization_id}</Field>}
         {(log.user_email || log.user) && <Field label="User">{log.user_email || log.user}</Field>}
+        <Field label="Endpoint">{callTypeLabel(log.call_type)}</Field>
+        {(log.deployment_model || log.api_base) && <Field label="Deployment">{log.deployment_model || log.api_base}</Field>}
+        {log.end_user && <Field label="End user">{log.end_user}</Field>}
+        {log.error_type && <Field label="Error type">{log.error_type}</Field>}
       </div>
+      {log.request_tags && log.request_tags.length > 0 && (
+        <div>
+          <div className="mb-1.5 text-xs text-gray-500">Tags · click one to show its requests</div>
+          <div className="flex flex-wrap gap-1.5">
+            {log.request_tags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => onFilterDetail({ tag })}
+                className="rounded-full bg-gray-100 px-2 py-0.5 text-[11.5px] text-gray-700 hover:bg-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div>
         <div className="mb-1.5 text-xs text-gray-500">Tokens · {(input + output).toLocaleString()} total</div>
         <div className="flex h-2.5 gap-0.5 overflow-hidden rounded-[5px] bg-gray-100">
@@ -163,6 +186,11 @@ export default function RequestLogDrawer({ log, canOpenAudit, onClose, onFilterK
         {log.api_key && (
           <button type="button" onClick={() => onFilterKey(log)} className="control-sm rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50">
             Show requests from this key
+          </button>
+        )}
+        {log.end_user && (
+          <button type="button" onClick={() => onFilterDetail({ endUser: log.end_user ?? undefined })} className="control-sm rounded-lg border border-gray-300 text-gray-900 hover:bg-gray-50">
+            Show requests from this end user
           </button>
         )}
       </div>
