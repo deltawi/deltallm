@@ -968,6 +968,7 @@
             "audit_ingestion_cleanup_batch_size": { "type": "integer", "minimum": 1, "maximum": 100000 },
             "audit_ingestion_cleanup_max_batches_per_run": { "type": "integer", "minimum": 1, "maximum": 1000 },
             "audit_ingestion_cleanup_time_budget_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 60 },
+            "audit_payload_max_bytes": { "type": "integer", "minimum": 4096, "maximum": 67108864 },
             "batch_webhook_enabled": { "type": "boolean" },
             "batch_webhook_worker_enabled": { "type": "boolean" },
             "batch_webhook_observability_enabled": { "type": "boolean" },

@@ -1196,3 +1196,45 @@ async def test_exhausted_best_effort_audit_is_failed_and_releases_capacity() -> 
     query, params = db.calls[-1]
     assert params[2] == "failed"
     assert "pending_count - CASE" in query
+
+
+@pytest.mark.asyncio
+async def test_durable_audit_omits_inline_binary_data_before_enqueue() -> None:
+    repo = FakeAuditRepository()
+    ingress = _DurableIngress()
+    service = AuditService(
+        repo,
+        db_client=object(),
+        ingestion_config=AuditIngestionConfig(enabled=True),
+    )
+    service.ingestion_repository = ingress  # type: ignore[assignment]
+    image = "data:image/jpeg;base64," + "A" * 200_000
+    request_body = {"messages": [{"content": [{"image_url": {"url": image}}]}]}
+
+    result = await service.enqueue_event(
+        AuditEventInput(action="CHAT_COMPLETION", organization_id="org-1"),
+        payloads=[AuditPayloadInput(kind="request", content_json=request_body)],
+        delivery_class="required",
+    )
+
+    assert result == "accepted"
+    stored = ingress.enqueued[0]["payload"]["payloads"][0]["content_json"]
+    url = stored["messages"][0]["content"][0]["image_url"]["url"]
+    assert url.startswith("[omitted inline data: image/jpeg, 200023 chars, sha256=")
+    assert len(json.dumps(ingress.enqueued[0]["payload"])) < 2_000
+    assert request_body["messages"][0]["content"][0]["image_url"]["url"] == image
+
+
+@pytest.mark.asyncio
+async def test_legacy_audit_applies_the_configured_payload_limit() -> None:
+    repo = FakeAuditRepository()
+    repo.content_toggles = {"org-1": True}
+    service = AuditService(repo, ingestion_config=AuditIngestionConfig(payload_max_bytes=4096))
+
+    await service.enqueue_event(
+        AuditEventInput(action="CHAT_COMPLETION", organization_id="org-1"),
+        payloads=[AuditPayloadInput(kind="request", content_json={"prompt": "x " * 10_000})],
+        delivery_class="required",
+    )
+
+    assert repo.payloads[0].content_json["omitted"] == "payload_too_large"

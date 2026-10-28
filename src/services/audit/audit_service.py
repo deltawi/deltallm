@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import inspect
 import logging
 import random
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -43,6 +43,10 @@ from src.metrics.audit import (
 from src.models.errors import ServiceUnavailableError
 from src.redis_namespace import build_redis_channel
 from src.services.audit.audit_policy_invalidation import AuditPolicyInvalidation
+from src.services.audit.payload_compaction import (
+    DEFAULT_AUDIT_PAYLOAD_MAX_BYTES,
+    compact_audit_content,
+)
 from src.telemetry.prompt_render import PromptRenderEvent
 from src.telemetry.lifecycle import (
     WorkerHealth,
@@ -136,6 +140,7 @@ class AuditIngestionConfig:
     cleanup_batch_size: int = 1000
     cleanup_max_batches_per_run: int = 10
     cleanup_time_budget_seconds: float = 2.0
+    payload_max_bytes: int = DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
     worker_startup_timeout_seconds: float = 5.0
     shutdown_drain_timeout_seconds: float = 20.0
     worker_id: str = "gateway-audit"
@@ -545,7 +550,7 @@ class AuditService:
         required = normalized_delivery is AuditDeliveryClass.REQUIRED
         item = _QueueItem(
             event=event,
-            payloads=list(payloads or []),
+            payloads=self._compact_payloads(payloads),
             critical=required,
             event_id=str(event.event_id or uuid4()),
             use_policy_cache=not self.ingestion_config.enabled,
@@ -771,7 +776,7 @@ class AuditService:
             increment_audit_events_dropped(reason=AuditDropReason.SERVICE_CLOSED.value)
             return
 
-        item = _QueueItem(event=event, payloads=list(payloads or []), critical=critical)
+        item = _QueueItem(event=event, payloads=self._compact_payloads(payloads), critical=critical)
         try:
             self._queue.put_nowait(item)
             set_audit_queue_depth(self._total_queue_depth())
@@ -781,6 +786,20 @@ class AuditService:
             logger.warning(
                 "audit queue full; dropping non-critical event", extra={"action": event.action}
             )
+
+    def _compact_payloads(
+        self, payloads: list[AuditPayloadInput] | None
+    ) -> list[AuditPayloadInput]:
+        result: list[AuditPayloadInput] = []
+        for payload in payloads or []:
+            if payload.content_json is not None:
+                content, changed = compact_audit_content(
+                    payload.content_json, max_bytes=self.ingestion_config.payload_max_bytes
+                )
+                if changed:
+                    payload = replace(payload, content_json=content)
+            result.append(payload)
+        return result
 
     def _enqueue_legacy_audit(self, item: _QueueItem) -> str:
         if self._closed:
@@ -811,7 +830,7 @@ class AuditService:
         await self._persist(
             _QueueItem(
                 event=event,
-                payloads=list(payloads or []),
+                payloads=self._compact_payloads(payloads),
                 critical=True,
                 event_id=event_id or event.event_id or str(uuid4()),
             ),

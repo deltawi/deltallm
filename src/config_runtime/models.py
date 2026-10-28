@@ -371,6 +371,7 @@ class ModelHotReloadManager:
                     cleanup_time_budget_seconds=(
                         general.audit_ingestion_cleanup_time_budget_seconds
                     ),
+                    payload_max_bytes=general.audit_payload_max_bytes,
                     worker_startup_timeout_seconds=(
                         general.telemetry_worker_startup_timeout_seconds
                     ),

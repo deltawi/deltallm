@@ -1020,6 +1020,7 @@ class GeneralSettings(
     audit_ingestion_cleanup_batch_size: int = Field(default=1000, ge=1, le=100_000)
     audit_ingestion_cleanup_max_batches_per_run: int = Field(default=10, ge=1, le=1000)
     audit_ingestion_cleanup_time_budget_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
+    audit_payload_max_bytes: int = Field(default=1_048_576, ge=4096, le=67_108_864)
     audit_retention_worker_enabled: bool = True
     audit_retention_interval_seconds: float = 86400.0
     audit_retention_scan_limit: int = 500
@@ -1364,6 +1365,7 @@ class Settings(
     audit_ingestion_cleanup_batch_size: int = Field(default=1000, ge=1, le=100_000)
     audit_ingestion_cleanup_max_batches_per_run: int = Field(default=10, ge=1, le=1000)
     audit_ingestion_cleanup_time_budget_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
+    audit_payload_max_bytes: int = Field(default=1_048_576, ge=4096, le=67_108_864)
     prompt_negative_cache_enabled: bool = False
     prompt_cache_l1_ttl_seconds: int = Field(default=30, ge=1)
     prompt_cache_l2_ttl_seconds: int = Field(default=300, ge=1)
