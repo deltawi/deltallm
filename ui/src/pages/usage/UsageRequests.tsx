@@ -33,6 +33,7 @@ import {
   withUsageFilter,
   writeUsageFilters,
 } from '../../lib/usageFilters';
+import { parseRequestFlags } from '../../lib/usageParams';
 import { useReport } from '../../lib/useReport';
 import ColumnsMenu from '../../components/audit/ColumnsMenu';
 import { PanelError, Segmented } from '../../components/usage/ReportBits';
@@ -57,15 +58,6 @@ interface UsageRequestsProps {
   canOpenAudit: boolean;
 }
 
-function readFlags(params: URLSearchParams): RequestFlags {
-  const status = params.get('status');
-  const cache = params.get('cache');
-  return {
-    status: status === 'error' || status === 'success' ? status : undefined,
-    cacheHit: cache === 'hit' ? true : cache === 'miss' ? false : undefined,
-  };
-}
-
 export default function UsageRequests({ view, capabilities, refreshToken, reloadToken, canOpenAudit }: UsageRequestsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const allowed = useMemo(() => allowedUsageDimensions(view, capabilities), [capabilities, view]);
@@ -73,7 +65,7 @@ export default function UsageRequests({ view, capabilities, refreshToken, reload
     () => parseUsageFilters(searchParams).filter((filter) => allowed.includes(filter.dimension)),
     [allowed, searchParams],
   );
-  const flags = readFlags(searchParams);
+  const flags = parseRequestFlags(searchParams);
   const details = useMemo(() => parseRequestDetails(searchParams), [searchParams]);
   const requestedSort = parseRequestSort(searchParams.get('sort'));
   const windowKey = parseRequestWindowSelection(searchParams.get('window'));

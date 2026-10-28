@@ -3,6 +3,7 @@
 These helpers mutate the ``params`` list as they append placeholders so the
 caller ends up with the full bind list in the original definition order.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -20,7 +21,9 @@ def _scoped_entity_visibility_clause(alias: str, scope: AuthScope, params: list[
     clauses: list[str] = []
     if scope.org_ids:
         org_placeholders = _append_param_list(params, scope.org_ids)
-        clauses.append(f"({alias}.scope_type = 'organization' AND {alias}.scope_id IN ({org_placeholders}))")
+        clauses.append(
+            f"({alias}.scope_type = 'organization' AND {alias}.scope_id IN ({org_placeholders}))"
+        )
         clauses.append(
             f"""({alias}.scope_type = 'team' AND EXISTS (
                     SELECT 1 FROM deltallm_teamtable t
@@ -46,7 +49,9 @@ def _scoped_entity_visibility_clause(alias: str, scope: AuthScope, params: list[
         )
     if scope.team_ids:
         team_placeholders = _append_param_list(params, scope.team_ids)
-        clauses.append(f"({alias}.scope_type = 'team' AND {alias}.scope_id IN ({team_placeholders}))")
+        clauses.append(
+            f"({alias}.scope_type = 'team' AND {alias}.scope_id IN ({team_placeholders}))"
+        )
         clauses.append(
             f"""({alias}.scope_type = 'api_key' AND EXISTS (
                     SELECT 1 FROM deltallm_verificationtoken vt
@@ -84,7 +89,7 @@ def _server_visibility_exists_clause(server_alias: str, scope: AuthScope, params
                 SELECT 1
                 FROM deltallm_mcpbinding b
                 WHERE b.mcp_server_id = {server_alias}.mcp_server_id
-                  AND ({_scoped_entity_visibility_clause('b', scope, params)})
+                  AND ({_scoped_entity_visibility_clause("b", scope, params)})
             )"""
     )
     return " OR ".join(f"({clause})" for clause in clauses)
@@ -94,7 +99,9 @@ def _audit_scope_visibility_clause(scope: AuthScope, params: list[Any]) -> str:
     clauses: list[str] = []
     if scope.org_ids:
         org_placeholders = _append_param_list(params, scope.org_ids)
-        clauses.append(f"(metadata->>'scope_type' = 'organization' AND metadata->>'scope_id' IN ({org_placeholders}))")
+        clauses.append(
+            f"(metadata->>'scope_type' = 'organization' AND metadata->>'scope_id' IN ({org_placeholders}))"
+        )
         clauses.append(
             f"""(metadata->>'scope_type' = 'team' AND EXISTS (
                     SELECT 1 FROM deltallm_teamtable t
@@ -120,7 +127,9 @@ def _audit_scope_visibility_clause(scope: AuthScope, params: list[Any]) -> str:
         )
     if scope.team_ids:
         team_placeholders = _append_param_list(params, scope.team_ids)
-        clauses.append(f"(metadata->>'scope_type' = 'team' AND metadata->>'scope_id' IN ({team_placeholders}))")
+        clauses.append(
+            f"(metadata->>'scope_type' = 'team' AND metadata->>'scope_id' IN ({team_placeholders}))"
+        )
         clauses.append(
             f"""(metadata->>'scope_type' = 'api_key' AND EXISTS (
                     SELECT 1 FROM deltallm_verificationtoken vt

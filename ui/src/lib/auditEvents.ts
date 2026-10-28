@@ -110,6 +110,8 @@ const ACTION_LABELS: Record<string, string> = {
   GLOBAL_SPEND_TEAMS_READ: 'Spend by team read',
   GLOBAL_SPEND_END_USERS_READ: 'Spend by end user read',
   SPEND_LOGS_READ: 'Spend logs read',
+  SPEND_LOGS_EXPORT: 'Request logs exported',
+  SPEND_REPORT_EXPORT: 'Usage report exported',
   MANAGED_ASSET_ACCESS_UPDATE: 'Asset access updated',
 };
 

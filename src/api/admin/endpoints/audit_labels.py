@@ -43,7 +43,9 @@ def _visible_email(
     """Platform admins see every email; others see their own and their organizations' members."""
     if not email:
         return None
-    if getattr(scope, "is_platform_admin", False) or account_id == getattr(scope, "account_id", None):
+    if getattr(scope, "is_platform_admin", False) or account_id == getattr(
+        scope, "account_id", None
+    ):
         return email
     visible_orgs = set(getattr(scope, "org_ids", []) or [])
     return email if memberships.get(account_id, set()) & visible_orgs else None
@@ -64,7 +66,9 @@ async def _accounts(db: Any, account_ids: list[str], scope: Any) -> dict[str, di
     org_roles: dict[str, dict[str, str]] = {}
     for row in membership_rows:
         memberships.setdefault(str(row["account_id"]), set()).add(str(row["organization_id"]))
-        org_roles.setdefault(str(row["account_id"]), {})[str(row["organization_id"])] = str(row["role"])
+        org_roles.setdefault(str(row["account_id"]), {})[str(row["organization_id"])] = str(
+            row["role"]
+        )
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
         account_id = str(row["account_id"])
@@ -87,7 +91,9 @@ async def _keys(db: Any, hashes: list[str]) -> dict[str, dict[str, Any]]:
 
 
 async def _names(db: Any, query: str, ids: list[str]) -> dict[str, str]:
-    return {str(row["id"]): str(row["name"]) for row in await _rows(db, query, ids) if row.get("name")}
+    return {
+        str(row["id"]): str(row["name"]) for row in await _rows(db, query, ids) if row.get("name")
+    }
 
 
 def _key_hash(event: dict[str, Any]) -> str | None:
@@ -121,7 +127,11 @@ async def label_events(db: Any, events: list[dict[str, Any]], scope: Any) -> Non
     )
     org_ids = _ids(
         [event.get("organization_id") for event in events]
-        + [event.get("resource_id") for event in events if event.get("resource_type") == "organization"]
+        + [
+            event.get("resource_id")
+            for event in events
+            if event.get("resource_type") == "organization"
+        ]
     )
     orgs = await _names(
         db,
@@ -130,7 +140,11 @@ async def label_events(db: Any, events: list[dict[str, Any]], scope: Any) -> Non
     )
     resource_names: dict[str, dict[str, str]] = {}
     for resource_type, query in _RESOURCE_NAME_QUERIES.items():
-        ids = _ids(event.get("resource_id") for event in events if event.get("resource_type") == resource_type)
+        ids = _ids(
+            event.get("resource_id")
+            for event in events
+            if event.get("resource_type") == resource_type
+        )
         resource_names[resource_type] = await _names(db, query, ids)
 
     for event in events:
@@ -145,7 +159,9 @@ async def label_events(db: Any, events: list[dict[str, Any]], scope: Any) -> Non
         resource_id = str(event.get("resource_id") or "")
         resource_label: str | None = None
         if resource_type == "api_key":
-            resource_label = ((keys.get(resource_id) or {}).get("key_name")) if resource_id else None
+            resource_label = (
+                ((keys.get(resource_id) or {}).get("key_name")) if resource_id else None
+            )
         elif resource_type == "team":
             resource_label = teams.get(resource_id)
         elif resource_type == "organization":
@@ -180,12 +196,16 @@ def _key_state(key: dict[str, Any] | None) -> str:
     return "active"
 
 
-async def _resource_state(db: Any, resource_type: str | None, resource_id: str | None) -> dict[str, Any] | None:
+async def _resource_state(
+    db: Any, resource_type: str | None, resource_id: str | None
+) -> dict[str, Any] | None:
     """Whether the touched thing still exists, and its state where the table has one."""
     if not resource_type or not resource_id:
         return None
     if resource_type == "api_key":
-        rows = await db.query_raw("SELECT expires FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", resource_id)
+        rows = await db.query_raw(
+            "SELECT expires FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", resource_id
+        )
         return {"state": _key_state(dict(rows[0]) if rows else None)}
     if resource_type == "batch":
         rows = await db.query_raw(
@@ -197,7 +217,10 @@ async def _resource_state(db: Any, resource_type: str | None, resource_id: str |
             return {"state": "missing"}
         row = dict(rows[0])
         total = int(row.get("total_items") or 0)
-        done = sum(int(row.get(name) or 0) for name in ("completed_items", "failed_items", "cancelled_items"))
+        done = sum(
+            int(row.get(name) or 0)
+            for name in ("completed_items", "failed_items", "cancelled_items")
+        )
         return {
             "state": str(row.get("status") or "unknown"),
             "progress": round(done * 100 / total) if total else None,
@@ -205,19 +228,30 @@ async def _resource_state(db: Any, resource_type: str | None, resource_id: str |
         }
     if resource_type == "organization":
         rows = await db.query_raw(
-            "SELECT lifecycle_state FROM deltallm_organizationtable WHERE organization_id = $1 LIMIT 1", resource_id
+            "SELECT lifecycle_state FROM deltallm_organizationtable WHERE organization_id = $1 LIMIT 1",
+            resource_id,
         )
-        return {"state": str(dict(rows[0]).get("lifecycle_state") or "active") if rows else "missing"}
+        return {
+            "state": str(dict(rows[0]).get("lifecycle_state") or "active") if rows else "missing"
+        }
     if resource_type == "account":
-        rows = await db.query_raw("SELECT is_active FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1", resource_id)
+        rows = await db.query_raw(
+            "SELECT is_active FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
+            resource_id,
+        )
         if not rows:
             return {"state": "missing"}
         return {"state": "active" if dict(rows[0]).get("is_active") else "inactive"}
     if resource_type == "model":
-        rows = await db.query_raw("SELECT 1 AS found FROM deltallm_modeldeployment WHERE model_name = $1 LIMIT 1", resource_id)
+        rows = await db.query_raw(
+            "SELECT 1 AS found FROM deltallm_modeldeployment WHERE model_name = $1 LIMIT 1",
+            resource_id,
+        )
         return {"state": "active" if rows else "missing"}
     if resource_type == "team":
-        rows = await db.query_raw("SELECT blocked FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1", resource_id)
+        rows = await db.query_raw(
+            "SELECT blocked FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1", resource_id
+        )
         if not rows:
             return {"state": "missing"}
         return {"state": "blocked" if dict(rows[0]).get("blocked") else "active"}
@@ -252,7 +286,9 @@ async def event_context(db: Any, event: dict[str, Any], scope: Any) -> dict[str,
         key = (await _keys(db, [key_hash])).get(key_hash)
         owner_email = None
         if key and key.get("owner_account_id"):
-            owner = (await _accounts(db, [str(key["owner_account_id"])], scope)).get(str(key["owner_account_id"]))
+            owner = (await _accounts(db, [str(key["owner_account_id"])], scope)).get(
+                str(key["owner_account_id"])
+            )
             owner_email = owner["email"] if owner else None
         context["key"] = {
             "name": key.get("key_name") if key else None,
@@ -277,7 +313,11 @@ async def event_context(db: Any, event: dict[str, Any], scope: Any) -> dict[str,
                 )
                 owner = None
                 if target.get("owner_account_id"):
-                    owner_row = (await _accounts(db, [str(target["owner_account_id"])], scope)).get(str(target["owner_account_id"]))
+                    owner_row = (await _accounts(db, [str(target["owner_account_id"])], scope)).get(
+                        str(target["owner_account_id"])
+                    )
                     owner = owner_row["email"] if owner_row else None
-                context["resource"].update({"team_id": team_id, "team": team_names.get(team_id or ""), "owner": owner})
+                context["resource"].update(
+                    {"team_id": team_id, "team": team_names.get(team_id or ""), "owner": owner}
+                )
     return to_json_value(context)

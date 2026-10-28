@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ChevronDown, Download, ScrollText } from 'lucide-react';
+import { ScrollText } from 'lucide-react';
 import { HeaderTabBar, IndexShell } from '../components/admin/shells';
+import ExportMenu from '../components/ExportMenu';
 import AuditEventPanel from '../components/audit/AuditEventPanel';
 import AuditEventTable from '../components/audit/AuditEventTable';
 import AuditFilterBar from '../components/audit/AuditFilterBar';
@@ -36,6 +37,11 @@ import { REQUEST_WINDOWS } from '../lib/usageFilters';
 
 const PAGE_SIZE = 50;
 
+const AUDIT_EXPORTS = [
+  { key: 'csv', label: 'Export as CSV' },
+  { key: 'jsonl', label: 'Export as JSONL' },
+] as const;
+
 const WINDOW_OPTIONS: ReadonlyArray<{ key: AuditWindow; label: string }> = [
   ...REQUEST_WINDOWS.map((item) => ({ key: item.key, label: item.label })),
   { key: 'custom', label: 'Custom' },
@@ -56,51 +62,6 @@ interface MorePages {
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
-}
-
-function ExportMenu({ onExport }: { onExport: (format: 'csv' | 'jsonl') => Promise<void> }) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointer);
-    return () => document.removeEventListener('mousedown', onPointer);
-  }, [open]);
-  const run = (format: 'csv' | 'jsonl') => {
-    setBusy(true);
-    setError(null);
-    onExport(format)
-      .then(() => setOpen(false), (reason: unknown) => setError(errorMessage(reason, 'Export failed.')))
-      .finally(() => setBusy(false));
-  };
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-expanded={open}
-        disabled={busy}
-        onClick={() => setOpen((current) => !current)}
-        className="control-md inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
-      >
-        <Download className="h-4 w-4 text-gray-500" aria-hidden="true" />
-        {busy ? 'Exporting' : 'Export'}
-        <ChevronDown className="h-3 w-3 text-gray-500" aria-hidden="true" />
-      </button>
-      {open && (
-        <div className="absolute right-0 z-30 mt-1 grid w-56 rounded-lg border border-gray-200 bg-white p-1 shadow-lg">
-          <button type="button" onClick={() => run('csv')} className="rounded-md px-2 py-1.5 text-left text-xs text-gray-800 hover:bg-gray-50">Export as CSV</button>
-          <button type="button" onClick={() => run('jsonl')} className="rounded-md px-2 py-1.5 text-left text-xs text-gray-800 hover:bg-gray-50">Export as JSONL</button>
-          <p className="px-2 py-1.5 text-[11.5px] text-gray-500">Uses the filters and time window on screen, up to 10,000 events.</p>
-          {error && <p role="alert" className="px-2 pb-1.5 text-[11.5px] text-rose-700">{error}</p>}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export default function AuditLogs() {
@@ -265,7 +226,7 @@ export default function AuditLogs() {
             autoRefreshMs={autoRefreshMs}
             onAutoRefreshChange={setAutoRefreshMs}
           />
-          <ExportMenu onExport={exportEvents} />
+          <ExportMenu options={AUDIT_EXPORTS} note="Uses the filters and time window on screen, up to 10,000 events." onExport={exportEvents} />
         </>
       )}
       tabs={(

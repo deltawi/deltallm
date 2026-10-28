@@ -114,7 +114,7 @@ def _cache_payload(
     )
 
 
-def _today() -> date:
+def today_utc() -> date:
     return datetime.now(tz=UTC).date()
 
 
@@ -153,7 +153,7 @@ async def usage_explorer_summary(
         x_master_key=x_master_key,
         cache_control=cache_control,
     )
-    window = report_window(start_date, end_date, _today())
+    window = report_window(start_date, end_date, today_utc())
     overrides = _provider_overrides(request, filters, ())
     query = usage_summary_query(
         window=window,
@@ -179,7 +179,7 @@ async def usage_explorer_summary(
             overrides,
             start_date=start_date,
             end_date=end_date,
-            window=_window_payload(window),
+            window=window_payload(window),
         ),
         cache_ttl=reporting_cache_ttl(start_date, end_date),
         query=query,
@@ -188,12 +188,12 @@ async def usage_explorer_summary(
     )
     return {
         **value,
-        "window": _window_payload(window),
+        "window": window_payload(window),
         "reporting_context": _reporting_context(request, context.visibility),
     }
 
 
-def _window_payload(window: ReportWindow) -> dict[str, str | None]:
+def window_payload(window: ReportWindow) -> dict[str, str | None]:
     previous_end = (
         (window.start - timedelta(days=1)).date().isoformat()
         if window.compares and window.start
@@ -238,7 +238,7 @@ async def usage_explorer_series(
         x_master_key=x_master_key,
         cache_control=cache_control,
     )
-    window = report_window(start_date, end_date, _today())
+    window = report_window(start_date, end_date, today_utc())
     overrides = _provider_overrides(request, filters, dimensions)
     query = usage_series_query(
         window=window,
@@ -260,7 +260,7 @@ async def usage_explorer_series(
             overrides,
             start_date=start_date,
             end_date=end_date,
-            window=_window_payload(window),
+            window=window_payload(window),
             interval=interval,
             split_by=dimension,
             max_groups=max_groups,
@@ -275,7 +275,7 @@ async def usage_explorer_series(
         "interval": interval,
         "split_by": dimension,
         **value,
-        "window": _window_payload(window),
+        "window": window_payload(window),
         "reporting_context": _reporting_context(request, context.visibility),
     }
 
@@ -342,7 +342,7 @@ async def usage_explorer_breakdown(
         x_master_key=x_master_key,
         cache_control=cache_control,
     )
-    window = report_window(start_date, end_date, _today())
+    window = report_window(start_date, end_date, today_utc())
     overrides = _provider_overrides(request, filters, (dimension,))
     normalized_search = search.strip() if search and search.strip() else None
     query = usage_breakdown_query(
@@ -397,7 +397,7 @@ async def usage_explorer_breakdown(
             group_by=dimension,
             start_date=start_date,
             end_date=end_date,
-            window=_window_payload(window),
+            window=window_payload(window),
             sort_by=sort_by,
             search=normalized_search,
             limit=limit,
@@ -412,7 +412,7 @@ async def usage_explorer_breakdown(
     response: dict[str, Any] = {
         "group_by": dimension,
         **value,
-        "window": _window_payload(window),
+        "window": window_payload(window),
         "reporting_context": _reporting_context(request, context.visibility),
     }
     if dimension == "user":

@@ -2,14 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import type { SpendView } from '../../lib/api';
 import { usageReports, type UsageDimension, type UsageFilterValue } from '../../lib/api/usageReports';
 import { dimensionLabel, filterLabel, groupLabel } from '../../lib/usageFilters';
+import type { RequestFlags } from '../../lib/usageParams';
 import { useReport } from '../../lib/useReport';
 import { Skeleton } from './ReportBits';
 import { FilterChip } from './UsageFilterChips';
 
-export interface RequestFlags {
-  status?: 'success' | 'error';
-  cacheHit?: boolean;
-}
+export type { RequestFlags };
 
 interface RequestFilterChipsProps {
   view: SpendView;

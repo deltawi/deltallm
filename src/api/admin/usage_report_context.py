@@ -15,6 +15,7 @@ from typing import Any, Literal
 from fastapi import HTTPException, Request
 
 from src.api.admin.endpoints.common import (
+    AuthScope,
     db_or_503,
     get_auth_scope,
     log_admin_query_timing,
@@ -44,6 +45,7 @@ Rows = list[dict[str, Any]]
 
 @dataclass(frozen=True, slots=True)
 class UsageReportContext:
+    scope: AuthScope
     visibility: SpendVisibility
     source: SpendReadSource
     cache: SpendReportingCache
@@ -75,6 +77,7 @@ async def usage_report_context(
             status_code=403, detail="This usage dimension is outside your reporting scope"
         )
     return UsageReportContext(
+        scope=scope,
         visibility=visibility,
         source=get_spend_read_source(),
         cache=await _reporting_cache(request),

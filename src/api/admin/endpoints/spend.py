@@ -24,19 +24,23 @@ from src.db.billing.spend_dimensions import (
     spend_dimension_sql,
 )
 from src.db.billing.admin_request_logs import (
-    RequestLogFilters,
     RequestLogSort,
-    RequestLogStatus,
     request_log_queries,
 )
 from src.services.reporting.request_log_cursor import (
     InvalidRequestLogCursor,
-    decode_request_log_cursor,
     decode_sorted_request_log_cursor,
     encode_request_log_cursor,
     encode_sorted_request_log_cursor,
 )
 from src.services.reporting.spend_reporting_cache import reporting_cache_ttl
+from src.api.admin.request_log_scope import (
+    RequestLogParams,
+    decode_cursor_or_422,
+    detail_filter_names,
+    request_log_params,
+    resolve_request_log_scope,
+)
 from src.api.admin.spend_reporting_dependencies import (
     _resolve_reporting_visibility,
     _reporting_v2_enabled,
@@ -56,11 +60,6 @@ from src.services.reporting.spend_visibility import (
     SpendVisibility,
     apply_spend_visibility,
     user_identity_labels_visible as _user_identity_labels_visible,
-)
-from src.services.reporting.usage_filters import (
-    UsageFilterError,
-    UsageFilterForbidden,
-    UsageFilters,
 )
 
 router = APIRouter(tags=["Spend"])
@@ -85,36 +84,6 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
-def _log_window_start(start_date: date | None, since: datetime | None) -> datetime | None:
-    """Return the later of the start date and ``since`` (a naive ``since`` is UTC)."""
-
-    if since is not None and since.tzinfo is None:
-        since = since.replace(tzinfo=UTC)
-    candidates = [value for value in (_date_start(start_date), since) if value is not None]
-    return max(candidates) if candidates else None
-
-
-def _log_window_end(end_date: date | None, until: datetime | None) -> datetime | None:
-    """Return the earlier of the end date and ``until`` (exclusive; a naive ``until`` is UTC)."""
-
-    if until is not None:
-        if until.tzinfo is None:
-            until = until.replace(tzinfo=UTC)
-        try:
-            until -= timedelta(microseconds=1)
-        except OverflowError as exc:
-            raise HTTPException(status_code=422, detail="until is too early") from exc
-    candidates = [value for value in (_date_end(end_date), until) if value is not None]
-    return min(candidates) if candidates else None
-
-
-def _decode_request_log_cursor(value: str) -> tuple[datetime, str]:
-    try:
-        return decode_request_log_cursor(value)
-    except InvalidRequestLogCursor as exc:
-        raise HTTPException(status_code=422, detail="Invalid request log cursor") from exc
-
-
 def _decode_sorted_request_log_cursor(value: str, sort: str) -> tuple[float | int, str]:
     try:
         return decode_sorted_request_log_cursor(value, sort)
@@ -124,11 +93,6 @@ def _decode_sorted_request_log_cursor(value: str, sort: str) -> tuple[float | in
 
 # Sorting by cost or duration reads every matching row of the window.
 MAX_SORTED_LOG_WINDOW = timedelta(days=31)
-
-
-def _optional_text(value: str | None) -> str | None:
-    stripped = value.strip() if value else ""
-    return stripped or None
 
 
 def _legacy_cache_model_provider_overrides(request: Request) -> dict[str, str]:
@@ -688,30 +652,8 @@ async def spend_feature_status(
 )
 async def request_logs(
     request: Request,
-    model: str | None = Query(default=None, max_length=512),
-    provider: str | None = Query(default=None, max_length=512),
-    organization_id: str | None = Query(default=None, max_length=512),
-    team_id: str | None = Query(default=None, max_length=512),
-    user_id: str | None = Query(default=None, max_length=512),
-    api_key: str | None = Query(default=None, max_length=512),
-    status: RequestLogStatus | None = Query(default=None),
-    cache_hit: bool | None = Query(default=None),
-    request_id: str | None = Query(default=None, max_length=256),
-    tag: str | None = Query(default=None, max_length=256),
-    end_user: str | None = Query(default=None, max_length=512),
-    call_type: str | None = Query(default=None, max_length=128),
-    deployment: str | None = Query(default=None, max_length=512),
-    http_status: int | None = Query(default=None, ge=100, le=599),
-    error_type: str | None = Query(default=None, max_length=256),
-    min_spend: float | None = Query(default=None, ge=0, le=1_000_000_000),
-    min_duration_ms: int | None = Query(default=None, ge=0, le=86_400_000),
+    params: RequestLogParams = Depends(request_log_params),
     sort: RequestLogSort = Query(default="newest"),
-    unassigned: list[str] | None = Query(default=None, max_length=6),
-    since: datetime | None = Query(default=None),
-    until: datetime | None = Query(default=None),
-    start_date: date | None = Query(default=None),
-    end_date: date | None = Query(default=None),
-    view: Literal["organization", "team", "self"] | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     cursor: str | None = Query(default=None, max_length=1024),
@@ -727,34 +669,14 @@ async def request_logs(
         x_master_key,
         required_permission=Permission.SPEND_READ,
     )
-    visibility = _resolve_reporting_visibility(request, scope, view)
-    if not visibility.can_view_request_logs:
-        raise HTTPException(status_code=403, detail="Request logs are outside your reporting scope")
-    try:
-        usage_filters = UsageFilters.build(
-            values={
-                "model": model,
-                "provider": provider,
-                "organization": organization_id,
-                "team": team_id,
-                "user": user_id,
-                "api_key": api_key,
-            },
-            unassigned=unassigned,
-        )
-        usage_filters.authorize(visibility)
-    except UsageFilterError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except UsageFilterForbidden as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    log_scope = resolve_request_log_scope(request, scope, params)
+    visibility = log_scope.visibility
     if pagination_mode == "offset" and cursor is not None:
         raise HTTPException(status_code=422, detail="cursor requires pagination_mode=cursor")
     if pagination_mode == "cursor" and "offset" in request.query_params:
         raise HTTPException(status_code=422, detail="offset cannot be used with cursor pagination")
-    window_start = _log_window_start(start_date, since)
-    window_end = _log_window_end(end_date, until)
-    if window_start is not None and window_end is not None and window_start > window_end:
-        raise HTTPException(status_code=422, detail="since must be before until")
+    window_start = log_scope.filters.start
+    window_end = log_scope.filters.end
     sorted_by_value = sort != "newest"
     if sorted_by_value:
         span_end = window_end or datetime.now(UTC)
@@ -767,35 +689,18 @@ async def request_logs(
     cache = await _reporting_cache(request)
     source = get_spend_read_source()
     queries = request_log_queries(
-        filters=RequestLogFilters(
-            start=window_start,
-            end=window_end,
-            usage=usage_filters,
-            status=status,
-            cache_hit=cache_hit,
-            request_id=_optional_text(request_id),
-            tag=_optional_text(tag),
-            end_user=_optional_text(end_user),
-            call_type=_optional_text(call_type),
-            deployment=_optional_text(deployment),
-            http_status=http_status,
-            error_type=_optional_text(error_type),
-            min_spend=min_spend,
-            min_duration_ms=min_duration_ms,
-        ),
+        filters=log_scope.filters,
         visibility=visibility,
         source=source,
         limit=limit if offset_pagination else limit + 1,
         offset=offset,
-        cursor=_decode_request_log_cursor(cursor) if cursor and not sorted_by_value else None,
+        cursor=decode_cursor_or_422(cursor) if cursor and not sorted_by_value else None,
         sort=sort,
         sort_cursor=(
             _decode_sorted_request_log_cursor(cursor, sort) if cursor and sorted_by_value else None
         ),
-        model_provider_overrides=(
-            _legacy_cache_model_provider_overrides(request) if provider else None
-        ),
-        user_identity_labels_visible=_user_identity_labels_visible(scope, visibility),
+        model_provider_overrides=log_scope.model_provider_overrides,
+        user_identity_labels_visible=log_scope.user_identity_labels_visible,
     )
 
     async def load_logs() -> dict[str, Any]:
@@ -860,24 +765,11 @@ async def request_logs(
     log_admin_query_timing(
         "request_logs",
         started_at,
-        filters=",".join(sorted(usage_filters.dimensions)),
-        status=status,
-        cache_hit=cache_hit,
-        request_id=bool(request_id),
-        extra_filters=",".join(
-            name
-            for name, value in (
-                ("tag", tag),
-                ("end_user", end_user),
-                ("call_type", call_type),
-                ("deployment", deployment),
-                ("http_status", http_status),
-                ("error_type", error_type),
-                ("min_spend", min_spend),
-                ("min_duration_ms", min_duration_ms),
-            )
-            if value is not None
-        ),
+        filters=",".join(sorted(log_scope.filters.usage.dimensions)),
+        status=params.status,
+        cache_hit=params.cache_hit,
+        request_id=bool(log_scope.filters.request_id),
+        extra_filters=",".join(detail_filter_names(log_scope.filters)),
         sort=sort,
         cursor=bool(cursor),
         pagination_mode=pagination_mode,

@@ -724,6 +724,37 @@ Breakdown parameters: `group_by=model|provider|organization|team|user|api_key`, 
 `search` (part of the name or ID), `limit` (1 to 100), and `offset`. The response contains `data`, `scope_spend`
 (the total spend of the filtered scope), and `pagination`.
 
+#### Usage export
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/spend/explorer/export` | Download every group of a breakdown as CSV or JSON |
+
+Parameters:
+
+- `group_by=model|provider|organization|team|user|api_key` (required).
+- `format=csv|json`. The default is `csv`.
+- `interval=day|week|month`: optional. Without it, the export has one row for each group.
+  With it, the export has one row for each UTC day, week, or month and each group.
+- `start_date`, `end_date`, `view`, and the filter parameters of the explorer routes. The same scope rules apply:
+  a dimension or a filter outside your view gets HTTP 403.
+- `limit`: 1 to 50,000 rows. The default is 10,000.
+
+CSV columns: `date` (only with `interval`), `dimension`, `group_key`, `name`, `spend`, `requests`,
+`failed_requests`, `total_tokens`, `prompt_tokens`, and `completion_tokens`. `group_key` is empty for unassigned rows,
+and `name` is then `Unassigned`. `name` is the email of a person only when your role can see user details.
+JSON has the same rows in `rows`, plus `group_by`, `interval`, `window`, and `truncated`.
+Rows are sorted by date, then by spend (highest first). The export reads only the selected period.
+It does not include the previous period.
+
+```bash
+curl -o usage-by-team.csv \
+  "http://localhost:8000/ui/api/spend/explorer/export?group_by=team&interval=day&start_date=2026-10-01&end_date=2026-10-31" \
+  -H "Authorization: Bearer YOUR_MASTER_KEY"
+```
+
+See [Export responses](#export-responses) for the headers and the audit event.
+
 #### Live reports
 
 These routes feed the Dashboard. They always use the last 24 hours (UTC) and accept only `view`.
@@ -770,6 +801,56 @@ Parameters:
 - `pagination_mode=cursor` with `cursor` and `limit` (1 to 500), or `pagination_mode=offset` with `limit` and `offset`.
 
 Each row also has `deployment_model` and `duration_ms` (`latency_ms`, or the time from start to end for rows without it).
+
+#### Request log export
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/logs/export` | Download the matching request logs as CSV or JSONL, newest first |
+
+This route takes the same filters and the same window parameters as `GET /ui/api/logs` (including `tag`, `end_user`,
+`call_type`, `deployment`, `http_status`, `error_type`, `min_spend`, and `min_duration_ms`), and the same access rule:
+only the platform and organization views can export request logs. Rows are always newest first; the export has no `sort`. It also takes:
+
+- `format=csv|jsonl`. The default is `csv`.
+- `limit`: 1 to 50,000 rows. The default is 10,000.
+- `cursor`: continue an export after its last row. Use the `X-DeltaLLM-Export-Next-Cursor` value of the previous export.
+
+Columns: `id`, `request_id`, `start_time`, `end_time`, `status`, `http_status_code`, `error_type`, `call_type`,
+`model`, `provider`, `organization_id`, `organization_name`, `team_id`, `team_alias`, `api_key` (the key hash),
+`key_name`, `user`, `user_email`, `end_user`, `cache_hit`, `spend`, `prompt_tokens`, `completion_tokens`,
+`total_tokens`, `prompt_tokens_cached`, `completion_tokens_cached`, `deployment_model`, `latency_ms`, `duration_ms`,
+and `request_tags`.
+The export never contains request or response bodies, request metadata, `api_base`, or cache keys.
+`user_email` is empty when your role cannot see user details.
+
+To export more than 50,000 rows, repeat the call with the cursor until the response has no next cursor:
+
+```bash
+curl -D headers.txt -o requests-1.csv \
+  "http://localhost:8000/ui/api/logs/export?since=2026-10-01T00:00:00Z&until=2026-11-01T00:00:00Z&limit=50000" \
+  -H "Authorization: Bearer YOUR_MASTER_KEY"
+grep -i x-deltallm-export-next-cursor headers.txt
+```
+
+#### Export responses
+
+Both export routes return the file with these headers:
+
+- `Content-Disposition: attachment; filename="..."`, for example `usage-team-by-day-2026-10-01-to-2026-10-31.csv`.
+- `X-DeltaLLM-Export-Rows`: the number of rows in the file.
+- `X-DeltaLLM-Export-Truncated`: `true` when more rows match than `limit`.
+- `X-DeltaLLM-Export-Next-Cursor`: request log export only, when the export is truncated.
+- `Cache-Control: no-store`.
+
+Each export runs one query with the reporting limits and the reporting time limit, so a long period can get HTTP 503
+with `Retry-After`. Use a shorter period or filters in that case. Before the file is returned, the gateway writes an
+audit event: `SPEND_REPORT_EXPORT` or `SPEND_LOGS_EXPORT`. The event records the format, the period, the view,
+the filter dimensions, and the row count. It does not record the file. If the audit event cannot be written,
+the export fails.
+
+In CSV files, a text value that starts with `=`, `+`, `-`, `@`, a tab, or a carriage return gets a `'` in front of it,
+so that a spreadsheet does not run it as a formula.
 
 All these report routes use the spend-reporting capacity gate. When the gate is full or a query takes too long,
 they return HTTP 503 with `Retry-After`.
