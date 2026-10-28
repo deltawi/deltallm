@@ -59,6 +59,7 @@ const testSources = [
   'tests/reportingRequest.test.ts',
   'tests/reportLoader.test.ts',
   'tests/usageFilters.test.ts',
+  'tests/requestLogDetails.test.tsx',
   'tests/usageExplorer.test.ts',
   'tests/liveDashboard.test.ts',
   'tests/routeGroupsApi.test.ts',

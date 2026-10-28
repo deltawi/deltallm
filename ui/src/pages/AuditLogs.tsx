@@ -14,6 +14,7 @@ import { resolveUiAccess } from '../lib/authorization';
 import {
   auditQuery,
   hasAuditFilters,
+  OPTIONAL_COLUMNS,
   parseAuditFilters,
   parseAuditWindow,
   readAuditColumns,
@@ -297,7 +298,7 @@ export default function AuditLogs() {
         {first.error && <PanelError message={first.error} onRetry={first.retry} stale={first.data !== null} />}
         <section className="relative rounded-xl border border-gray-200 bg-white px-2 py-1" aria-label="Audit events">
           <div className="absolute right-2 top-1.5 z-10 hidden min-[880px]:block">
-            <ColumnsMenu columns={columns} onColumns={changeColumns} showUtc={showUtc} onShowUtc={changeUtc} />
+            <ColumnsMenu options={OPTIONAL_COLUMNS} columns={columns} onColumns={changeColumns} showUtc={showUtc} onShowUtc={changeUtc} />
           </div>
           {!first.loading && events.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-gray-500">

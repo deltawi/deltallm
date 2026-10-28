@@ -57,12 +57,21 @@ It shows only to accounts that can see request logs (platform and organization r
 - **View matching requests** on the Overview opens this view with the same filters. A calendar or custom period
   opens as a custom window with the same days. A period longer than 7 days without fixed dates opens the last 30 days.
 - Filter by status (success or error), cache (hit or miss), model, provider, team, or API key.
+- Filter by **Endpoint** (chat and text, embeddings, images, speech, transcription, rerank, MCP tool) or **Tag**.
+  **More filters** adds end user, deployment, HTTP status, error type, a minimum cost, or a minimum duration.
+  A filter menu suggests the values in the rows on screen; you can also type a value.
+- **Sort** shows the newest requests first, the most expensive first (**Cost**), or the slowest first (**Duration**).
+  Cost and Duration read every matching request in the window, so they are available for windows of 31 days or less.
 - Type a full request ID in **Find a request ID** to find one request in the selected window.
+- Click the columns button at the right of the table header to add columns: Person (the key owner), Organization,
+  Endpoint, Deployment, End user, Tags, Error type, Cached tokens, and Request ID. The choice is saved in this browser.
+  The extra columns show on wide screens. Each one makes the table wider, and the table then scrolls sideways.
 - **Duration** shows milliseconds below 1 second (`412 ms`). Above 1 second it shows seconds
   (`1.26 s`, `15.3 s`), then minutes (`2m 5s`) and hours (`1h 4m`). In this table, durations over
   5 seconds are red. Audit logs, Playground latency, and MCP latency show durations in the same format.
 - Click a row to open the request panel. The panel shows the error, the model, the provider, the team,
-  the API key, the cost, the token counts, the metadata, and links to the audit log and to the other requests of the key.
+  the API key, the endpoint, the deployment, the end user, the error type, the tags, the cost, the token counts,
+  the metadata, and links to the audit log and to the other requests of the key or the end user. Click a tag to show its requests.
 - On a narrow screen, the table hides columns in this order: Team, Cache, and Tokens first, then
   API key and Duration. Long names end with "…". The request panel shows all values.
 
@@ -87,6 +96,8 @@ make requests through the gateway slower:
   Each query has a time limit. When the limit is reached, the gateway returns HTTP 503 with `Retry-After`,
   and the panel shows a message with a **Retry** button.
 - A search by request ID reads only the selected time window. Use the shortest window that contains the request.
+  The other request filters also read only the selected window, newest first, until a page is full.
+- Sorting requests by cost or duration reads every matching request in the window. It is limited to 31 days.
 - A custom period uses the same reporting cache, cache times, and limits as the presets. The cache time depends
   on the length of the period: a longer period is cached longer.
 

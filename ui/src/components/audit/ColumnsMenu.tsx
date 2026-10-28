@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { Columns3 } from 'lucide-react';
-import { OPTIONAL_COLUMNS, type AuditColumn } from '../../lib/auditEvents';
 import { MenuNote } from './ChipMenu';
 
-interface ColumnsMenuProps {
-  columns: readonly AuditColumn[];
-  onColumns: (columns: AuditColumn[]) => void;
-  showUtc: boolean;
-  onShowUtc: (value: boolean) => void;
+interface ColumnsMenuProps<T extends string> {
+  /** Every optional column, in table order. */
+  options: ReadonlyArray<{ key: T; label: string }>;
+  columns: readonly T[];
+  onColumns: (columns: T[]) => void;
+  /** Leave out to hide the time format option. */
+  showUtc?: boolean;
+  onShowUtc?: (value: boolean) => void;
 }
 
 const CHECKBOX = 'h-3.5 w-3.5 rounded border-gray-300 text-brand-primary focus:ring-brand-primary';
 const OPTION = 'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50';
 
 /** The icon at the right end of the table header: extra columns and the time format. */
-export default function ColumnsMenu({ columns, onColumns, showUtc, onShowUtc }: ColumnsMenuProps) {
+export default function ColumnsMenu<T extends string>({ options, columns, onColumns, showUtc, onShowUtc }: ColumnsMenuProps<T>) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -50,14 +52,14 @@ export default function ColumnsMenu({ columns, onColumns, showUtc, onShowUtc }: 
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1 grid w-64 rounded-lg border border-gray-200 bg-white p-1 shadow-lg">
           <MenuNote>Extra columns show on wide screens</MenuNote>
-          {OPTIONAL_COLUMNS.map((column) => (
+          {options.map((column) => (
             <label key={column.key} className={OPTION}>
               <input
                 type="checkbox"
                 checked={columns.includes(column.key)}
                 onChange={(event) =>
                   onColumns(
-                    OPTIONAL_COLUMNS.map((item) => item.key).filter((key) =>
+                    options.map((item) => item.key).filter((key) =>
                       key === column.key ? event.target.checked : columns.includes(key),
                     ),
                   )
@@ -67,11 +69,15 @@ export default function ColumnsMenu({ columns, onColumns, showUtc, onShowUtc }: 
               {column.label}
             </label>
           ))}
-          <div className="my-1 border-t border-gray-100" />
-          <label className={OPTION}>
-            <input type="checkbox" checked={showUtc} onChange={(event) => onShowUtc(event.target.checked)} className={CHECKBOX} />
-            Show times in UTC
-          </label>
+          {showUtc !== undefined && onShowUtc && (
+            <>
+              <div className="my-1 border-t border-gray-100" />
+              <label className={OPTION}>
+                <input type="checkbox" checked={showUtc} onChange={(event) => onShowUtc(event.target.checked)} className={CHECKBOX} />
+                Show times in UTC
+              </label>
+            </>
+          )}
           <MenuNote>Saved in this browser</MenuNote>
         </div>
       )}

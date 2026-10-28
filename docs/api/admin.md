@@ -756,7 +756,20 @@ Parameters:
 - `status`: `success` or `error`.
 - `cache_hit`: `true` or `false`.
 - `request_id`: one exact request ID. The search reads only the selected window.
+- `tag`: rows whose `request_tags` contain this tag.
+- `end_user`: the end user ID that the client sent (the `user` field of the request).
+- `call_type`: the stored call type, for example `completion`, `embedding`, `image_generation`, `audio_speech`,
+  `audio_transcription`, `rerank`, or `mcp_tool`.
+- `deployment`: the deployment model name that served the request.
+- `http_status`: an HTTP status code from 100 to 599. `error_type`: the stored error type, for example `RateLimitError`.
+- `min_spend`: rows that cost at least this amount in USD. `min_duration_ms`: rows that took at least this many milliseconds.
+  Rows without `latency_ms` use the time from start to end.
+- `sort`: `newest` (default), `cost` (highest first), or `duration` (slowest first). `cost` and `duration` read every
+  matching row in the window, so they need `since` or `start_date` and a window of 31 days or less. Otherwise the call returns 422.
+  A cursor is valid only for the sort that issued it.
 - `pagination_mode=cursor` with `cursor` and `limit` (1 to 500), or `pagination_mode=offset` with `limit` and `offset`.
+
+Each row also has `deployment_model` and `duration_ms` (`latency_ms`, or the time from start to end for rows without it).
 
 All these report routes use the spend-reporting capacity gate. When the gate is full or a query takes too long,
 they return HTTP 503 with `Retry-After`.

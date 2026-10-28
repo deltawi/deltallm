@@ -1,6 +1,17 @@
+import type { CSSProperties, ReactNode } from 'react';
 import type { RequestLog } from '../../lib/api/usageReports';
 import { fmtCompact, fmtDuration, fmtSpendValue } from '../../lib/format';
-import { logDurationMs, logKeyName, logProvider, logStatusCode, relativeTime, utcTimestamp } from '../../lib/requestLogs';
+import {
+  callTypeLabel,
+  logDurationMs,
+  logKeyName,
+  logProvider,
+  logStatusCode,
+  relativeTime,
+  REQUEST_LOG_COLUMNS,
+  utcTimestamp,
+  type RequestLogColumn,
+} from '../../lib/requestLogs';
 import { keyTail } from '../../lib/usageFilters';
 import { TableSkeleton } from './ReportBits';
 
@@ -9,6 +20,8 @@ interface RequestLogTableProps {
   loading: boolean;
   refreshing: boolean;
   selectedId: string | null;
+  /** Optional columns the viewer added with the Columns menu. */
+  columns?: readonly RequestLogColumn[];
   onSelect: (log: RequestLog) => void;
 }
 
@@ -18,12 +31,63 @@ const CELL = 'overflow-hidden text-ellipsis whitespace-nowrap border-b border-gr
 // Columns hide by priority as the screen gets narrower, so the table never scrolls sideways.
 const LARGE = 'hidden lg:table-cell';
 const WIDE = 'hidden xl:table-cell';
+// Each optional column has a set width, and the table gets wider by that much and
+// scrolls sideways, so Model, Team and API key keep their room.
+const OPTIONAL_WIDTH: Record<RequestLogColumn, { className: string; px: number }> = {
+  person: { className: 'w-[150px]', px: 150 },
+  organization: { className: 'w-[130px]', px: 130 },
+  endpoint: { className: 'w-[120px]', px: 120 },
+  deployment: { className: 'w-[150px]', px: 150 },
+  end_user: { className: 'w-[120px]', px: 120 },
+  tags: { className: 'w-[140px]', px: 140 },
+  error: { className: 'w-[130px]', px: 130 },
+  cached: { className: 'w-[96px] text-right', px: 96 },
+  request_id: { className: 'w-[180px]', px: 180 },
+};
+// Room for the default columns at the xl breakpoint, where optional columns show.
+const BASE_TABLE_PX = 1000;
+const MUTED = <span className="text-gray-400">—</span>;
 
-export default function RequestLogTable({ logs, loading, refreshing, selectedId, onSelect }: RequestLogTableProps) {
+function optionalCell(column: RequestLogColumn, log: RequestLog): ReactNode {
+  switch (column) {
+    case 'person':
+      return log.user_email || log.user || MUTED;
+    case 'organization':
+      return log.organization_name || log.organization_id || MUTED;
+    case 'endpoint':
+      return callTypeLabel(log.call_type);
+    case 'deployment':
+      return log.deployment_model || log.api_base || MUTED;
+    case 'end_user':
+      return log.end_user || MUTED;
+    case 'tags':
+      return log.request_tags?.length ? log.request_tags.join(', ') : MUTED;
+    case 'error':
+      return log.error_type || MUTED;
+    case 'cached':
+      return fmtCompact(log.prompt_tokens_cached ?? 0);
+    case 'request_id':
+      return <span className="font-mono text-[11.5px]">{log.request_id}</span>;
+  }
+}
+
+function optionalTitle(column: RequestLogColumn, log: RequestLog): string | undefined {
+  if (column === 'tags') return log.request_tags?.join(', ') || undefined;
+  if (column === 'request_id') return log.request_id;
+  if (column === 'deployment') return log.deployment_model || log.api_base || undefined;
+  if (column === 'person') return log.user_email || log.user || undefined;
+  return undefined;
+}
+export default function RequestLogTable({ logs, loading, refreshing, selectedId, columns = [], onSelect }: RequestLogTableProps) {
   if (loading) return <TableSkeleton rows={8} columns={9} />;
+  const optional = REQUEST_LOG_COLUMNS.filter((column) => columns.includes(column.key));
+  const minWidth = optional.length ? BASE_TABLE_PX + optional.reduce((sum, column) => sum + OPTIONAL_WIDTH[column.key].px, 0) : 0;
   return (
     <div className={`overflow-x-auto transition-opacity ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
-      <table className="w-full table-fixed border-collapse text-[12.5px] tabular-nums">
+      <table
+        className={`w-full table-fixed border-collapse text-[12.5px] tabular-nums ${optional.length ? 'xl:min-w-[var(--request-table-min)]' : ''}`}
+        style={optional.length ? ({ '--request-table-min': `${minWidth}px` } as CSSProperties) : undefined}
+      >
         <thead>
           <tr>
             <th className={`${HEAD} w-[88px] sm:w-[96px]`}>Time</th>
@@ -35,6 +99,11 @@ export default function RequestLogTable({ logs, loading, refreshing, selectedId,
             <th className={`${HEAD} w-[76px] sm:w-[88px] text-right`}>Cost</th>
             <th className={`${HEAD} ${LARGE} w-[84px] text-right`}>Duration</th>
             <th className={`${HEAD} ${WIDE} w-[68px]`}>Cache</th>
+            {optional.map((column) => (
+              <th key={column.key} className={`${HEAD} ${WIDE} ${OPTIONAL_WIDTH[column.key].className}`}>{column.label}</th>
+            ))}
+            {/* Room for the Columns button, which sits over this corner. */}
+            <th className={`${HEAD} hidden w-9 min-[880px]:table-cell`}><span className="sr-only">Columns</span></th>
           </tr>
         </thead>
         <tbody>
@@ -91,6 +160,16 @@ export default function RequestLogTable({ logs, loading, refreshing, selectedId,
                     {log.cache_hit ? 'Hit' : 'Miss'}
                   </span>
                 </td>
+                {optional.map((column) => (
+                  <td
+                    key={column.key}
+                    title={optionalTitle(column.key, log)}
+                    className={`${CELL} ${WIDE} text-gray-700 ${OPTIONAL_WIDTH[column.key].className}`}
+                  >
+                    {optionalCell(column.key, log)}
+                  </td>
+                ))}
+                <td className={`${CELL} hidden min-[880px]:table-cell`} />
               </tr>
             );
           })}

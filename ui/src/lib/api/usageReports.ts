@@ -170,6 +170,8 @@ export interface BudgetAlertsResponse {
 export interface RequestLog extends SpendLog {
   provider?: string | null;
   latency_ms?: number | null;
+  /** latency_ms, or the stored start to end time for rows without it. */
+  duration_ms?: number | null;
   organization_id?: string | null;
   team_alias?: string | null;
   organization_name?: string | null;
@@ -183,6 +185,20 @@ export interface RequestLogsResponse {
   reporting_context?: SpendReportingContext;
 }
 
+export type RequestLogSort = 'newest' | 'cost' | 'duration';
+
+/** Request log filters that only the Requests view has. */
+export interface RequestLogDetails {
+  tag?: string;
+  endUser?: string;
+  callType?: string;
+  deployment?: string;
+  httpStatus?: number;
+  errorType?: string;
+  minSpend?: number;
+  minDurationMs?: number;
+}
+
 export interface RequestLogQuery {
   view: SpendView;
   since?: string;
@@ -192,6 +208,8 @@ export interface RequestLogQuery {
   status?: 'success' | 'error';
   cacheHit?: boolean;
   requestId?: string;
+  details?: RequestLogDetails;
+  sort?: RequestLogSort;
   cursor?: string | null;
   limit: number;
 }
@@ -246,6 +264,16 @@ export function requestLogQuery(params: RequestLogQuery): URLSearchParams {
   if (params.status) query.set('status', params.status);
   if (params.cacheHit !== undefined) query.set('cache_hit', String(params.cacheHit));
   if (params.requestId) query.set('request_id', params.requestId);
+  const details = params.details ?? {};
+  if (details.tag) query.set('tag', details.tag);
+  if (details.endUser) query.set('end_user', details.endUser);
+  if (details.callType) query.set('call_type', details.callType);
+  if (details.deployment) query.set('deployment', details.deployment);
+  if (details.httpStatus !== undefined) query.set('http_status', String(details.httpStatus));
+  if (details.errorType) query.set('error_type', details.errorType);
+  if (details.minSpend !== undefined) query.set('min_spend', String(details.minSpend));
+  if (details.minDurationMs !== undefined) query.set('min_duration_ms', String(details.minDurationMs));
+  if (params.sort && params.sort !== 'newest') query.set('sort', params.sort);
   if (params.cursor) query.set('cursor', params.cursor);
   return query;
 }
