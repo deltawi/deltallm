@@ -222,7 +222,11 @@ is valid and produces zero windows.
 
 Preparation and activation also reject unresolved realtime intents, spend outbox
 rows, selector operations, batch jobs, and batch completion receipts. Review blocked
-work; do not delete it to make activation pass. These checks assume stopped writers.
+work; do not delete it to make activation pass. A batch completion receipt counts as
+settled once its status is `sent`; `queued`, `processing`, `retrying` and `failed`
+receipts still block. Apply migration `20261028100000_accounting_cutover_sent_batch_receipts`
+first: before it, every delivered receipt was reported as pending batch work.
+These checks assume stopped writers.
 They do not support an online rollout with both legacy and v2 billing writers.
 
 Partition capacity should cover maximum admitted provider calls, with headroom for
