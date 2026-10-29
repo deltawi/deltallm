@@ -7,6 +7,7 @@ Keeps the public import surface stable: callers continue to do
 and receive the aggregate :class:`APIRouter` composed of the per-concern
 sub-routers defined under :mod:`src.api.admin.endpoints.mcp.routes`.
 """
+
 from __future__ import annotations
 
 from src.api.admin.endpoints.mcp.router import router

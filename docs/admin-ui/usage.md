@@ -44,6 +44,22 @@ The row shows the account email when your role can see user details. Otherwise i
 
 The filters, the period, the metric, the split, and the tab are in the page URL. You can share a link to a filtered view.
 
+## Export
+
+Click **Export** at the top right to download what the current view shows. The export uses the same scope,
+period, and filters as the page.
+
+- On the Overview, the export lists every row of the selected top-table tab (for example every team),
+  not only the rows on the current page:
+  - **Spend by team as CSV** or **as JSON**: one row for each team, with spend, requests, failed requests, and tokens.
+  - **Daily spend by team as CSV**: one row for each UTC day and team. Use it for chargeback spreadsheets.
+- On Requests, **Requests as CSV** or **as JSONL** downloads the matching requests in the selected window, newest first.
+  The file has the table columns, the IDs, and the names. It never contains prompts, responses, or request metadata.
+
+An export has at most 10,000 rows. To get more rows, use a shorter period or the
+[export API](../api/admin.md#usage-export), which accepts up to 50,000 rows and a cursor.
+Each export writes an audit event (**Usage report exported** or **Request logs exported**).
+
 ## Requests
 
 The Requests view shows each request through the gateway, newest first.
@@ -100,6 +116,8 @@ make requests through the gateway slower:
 - Sorting requests by cost or duration reads every matching request in the window. It is limited to 31 days.
 - A custom period uses the same reporting cache, cache times, and limits as the presets. The cache time depends
   on the length of the period: a longer period is cached longer.
+- An export runs one query with the same limits. It does not use the cache. A very long period can take too long;
+  use a shorter period then.
 
 ## Access scope
 

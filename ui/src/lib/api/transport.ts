@@ -74,10 +74,7 @@ function errorMessage(status: number, detail: unknown): string {
   return `Request failed (${status})`;
 }
 
-export async function apiFetch<T>(
-  path: string,
-  opts?: RequestInit & { json?: unknown },
-): Promise<T> {
+async function send(path: string, opts?: RequestInit & { json?: unknown }): Promise<Response> {
   const body = opts && 'json' in opts ? JSON.stringify(opts.json ?? null) : opts?.body;
   const headers = buildHeaders(opts?.headers, body);
   if (uiMount().external_console) {
@@ -113,12 +110,34 @@ export async function apiFetch<T>(
       retryAfterSeconds,
     );
   }
+  return response;
+}
 
+export async function apiFetch<T>(
+  path: string,
+  opts?: RequestInit & { json?: unknown },
+): Promise<T> {
+  const response = await send(path, opts);
   if (response.status === 204) return undefined as T;
 
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) return (await response.text()) as T;
   return (await response.json()) as T;
+}
+
+export interface DownloadedFile {
+  blob: Blob;
+  /** From ``Content-Disposition``, or ``fallbackName`` when the server sends none. */
+  filename: string;
+  headers: Headers;
+}
+
+/** A file download with the same auth, session and error handling as ``apiFetch``. */
+export async function apiDownload(path: string, fallbackName: string, opts?: RequestInit): Promise<DownloadedFile> {
+  const response = await send(path, opts);
+  const disposition = response.headers.get('content-disposition') || '';
+  const match = /filename="([^"]+)"/.exec(disposition);
+  return { blob: await response.blob(), filename: match?.[1] || fallbackName, headers: response.headers };
 }
 
 export function withQuery<Query extends object>(path: string, params?: Query): string {

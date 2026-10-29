@@ -19,6 +19,7 @@ import {
   withUsageFilter,
   writeUsageFilters,
 } from '../../lib/usageFilters';
+import { parseUsageTab } from '../../lib/usageParams';
 import { SPLIT_GROUPS, USAGE_METRICS, usageChartData, type UsageMetric } from '../../lib/usageExplorer';
 import { useReport } from '../../lib/useReport';
 import UsageFilterChips from '../../components/usage/UsageFilterChips';
@@ -72,8 +73,7 @@ export default function UsageExplorer({ view, range, capabilities, refreshToken,
   const split = splitOptions.find((option) => option.key === requestedSplit && !option.disabled)?.key
     ?? splitOptions.find((option) => !option.disabled)?.key
     ?? 'model';
-  const requestedTab = searchParams.get('tab') as UsageDimension | null;
-  const tab = requestedTab && allowed.includes(requestedTab) ? requestedTab : 'model';
+  const tab = parseUsageTab(searchParams, allowed);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), 300);
 

@@ -92,6 +92,11 @@ async def test_request_logs_filter_and_label_page_rows(explorer_db):
             organization_id, cursor=(rows[0]["start_time"], rows[0]["id"]), limit=1
         )
         assert [row["id"] for row in await _rows(db, after_first.page)] == [rows[1]["id"]]
+
+        exported = await _rows(db, _queries(organization_id, include_details=False).page)
+        assert [float(row["spend"]) for row in exported] == [3.0, 2.0, 1.0]
+        assert exported[2]["team_alias"] == "Search"
+        assert all(row["metadata"] is None and row["cache_key"] is None for row in exported)
     finally:
         await db.execute_raw("DELETE FROM deltallm_teamtable WHERE team_id = $1", team_id)
         await db.execute_raw(

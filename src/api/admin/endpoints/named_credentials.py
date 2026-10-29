@@ -128,8 +128,7 @@ def _require_target_change_allowed(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "Only the credential owner can change where it connects: "
-                + ", ".join(changed)
+                "Only the credential owner can change where it connects: " + ", ".join(changed)
             ),
         )
 

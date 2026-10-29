@@ -76,6 +76,17 @@ curl "http://localhost:8000/ui/api/spend/report?group_by=model" \
   -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
 
+Export a breakdown as CSV, for example spend for each team and each day of October:
+
+```bash
+curl -o spend-by-team.csv \
+  "http://localhost:8000/ui/api/spend/explorer/export?group_by=team&interval=day&start_date=2026-10-01&end_date=2026-10-31" \
+  -H "Authorization: Bearer YOUR_MASTER_KEY"
+```
+
+`GET /ui/api/logs/export` exports the request logs. See [Usage export](../api/admin.md#usage-export) and
+[Usage & Spend](../admin-ui/usage.md#export).
+
 The legacy master-key spend endpoints also exist under `/global/spend`, `/global/spend/report`, `/global/spend/keys`, and `/global/spend/teams`.
 
 ## Soft Budgets and Resets

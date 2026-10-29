@@ -28,6 +28,7 @@ import RefreshControl from '../components/usage/RefreshControl';
 import { useAutoRefresh, type AutoRefreshMs } from '../lib/useAutoRefresh';
 import { Segmented } from '../components/usage/ReportBits';
 import UsageExplorer from './usage/UsageExplorer';
+import UsageExportMenu from './usage/UsageExportMenu';
 import UsageRequests from './usage/UsageRequests';
 
 const REQUEST_WINDOW_OPTIONS: ReadonlyArray<{ key: RequestWindowSelection; label: string }> = [
@@ -165,13 +166,18 @@ export default function Usage() {
       titleIcon={BarChart3}
       description={subtitle}
       action={(
-        <RefreshControl
-          updatedAt={updatedAt}
-          refreshing={false}
-          onRefresh={refresh}
-          autoRefreshMs={autoRefreshMs}
-          onAutoRefreshChange={setAutoRefreshMs}
-        />
+        <>
+          <RefreshControl
+            updatedAt={updatedAt}
+            refreshing={false}
+            onRefresh={refresh}
+            autoRefreshMs={autoRefreshMs}
+            onAutoRefreshChange={setAutoRefreshMs}
+          />
+          {scopeReady && (
+            <UsageExportMenu requestsPath={requestsPath} view={view} capabilities={capabilities} range={range} />
+          )}
+        </>
       )}
       tabs={(
         <HeaderTabBar

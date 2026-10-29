@@ -74,7 +74,10 @@ def request_log_queries(
     sort_cursor: tuple[float | int, str] | None = None,
     model_provider_overrides: dict[str, str] | None = None,
     user_identity_labels_visible: bool = False,
+    include_details: bool = True,
 ) -> RequestLogQueries:
+    """``include_details=False`` leaves out metadata, cache keys and ``api_base`` (exports)."""
+
     where = WhereBuilder()
     sort_column = _SORT_COLUMNS.get(sort)
     if sort_cursor is not None and sort_column is not None:
@@ -161,6 +164,11 @@ def request_log_queries(
     else:
         inner_order = f"ORDER BY {sort_column} DESC, id DESC"
         outer_order = "ORDER BY page.sort_value DESC, page.id DESC"
+    details = (
+        "api_base, metadata, cache_key"
+        if include_details
+        else "NULL::text AS api_base, NULL::jsonb AS metadata, NULL::text AS cache_key"
+    )
     page_sql = f"""
     SELECT page.*,
            COALESCE(page.owner_account_id, page.runtime_user_id, pvt.owner_service_account_id)
@@ -171,7 +179,7 @@ def request_log_queries(
            (SELECT vt.key_name FROM deltallm_verificationtoken vt WHERE vt.token = page.api_key) AS key_name,
            {user_email} AS user_email
     FROM (
-        SELECT id, request_id, call_type, model, s.provider, s.deployment_model, api_base, api_key,
+        SELECT id, request_id, call_type, model, s.provider, s.deployment_model, {details}, api_key,
                spend, total_tokens,
                s.{source.prompt_tokens_column} AS prompt_tokens,
                s.{source.completion_tokens_column} AS completion_tokens,
@@ -182,7 +190,7 @@ def request_log_queries(
                {owner_column} AS owner_account_id, team_id,
                {source.column("organization_column", table_alias="s")} AS organization_id,
                s.{source.end_user_column} AS end_user,
-               metadata, cache_hit, cache_key, request_tags, status, http_status_code, error_type
+               cache_hit, request_tags, status, http_status_code, error_type
         FROM {source.table} s
         {where_sql}
         {inner_order}

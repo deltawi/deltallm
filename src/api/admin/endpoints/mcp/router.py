@@ -1,4 +1,5 @@
 """Top-level aggregate router for the admin MCP endpoints."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter

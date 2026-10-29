@@ -12,7 +12,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from src.auth.roles import Permission
 from src.api.admin.endpoints.audit_labels import event_context, label_events
 from src.api.admin.endpoints.common import db_or_503, get_auth_scope, to_json_value
-from src.audit.categories import AUDIT_CATEGORIES, audit_action_category, audit_category_clause, known_audit_actions
+from src.audit.categories import (
+    AUDIT_CATEGORIES,
+    audit_action_category,
+    audit_category_clause,
+    known_audit_actions,
+)
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Audit"])
@@ -46,7 +51,9 @@ def _decode_cursor(cursor: str | None) -> tuple[datetime, str] | None:
         moment, _, event_id = cursor.partition("|")
         parsed = datetime.fromisoformat(moment.replace("Z", "+00:00"))
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid cursor") from None
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid cursor"
+        ) from None
     if not event_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid cursor")
     return _naive_utc(parsed) or parsed, event_id
@@ -137,7 +144,9 @@ def _build_audit_where(
     if search:
         params.append(search)
         index = len(params)
-        clauses.append(f"(event_id::text = ${index} OR request_id = ${index} OR resource_id = ${index})")
+        clauses.append(
+            f"(event_id::text = ${index} OR request_id = ${index} OR resource_id = ${index})"
+        )
 
     start_dt = _date_start(start_date)
     end_dt = _date_end(end_date)
@@ -176,13 +185,18 @@ def _build_audit_where(
 _CATEGORY_PATTERN = "^(" + "|".join(AUDIT_CATEGORIES) + ")$"
 
 
-@router.get("/ui/api/audit/actions", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))])
+@router.get(
+    "/ui/api/audit/actions", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))]
+)
 async def list_audit_actions() -> dict[str, Any]:
     """Every known action with its category. A fixed list: no database read."""
     return {"actions": known_audit_actions(), "categories": list(AUDIT_CATEGORIES)}
 
 
-@router.get("/ui/api/audit/organizations", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))])
+@router.get(
+    "/ui/api/audit/organizations",
+    dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))],
+)
 async def list_audit_organizations(
     request: Request,
     search: str | None = Query(default=None, max_length=200),
@@ -191,7 +205,9 @@ async def list_audit_organizations(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     """Organizations for the Organization filter, limited to the ones whose audit log the caller can read."""
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.AUDIT_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.AUDIT_READ
+    )
     db = db_or_503(request)
     clauses: list[str] = []
     params: list[Any] = []
@@ -203,7 +219,9 @@ async def list_audit_organizations(
         clauses.append(f"organization_id = ANY(${len(params)}::text[])")
     if search and search.strip():
         params.append(f"%{search.strip()}%")
-        clauses.append(f"(organization_name ILIKE ${len(params)} OR organization_id ILIKE ${len(params)})")
+        clauses.append(
+            f"(organization_name ILIKE ${len(params)} OR organization_id ILIKE ${len(params)})"
+        )
     params.append(limit)
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = await db.query_raw(
@@ -219,7 +237,9 @@ async def list_audit_organizations(
     return {"organizations": [to_json_value(dict(row)) for row in rows]}
 
 
-@router.get("/ui/api/audit/events", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))])
+@router.get(
+    "/ui/api/audit/events", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))]
+)
 async def list_audit_events(
     request: Request,
     action: str | None = Query(default=None),
@@ -247,7 +267,9 @@ async def list_audit_events(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.AUDIT_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.AUDIT_READ
+    )
     db = db_or_503(request)
     actor_ids: list[str] | None = None
     actor_key_hashes: list[str] | None = None
@@ -352,7 +374,9 @@ async def _event_id_clause(db: Any, event_id: str, index: int) -> str:
         try:
             UUID(event_id)
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit event not found") from None
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Audit event not found"
+            ) from None
         return f"event_id = ${index}::uuid"
     return f"event_id = ${index}"
 
@@ -411,7 +435,10 @@ async def _payload_rows(db: Any, event_id: str, *, content: bool) -> list[dict[s
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.get("/ui/api/audit/events/{event_id}", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))])
+@router.get(
+    "/ui/api/audit/events/{event_id}",
+    dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))],
+)
 async def get_audit_event(
     request: Request,
     event_id: str,
@@ -420,7 +447,9 @@ async def get_audit_event(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.AUDIT_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.AUDIT_READ
+    )
     db = db_or_503(request)
     event = await _load_event(db, event_id, scope)
     if include_payloads:
@@ -448,7 +477,9 @@ async def get_audit_event_payloads(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.AUDIT_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.AUDIT_READ
+    )
     db = db_or_503(request)
     await _load_event(db, event_id, scope)
     return {"payloads": await _payload_rows(db, event_id, content=True)}
@@ -469,7 +500,9 @@ async def get_related_audit_events(
 ) -> dict[str, Any]:
     """Events around one event: the same request, the same resource, and recent
     sign-ins by the same person. Small indexed lookups, loaded when the panel opens."""
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.AUDIT_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.AUDIT_READ
+    )
     db = db_or_503(request)
     event = await _load_event(db, event_id, scope)
 
@@ -509,7 +542,10 @@ async def get_related_audit_events(
     return {"request": request_events, "resource": resource_events, "actor_signins": actor_signins}
 
 
-@router.get("/ui/api/audit/timeline", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))])
+@router.get(
+    "/ui/api/audit/timeline",
+    dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))],
+)
 async def audit_timeline(
     request: Request,
     request_id: str = Query(default=""),
@@ -518,9 +554,14 @@ async def audit_timeline(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     if not request_id and not correlation_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request_id or correlation_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="request_id or correlation_id is required",
+        )
 
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.AUDIT_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.AUDIT_READ
+    )
     db = db_or_503(request)
     where_sql, params = _build_audit_where(
         action=None,
@@ -546,7 +587,9 @@ async def audit_timeline(
     return {"events": [to_json_value(dict(row)) for row in rows]}
 
 
-@router.get("/ui/api/audit/export", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))])
+@router.get(
+    "/ui/api/audit/export", dependencies=[Depends(require_admin_permission(Permission.AUDIT_READ))]
+)
 async def export_audit_events(
     request: Request,
     format: str = Query(default="jsonl", pattern="^(jsonl|csv)$"),
@@ -571,7 +614,9 @@ async def export_audit_events(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> Response:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.AUDIT_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.AUDIT_READ
+    )
     db = db_or_503(request)
     actor_ids: list[str] | None = None
     actor_key_hashes: list[str] | None = None

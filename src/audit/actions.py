@@ -191,6 +191,8 @@ class AuditAction(str, Enum):
     GLOBAL_SPEND_REPORT_READ = "GLOBAL_SPEND_REPORT_READ"
     GLOBAL_SPEND_TEAMS_READ = "GLOBAL_SPEND_TEAMS_READ"
     SPEND_LOGS_READ = "SPEND_LOGS_READ"
+    SPEND_LOGS_EXPORT = "SPEND_LOGS_EXPORT"
+    SPEND_REPORT_EXPORT = "SPEND_REPORT_EXPORT"
 
 
 def normalize_audit_action(action: str | AuditAction | Any) -> str:

@@ -14,6 +14,7 @@ from src.db.billing.usage_explorer_queries import (
     ReportQuery,
     ReportWindow,
     usage_breakdown_query,
+    usage_export_query,
     usage_series_query,
     usage_summary_query,
 )
@@ -295,3 +296,55 @@ async def test_provider_filter_and_search_accept_braces_and_like_wildcards(explo
     assert "my{model}_x" in {row["group_key"] for row in by_provider}
     assert [row["group_key"] for row in underscore] == ["my{model}_x"]
     assert [row["request_count"] for row in percent] == [None]
+
+
+async def test_export_lists_every_group_once_or_per_day(explorer_db):
+    db, organization_id = explorer_db
+    await _seed(db, organization_id)
+    common: dict[str, Any] = {
+        "window": WINDOW,
+        "group_by": "model",
+        "visibility": _visibility(organization_id),
+        "filters": UsageFilters(),
+        "source": get_spend_read_source(),
+    }
+
+    totals = await _rows(db, usage_export_query(interval=None, max_rows=100, **common))
+    assert [row["group_key"] for row in totals] == ["gpt-4o", "claude", "mini", "selector"]
+    assert float(totals[0]["total_spend"]) == pytest.approx(4.0)
+    assert int(totals[0]["request_count"]) == 2
+    assert int(totals[0]["failed_requests"]) == 1
+    assert int(totals[3]["request_count"]) == 0
+    # The export reads only the current window, never the previous one.
+    assert sum(float(row["total_spend"]) for row in totals) == pytest.approx(6.75)
+
+    daily = await _rows(db, usage_export_query(interval="day", max_rows=100, **common))
+    assert [(str(row["bucket"]), row["group_key"]) for row in daily] == [
+        ("2026-09-10", "gpt-4o"),
+        ("2026-09-10", "selector"),
+        ("2026-09-11", "claude"),
+        ("2026-09-11", "mini"),
+    ]
+
+    capped = await _rows(db, usage_export_query(interval=None, max_rows=2, **common))
+    assert len(capped) == 2
+
+
+@pytest.mark.parametrize("dimension", ["provider", "organization", "team", "user", "api_key"])
+async def test_export_runs_for_every_dimension(explorer_db, dimension):
+    db, organization_id = explorer_db
+    await _seed(db, organization_id)
+    rows = await _rows(
+        db,
+        usage_export_query(
+            window=WINDOW,
+            group_by=dimension,
+            interval="week",
+            max_rows=100,
+            visibility=_visibility(organization_id),
+            filters=UsageFilters.build(values={"provider": "OpenAI"}),
+            source=get_spend_read_source(),
+            user_identity_labels_visible=True,
+        ),
+    )
+    assert sum(float(row["total_spend"]) for row in rows) == pytest.approx(6.75)

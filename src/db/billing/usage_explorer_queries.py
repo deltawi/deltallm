@@ -409,3 +409,63 @@ def usage_breakdown_query(
         """,
         params=tuple(where.params),
     )
+
+
+ExportInterval = Literal["day", "week", "month"]
+
+
+def usage_export_query(
+    *,
+    window: ReportWindow,
+    group_by: SpendDimension,
+    interval: ExportInterval | None,
+    max_rows: int,
+    visibility: SpendVisibility,
+    filters: UsageFilters,
+    source: SpendReadSource,
+    model_provider_overrides: dict[str, str] | None = None,
+    user_identity_labels_visible: bool = False,
+) -> ReportQuery:
+    """Every group in the current window, optionally per UTC day, week or month.
+
+    The query returns at most ``max_rows`` rows. The caller asks for one row more
+    than it exports, so an extra row tells it that the export is truncated.
+    """
+
+    current_window = ReportWindow(start=window.start, end=window.end)
+    where = _scoped_where(
+        window=current_window,
+        visibility=visibility,
+        filters=filters,
+        source=source,
+        model_provider_overrides=model_provider_overrides,
+    )
+    dimension = explorer_dimension_sql(
+        group_by,
+        source,
+        model_provider_overrides=model_provider_overrides,
+        user_identity_labels_visible=user_identity_labels_visible,
+    )
+    bucket = _BUCKET_EXPRESSIONS[interval] if interval else "NULL::date"
+    group_by_exprs = list(dimension.group_by_exprs)
+    if interval:
+        group_by_exprs.insert(0, bucket)
+    limit_param = where.bind(max_rows)
+    joins = "\n".join(dimension.joins)
+    return ReportQuery(
+        sql=f"""
+        SELECT
+            {bucket} AS bucket,
+            {dimension.group_expr} AS group_key,
+            ({dimension.group_expr}) IS NULL AS is_unassigned,
+            {dimension.display_expr} AS display_name,
+            {_metric_columns(source, only=None)}
+        FROM {source.table} s
+        {joins}
+        WHERE {where.sql()}
+        GROUP BY {", ".join(group_by_exprs)}
+        ORDER BY bucket ASC NULLS FIRST, total_spend DESC, group_key ASC NULLS LAST
+        LIMIT {limit_param}
+        """,
+        params=tuple(where.params),
+    )
