@@ -821,7 +821,9 @@ async def test_unsettled_realtime_work_prevents_accounting_activation(accounting
         ("batch", "in_progress"),
         ("batch", "finalizing"),
         ("batch_receipt", "queued"),
-        ("batch_receipt", "blocked"),
+        ("batch_receipt", "processing"),
+        ("batch_receipt", "retrying"),
+        ("batch_receipt", "failed"),
     ],
 )
 async def test_each_legacy_writer_blocks_activation_until_drained(accounting_db, lane, state):
@@ -855,6 +857,25 @@ async def test_each_legacy_writer_blocks_activation_until_drained(accounting_db,
     assert await db.query_raw("SELECT lane FROM deltallm_accounting_pending_legacy_work()") == []
     await db.execute_raw("SELECT deltallm_activate_accounting_protocol($1)", generation)
     assert await AccountingProtocolRepository(db).protocol_ready(generation) is True
+
+
+@pytest.mark.parametrize(("lane", "state"), [("spend", "completed"), ("batch_receipt", "sent")])
+async def test_settled_legacy_work_does_not_block_activation(accounting_db, lane, state):
+    clients, generation = accounting_db
+    db = clients[0]
+    identity = str(uuid4())
+    await _insert_legacy_cutover_work(db, lane, state, identity)
+    try:
+        assert (
+            await db.query_raw("SELECT lane FROM deltallm_accounting_pending_legacy_work()") == []
+        )
+    finally:
+        await db.execute_raw(
+            "DELETE FROM deltallm_spend_ingestion_outbox WHERE event_id=$1", identity
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_batch_completion_outbox WHERE completion_id=$1", identity
+        )
 
 
 async def _insert_legacy_cutover_work(db, lane, state, identity):
