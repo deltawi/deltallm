@@ -70,7 +70,14 @@ def test_invalid_managed_budgets_and_process_overrides_fail_render(setting, reas
     ],
 )
 def test_incompatible_production_release_choices_fail_render(setting, reason):
-    result = render("-f", str(CHART / "values-production.yaml"), "--set", setting)
+    result = render(
+        "-f",
+        str(CHART / "values-production.yaml"),
+        "-f",
+        str(CHART / "values-production-strict.yaml"),
+        "--set",
+        setting,
+    )
     assert result.returncode != 0
     assert reason in result.stderr
 

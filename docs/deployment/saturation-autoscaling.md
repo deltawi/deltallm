@@ -26,8 +26,9 @@ no supported pod-to-concurrency or N−1 number has been qualified before PR10.
 ## Capacity declaration and preflight
 
 Render the exact overlays planned for the release, using an immutable image and
-actual operator-supplied `providerDomains`. The chart refuses production values
-without a domain declaration. The local-mock fixture file in this repository is
+actual operator-supplied `providerDomains`. These checks run when
+`values-production-strict.yaml` is added after `values-production.yaml`; the chart
+then refuses production values without a domain declaration. The local-mock fixture file in this repository is
 only for CI and a disposable cluster. Domain `modelIds` must cover the active DB
 catalog. `rpm`, `tpm` and `concurrency` are provider **allocations**; set the
 per-process attempt, token and request-rate envelope, reserve other clients, and
@@ -80,6 +81,7 @@ capacity can therefore require a higher `maxPodsPerNode` and real node limit.
 ```bash
 helm template gateway deploy/kubernetes/helm -n deltallm \
   -f deploy/kubernetes/helm/values-production.yaml \
+  -f deploy/kubernetes/helm/values-production-strict.yaml \
   -f operator-capacity.yaml --set image.tag=YOUR_IMMUTABLE_TAG \
   > /tmp/deltallm-capacity-render.yaml
 kubectl -n deltallm get configmap gateway-deltallm-dependency-capacity \

@@ -193,6 +193,8 @@ def prime_database(cluster: LifecycleCluster, values: Path) -> None:
         "-f",
         str(CHART / "values-production.yaml"),
         "-f",
+        str(CHART / "values-production-strict.yaml"),
+        "-f",
         str(CHART / "values-capacity-experiment.yaml"),
         "-f",
         str(CHART / "values-capacity-fixture.yaml"),

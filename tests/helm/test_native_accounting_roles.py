@@ -24,6 +24,8 @@ def arguments(*changes):
         "-f",
         str(HELM_CHART_DIR / "values-production.yaml"),
         "-f",
+        str(HELM_CHART_DIR / "values-production-strict.yaml"),
+        "-f",
         str(HELM_CHART_DIR / "values-accounting-native.yaml"),
         "--set",
         "autoscaling.enabled=false",

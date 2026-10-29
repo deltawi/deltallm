@@ -69,6 +69,8 @@ def capacity_release(cluster: LifecycleCluster, values: Path, *extra: str) -> No
         "-f",
         str(CHART / "values-production.yaml"),
         "-f",
+        str(CHART / "values-production-strict.yaml"),
+        "-f",
         str(CHART / "values-capacity-experiment.yaml"),
         "-f",
         str(CHART / "values-capacity-fixture.yaml"),

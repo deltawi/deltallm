@@ -186,6 +186,7 @@ jobs:
             > /dev/null
           helm lint /tmp/deltallm-chart \
             -f /tmp/deltallm-chart/values-production.yaml \
+            -f /tmp/deltallm-chart/values-production-strict.yaml \
             -f /tmp/deltallm-chart/values-capacity-fixture.yaml \
             --set image.tag="${RELEASE_TAG}" \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
@@ -194,6 +195,7 @@ jobs:
             --set runtime.redis.url="${VALID_REDIS_URL}"
           helm template deltallm /tmp/deltallm-chart \
             -f /tmp/deltallm-chart/values-production.yaml \
+            -f /tmp/deltallm-chart/values-production-strict.yaml \
             -f /tmp/deltallm-chart/values-capacity-fixture.yaml \
             --set image.tag="${RELEASE_TAG}" \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
@@ -240,6 +242,7 @@ jobs:
           cp "${SOURCE_CHART_DIR}/values.yaml" "values-${CHART_VERSION}.yaml"
           cp "${SOURCE_VALUES_DIR}/values-eval.yaml" "values-eval-${CHART_VERSION}.yaml"
           cp "${SOURCE_VALUES_DIR}/values-production.yaml" "values-production-${CHART_VERSION}.yaml"
+          cp "${SOURCE_VALUES_DIR}/values-production-strict.yaml" "values-production-strict-${CHART_VERSION}.yaml"
 
           if [[ -f index.yaml ]]; then
             helm repo index . --url "${CHART_REPO_URL}" --merge index.yaml
@@ -268,6 +271,7 @@ jobs:
             <ul>
               <li><a href="values-eval-${CHART_VERSION}.yaml">values-eval-${CHART_VERSION}.yaml</a></li>
               <li><a href="values-production-${CHART_VERSION}.yaml">values-production-${CHART_VERSION}.yaml</a></li>
+              <li><a href="values-production-strict-${CHART_VERSION}.yaml">values-production-strict-${CHART_VERSION}.yaml</a></li>
               <li><a href="values-${CHART_VERSION}.yaml">values-${CHART_VERSION}.yaml</a></li>
             </ul>
             <p>See the main project docs for deployment examples.</p>
@@ -289,7 +293,8 @@ jobs:
             values-production.yaml \
             "values-${CHART_VERSION}.yaml" \
             "values-eval-${CHART_VERSION}.yaml" \
-            "values-production-${CHART_VERSION}.yaml"
+            "values-production-${CHART_VERSION}.yaml" \
+            "values-production-strict-${CHART_VERSION}.yaml"
           if git diff --cached --quiet; then
             echo "No chart repo changes to publish"
             exit 0
