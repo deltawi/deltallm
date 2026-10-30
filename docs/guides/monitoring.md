@@ -26,6 +26,24 @@ Alert on conditions that need a person to act:
 
 Choose thresholds from normal traffic in your own environment. Test each alert in staging and make sure it reaches the correct on-call owner.
 
+## Use the example dashboard and alert rules
+
+The repository includes two files in `deploy/kubernetes/monitoring/`:
+
+- `grafana-deltallm-overview.json` is a Grafana dashboard. It shows traffic, error ratio,
+  latency, time to first token, tokens, spend, failover, deployment health, background
+  backlogs, and dropped telemetry. In Grafana, select **Dashboards > New > Import**, then
+  select your Prometheus data source.
+- `deltallm-alerts.yaml` is a `PrometheusRule` for the Prometheus Operator. It includes alerts
+  for scrape failures, error ratio, slow responses, slow first token, deployment cooldowns,
+  failover spikes, old audit and spend backlogs, blocked email audits, and dropped telemetry.
+
+```bash
+kubectl apply -n monitoring -f deploy/kubernetes/monitoring/deltallm-alerts.yaml
+```
+
+The thresholds are examples. Change them to agree with your normal traffic before you send alerts to on-call.
+
 ## Check after a deployment
 
 After every release, confirm:

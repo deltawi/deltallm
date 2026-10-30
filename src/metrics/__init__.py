@@ -141,6 +141,7 @@ from src.metrics.counters import (
     increment_request,
     increment_request_failure,
     increment_router_context_decision,
+    increment_router_failover_event,
     increment_router_health_transition,
     increment_router_health_update_failure,
     increment_spend,
@@ -158,6 +159,7 @@ from src.metrics.gauges import (
 )
 from src.metrics.histograms import (
     observe_api_latency,
+    observe_time_to_first_token,
     observe_prompt_resolution_latency,
     observe_request_latency,
     observe_tier_capacity_fair_share_latency,
@@ -289,6 +291,7 @@ __all__ = [
     "increment_request",
     "increment_request_failure",
     "increment_router_context_decision",
+    "increment_router_failover_event",
     "increment_router_health_transition",
     "increment_router_health_update_failure",
     "increment_usage",
@@ -311,6 +314,7 @@ __all__ = [
     "increment_router_quality_sync",
     "observe_request_latency",
     "observe_api_latency",
+    "observe_time_to_first_token",
     "observe_prompt_resolution_latency",
     "observe_tier_capacity_fair_share_latency",
     "observe_request_phase",

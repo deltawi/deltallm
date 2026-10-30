@@ -7,7 +7,7 @@ from threading import Event
 import weakref
 
 import pytest
-from prometheus_client import REGISTRY
+from src.metrics.prometheus import PROMETHEUS_REGISTRY as REGISTRY
 
 from src.blocking_work import BlockingWorkExecutor, WorkUnavailableError
 from src.bounded_payload import PayloadCapacityExceeded, retained_size

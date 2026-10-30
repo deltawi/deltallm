@@ -13,7 +13,7 @@ from src.chat.stream_validation import validate_first_downstream_stream_frame
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.services.admission.output_token_context import OutputTokenContext
-from src.metrics import observe_request_phase
+from src.metrics import observe_request_phase, observe_time_to_first_token
 from src.metrics.request_phases import track_request_phase
 from src.providers.native_hop import (
     NATIVE_RESPONSE_KEY,
@@ -316,12 +316,18 @@ async def _open_stream_with_first_chunk(
                 affects_deployment_health=True,
             )
 
+        first_chunk_seconds = perf_counter() - upstream_started
         observe_request_phase(
             route="chat_completions",
             phase="upstream_http",
             outcome="success",
             response_kind="stream",
-            latency_seconds=perf_counter() - upstream_started,
+            latency_seconds=first_chunk_seconds,
+        )
+        observe_time_to_first_token(
+            model=payload.model,
+            api_provider=resolve_provider(params),
+            latency_seconds=first_chunk_seconds,
         )
 
         return OpenedStream(
