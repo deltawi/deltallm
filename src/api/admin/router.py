@@ -7,6 +7,7 @@ from src.api.admin.endpoints import (
     batch_create_sessions_router,
     callable_targets_router,
     config_router,
+    alerts_router,
     email_router,
     email_feedback_router,
     guardrails_router,
@@ -55,6 +56,7 @@ admin_router.include_router(auth_ui_router)
 admin_router.include_router(external_auth_admin_router)
 admin_router.include_router(external_auth_diagnostics_router)
 admin_router.include_router(key_revocations_router)
+admin_router.include_router(alerts_router)
 admin_router.include_router(email_router)
 admin_router.include_router(email_feedback_router)
 admin_router.include_router(invitations_router)

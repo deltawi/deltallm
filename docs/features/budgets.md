@@ -97,7 +97,7 @@ Soft-budget notifications are:
 
 - opt-in
 - disabled by default
-- delivered through configured email and/or Slack channels
+- delivered through configured email, Slack, and [alert destinations](alerting.md)
 - deduplicated within the configured TTL window
 
 To enable them:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Literal, Sequence
 
@@ -88,9 +89,16 @@ class NotificationDispatcher:
             channels=self.channels,
         )
 
+        # Channels send at the same time, so one slow destination cannot use
+        # the time of the others. Each channel bounds its own time.
+        results = await asyncio.gather(
+            *(
+                self._send_one(channel=channel, message=message, recipients=recipients)
+                for channel in targets
+            )
+        )
         any_delivered = False
-        for channel in targets:
-            result = await self._send_one(channel=channel, message=message, recipients=recipients)
+        for channel, result in zip(targets, results, strict=True):
             if result.outcome == "queued":
                 any_delivered = True
             try:

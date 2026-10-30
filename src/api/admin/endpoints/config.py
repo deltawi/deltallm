@@ -642,6 +642,13 @@ def app_config_proxy_names(request: Request) -> set[str]:
     return set(getattr(general, "upstream_proxies", None) or {})
 
 
+def app_config_alert_destinations(request: Request) -> list[Any]:
+    app_config = getattr(request.app.state, "app_config", None)
+    general = getattr(app_config, "general_settings", None)
+    destinations = getattr(general, "alert_destinations", None) or []
+    return [to_json_value(item.model_dump(mode="json")) for item in destinations]
+
+
 @router.put(
     "/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]
 )
@@ -700,6 +707,19 @@ async def update_settings(
                 detail={
                     "code": "restart_required",
                     "message": "general_settings.upstream_proxies requires startup configuration",
+                },
+            )
+    if "alert_destinations" in general_updates:
+        # Destination URLs and signing secrets are secrets read only at startup;
+        # the page may send back the masked list it was given.
+        general_updates = dict(general_updates)
+        submitted = general_updates.pop("alert_destinations")
+        if submitted is not None and submitted != app_config_alert_destinations(request):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "restart_required",
+                    "message": "general_settings.alert_destinations requires startup configuration",
                 },
             )
     router_updates = (

@@ -93,6 +93,7 @@ const ACTION_LABELS: Record<string, string> = {
   ADMIN_KEY_SELF_ROTATE: 'Own key rotated',
   ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED: 'Key revoked after member removal',
   ADMIN_EMAIL_TEST: 'Test email sent',
+  ADMIN_ALERT_TEST: 'Test alert sent',
   ADMIN_MCP_APPROVAL_DECIDE: 'MCP tool approval decided',
   ADMIN_MCP_SERVER_HEALTH_CHECK: 'MCP server health checked',
   ADMIN_MCP_SERVER_OAUTH_DISCOVERY: 'MCP server OAuth discovery run',

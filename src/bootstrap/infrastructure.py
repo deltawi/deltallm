@@ -76,6 +76,7 @@ from src.outbound.network_policy import OutboundNetworkPolicy
 from src.outbound.user_egress import UserEgressGuard
 from src.providers.discovery_runtime import ProviderDiscoveryRuntime
 from src.mcp.oauth.http import MCPOAuthHTTP
+from src.notifications.destination_http import AlertDestinationHTTP
 
 
 logger = logging.getLogger(__name__)
@@ -374,6 +375,16 @@ async def _init_infrastructure_runtime(
             allow_http=cfg.general_settings.mcp_oauth_allow_http,
             allowed_ports=cfg.general_settings.mcp_oauth_allowed_ports,
             allowed_private_cidrs=cfg.general_settings.mcp_oauth_allowed_private_cidrs,
+            resolution_timeout_seconds=2.0,
+        ),
+    )
+    # Alert destinations are operator-configured URLs, so they get the same checks.
+    app.state.alert_destination_http = AlertDestinationHTTP(
+        transport=control_transport,
+        policy=OutboundNetworkPolicy(
+            allow_http=cfg.general_settings.alert_destinations_allow_http,
+            allowed_ports=cfg.general_settings.alert_destinations_allowed_ports,
+            allowed_private_cidrs=cfg.general_settings.alert_destinations_allowed_private_cidrs,
             resolution_timeout_seconds=2.0,
         ),
     )

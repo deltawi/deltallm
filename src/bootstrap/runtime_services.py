@@ -51,6 +51,7 @@ from src.mcp import (
 )
 from src.bootstrap.mcp_oauth import build_mcp_oauth_service
 from src.notifications.channels import EmailChannel, SlackChannel
+from src.notifications.channels.destinations import AlertDestinationChannel
 from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.types import NotificationChannel
 from src.notifications.webhook import close_shared_client
@@ -358,6 +359,15 @@ async def _init_runtime_services(
                 allowed_alert_types=set(getattr(general_settings, "slack_alert_kinds", []) or []),
             )
         )
+
+    destination_http = getattr(app.state, "alert_destination_http", None)
+    destination_channels: dict[str, AlertDestinationChannel] = {}
+    if destination_http is not None:
+        for destination in getattr(general_settings, "alert_destinations", None) or []:
+            channel = AlertDestinationChannel(settings=destination, http=destination_http)
+            destination_channels[channel.name] = channel
+            channels.append(channel)
+    app.state.alert_destination_channels = destination_channels
 
     notification_dispatcher = NotificationDispatcher(
         channels=channels,

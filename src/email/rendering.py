@@ -107,4 +107,20 @@ def render_email_template(template_key: str, payload: dict[str, Any] | None = No
         )
         return RenderedEmailTemplate(template_key=normalized, subject=subject, text_body=text_body, html_body=html_body)
 
+    if normalized == "alert_test":
+        instance_name = str(context.get("instance_name") or "DeltaLLM")
+        destination = str(context.get("destination") or "unknown")
+        sent_at = str(context.get("sent_at") or datetime.now(tz=UTC).isoformat())
+        subject = f"{instance_name} alert delivery test"
+        text_body = (
+            f"This is a test alert from {instance_name}.\n\n"
+            f"Destination: {destination}\n"
+            f"Sent at: {sent_at}\n"
+        )
+        html_body = (
+            f"<p>This is a test alert from <strong>{escape(instance_name)}</strong>.</p>"
+            f"<ul><li>Destination: {escape(destination)}</li><li>Sent at: {escape(sent_at)}</li></ul>"
+        )
+        return RenderedEmailTemplate(template_key=normalized, subject=subject, text_body=text_body, html_body=html_body)
+
     raise ValueError(f"Unknown email template '{template_key}'")
