@@ -488,6 +488,12 @@ Use this workflow:
 4. Publish only after the review and the dry run look correct.
 5. After the rollout, check `/health/deployments` and `/health/fallback-events`.
 
+When accounting v2 is on, each request holds enough budget for the most expensive
+model in the group (and its fallback groups) until it finishes, so failover to any
+member is covered. A key close to its budget limit can be refused a little earlier
+than its cheapest member alone would need. Models without a price cost nothing and
+can share a group with priced models.
+
 The simulation view is especially useful for:
 
 - checking weighted splits

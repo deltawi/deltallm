@@ -45,6 +45,7 @@ from src.billing.spend.spend_ingestion import SpendIngestionService
 from src.billing.pricing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
 from src.providers.resolution import resolve_provider
 from src.models.responses import UserAPIKeyAuth
+from src.router.failover_candidates import failover_candidates
 from src.router.router import Deployment
 from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.telemetry.selector_decision import ProtectedSelectorDecision
@@ -224,6 +225,16 @@ async def _accounted_provider_call(
         )
         _store_pricing_snapshot(request, model, deployment, pricing)
         return await execute()
+    allowance = _failover_allowance(
+        request,
+        auth=auth,
+        model=model,
+        call_type=call_type,
+        deployment=deployment,
+        bounds=bounds,
+        max_attempts=max_attempts,
+        allowance=allowance,
+    )
     reservation = _provider_reservation(
         request,
         auth=auth,
@@ -260,6 +271,41 @@ def settle_mcp_hop(request: Request) -> None:
     else:
         settled = min(handle.settled_attempts + 1, len(handle.intent.attempts))
     request.state.spend_operation_handle = handle.model_copy(update={"settled_attempts": settled})
+
+
+def _failover_allowance(
+    request: Request,
+    *,
+    auth: UserAPIKeyAuth,
+    model: str,
+    call_type: str,
+    deployment: Deployment,
+    bounds: ProviderRequestBounds,
+    max_attempts: int,
+    allowance: Decimal,
+) -> Decimal:
+    """Size the first reservation for the priciest deployment failover may reach.
+
+    Later attempts reuse this reservation and cannot grow it. A member whose
+    ceiling cannot be computed is left out; reaching it fails as before.
+    """
+    for candidate in failover_candidates():
+        if candidate.deployment_id == deployment.deployment_id:
+            continue
+        try:
+            candidate_allowance = conservative_provider_allowance(
+                pricing=freeze_operation_pricing(
+                    operation_pricing(request, auth=auth, model=model, deployment=candidate)
+                ),
+                model_info=candidate.model_info,
+                call_type=call_type,
+                bounds=bounds,
+                max_attempts=max_attempts,
+            )
+        except (SpendPersistenceUnavailable, TypeError, ValueError):
+            continue
+        allowance = max(allowance, candidate_allowance)
+    return allowance
 
 
 def _provider_call_slots(request: Request) -> int:

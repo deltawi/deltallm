@@ -21,6 +21,7 @@ from src.cache.middleware import CacheMiddleware
 from src.models.errors import BudgetExceededError
 from src.models.responses import UserAPIKeyAuth
 from src.models.requests import ChatCompletionRequest
+from src.router.failover_candidates import failover_scope, set_failover_candidates
 from src.router.router import Deployment
 from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 from src.telemetry.spend_operation import (
@@ -209,6 +210,91 @@ async def test_failover_cannot_exceed_the_original_durable_allowance():
             )
         second.assert_not_awaited()
         assert len(repository.reservations) == 1
+    finally:
+        await accounting.close()
+
+
+def _unpriced_deployment():
+    return Deployment(
+        deployment_id="deployment-unpriced",
+        model_name="gpt-test",
+        deltallm_params={"model": "private-unpriced", "custom_llm_provider": "openai"},
+        model_info={"max_input_tokens": 100, "max_output_tokens": 20},
+    )
+
+
+async def test_failover_from_an_unpriced_member_fits_the_first_reservation():
+    repository = _AccountingRepository()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    ingestion = SpendIngestionService(
+        db_client=None,
+        writer=MagicMock(),
+        config=SpendIngestionConfig(),
+        accounting=accounting,
+    )
+    request = _request(accounting, ingestion)
+    unpriced = _unpriced_deployment()
+    priced = _deployment()
+    uncomputable = Deployment(
+        deployment_id="deployment-invalid-price",
+        model_name="gpt-test",
+        deltallm_params={"model": "private-invalid", "custom_llm_provider": "openai"},
+        model_info={"max_input_tokens": 100, "cost_per_request": "-1"},
+    )
+    try:
+        with failover_scope():
+            set_failover_candidates([unpriced, priced, uncomputable])
+            with pytest.raises(RuntimeError, match="upstream failed"):
+                await durable_provider_call(
+                    request,
+                    model="gpt-test",
+                    call_type="completion",
+                    deployment=unpriced,
+                    bounds=ProviderRequestBounds(max_output_tokens=10),
+                    execute=AsyncMock(side_effect=RuntimeError("upstream failed")),
+                )
+            result = await durable_provider_call(
+                request,
+                model="gpt-test",
+                call_type="completion",
+                deployment=priced,
+                bounds=ProviderRequestBounds(max_output_tokens=10),
+                execute=AsyncMock(return_value="provider-result"),
+            )
+        assert result == "provider-result"
+        assert len(repository.reservations) == 1
+        # Sized for the priced member; a member without a valid ceiling is left out.
+        assert repository.reservations[0].allowance == Decimal("3.900000000000000000")
+        assert len(operation_handle(request).attempts) == 2
+    finally:
+        await accounting.close()
+
+
+async def test_single_member_reservation_is_unchanged_by_the_failover_scope():
+    repository = _AccountingRepository()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    ingestion = SpendIngestionService(
+        db_client=None,
+        writer=MagicMock(),
+        config=SpendIngestionConfig(),
+        accounting=accounting,
+    )
+    request = _request(accounting, ingestion)
+    unpriced = _unpriced_deployment()
+    try:
+        with failover_scope():
+            set_failover_candidates([unpriced])
+            await durable_provider_call(
+                request,
+                model="gpt-test",
+                call_type="completion",
+                deployment=unpriced,
+                bounds=ProviderRequestBounds(max_output_tokens=10),
+                execute=AsyncMock(return_value="provider-result"),
+            )
+        assert repository.reservations[0].allowance == Decimal(0)
     finally:
         await accounting.close()
 
