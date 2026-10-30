@@ -37,6 +37,7 @@ from src.router.candidates import (
     RouteCandidatePlanner,
 )
 from src.router.cooldown import CooldownManager
+from src.router.failover_candidates import failover_scope, set_failover_candidates
 from src.router.context_policy import context_capacity_error
 from src.router.execution import (
     ManagedFailoverResult,
@@ -424,21 +425,22 @@ class FailoverManager:
     ) -> Any:
         attempt_history: list[str] = []
         try:
-            return await self._execute_with_failover(
-                primary_deployment=primary_deployment,
-                model_group=model_group,
-                execute=execute,
-                return_deployment=return_deployment,
-                on_attempt=on_attempt,
-                timeout_seconds=timeout_seconds,
-                timeout_for_deployment=timeout_for_deployment,
-                retry_max_attempts=retry_max_attempts,
-                retryable_error_classes=retryable_error_classes,
-                routing_context=routing_context,
-                request_deadline=request_deadline,
-                _manage_attempt_lifecycle=_manage_attempt_lifecycle,
-                _attempt_history=attempt_history,
-            )
+            with failover_scope():
+                return await self._execute_with_failover(
+                    primary_deployment=primary_deployment,
+                    model_group=model_group,
+                    execute=execute,
+                    return_deployment=return_deployment,
+                    on_attempt=on_attempt,
+                    timeout_seconds=timeout_seconds,
+                    timeout_for_deployment=timeout_for_deployment,
+                    retry_max_attempts=retry_max_attempts,
+                    retryable_error_classes=retryable_error_classes,
+                    routing_context=routing_context,
+                    request_deadline=request_deadline,
+                    _manage_attempt_lifecycle=_manage_attempt_lifecycle,
+                    _attempt_history=attempt_history,
+                )
         except Exception as exc:
             attach_failover_attempt_context(
                 exc,
@@ -474,6 +476,9 @@ class FailoverManager:
                 routing_context,
             )
         )
+        # A provider call reserves spend once, on the first attempt. It must cover
+        # every planned member so a failover to a pricier one still fits.
+        set_failover_candidates(chain)
         effective_retries = self._effective_retry_count(retry_max_attempts)
         effective_retry_classes = self._normalize_retryable_error_classes(retryable_error_classes)
         last_error: Exception | None = None

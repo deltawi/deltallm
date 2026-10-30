@@ -63,6 +63,7 @@ from src.router.context_policy import (
     RequestTokenDemand,
     set_request_token_demand,
 )
+from src.router.failover_candidates import failover_candidates
 from src.router.router import Deployment
 from tests.conftest import FakeRedis
 
@@ -183,6 +184,35 @@ async def test_failover_does_not_attempt_context_ineligible_primary():
 
     assert exc_info.value.code == "context_length_exceeded"
     assert attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_failover_exposes_every_planned_member_to_the_first_attempt():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    secondary = _deployment("dep-b")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary, secondary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    seen: list[set[str]] = []
+
+    async def run(deployment: Deployment) -> str:
+        seen.append({candidate.deployment_id for candidate in failover_candidates()})
+        if deployment.deployment_id == "dep-a":
+            raise TimeoutError(message="primary timed out")
+        return "ok"
+
+    assert (
+        await manager.execute_with_failover(
+            primary, "group-a", run, routing_context={ROUTING_MODE_CONTEXT_KEY: "chat"}
+        )
+        == "ok"
+    )
+    assert seen == [{"dep-a", "dep-b"}, {"dep-a", "dep-b"}]
+    assert failover_candidates() == ()
 
 
 @pytest.mark.asyncio

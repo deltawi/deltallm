@@ -41,6 +41,15 @@ cache hit reserves its known charge and records a terminal result before success
 It reserves one accounting slot, but no extra provider-attempt allowance. It does
 not call a provider.
 
+A provider call reserves its allowance once, on the first attempt. Retries and
+failovers reuse that reservation and cannot grow it. The first reservation is
+therefore sized for the priciest deployment in the planned failover chain: the
+route group's members and its configured fallback groups. A group that mixes
+priced and unpriced deployments can fail over from an unpriced member to a priced
+one. Fallback groups resolved later (model-router groups) and context or content
+fallbacks are not in the plan; a failover there that needs a larger allowance still
+fails closed. The unused part of the allowance is returned at finalization.
+
 Realtime, batch completion, and selector billing now use typed adapters to the
 same authority. Real-database mixed-feature checks cover exact charges, all five
 budget scopes, replay, uncertain results, and unused funding. The temporary
