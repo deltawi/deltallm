@@ -181,10 +181,34 @@ async def test_native_checkpoint_lock_wait_is_bounded(batch_db, claimed_selector
         started = perf_counter()
         with pytest.raises(BatchAccountingUnavailable):
             await store.write_many(
-                [BatchAccountingWrite(claim, None, pending)], expires_at=deadline()
+                [BatchAccountingWrite(claim, None, pending)],
+                expires_at=asyncio.get_running_loop().time() + 0.4,
             )
         assert perf_counter() - started < 1
     await store.write_many([BatchAccountingWrite(claim, None, pending)], expires_at=deadline())
+
+
+async def test_native_checkpoint_retries_after_a_short_lock_wait(batch_db, claimed_selector):
+    _, claim, _ = claimed_selector
+    store, pending = BatchAccountingRepository(batch_db), checkpoint_for(claim)
+    async with batch_db.tx() as tx:
+        await tx.query_raw(
+            "SELECT item_id FROM deltallm_batch_item WHERE item_id=$1 FOR UPDATE", claim.item_id
+        )
+        write = asyncio.create_task(
+            store.write_many(
+                [BatchAccountingWrite(claim, None, pending)],
+                expires_at=asyncio.get_running_loop().time() + 2,
+            )
+        )
+        # Hold the row past the first attempt (half the budget), then let go.
+        await asyncio.sleep(1.2)
+    await write
+    (row,) = await batch_db.query_raw(
+        "SELECT accounting_checkpoint FROM deltallm_batch_item WHERE item_id=$1",
+        claim.item_id,
+    )
+    assert row["accounting_checkpoint"] == pending.model_dump(mode="json")
 
 
 async def test_lost_initial_write_reply_can_release_only_the_same_unsent_proof(

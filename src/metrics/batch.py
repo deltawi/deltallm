@@ -186,6 +186,20 @@ deltallm_batch_item_terminal_failures_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_accounting_checkpoint_write_metric = Histogram(
+    "deltallm_batch_accounting_checkpoint_write_seconds",
+    "Batch accounting checkpoint write latency, including the per-pod queue, by outcome",
+    ["outcome"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_accounting_checkpoint_write_retries_metric = Counter(
+    "deltallm_batch_accounting_checkpoint_write_retries_total",
+    "Batch accounting checkpoint writes retried after a timeout or database error",
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_item_retry_delay_metric = Histogram(
     "deltallm_batch_item_retry_delay_seconds",
     "Batch item retry delay by retry category",
@@ -886,6 +900,16 @@ def increment_batch_item_terminal_failure(*, category: str, reason: str) -> None
         category=sanitize_label(category),
         reason=sanitize_label(reason),
     ).inc()
+
+
+def observe_batch_accounting_checkpoint_write(*, outcome: str, latency_seconds: float) -> None:
+    deltallm_batch_accounting_checkpoint_write_metric.labels(
+        outcome=sanitize_label(outcome)
+    ).observe(max(0.0, float(latency_seconds)))
+
+
+def increment_batch_accounting_checkpoint_write_retry() -> None:
+    deltallm_batch_accounting_checkpoint_write_retries_metric.inc()
 
 
 def observe_batch_item_retry_delay(*, category: str, delay_seconds: float) -> None:

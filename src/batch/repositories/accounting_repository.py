@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from datetime import timedelta
 import json
 import math
+import random
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 from src.batch.accounting_checkpoint import (
@@ -16,6 +18,10 @@ from src.batch.accounting_checkpoint import (
     BatchAccountingWrite,
 )
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
+from src.metrics import (
+    increment_batch_accounting_checkpoint_write_retry,
+    observe_batch_accounting_checkpoint_write,
+)
 from src.batch.repositories.completion_outbox_fences import SENT_SQL, execute_completion_transition
 
 if TYPE_CHECKING:
@@ -83,9 +89,28 @@ LEFT JOIN deltallm_batch_completion_outbox AS o ON o.item_id=u.item_id
 """
 
 
+# A second attempt runs only when at least this much of the budget is left.
+CHECKPOINT_RETRY_MIN_SECONDS = 0.25
+CHECKPOINT_RETRY_JITTER_SECONDS = (0.02, 0.1)
+DEFAULT_MAX_CONCURRENT_WRITES = 8
+
+
+class _CheckpointRejected(Exception):
+    """The database answered, but did not save every proof: never retried."""
+
+
 class BatchAccountingRepository:
-    def __init__(self, db: Prisma) -> None:
+    def __init__(
+        self,
+        db: Prisma,
+        *,
+        max_concurrent_writes: int = DEFAULT_MAX_CONCURRENT_WRITES,
+    ) -> None:
+        if type(max_concurrent_writes) is not int or max_concurrent_writes < 1:
+            raise ValueError("Invalid batch checkpoint write concurrency")
         self._db = db
+        # Extra writers wait here instead of timing out in the shared pool.
+        self._writes = asyncio.Semaphore(max_concurrent_writes)
 
     async def write_many(
         self,
@@ -124,27 +149,59 @@ class BatchAccountingRepository:
         await self._write(document, len(writes), expires_at=expires_at)
 
     async def _write(self, document: str, count: int, *, expires_at: float) -> None:
-        remaining = self._budget(expires_at)
+        started = perf_counter()
         try:
-            async with asyncio.timeout(remaining):
-                async with self._db.tx(
-                    max_wait=timedelta(seconds=remaining),
-                    timeout=timedelta(seconds=remaining),
-                ) as tx:
-                    await tx.query_raw(
-                        "SELECT set_config('statement_timeout',$1,true), "
-                        "set_config('lock_timeout',$1,true)",
-                        f"{max(1, int(remaining * 1000))}ms",
-                    )
-                    rows = await tx.query_raw(
-                        WRITE_CHECKPOINTS_SQL,
-                        document,
-                        COMPLETION_OUTBOX_MAX_ATTEMPTS,
-                    )
-                    if len(rows) != count or any(row["delivery_saved"] is not True for row in rows):
-                        raise BatchAccountingUnavailable()
-        except Exception:
+            async with asyncio.timeout(self._budget(expires_at)):
+                async with self._writes:
+                    await self._write_with_retry(document, count, expires_at=expires_at)
+        except _CheckpointRejected:
+            observe_batch_accounting_checkpoint_write(
+                outcome="rejected", latency_seconds=perf_counter() - started
+            )
             raise BatchAccountingUnavailable() from None
+        except Exception:
+            observe_batch_accounting_checkpoint_write(
+                outcome="unavailable", latency_seconds=perf_counter() - started
+            )
+            raise BatchAccountingUnavailable() from None
+        observe_batch_accounting_checkpoint_write(
+            outcome="saved", latency_seconds=perf_counter() - started
+        )
+
+    async def _write_with_retry(self, document: str, count: int, *, expires_at: float) -> None:
+        remaining = self._budget(expires_at)
+        if remaining < 2 * CHECKPOINT_RETRY_MIN_SECONDS:
+            await self._write_once(document, count, budget=remaining)
+            return
+        try:
+            await self._write_once(document, count, budget=remaining / 2)
+            return
+        except _CheckpointRejected:
+            raise
+        except Exception:
+            # Same proofs again: a committed first try is accepted or rejected, never doubled.
+            increment_batch_accounting_checkpoint_write_retry()
+        await asyncio.sleep(random.uniform(*CHECKPOINT_RETRY_JITTER_SECONDS))
+        await self._write_once(document, count, budget=self._budget(expires_at))
+
+    async def _write_once(self, document: str, count: int, *, budget: float) -> None:
+        async with asyncio.timeout(budget):
+            async with self._db.tx(
+                max_wait=timedelta(seconds=budget),
+                timeout=timedelta(seconds=budget),
+            ) as tx:
+                await tx.query_raw(
+                    "SELECT set_config('statement_timeout',$1,true), "
+                    "set_config('lock_timeout',$1,true)",
+                    f"{max(1, int(budget * 1000))}ms",
+                )
+                rows = await tx.query_raw(
+                    WRITE_CHECKPOINTS_SQL,
+                    document,
+                    COMPLETION_OUTBOX_MAX_ATTEMPTS,
+                )
+                if len(rows) != count or any(row["delivery_saved"] is not True for row in rows):
+                    raise _CheckpointRejected()
 
     async def mark_sent(
         self,
@@ -164,7 +221,7 @@ class BatchAccountingRepository:
 
     @staticmethod
     def _budget(expires_at: float) -> float:
-        remaining = min(0.25, expires_at - asyncio.get_running_loop().time())
+        remaining = expires_at - asyncio.get_running_loop().time()
         if not math.isfinite(remaining) or remaining <= 0:
             raise BatchAccountingUnavailable()
         return remaining
