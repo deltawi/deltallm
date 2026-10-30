@@ -147,6 +147,13 @@ deltallm_router_health_transitions_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_router_failover_events_metric = Counter(
+    "deltallm_router_failover_events_total",
+    "Failover attempts that failed and fallback deployments that served a request",
+    ["model_group", "outcome", "reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_router_health_update_failures_metric = Counter(
     "deltallm_router_health_update_failures_total",
     "Router health outcome updates that could not be persisted",
@@ -365,6 +372,17 @@ def increment_config_reload(*, source: str, result: str) -> None:
 def increment_router_health_transition(*, transition: str) -> None:
     deltallm_router_health_transitions_metric.labels(
         transition=sanitize_label(transition),
+    ).inc()
+
+
+def increment_router_failover_event(*, model_group: str, outcome: str, reason: str) -> None:
+    if outcome not in {"attempt_failed", "fallback_served"}:
+        raise ValueError("unsupported router failover outcome")
+    # model_group is a configured name; reason is a fixed failure classification.
+    deltallm_router_failover_events_metric.labels(
+        model_group=sanitize_label(model_group),
+        outcome=outcome,
+        reason=sanitize_label(reason),
     ).inc()
 
 

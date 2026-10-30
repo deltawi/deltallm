@@ -1,0 +1,108 @@
+# Example PrometheusRule for the DeltaLLM gateway.
+# Apply it in the namespace that your Prometheus Operator watches, then tune the
+# thresholds from normal traffic in your environment. See docs/guides/monitoring.md.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: deltallm-alerts
+  labels:
+    app.kubernetes.io/name: deltallm
+spec:
+  groups:
+    - name: deltallm.availability
+      rules:
+        - alert: DeltaLLMTargetDown
+          expr: up{job=~".*deltallm.*"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: A DeltaLLM scrape target is down
+            description: Prometheus cannot scrape {{ $labels.instance }} for 5 minutes.
+        - alert: DeltaLLMHighErrorRate
+          # deltallm_requests_total counts successful and failed requests.
+          expr: |
+            sum by (model) (rate(deltallm_request_failures_total[5m]))
+              /
+            clamp_min(sum by (model) (rate(deltallm_requests_total[5m])), 1e-9) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 5% of requests fail for model {{ $labels.model }}
+        - alert: DeltaLLMSlowResponses
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le, model) (rate(deltallm_request_total_latency_seconds_bucket[5m]))
+            ) > 30
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: p95 latency is above 30 s for model {{ $labels.model }}
+        - alert: DeltaLLMSlowFirstToken
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le, model) (rate(deltallm_llm_api_time_to_first_token_seconds_bucket[5m]))
+            ) > 10
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: p95 time to first token is above 10 s for model {{ $labels.model }}
+    - name: deltallm.providers
+      rules:
+        - alert: DeltaLLMDeploymentCooldowns
+          # Transitions are counted when they happen. The deltallm_deployment_cooldown
+          # gauge changes only when /health/deployments or the admin UI reads health.
+          expr: sum(increase(deltallm_router_health_transitions_total{transition="cooldown"}[10m])) > 3
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 3 deployments entered cooldown in 10 minutes
+        - alert: DeltaLLMFailoverSpike
+          expr: |
+            sum by (model_group) (
+              rate(deltallm_router_failover_events_total{outcome="attempt_failed"}[5m])
+            ) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Provider attempts fail often for {{ $labels.model_group }}
+    - name: deltallm.background
+      rules:
+        - alert: DeltaLLMAuditBacklogOld
+          expr: max(deltallm_audit_oldest_event_age_seconds) > 300
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: The oldest audit record waits for more than 5 minutes
+        - alert: DeltaLLMSpendBacklogOld
+          expr: max(deltallm_spend_ingestion_oldest_event_age_seconds) > 300
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: The oldest spend record waits for more than 5 minutes
+        - alert: DeltaLLMEmailAuditBlocked
+          expr: max(deltallm_email_delivery_audit_backlog{status="blocked"}) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: Required email delivery audits are blocked and need replay
+        - alert: DeltaLLMTelemetryDropped
+          expr: |
+            sum(rate(deltallm_otel_spans_total{outcome=~"dropped|export_failed"}[10m])) > 0
+            or
+            sum(rate(deltallm_bounded_work_rejections_total{allocation="callback"}[10m])) > 0
+          for: 15m
+          labels:
+            severity: info
+          annotations:
+            summary: Optional callbacks or trace spans are dropped
+            description: Requests are not affected. Check the collector, or raise the callback limits.

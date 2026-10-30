@@ -5,6 +5,11 @@ from __future__ import annotations
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.request_identity import resolve_request_id
+from src.telemetry.trace_context import (
+    bind_trace_context,
+    reset_trace_context,
+    trace_context_from_headers,
+)
 
 
 class RequestIdentityMiddleware:
@@ -33,4 +38,10 @@ class RequestIdentityMiddleware:
                 ] + [(b"x-request-id", request_id)]
             await send(message)
 
-        await self.app(scope, receive, send_with_identity)
+        # The caller's trace context only parents optional exported spans.
+        # It is never forwarded upstream or used for identity.
+        token = bind_trace_context(trace_context_from_headers(headers))
+        try:
+            await self.app(scope, receive, send_with_identity)
+        finally:
+            reset_trace_context(token)

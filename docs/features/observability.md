@@ -74,11 +74,13 @@ Core metrics include:
 | `deltallm_cache_miss_total` | Counter | Cache misses |
 | `deltallm_request_total_latency_seconds` | Histogram | End-to-end latency |
 | `deltallm_llm_api_latency_seconds` | Histogram | Provider-only latency |
+| `deltallm_llm_api_time_to_first_token_seconds` | Histogram | Time from the provider call to the first streamed chunk, by `model` and `api_provider`. Chat completion streams only |
 | `deltallm_deployment_state` | Gauge | Deployment health state |
 | `deltallm_deployment_active_requests` | Gauge | In-flight requests per deployment |
 | `deltallm_deployment_cooldown` | Gauge | Whether a deployment is cooled down |
 | `deltallm_router_health_transitions_total` | Counter | Actual cooldown, manual-cooldown, and recovery transitions |
 | `deltallm_router_health_update_failures_total` | Counter | Post-outcome router health updates that could not be persisted |
+| `deltallm_router_failover_events_total` | Counter | Failover events by `model_group`, `outcome` (`attempt_failed` or `fallback_served`), and fixed `reason` |
 | `deltallm_provider_error_body_discards_total` | Counter | Encoded or oversized provider error bodies excluded from classification |
 | `deltallm_provider_stream_validation_failures_total` | Counter | Rejected OpenAI-compatible streams by a fixed validation reason |
 | `deltallm_prompt_resolutions_total` | Counter | Prompt registry resolution results |
@@ -122,6 +124,10 @@ Core metrics include:
 | `deltallm_tier_capacity_pool_saturation` | Gauge | Current RPM or TPM pool saturation ratio |
 | `deltallm_tier_capacity_pool_active_organizations` | Gauge | Active organizations in advanced fair-share pools |
 | `deltallm_tier_capacity_fair_share_latency_seconds` | Histogram | Advanced fair-share admission latency |
+| `deltallm_callback_outcomes_total` | Counter | Optional callback delivery outcomes by `integration` and `outcome` |
+| `deltallm_bounded_work_rejections_total` | Counter | Optional work that was not started, by `allocation` and `reason` |
+| `deltallm_otel_spans_total` | Counter | OpenTelemetry spans by `outcome`: `exported`, `dropped`, or `export_failed` |
+| `deltallm_otel_span_queue_depth` | Gauge | OpenTelemetry spans that wait for export in this process |
 | `deltallm_key_last_used_events_total` | Counter | API-key last-used tracking by `event`: `flushed`, `flush_failed`, or `dropped` key hashes |
 
 Best-effort audit dependency failures increment both the write-failure counter and
@@ -174,6 +180,65 @@ deltallm_settings:
       region: us-east-1
       prefix: deltallm-logs/
 ```
+
+## OpenTelemetry Tracing
+
+The `otel` callback sends one span for each request to an OTLP/HTTP collector.
+Install the SDK in the image first, because it is not a default dependency:
+
+```bash
+pip install opentelemetry-sdk opentelemetry-exporter-otlp-proto-http
+```
+
+```yaml
+deltallm_settings:
+  callbacks:
+    - otel
+  callback_settings:
+    otel:
+      endpoint: https://otel-collector.internal:4318/v1/traces
+      service_name: deltallm
+      # Optional. These are the default values.
+      max_queue_size: 2048
+      max_export_batch_size: 512
+      schedule_delay_seconds: 1.0
+```
+
+If you do not set `endpoint`, DeltaLLM uses `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+### Trace context
+
+Send a W3C `traceparent` header (and an optional `tracestate` header) with the request.
+DeltaLLM makes the span a child of that trace, so the gateway span shows in your
+application trace. DeltaLLM ignores a header that is not valid or that occurs more than one time.
+For compatibility, DeltaLLM also accepts `traceparent` in the request `metadata`. The header has priority.
+
+DeltaLLM does not send the caller's trace context to the provider.
+If the caller's `traceparent` has the sampled flag off, DeltaLLM does not record the span.
+
+### Span attributes
+
+Each span has the OpenTelemetry GenAI attributes and the earlier `llm.*` attributes:
+
+| Attribute | Value |
+| --- | --- |
+| `gen_ai.operation.name` | `chat`, `embeddings`, `execute_tool`, or the call type |
+| `gen_ai.provider.name` | Provider of the deployment that served the request |
+| `gen_ai.request.model` | Model name that the client sent |
+| `gen_ai.response.model` | Deployment model |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | Token usage |
+| `gen_ai.request.temperature`, `gen_ai.request.max_tokens`, `gen_ai.request.top_p` | Request parameters, when the client sets them |
+| `deltallm.request_id` | The `x-request-id` value |
+| `error.type` | Error class name, on failed requests only |
+
+Failed spans do not include the provider error message, because it can contain prompt or account data.
+
+### Export limits
+
+Callback delivery only records the span. One export thread in each process sends spans in batches.
+When the queue is full, DeltaLLM drops the new span and increments
+`deltallm_otel_spans_total{outcome="dropped"}`. A collector failure increments
+`deltallm_otel_spans_total{outcome="export_failed"}`. Tracing never changes the result of a request.
 
 ## Message Logging Privacy
 

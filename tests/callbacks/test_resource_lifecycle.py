@@ -92,7 +92,7 @@ async def test_shutdown_deadline_retains_stuck_close_until_real_completion():
 
 
 @pytest.mark.parametrize("failed", [False, True])
-async def test_otel_exports_off_loop_without_sdk_queue_and_ends_span_once(monkeypatch, failed):
+async def test_otel_records_span_off_loop_and_ends_span_once(monkeypatch, failed):
     loop_thread = get_ident()
     span = Mock()
     export_threads = []
@@ -108,7 +108,7 @@ async def test_otel_exports_off_loop_without_sdk_queue_and_ends_span_once(monkey
         "OPENTELEMETRY_AVAILABLE": True,
         "TracerProvider": factory,
         "OTLPSpanExporter": exporter,
-        "SimpleSpanProcessor": processor,
+        "BoundedBatchSpanProcessor": processor,
         "Resource": Mock(),
         "Status": Mock(),
         "StatusCode": SimpleNamespace(OK=1, ERROR=2),
@@ -127,7 +127,8 @@ async def test_otel_exports_off_loop_without_sdk_queue_and_ends_span_once(monkey
         factory.assert_called_once()
         assert factory.call_args.kwargs["shutdown_on_exit"] is False
         assert exporter.call_args.kwargs["timeout"] == 5
-        processor.assert_called_once_with(exporter.return_value)
+        assert processor.call_args.args == (exporter.return_value,)
+        assert processor.call_args.kwargs["max_queue_size"] == 2048
         assert tracer.start_span.call_args.kwargs["start_time"] == int(
             event.start_time.timestamp() * 1e9
         )

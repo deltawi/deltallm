@@ -3455,3 +3455,37 @@ async def test_provider_5xx_retry_stays_fast_and_keeps_batch_hint(
     assert attempts == ["dep-a", "dep-a"]
     assert delays == [1]
     assert classify_batch_retry(caught.value).retry_after_seconds == 3600
+
+
+@pytest.mark.asyncio
+async def test_failover_events_are_counted_with_bounded_labels():
+    from src.metrics.prometheus import PROMETHEUS_REGISTRY
+
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-metric-primary")
+    fallback = _deployment("dep-metric-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=3, timeout=1.0, fallbacks={"metric-a": ["metric-b"]}),
+        candidate_planner=_planner(state, {"metric-a": [primary], "metric-b": [fallback]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+
+    async def run(deployment: Deployment) -> str:
+        if deployment is primary:
+            raise map_standard_provider_status_error(400)
+        return "ok"
+
+    assert await manager.execute_with_failover(primary, "metric-a", run) == "ok"
+
+    failed, served = manager.get_recent_fallback_events()
+
+    def count(outcome: str, reason: str) -> float | None:
+        return PROMETHEUS_REGISTRY.get_sample_value(
+            "deltallm_router_failover_events_total",
+            {"model_group": "metric-a", "outcome": outcome, "reason": reason},
+        )
+
+    assert count("attempt_failed", failed["reason"]) == 1
+    assert count("fallback_served", served["reason"]) == 1
+    assert served["reason"] == "primary_failed"

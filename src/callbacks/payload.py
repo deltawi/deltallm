@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from src.telemetry.trace_context import current_trace_context, parse_trace_context
+
 
 class TokenUsage(BaseModel):
     prompt_tokens: int = 0
@@ -44,6 +46,8 @@ class StandardLoggingPayload(BaseModel):
     api_provider: str
     api_base: str | None = None
     error_info: dict[str, Any] | None = None
+    # Validated W3C carrier: the request's traceparent header, else metadata.
+    trace_context: dict[str, str] | None = None
 
 
 def _usage_from_response(response_obj: dict[str, Any] | None) -> TokenUsage:
@@ -101,6 +105,9 @@ def build_standard_logging_payload(
         end_time = end_time.replace(tzinfo=UTC)
 
     deltallm_call_id = str(metadata.get("deltallm_call_id") or uuid4())
+    trace_context = current_trace_context() or parse_trace_context(
+        metadata.get("traceparent"), metadata.get("tracestate")
+    )
     messages = None if turn_off_message_logging else request_payload.get("messages")
 
     return StandardLoggingPayload(
@@ -134,4 +141,5 @@ def build_standard_logging_payload(
         api_provider=_api_provider(deployment_model, api_provider),
         api_base=api_base,
         error_info=error_info,
+        trace_context=trace_context.carrier() if trace_context is not None else None,
     )

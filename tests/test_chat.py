@@ -1509,6 +1509,35 @@ async def test_chat_completion_without_mcp_tools_skips_mcp_gateway(client, test_
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_stream_records_time_to_first_token(client, test_app):
+    from src.metrics.prometheus import PROMETHEUS_REGISTRY
+
+    def samples() -> float:
+        return sum(
+            sample.value
+            for metric in PROMETHEUS_REGISTRY.collect()
+            if metric.name == "deltallm_llm_api_time_to_first_token_seconds"
+            for sample in metric.samples
+            if sample.name.endswith("_count") and sample.labels["model"] == "gpt-4o-mini"
+        )
+
+    before = samples()
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "data: [DONE]" in response.text
+    assert samples() == before + 1
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_streaming_success(client, test_app):
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {

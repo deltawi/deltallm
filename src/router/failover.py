@@ -17,7 +17,11 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from src.metrics import increment_router_health_transition, increment_router_health_update_failure
+from src.metrics import (
+    increment_router_failover_event,
+    increment_router_health_transition,
+    increment_router_health_update_failure,
+)
 from src.router.attempt_capacity import attempt_capacity
 from src.models.errors import (
     FailureClassification,
@@ -279,6 +283,11 @@ class FailoverManager:
             success=success,
         )
         self.event_journal.append(event)
+        increment_router_failover_event(
+            model_group=model_group,
+            outcome="fallback_served" if success else "attempt_failed",
+            reason=event.reason,
+        )
 
         if success:
             logger.info(
