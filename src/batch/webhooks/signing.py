@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from src.batch.models import BatchWebhookOutboxRecord
 from src.batch.webhooks.events import canonical_batch_webhook_event_bytes
+from src.outbound.webhook_signing import webhook_signature
 
 
 class BatchWebhookPayloadIntegrityError(ValueError):
@@ -32,17 +33,6 @@ def build_batch_webhook_headers(
     body = verified_body if raw_body is None else raw_body
     if not hmac.compare_digest(body, verified_body):
         raise BatchWebhookPayloadIntegrityError("batch webhook payload integrity check failed")
-    secret = (
-        signing_secret.get_secret_value()
-        if isinstance(signing_secret, SecretStr)
-        else str(signing_secret)
-    )
-    signed_payload = str(int(timestamp)).encode("ascii") + b"." + body
-    signature = hmac.new(
-        secret.encode("utf-8"),
-        signed_payload,
-        hashlib.sha256,
-    ).hexdigest()
     return {
         "Content-Type": "application/json",
         "User-Agent": "DeltaLLM-Webhooks/1.0",
@@ -51,5 +41,7 @@ def build_batch_webhook_headers(
         "X-DeltaLLM-Event-Type": record.event_type.value,
         "X-DeltaLLM-Webhook-Attempt": str(record.attempt_count),
         "X-DeltaLLM-Timestamp": str(int(timestamp)),
-        "X-DeltaLLM-Signature": f"v1={signature}",
+        "X-DeltaLLM-Signature": webhook_signature(
+            signing_secret=signing_secret, timestamp=timestamp, body=body
+        ),
     }

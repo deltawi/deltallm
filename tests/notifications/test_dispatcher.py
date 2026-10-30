@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from src.notifications.dispatcher import NotificationDispatcher
@@ -209,3 +211,35 @@ async def test_preference_resolver_can_filter_channels() -> None:
 
     assert len(email.calls) == 1
     assert slack.calls == []
+
+
+class _GatedChannel(_FakeChannel):
+    """Waits until every gated channel has started, so it passes only with concurrent sends."""
+
+    started: list[str] = []
+
+    def __init__(self, name: str, *, peers: int, all_started) -> None:  # noqa: ANN001
+        super().__init__(name)
+        self.peers = peers
+        self.all_started = all_started
+
+    async def send(
+        self, *, message: NotificationMessage, recipients: NotificationRecipients
+    ) -> ChannelResult:
+        type(self).started.append(self.name)
+        if len(type(self).started) == self.peers:
+            self.all_started.set()
+        await self.all_started.wait()
+        return await super().send(message=message, recipients=recipients)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_sends_to_channels_concurrently() -> None:
+    _GatedChannel.started = []
+    all_started = asyncio.Event()
+    channels = [_GatedChannel(name, peers=2, all_started=all_started) for name in ("a", "b")]
+    dispatcher = NotificationDispatcher(channels=channels)
+
+    async with asyncio.timeout(2):
+        assert await _dispatch(dispatcher) is True
+    assert [len(channel.calls) for channel in channels] == [1, 1]

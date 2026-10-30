@@ -147,6 +147,8 @@ def _handling(name: str, annotation: object) -> str:
         return "Startup trust; excluded from settings API"
     if name == "ui_mount":
         return "Startup only; non-secret UI configuration"
+    if name == "alert_destinations":
+        return "Startup only; URLs and signing secrets are masked"
     if "SecretStr" in annotation_text or name in WRITE_ONLY_GENERAL_SETTINGS:
         return "Secret"
     if name.endswith(secret_suffixes):

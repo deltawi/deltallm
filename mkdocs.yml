@@ -199,6 +199,7 @@ nav:
       - Operations details:
           - Kubernetes and Helm: deployment/kubernetes.md
           - Metrics and callbacks: features/observability.md
+          - Alert destinations: features/alerting.md
           - Measure gateway concurrency: deployment/concurrency-measurement.md
           - Gateway ingress admission: deployment/ingress-admission.md
           - Dependency capacity: deployment/dependency-capacity.md

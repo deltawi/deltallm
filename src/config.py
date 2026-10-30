@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from ipaddress import ip_network
@@ -578,6 +579,58 @@ WRITE_ONLY_GENERAL_SETTINGS: frozenset[str] = frozenset(
 )
 
 
+ALERT_DESTINATION_TYPES = ("slack", "teams", "discord", "webhook")
+_RESERVED_ALERT_DESTINATION_NAMES = frozenset({"email", "slack", "none"})
+_ALERT_DESTINATION_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+class AlertDestinationSettings(BaseModel):
+    """One operator-configured alert receiver. The URL and secret are write-only."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    name: str
+    type: Literal["slack", "teams", "discord", "webhook"]
+    url: SecretStr
+    signing_secret: SecretStr | None = None
+    alert_types: list[str] = Field(min_length=1, max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not _ALERT_DESTINATION_NAME.fullmatch(value):
+            raise ValueError(
+                "alert destination names use 1-32 lowercase letters, digits, '-' or '_'"
+            )
+        if value in _RESERVED_ALERT_DESTINATION_NAMES:
+            raise ValueError(f"alert destination name {value!r} is reserved")
+        return value
+
+    @field_validator("alert_types")
+    @classmethod
+    def validate_alert_types(cls, value: list[str]) -> list[str]:
+        from src.notifications.types import NOTIFICATION_ALERT_TYPES
+
+        unknown = sorted(set(value) - NOTIFICATION_ALERT_TYPES - {"*"})
+        if unknown:
+            allowed = ", ".join(["*", *sorted(NOTIFICATION_ALERT_TYPES)])
+            raise ValueError(
+                f"alert_types contains unknown alert types {unknown}; allowed values are: {allowed}"
+            )
+        return list(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def validate_signing_secret(self) -> AlertDestinationSettings:
+        secret = self.signing_secret.get_secret_value() if self.signing_secret else ""
+        if self.type == "webhook" and len(secret) < 32:
+            raise ValueError("webhook alert destinations require a signing_secret of 32+ characters")
+        if self.type != "webhook" and self.signing_secret is not None:
+            raise ValueError("signing_secret applies only to webhook alert destinations")
+        if not self.url.get_secret_value().startswith(("https://", "http://")):
+            raise ValueError("alert destination url must be an http(s) URL")
+        return self
+
+
 class GeneralSettings(
     DatabaseAllocationSettings,
     SpendOperationSettings,
@@ -789,6 +842,17 @@ class GeneralSettings(
     slack_alerting_enabled: bool = False
     slack_webhook_url: SecretStr | None = None
     slack_alert_kinds: list[str] = Field(default_factory=list)
+    # Startup-only. Named receivers for notifications; see docs/features/alerting.md.
+    alert_destinations: list[AlertDestinationSettings] = Field(
+        default_factory=list, max_length=32
+    )
+    alert_destinations_allow_http: bool = Field(default=False, strict=True)
+    alert_destinations_allowed_ports: list[int] = Field(
+        default_factory=lambda: [443], min_length=1, max_length=64
+    )
+    alert_destinations_allowed_private_cidrs: list[str] = Field(
+        default_factory=list, max_length=128
+    )
     email_enabled: bool = False
     email_provider: Literal["smtp", "resend", "sendgrid"] = "smtp"
     email_from_address: str | None = None
@@ -1059,7 +1123,12 @@ class GeneralSettings(
         decode_envelope_key(value, key_name="mcp_oauth_encryption_key")
         return value
 
-    @field_validator("provider_discovery_allowed_ports", "mcp_oauth_allowed_ports", mode="before")
+    @field_validator(
+        "provider_discovery_allowed_ports",
+        "mcp_oauth_allowed_ports",
+        "alert_destinations_allowed_ports",
+        mode="before",
+    )
     @classmethod
     def validate_provider_discovery_ports(cls, value: object, info: ValidationInfo) -> object:
         if not isinstance(value, list) or any(
@@ -1090,7 +1159,11 @@ class GeneralSettings(
             raise ValueError("trusted_proxy_cidrs cannot trust every address")
         return list(dict.fromkeys(str(network) for network in networks))
 
-    @field_validator("provider_discovery_allowed_private_cidrs", "mcp_oauth_allowed_private_cidrs")
+    @field_validator(
+        "provider_discovery_allowed_private_cidrs",
+        "mcp_oauth_allowed_private_cidrs",
+        "alert_destinations_allowed_private_cidrs",
+    )
     @classmethod
     def validate_provider_discovery_cidrs(cls, value: list[str], info: ValidationInfo) -> list[str]:
         try:
@@ -1244,6 +1317,9 @@ class GeneralSettings(
             raise ValueError(
                 "batch scheduler shadow mode requires embeddings_batch_model_capacity_enabled=true"
             )
+        names = [destination.name for destination in self.alert_destinations]
+        if len(names) != len(set(names)):
+            raise ValueError("alert_destinations names must be unique")
         if self.slack_alerting_enabled and self.slack_webhook_url is None:
             raise ValueError("slack_alerting_enabled requires slack_webhook_url to be set")
         if self.slack_alerting_enabled:

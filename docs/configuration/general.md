@@ -645,6 +645,8 @@ Governance notifications are opt-in and disabled by default.
 | `slack_alerting_enabled` | `false` | Send governance alerts to a Slack incoming webhook in addition to email |
 | `slack_webhook_url` | `null` | Slack incoming webhook URL (secret); required when `slack_alerting_enabled` is true |
 | `slack_alert_kinds` | `[]` | Alert types routed to Slack, e.g. `["budget_threshold"]`; empty routes nothing |
+| `alert_destinations` | `[]` | Named Slack, Microsoft Teams, Discord, and signed webhook destinations, each with its alert types; restart required. See [Alert destinations](../features/alerting.md) |
+| `alert_destinations_allow_http`, `alert_destinations_allowed_ports`, `alert_destinations_allowed_private_cidrs` | `false`, `[443]`, `[]` | Outbound network policy for destination URLs; restart required |
 
 ## Metrics Settings
 

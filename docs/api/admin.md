@@ -981,6 +981,13 @@ Audit read access is limited to the roles that hold `audit.read`.
 | `DELETE` | `/ui/api/email/suppressions/{email_address}` | Remove a suppressed recipient |
 | `POST` | `/webhooks/email/resend` | Ingest Resend delivery feedback and suppression events |
 
+## Alert Destination Endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/alerts/destinations` | List configured alert destinations without URLs or secrets |
+| `POST` | `/ui/api/alerts/test` | Send a test alert to one destination and return the delivery result |
+
 ## Session and Login Endpoints
 
 | Method | Endpoint | Purpose |
