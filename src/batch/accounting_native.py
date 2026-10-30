@@ -12,6 +12,7 @@ from uuid import uuid4, uuid5
 from src.batch.accounting_checkpoint import (
     CHECKPOINT_BATCH_MAX_ITEMS,
     CHECKPOINT_MAX_BYTES,
+    DEFAULT_CHECKPOINT_WRITE_SECONDS,
     BatchAccountingCheckpoint,
     BatchAccountingCheckpoints,
     BatchAccountingUnavailable,
@@ -61,13 +62,20 @@ class NativeBatchBilling:
         *,
         tier_policy: TierPolicyService | None,
         max_provider_attempts: int,
+        checkpoint_write_seconds: float = DEFAULT_CHECKPOINT_WRITE_SECONDS,
     ) -> None:
         if type(max_provider_attempts) is not int or not 1 <= max_provider_attempts <= 128:
             raise ValueError("Invalid native batch attempt limit")
+        if not 0 < checkpoint_write_seconds <= 30:
+            raise ValueError("Invalid native batch checkpoint write budget")
         self.accounting = accounting
         self.checkpoints = checkpoints
         self.tier_policy = tier_policy
         self.max_provider_attempts = max_provider_attempts
+        self.checkpoint_write_seconds = checkpoint_write_seconds
+
+    def _deadline(self) -> float:
+        return deadline(self.checkpoint_write_seconds)
 
     def bind(
         self,
@@ -141,7 +149,7 @@ class NativeBatchBilling:
             BatchAccountingWrite(execution.claim, old, execution.checkpoint)
             for execution, old in zip(executions, expected, strict=True)
         ]
-        await self.checkpoints.write_many(writes, expires_at=deadline())
+        await self.checkpoints.write_many(writes, expires_at=self._deadline())
         for execution in executions:
             execution.stored_checkpoint = execution.checkpoint
             execution.item.accounting_checkpoint = execution.checkpoint.model_dump(mode="json")
@@ -295,7 +303,7 @@ class NativeBatchBilling:
             )
             writes.append(BatchAccountingWrite(claim, expected, terminal))
             item.accounting_checkpoint = terminal.model_dump(mode="json")
-        await self.checkpoints.write_many(writes, expires_at=deadline())
+        await self.checkpoints.write_many(writes, expires_at=self._deadline())
 
     async def close_group(self, executions: Sequence[BatchAccountingExecution]) -> None:
         writes = []
@@ -324,7 +332,7 @@ class NativeBatchBilling:
             execution.checkpoint = terminal
             execution.item.accounting_checkpoint = terminal.model_dump(mode="json")
         if writes:
-            await self.checkpoints.write_many(writes, expires_at=deadline())
+            await self.checkpoints.write_many(writes, expires_at=self._deadline())
             for execution in executions:
                 execution.stored_checkpoint = execution.checkpoint
 
@@ -378,8 +386,9 @@ def terminal_checkpoint(
     )
 
 
-def deadline() -> float:
-    return asyncio.get_running_loop().time() + 0.25
+def deadline(seconds: float = DEFAULT_CHECKPOINT_WRITE_SECONDS) -> float:
+    # Batch is off the request latency path: wait for a busy pool instead of failing.
+    return asyncio.get_running_loop().time() + seconds
 
 
 def _same_subject(

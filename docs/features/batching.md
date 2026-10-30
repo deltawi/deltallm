@@ -218,6 +218,16 @@ PostgreSQL connection planning is based on process pools, not worker concurrency
 
 Keep at least 20 percent spare database capacity during normal operation. For example, three worker pods with `db_pool_size=20` reserve about 60 worker-side connections, not `3 * concurrency * 20`.
 
+### Accounting v2 checkpoint writes
+
+With accounting v2, each batch item saves a billing checkpoint before the provider call, and a closing one if the item fails. The write waits up to `embeddings_batch_accounting_write_timeout_seconds` (default 2 seconds). If the first try times out or hits a database error, it retries once with the time left. Each worker process runs at most `embeddings_batch_accounting_write_concurrency` writes at once (default: half of `db_pool_size`), so the rest of the pool stays free for lease renewals and result saves. Extra items wait in memory instead of failing.
+
+Sizing rule:
+
+- Keep `embeddings_batch_worker_concurrency` at or below `db_pool_size`. The worker logs a warning at startup when it is higher.
+- For more batch throughput, add `batchWorker` replicas instead of raising per-pod concurrency, and check the connection budget above.
+- Watch `deltallm_batch_accounting_checkpoint_write_seconds` (by `outcome`) and `deltallm_batch_accounting_checkpoint_write_retries_total`. A rising `unavailable` count means the database or pool is saturated: lower concurrency or claim size, or add database capacity.
+
 ### Scheduler Modes
 
 Use `smart_v1` for production batch scheduling. It composes:
@@ -624,6 +634,8 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_worker_concurrency` | `4` | Maximum concurrent item executions per worker iteration |
 | `embeddings_batch_item_claim_limit` | `20` | Maximum items claimed per worker iteration |
 | `embeddings_batch_item_buffer_multiplier` | `2` | Multiplier on concurrency for item prefetch. Effective claim limit is `max(item_claim_limit, concurrency * buffer_multiplier)` |
+| `embeddings_batch_accounting_write_timeout_seconds` | `2.0` | Accounting v2 only. Time budget for one billing checkpoint write, including the wait for a free write slot and one retry |
+| `embeddings_batch_accounting_write_concurrency` | `0` | Accounting v2 only. Concurrent billing checkpoint writes per worker process; `0` uses half of `db_pool_size` |
 | `embeddings_batch_max_attempts` | `3` | Maximum retry attempts for a failed item |
 | `embeddings_batch_retry_initial_seconds` | `5` | Initial retry delay for retryable item failures |
 | `embeddings_batch_retry_max_seconds` | `300` | Maximum retry delay for retryable item failures, including capped `Retry-After` hints |
@@ -929,6 +941,8 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_stale_lease_sweeper_rows_total` | Counter | Rows reclaimed, released, skipped, or refreshed by the sweeper |
 | `deltallm_batch_stale_lease_sweeper_duration_seconds` | Histogram | Stale lease sweeper duration |
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
+| `deltallm_batch_accounting_checkpoint_write_seconds` | Histogram | Accounting v2 checkpoint write latency by outcome (`saved`, `rejected`, `unavailable`), including the per-process queue |
+| `deltallm_batch_accounting_checkpoint_write_retries_total` | Counter | Accounting v2 checkpoint writes retried after a timeout or database error |
 
 ### Terminal webhooks
 
@@ -1063,6 +1077,7 @@ Gateway authentication and output-usage recovery hints stay unchanged.
 - Budget exhaustion, model access denial, guardrail rejection, deleted keys, and expired keys are terminal and are not retried
 - Rate-limit and max-parallel contention are retried until the item reaches `embeddings_batch_max_attempts`
 - Check that the model deployment is healthy and reachable
+- `batch_accounting_checkpoint_unavailable` (accounting v2): the billing checkpoint could not be saved in time. Check `deltallm_batch_accounting_checkpoint_write_seconds{outcome="unavailable"}` and database load, and keep `embeddings_batch_worker_concurrency` at or below `db_pool_size`
 
 ### Terminal webhook is not delivered
 

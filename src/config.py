@@ -863,6 +863,11 @@ class GeneralSettings(
     embeddings_batch_item_lease_seconds: int = Field(default=360, ge=30)
     embeddings_batch_finalization_retry_delay_seconds: int = Field(default=60, ge=1)
     embeddings_batch_worker_concurrency: int = Field(default=4, ge=1, le=100)
+    # Accounting v2 batch checkpoint writes. Batch is off the request latency path,
+    # so writes wait for a busy pool instead of failing the item.
+    embeddings_batch_accounting_write_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    # 0 means half of db_pool_size, so leases and result saves keep free connections.
+    embeddings_batch_accounting_write_concurrency: int = Field(default=0, ge=0, le=100)
     embeddings_batch_item_buffer_multiplier: int = Field(default=2, ge=1, le=10)
     embeddings_batch_storage_chunk_size: int = Field(default=65_536, ge=1_024)
     embeddings_batch_finalization_page_size: int = Field(default=500, ge=10, le=10_000)
