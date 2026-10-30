@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -133,7 +135,12 @@ def test_runtime_bootstrap_checks_the_actual_rendered_contract(tmp_path, monkeyp
         "all_proxy",
     ):
         monkeypatch.delenv(name, raising=False)
-    docs = _render("-f", str(HELM_CHART_DIR / "values-production.yaml"))
+    docs = _render(
+        "-f",
+        str(HELM_CHART_DIR / "values-production.yaml"),
+        "-f",
+        str(HELM_CHART_DIR / "values-production-strict.yaml"),
+    )
     contract = tmp_path / "report.json"
     contract.write_text(capacity(docs)["report.json"])
     raw = next(doc["data"]["config.yaml"] for doc in docs if "config.yaml" in doc.get("data", {}))
@@ -297,3 +304,29 @@ def test_named_upstream_proxies_add_upstream_pools_only():
     )
     assert result.roles["api"].pools.upstream_http == 1000
     assert result.roles["api"].pools.control_http == 100
+
+
+def _render_without_quotas(*overlays: str):
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+    command = [helm, "template", "deltallm", str(HELM_CHART_DIR), "--set", "image.tag=1.0.0"]
+    command += ["--set", "secret.values.masterKey=sk-testmasterkey1234567890A1"]
+    command += ["--set", "secret.values.saltKey=test-salt-key-1234567890"]
+    for overlay in overlays:
+        command += ["-f", str(HELM_CHART_DIR / overlay)]
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def test_production_profile_renders_without_provider_quotas_until_strict_checks_are_added():
+    plain = _render_without_quotas("values-production.yaml")
+    assert plain.returncode == 0, plain.stderr
+    general = next(
+        yaml.safe_load(doc["data"]["config.yaml"])["general_settings"]
+        for doc in yaml.safe_load_all(plain.stdout)
+        if doc and doc["kind"] == "ConfigMap" and "config.yaml" in doc.get("data", {})
+    )
+    assert general["deployment_capacity_path"] is None
+    strict = _render_without_quotas("values-production.yaml", "values-production-strict.yaml")
+    assert strict.returncode != 0
+    assert "explicit providerDomains" in strict.stderr

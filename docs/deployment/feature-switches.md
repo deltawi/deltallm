@@ -15,7 +15,7 @@ The [complete settings reference](../configuration/general-settings-reference.md
 | Small team | One server or a one-replica Helm release serving a team, with the Model Selector, Realtime, and the Batch API available | [`config.small-team.example.yaml`](https://github.com/deltawi/deltallm/blob/main/config.small-team.example.yaml) |
 | Production | Several replicas behind a load balancer, with external PostgreSQL and Redis | Helm with `values-production.yaml`; see [Kubernetes](kubernetes.md) and the [production checklist](production-checklist.md) |
 
-The Production profile is enforced: the chart refuses to render a production release unless ingress admission, preflight capacity, both outboxes, spend operation intents or accounting v2, `redis_degraded_mode: fail_closed`, `budget_enforcement_query_mode: combined`, `model_deployment_source: db_only` without config bootstrap, and external migrations are all set.
+The Production profile has optional strict checks. Add `values-production-strict.yaml` after `values-production.yaml` (and an overlay with your real provider quotas) and the chart refuses to render a production release unless ingress admission, preflight capacity, both outboxes, spend operation intents or accounting v2, `redis_degraded_mode: fail_closed`, `budget_enforcement_query_mode: combined`, `model_deployment_source: db_only` without config bootstrap, and external migrations are all set, and it checks the declared database, Redis, file-descriptor and provider capacity. Without the strict overlay these settings are the same, but nothing stops a release that changes them.
 
 ## Feature switches
 

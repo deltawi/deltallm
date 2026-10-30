@@ -340,6 +340,7 @@ jobs:
             > /dev/null
           helm lint deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            -f deploy/kubernetes/helm/values-production-strict.yaml \
             -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
             --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
@@ -348,6 +349,7 @@ jobs:
             --set runtime.redis.url="${VALID_REDIS_URL}"
           helm template deltallm deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            -f deploy/kubernetes/helm/values-production-strict.yaml \
             -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
             --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
@@ -358,6 +360,7 @@ jobs:
           for replicas in 2 3 4; do
             helm lint deploy/kubernetes/helm \
               -f deploy/kubernetes/helm/values-production.yaml \
+              -f deploy/kubernetes/helm/values-production-strict.yaml \
               -f deploy/kubernetes/helm/values-capacity-experiment.yaml \
               -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
               --set replicaCount="$replicas" \
@@ -368,6 +371,7 @@ jobs:
               --set runtime.redis.url="${VALID_REDIS_URL}"
             helm template deltallm deploy/kubernetes/helm \
               -f deploy/kubernetes/helm/values-production.yaml \
+              -f deploy/kubernetes/helm/values-production-strict.yaml \
               -f deploy/kubernetes/helm/values-capacity-experiment.yaml \
               -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
               --set replicaCount="$replicas" \

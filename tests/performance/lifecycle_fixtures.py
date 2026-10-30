@@ -198,6 +198,8 @@ def release(cluster: LifecycleCluster, values: Path, *extra: str, check: bool = 
         "-f",
         str(CHART / "values-production.yaml"),
         "-f",
+        str(CHART / "values-production-strict.yaml"),
+        "-f",
         str(values),
         "--wait",
         "--timeout",

@@ -8,7 +8,12 @@ from scripts.prepare_capacity_adapter import MONITORING, serving_tls
 from tests.helm.test_batch_worker_split import HELM_CHART_DIR, _render, _render_error
 
 pytestmark = pytest.mark.helm
-PRODUCTION = ("-f", str(HELM_CHART_DIR / "values-production.yaml"))
+PRODUCTION = (
+    "-f",
+    str(HELM_CHART_DIR / "values-production.yaml"),
+    "-f",
+    str(HELM_CHART_DIR / "values-production-strict.yaml"),
+)
 
 
 def test_production_hpa_uses_pod_admission_cpu_and_stabilization():

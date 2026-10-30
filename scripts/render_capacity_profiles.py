@@ -14,9 +14,14 @@ TARGET = Path(__file__).resolve().parents[1] / "docs/deployment/capacity-profile
 PROFILES = {
     "Base": (),
     "Evaluation": ("values-eval.yaml",),
-    "Production": ("values-production.yaml", "values-capacity-fixture.yaml"),
+    "Production": (
+        "values-production.yaml",
+        "values-production-strict.yaml",
+        "values-capacity-fixture.yaml",
+    ),
     "Experiment": (
         "values-production.yaml",
+        "values-production-strict.yaml",
         "values-capacity-experiment.yaml",
         "values-capacity-fixture.yaml",
     ),
@@ -27,6 +32,7 @@ PROFILES = {
     ),
     "Native production": (
         "values-production.yaml",
+        "values-production-strict.yaml",
         "values-capacity-fixture.yaml",
         "values-accounting-native.yaml",
     ),

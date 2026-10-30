@@ -1,7 +1,9 @@
 # Release prerequisites: a pre-existing database Secret and an immutable release image.
 managedLifecycle:
   enabled: true
-  production: true
+  # Strict production checks are opt-in: add values-production-strict.yaml after
+  # this file once an operator overlay declares real providerDomains.
+  production: false
   exitMarginSeconds: 10
 terminationGracePeriodSeconds: 90
 image:
@@ -241,7 +243,7 @@ dependencyCapacity:
   redisMaxClients: 5000
   redisReservedClients: 128
   extended:
-    enabled: true
+    enabled: false # Enabled by values-production-strict.yaml.
     postgresqlMigrationConnections: 2
     postgresqlOtherConnections: 0
     redisOtherClients: 0

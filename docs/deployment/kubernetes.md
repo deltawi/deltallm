@@ -314,6 +314,23 @@ helm upgrade --install deltallm deltallm/deltallm \
 - `model_deployment_source: db_only` (database-managed models)
 - `model_deployment_bootstrap_from_config: false` (no auto-seeding)
 
+Strict production checks are off by default. Once you know your provider quotas,
+add `values-production-strict.yaml` after `values-production.yaml`, together with an
+overlay that declares `dependencyCapacity.extended.providerDomains` (see
+[saturation autoscaling](saturation-autoscaling.md#capacity-declaration-and-preflight)).
+The chart then refuses to render a release that breaks the production profile
+(mutable image tag, startup migrations, fail-open Redis, config-seeded models, and
+others) or whose peak pods exceed the declared database, Redis, file-descriptor or
+provider capacity. The overlay changes no runtime setting; it only adds these
+render-time checks and the capacity report that each process checks at start.
+
+Because production loads models only from the database, confirm the database holds
+every model in use before upgrading:
+
+```sql
+SELECT deployment_id, model_name FROM deltallm_modeldeployment ORDER BY model_name;
+```
+
 A typical HA overlay looks like this:
 
 ```yaml

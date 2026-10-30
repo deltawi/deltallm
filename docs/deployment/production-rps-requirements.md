@@ -316,8 +316,9 @@ tenants can change capacity; record that mix with the target.
 
 ## Configure and validate the deployment
 
-Use `deploy/kubernetes/helm/values-production.yaml` and, for native accounting,
-layer `values-accounting-native.yaml` afterward. Add an operator overlay with
+Use `deploy/kubernetes/helm/values-production.yaml` followed by
+`values-production-strict.yaml` and, for native accounting, layer
+`values-accounting-native.yaml` afterward. Add an operator overlay with
 real secrets, resource allocations, provider domains, cluster CIDRs and network
 rules. Set `secret.existingSecret` to a provisioned master/salt Secret and configure
 the external database and Redis connection secrets. Do not put secret values in
@@ -329,10 +330,12 @@ Validate the exact overlays without applying them:
 ```sh
 helm lint deploy/kubernetes/helm \
   -f deploy/kubernetes/helm/values-production.yaml \
+  -f deploy/kubernetes/helm/values-production-strict.yaml \
   -f deploy/kubernetes/helm/values-accounting-native.yaml \
   -f operator-capacity.yaml --set image.digest=sha256:YOUR_RELEASE_DIGEST
 helm template gateway deploy/kubernetes/helm --namespace deltallm \
   -f deploy/kubernetes/helm/values-production.yaml \
+  -f deploy/kubernetes/helm/values-production-strict.yaml \
   -f deploy/kubernetes/helm/values-accounting-native.yaml \
   -f operator-capacity.yaml --set image.digest=sha256:YOUR_RELEASE_DIGEST
 ```
