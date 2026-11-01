@@ -245,6 +245,23 @@ Use `fifo_v1` only for local evaluation, very small single-tenant deployments, o
 
 Use `embeddings_batch_max_attempts: 5` for production if provider hiccups are common. Keep retry jitter enabled so workers do not retry the same provider or model group at the same instant.
 
+#### Retries with accounting v2
+
+With accounting v2, an item keeps one billing operation across all its retries. When a provider call fails with a retryable error (timeout, connection error, `429` or `5xx`), the worker leaves that operation open, marks its checkpoint as released, and requeues the item with the normal backoff. The next claim adds one attempt to the same operation instead of opening a new one, so no new funds are reserved.
+
+The item is charged once:
+
+- If a retry succeeds, the charge is the real usage of the successful call. Earlier failed attempts are recorded as unresolved attempts on that charge.
+- If the last attempt fails, or the item cannot run again, the operation closes as uncertain and keeps its provisional debit, the same as a single failed call.
+
+An item is retried this way only while all of these hold:
+
+- it has attempts left under `embeddings_batch_max_attempts`
+- its operation has attempts left under `accounting_max_provider_attempts` (default 3; the reservation is sized for this many calls)
+- the reservation (14 minutes from the first call) outlives the retry delay plus `embeddings_batch_item_lease_seconds`
+
+Otherwise the item fails with `terminal_reason` `accounting_closed` (or `attempts_exhausted`). If a worker crashes during a call, the next claim still closes that operation as uncertain without calling the provider again. Known gap: when a whole embedding micro-batch fails, its items are not retried this way yet.
+
 The stale lease sweeper should stay enabled. It reclaims expired item and job leases even when no worker is currently scanning the affected model group.
 
 ## Quick Start

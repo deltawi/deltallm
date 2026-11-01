@@ -9,7 +9,7 @@ from typing import Any
 from src.batch.backpressure import BatchModelGroupDeferred
 from src.batch.error_sanitization import persisted_batch_error_message
 from src.batch.models import BatchItemRecord, BatchJobRecord
-from src.batch.accounting_native import NativeBatchBilling
+from src.batch.accounting_native import NativeBatchBilling, native_retry_ready
 from src.batch.accounting_execution import BatchAccountingExecution
 from src.batch.public_errors import exception_public_error_code
 from src.batch.retry import (
@@ -42,7 +42,18 @@ class WorkerFailureHandlingMixin:
         started_at_monotonic: float,
         native_execution: BatchAccountingExecution | None = None,
     ) -> None:
-        if self.native_billing is not None:
+        retry_decision = classify_batch_retry(exc)
+        retry_delay = (
+            self._retry_delay_seconds(item_attempts=item.attempts, decision=retry_decision)
+            if retry_decision.retryable
+            else 0
+        )
+        if self.native_billing is not None and not await self._hold_native_billing_for_retry(
+            item=item,
+            decision=retry_decision,
+            retry_delay_seconds=retry_delay,
+            native_execution=native_execution,
+        ):
             if native_execution is not None:
                 await self.native_billing.close_group([native_execution])
             elif item.accounting_checkpoint is not None:
@@ -54,6 +65,43 @@ class WorkerFailureHandlingMixin:
             exc=exc,
             deployment_id=deployment_id,
             started_at_monotonic=started_at_monotonic,
+            retry_decision=retry_decision,
+            retry_delay_seconds=retry_delay,
+        )
+
+    async def _hold_native_billing_for_retry(
+        self,
+        *,
+        item: BatchItemRecord,
+        decision: BatchRetryDecision,
+        retry_delay_seconds: int,
+        native_execution: BatchAccountingExecution | None,
+    ) -> bool:
+        """Keep one funded operation open across retries instead of closing it.
+
+        The next claim adds an attempt to the same operation, so the item is
+        still charged once: for the attempt that succeeds, or as uncertain
+        after the last one fails.
+        """
+        owner = self.native_billing
+        if (
+            owner is None
+            or not decision.retryable
+            or item.attempts >= self.config.max_attempts
+            or item.accounting_checkpoint is None
+        ):
+            return False
+        if native_execution is None or native_execution.pricing is None:
+            # This claim never added an attempt: an earlier release still holds.
+            if not native_retry_ready(item.accounting_checkpoint):
+                return False
+            if native_execution is not None:
+                native_execution.released = True
+            return True
+        return await owner.release_for_retry(
+            native_execution,
+            retry_delay_seconds=retry_delay_seconds,
+            claim_margin_seconds=int(self.config.item_lease_seconds),
         )
 
     async def _mark_item_failed_after_accounting(
@@ -65,17 +113,23 @@ class WorkerFailureHandlingMixin:
         exc: Exception,
         deployment_id: str | None,
         started_at_monotonic: float,
+        retry_decision: BatchRetryDecision | None = None,
+        retry_delay_seconds: int | None = None,
     ) -> None:
         batch_id = job.batch_id
         failover_context = get_failover_attempt_context(exc)
         if failover_context is not None:
             deployment_id = failover_context.last_attempted_deployment_id
-        retry_decision = classify_batch_retry(exc)
-        candidate_retry_delay = (
-            self._retry_delay_seconds(item_attempts=item.attempts, decision=retry_decision)
-            if retry_decision.retryable
-            else 0
-        )
+        if retry_decision is None:
+            retry_decision = classify_batch_retry(exc)
+        if retry_delay_seconds is not None:
+            candidate_retry_delay = retry_delay_seconds
+        elif retry_decision.retryable:
+            candidate_retry_delay = self._retry_delay_seconds(
+                item_attempts=item.attempts, decision=retry_decision
+            )
+        else:
+            candidate_retry_delay = 0
         await self._maybe_defer_model_group_for_retry(
             item=item,
             model_name=model_name,
@@ -120,6 +174,7 @@ class WorkerFailureHandlingMixin:
             claim_epoch=item.claim_epoch,
         )
         if not updated and retryable:
+            await self._close_held_native_billing(item)
             retryable = False
             retry_delay = 0
             terminal_reason = BatchRetryTerminalReason.BATCH_EXPIRED
@@ -172,6 +227,22 @@ class WorkerFailureHandlingMixin:
             reference=item.item_id,
         )
 
+    async def _close_held_native_billing(self, item: BatchItemRecord) -> None:
+        """Close an operation kept open for a retry that will not run."""
+        owner = self.native_billing
+        if owner is None or not native_retry_ready(item.accounting_checkpoint):
+            return
+        try:
+            await owner.fail_items([item], worker_id=self.config.worker_id)
+        except Exception as exc:
+            # The funded operation keeps its debit until accounting recovery.
+            logger.warning(
+                "batch item held billing close failed batch_id=%s item_id=%s error=%s",
+                item.batch_id,
+                item.item_id,
+                exc,
+            )
+
     def _build_failure_error_payload(
         self,
         *,
@@ -210,12 +281,15 @@ class WorkerFailureHandlingMixin:
         decision: BatchRetryDecision,
         retry_delay_seconds: int,
     ) -> BatchRetryTerminalReason | None:
-        if item.accounting_checkpoint is not None:
-            return BatchRetryTerminalReason.NOT_RETRYABLE
         if not decision.retryable:
             return decision.terminal_reason or BatchRetryTerminalReason.NOT_RETRYABLE
         if item.attempts >= self.config.max_attempts:
             return BatchRetryTerminalReason.ATTEMPTS_EXHAUSTED
+        if item.accounting_checkpoint is not None and (
+            self.native_billing is None or not native_retry_ready(item.accounting_checkpoint)
+        ):
+            # Billing for this item is already closed, so it cannot run again.
+            return BatchRetryTerminalReason.ACCOUNTING_CLOSED
         return None
 
     def _can_retry_item(

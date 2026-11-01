@@ -42,7 +42,8 @@ class Checkpoints:
                 or (write.expected is not None and current == write.checkpoint)
                 or (
                     write.checkpoint.terminal is not None
-                    and current
+                    and current is not None
+                    and current.model_copy(update={"released_attempts": 0})
                     in (write.checkpoint, write.checkpoint.model_copy(update={"terminal": None}))
                 )
             )
@@ -323,3 +324,97 @@ async def test_native_delivery_lost_ack_retries_bytes_without_second_provider_ca
     assert calls[0] == calls[1]
     with pytest.raises(BatchAccountingUnavailable):
         await NativeBatchCompletionDelivery(None, repository).deliver(record, worker_id="delivery")
+
+
+async def released_retry(owner, checkpoints, auth, payload, deployment):
+    executions, _, _, _ = subjects(owner)
+    await fund(owner, executions, payload, auth, deployment)
+    assert await owner.release_for_retry(
+        executions[0], retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    await owner.close_group(executions)
+    stored = checkpoints.rows[executions[0].claim.item_id]
+    assert stored.retry_ready and stored.terminal is None
+    item = replace(
+        executions[0].item,
+        claim_epoch=2,
+        locked_by="w2",
+        accounting_checkpoint=stored.model_dump(mode="json"),
+    )
+    return owner.bind(_build_chat_batch_job(), item, worker_id="w2", auth=auth)
+
+
+async def test_released_retry_adds_an_attempt_without_new_funding(native_batch):
+    owner, checkpoints, service = native_batch
+    _, payload, auth, deployment = subjects(owner)
+    service.reserve = AsyncMock(wraps=service.reserve)
+    current = await released_retry(owner, checkpoints, auth, payload, deployment)
+    await fund(owner, [current], payload, auth, deployment)
+    assert service.reserve.await_count == 1
+    stored = checkpoints.rows[current.claim.item_id]
+    assert len(stored.operation.attempts) == 2 and not stored.retry_ready
+    assert stored.claim_epoch == 2
+    usage = {"prompt_tokens": 5, "completion_tokens": 2, "prompt_tokens_cached": 0}
+    current.completion_payload({"completed_at": datetime.now(UTC).isoformat()}, usage)
+    assert current.checkpoint.terminal.outcome is AccountingOutcome.COMPLETED
+    assert current.checkpoint.terminal.exact_charge == Decimal("0.009")
+    assert current.checkpoint.terminal.unresolved_attempts == 1
+
+
+async def test_released_retry_failure_before_dispatch_stays_uncertain(native_batch):
+    owner, checkpoints, _ = native_batch
+    _, payload, auth, deployment = subjects(owner)
+    current = await released_retry(owner, checkpoints, auth, payload, deployment)
+    changed = payload.model_copy(update={"user": "foreign-end-user"})
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, [current], changed, auth, deployment)
+    stored = checkpoints.rows[current.claim.item_id]
+    assert stored.terminal.outcome is AccountingOutcome.UNCERTAIN
+    assert len(stored.operation.attempts) == 1
+
+
+async def test_released_retry_lost_dispatch_reply_closes_the_new_attempt(native_batch):
+    owner, checkpoints, _ = native_batch
+    _, payload, auth, deployment = subjects(owner)
+    current = await released_retry(owner, checkpoints, auth, payload, deployment)
+    checkpoints.lose_dispatch_reply = True
+    with pytest.raises(TimeoutError):
+        await fund(owner, [current], payload, auth, deployment)
+    await owner.close_group([current])
+    stored = checkpoints.rows[current.claim.item_id]
+    assert stored.terminal.outcome is AccountingOutcome.UNCERTAIN
+    assert len(stored.operation.attempts) == 2
+
+
+async def test_release_is_refused_near_funding_expiry_or_at_attempt_limit(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    await fund(owner, executions, payload, auth, deployment)
+    assert not await owner.release_for_retry(
+        executions[0], retry_delay_seconds=300, claim_margin_seconds=14 * 60
+    )
+    for _ in range(2):
+        await fund(owner, executions, payload, auth, deployment)
+    assert not await owner.release_for_retry(
+        executions[0], retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert not executions[0].released
+    await owner.close_group(executions)
+    stored = checkpoints.rows[executions[0].claim.item_id]
+    assert stored.terminal.outcome is AccountingOutcome.UNCERTAIN
+
+
+async def test_release_is_refused_when_the_write_fails(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    await fund(owner, executions, payload, auth, deployment)
+    checkpoints.lose_dispatch_reply = True
+    assert not await owner.release_for_retry(
+        executions[0], retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert not executions[0].released
+    # The release may have been saved: closing still settles the same operation.
+    assert checkpoints.rows[executions[0].claim.item_id].retry_ready
+    await owner.close_group(executions)
+    stored = checkpoints.rows[executions[0].claim.item_id]
+    assert stored.terminal.outcome is AccountingOutcome.UNCERTAIN

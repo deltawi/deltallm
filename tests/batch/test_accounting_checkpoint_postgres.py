@@ -339,3 +339,47 @@ async def test_every_native_delivery_transition_rejects_stale_attempt(
         attempt_count=second.attempt_count,
         **parameters,
     )
+
+
+async def test_released_dispatch_lets_the_next_claim_retry_under_one_operation(
+    batch_db, claimed_selector
+):
+    repository, claim, _ = claimed_selector
+    pending, store = checkpoint_for(claim), BatchAccountingRepository(batch_db)
+    await store.write_many([BatchAccountingWrite(claim, None, pending)], expires_at=deadline())
+    released = pending.model_copy(update={"released_attempts": 1})
+    await store.write_many([BatchAccountingWrite(claim, pending, released)], expires_at=deadline())
+    await batch_db.execute_raw(
+        "UPDATE deltallm_batch_item SET lease_expires_at=NOW() WHERE item_id=$1",
+        claim.item_id,
+    )
+    (item,) = await repository.claim_items(batch_id=claim.batch_id, worker_id="new-worker")
+    assert item.accounting_checkpoint == released.model_dump(mode="json")
+    current = replace(claim, worker_id="new-worker", claim_epoch=item.claim_epoch)
+    retry = pending.model_copy(
+        update={
+            "claim_epoch": current.claim_epoch,
+            "operation": pending.operation.model_copy(
+                update={"attempts": pending.operation.attempts * 2}
+            ),
+        }
+    )
+    await store.write_many([BatchAccountingWrite(current, released, retry)], expires_at=deadline())
+    assert not await repository.list_completion_outbox_by_item_ids([claim.item_id])
+    terminal = uncertain(retry)
+    await store.write_many([BatchAccountingWrite(current, retry, terminal)], expires_at=deadline())
+    (record,) = await repository.list_completion_outbox_by_item_ids([claim.item_id])
+    assert record.completion_id == str(pending.operation_id)
+    assert record.payload_json["native_accounting"] == terminal.model_dump(mode="json")
+
+
+async def test_close_settles_a_release_whose_reply_was_lost(batch_db, claimed_selector):
+    repository, claim, _ = claimed_selector
+    pending, store = checkpoint_for(claim), BatchAccountingRepository(batch_db)
+    await store.write_many([BatchAccountingWrite(claim, None, pending)], expires_at=deadline())
+    released = pending.model_copy(update={"released_attempts": 1})
+    await store.write_many([BatchAccountingWrite(claim, pending, released)], expires_at=deadline())
+    terminal = uncertain(pending)
+    await store.write_many([BatchAccountingWrite(claim, pending, terminal)], expires_at=deadline())
+    (saved,) = await repository.load_claim_items([claim.item_id])
+    assert saved.accounting_checkpoint == terminal.model_dump(mode="json")

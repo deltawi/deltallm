@@ -300,7 +300,8 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
         decision: BatchRetryDecision,
     ) -> bool:
         if any(prepared.item.accounting_checkpoint is not None for prepared in prepared_items):
-            await self._close_native_batch_items(prepared_items)
+            # Funded items fail one by one: each keeps its operation open for
+            # its own retry or closes it.
             return False
         if not decision.retryable:
             return False

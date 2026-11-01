@@ -237,3 +237,112 @@ async def test_native_provider_cancellation_keeps_uncertain_debit(
         proof.terminal.outcome is AccountingOutcome.UNCERTAIN for proof in checkpoints.rows.values()
     )
     worker.app.state.spend_tracking_service.log_request_failure.assert_not_awaited()
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+async def test_native_timeout_retries_on_the_same_operation_and_charges_once(
+    native_batch, monkeypatch, grouped
+):
+    import httpx
+
+    owner, checkpoints, service = native_batch
+    worker, repo, job, items = build_worker(owner, embedding=False, grouped=grouped)
+    worker.config.max_attempts = 3
+    service.reserve = AsyncMock(wraps=service.reserve)
+    outcomes = ["timeout"]
+
+    async def check():
+        if outcomes and outcomes.pop(0) == "timeout":
+            raise httpx.ReadTimeout("slow provider")
+
+    async def chat(request, payload, deployment, *, record_usage=True):
+        await check()
+        return chat_result(), 1.0
+
+    async def microbatch(*, requests, deployment, request_context):
+        await check()
+        return [
+            {"index": index, "response_body": chat_result(), "usage": chat_result()["usage"]}
+            for index in range(len(requests))
+        ]
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", chat)
+    if grouped:
+        worker.app.state.chat_microbatch_executor = SimpleNamespace(
+            execute_chat_microbatch=microbatch
+        )
+    for item in items:
+        item.attempts = 1
+    await worker._process_items(job, items)
+
+    assert not repo.completed_calls
+    assert len(repo.failed_calls) == len(items)
+    assert all(call["retryable"] for call in repo.failed_calls)
+    assert all(call["error_body"]["retry_category"] == "timeout" for call in repo.failed_calls)
+    for item in items:
+        held = checkpoints.rows[item.item_id]
+        assert held.terminal is None and held.retry_ready
+
+    retried = [
+        replace(
+            item,
+            claim_epoch=2,
+            attempts=2,
+            accounting_checkpoint=checkpoints.rows[item.item_id].model_dump(mode="json"),
+        )
+        for item in items
+    ]
+    await worker._process_items(job, retried)
+
+    assert service.reserve.await_count == len(items)
+    assert len(repo.completed_calls) == len(items)
+    assert len(repo.completion_outbox_calls) == len(items)
+    for payload in repo.completion_outbox_calls:
+        proof = decode_checkpoint(payload["native_accounting"])
+        assert proof.terminal.outcome is AccountingOutcome.COMPLETED
+        assert proof.terminal.unresolved_attempts == 1
+        assert len(proof.operation.attempts) == 2
+        assert proof.released_attempts == 0
+
+
+async def test_native_timeout_on_last_attempt_closes_uncertain(native_batch, monkeypatch):
+    import httpx
+
+    owner, checkpoints, _ = native_batch
+    worker, repo, job, items = build_worker(owner, embedding=False, grouped=False)
+    worker.config.max_attempts = 1
+
+    async def chat(request, payload, deployment, *, record_usage=True):
+        raise httpx.ReadTimeout("slow provider")
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", chat)
+    items[0].attempts = 1
+    await worker._process_items(job, items)
+    assert repo.failed_calls[-1]["retryable"] is False
+    assert repo.failed_calls[-1]["error_body"]["terminal_reason"] == "attempts_exhausted"
+    assert checkpoints.rows[items[0].item_id].terminal.outcome is AccountingOutcome.UNCERTAIN
+
+
+async def test_native_held_retry_closes_when_requeue_is_refused(native_batch, monkeypatch):
+    import httpx
+
+    owner, checkpoints, _ = native_batch
+    worker, repo, job, items = build_worker(owner, embedding=False, grouped=False)
+    worker.config.max_attempts = 3
+    results = iter([False, True])
+
+    async def mark_item_failed(**kwargs):
+        repo.failed_calls.append(kwargs)
+        return next(results)
+
+    repo.mark_item_failed = mark_item_failed
+
+    async def chat(request, payload, deployment, *, record_usage=True):
+        raise httpx.ReadTimeout("slow provider")
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", chat)
+    items[0].attempts = 1
+    await worker._process_items(job, items)
+    assert [call["retryable"] for call in repo.failed_calls] == [True, False]
+    assert repo.failed_calls[-1]["error_body"]["terminal_reason"] == "batch_expired"
+    assert checkpoints.rows[items[0].item_id].terminal.outcome is AccountingOutcome.UNCERTAIN

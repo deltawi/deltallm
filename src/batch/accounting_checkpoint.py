@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 from uuid import UUID, uuid5
 
-from pydantic import Field, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from src.batch.public_errors import BatchPublicError, BatchPublicErrorCode
 from src.batch.selector_checkpoint import BatchSelectorClaim
@@ -38,10 +38,27 @@ class BatchAccountingCheckpoint(FrozenBillingContract):
     claim_epoch: int = Field(ge=1, le=2**63 - 1)
     operation: LocalAccountingHandle | AccountingOperationHandle = Field(repr=False)
     terminal: AccountingFinalization | None = Field(default=None, repr=False)
+    # Set after a retryable provider failure: every recorded attempt has
+    # ended, so the next claim may add one attempt under the same funding.
+    released_attempts: int = Field(default=0, ge=0, le=128)
+
+    @model_serializer(mode="wrap")
+    def _omit_unreleased(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        # Keep stored bytes of checkpoints without a release unchanged.
+        data = handler(self)
+        if not self.released_attempts:
+            data.pop("released_attempts", None)
+        return data
+
+    @property
+    def retry_ready(self) -> bool:
+        return self.terminal is None and self.released_attempts == len(self.operation.attempts)
 
     @model_validator(mode="after")
     def validate_proofs(self) -> BatchAccountingCheckpoint:
         reservation = self.operation.reservation
+        if self.released_attempts and not self.retry_ready:
+            raise ValueError("Invalid batch accounting release")
         if (
             self.operation_id != reservation.operation_id
             or self.operation.dispatch_token != reservation.owner_token
@@ -101,11 +118,17 @@ class BatchAccountingWrite:
             exclude={"attempts"}
         ):
             raise BatchAccountingUnavailable()
+        appended = len(new_operation.attempts) - len(old_operation.attempts)
+        # A later claim may close the old dispatch, or add one attempt (and
+        # later close it) only after the earlier attempts were released.
+        retried = expected.retry_ready and appended == 1
         if (
             new_operation.attempts[: len(old_operation.attempts)] != old_operation.attempts
-            or len(new_operation.attempts) > len(old_operation.attempts) + 1
+            or appended > 1
+            or (checkpoint.released_attempts and appended)
             or (
                 expected.claim_epoch != claim.claim_epoch
+                and not retried
                 and (new_operation != old_operation or checkpoint.terminal is None)
             )
         ):
