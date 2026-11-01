@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import json
 from uuid import uuid4, uuid5
@@ -100,6 +100,8 @@ class NativeBatchBilling:
             item=item,
             checkpoint=checkpoint,
             stored_checkpoint=checkpoint,
+            # A stored proof means an earlier claim already called the provider.
+            dispatched=checkpoint is not None,
         )
 
     async def prepare_group(
@@ -119,7 +121,11 @@ class NativeBatchBilling:
         ):
             raise BatchAccountingUnavailable()
         for execution in executions:
-            if execution.checkpoint is not None and execution.pricing is None:
+            if (
+                execution.checkpoint is not None
+                and execution.pricing is None
+                and not execution.checkpoint.retry_ready
+            ):
                 try:
                     await self.fail_items([execution.item], worker_id=execution.claim.worker_id)
                 finally:
@@ -276,6 +282,48 @@ class NativeBatchBilling:
             self.accounting, reservation=reservation, attempt=attempt
         )
 
+    async def release_for_retry(
+        self,
+        execution: BatchAccountingExecution,
+        *,
+        retry_delay_seconds: int,
+        claim_margin_seconds: int,
+    ) -> bool:
+        """Keep the funded operation open so the next claim adds one attempt.
+
+        Only a durably stored, dispatched and unfinished proof qualifies, and
+        only while its funding outlives the retry delay plus a claim margin.
+        """
+        checkpoint = execution.checkpoint
+        if (
+            checkpoint is None
+            or checkpoint.terminal is not None
+            or checkpoint != execution.stored_checkpoint
+            or not execution.dispatched
+            or execution.completion_saved
+            or len(checkpoint.operation.attempts) >= self.max_provider_attempts
+        ):
+            return False
+        hold_until = datetime.now(UTC) + timedelta(
+            seconds=max(0, retry_delay_seconds) + max(0, claim_margin_seconds)
+        )
+        if checkpoint.operation.reservation.expires_at <= hold_until:
+            return False
+        released = checkpoint.model_copy(
+            update={"released_attempts": len(checkpoint.operation.attempts)}
+        )
+        try:
+            await self.checkpoints.write_many(
+                [BatchAccountingWrite(execution.claim, checkpoint, released)],
+                expires_at=self._deadline(),
+            )
+        except (BatchAccountingUnavailable, TimeoutError):
+            return False
+        execution.checkpoint = execution.stored_checkpoint = released
+        execution.item.accounting_checkpoint = released.model_dump(mode="json")
+        execution.released = True
+        return True
+
     async def fail_items(self, items: Sequence[BatchItemRecord], *, worker_id: str) -> None:
         writes = []
         for item in items:
@@ -290,9 +338,12 @@ class NativeBatchBilling:
                 item.claim_epoch,
             )
             terminal = terminal_checkpoint(stored, claim_epoch=item.claim_epoch, dispatched=True)
-            original_epoch = stored.operation.reservation.pricing_snapshot.get(
+            # The open proof was last written by the claim of its newest attempt.
+            original_epoch = stored.operation.attempts[-1].pricing_snapshot.get(
                 "batch_claim_epoch",
-                stored.claim_epoch,
+                stored.operation.reservation.pricing_snapshot.get(
+                    "batch_claim_epoch", stored.claim_epoch
+                ),
             )
             if type(original_epoch) is not int:
                 raise BatchAccountingUnavailable()
@@ -311,6 +362,7 @@ class NativeBatchBilling:
             if (
                 execution.checkpoint is None
                 or execution.completion_saved
+                or execution.released
                 or (
                     execution.checkpoint.terminal is not None
                     and execution.stored_checkpoint == execution.checkpoint
@@ -335,6 +387,15 @@ class NativeBatchBilling:
             await self.checkpoints.write_many(writes, expires_at=self._deadline())
             for execution in executions:
                 execution.stored_checkpoint = execution.checkpoint
+
+
+def native_retry_ready(value: object) -> bool:
+    """True when a stored proof was released for retry and is still open."""
+    try:
+        checkpoint = decode_checkpoint(value)
+    except BatchAccountingUnavailable:
+        return False
+    return checkpoint is not None and checkpoint.retry_ready
 
 
 def decode_checkpoint(value: object) -> BatchAccountingCheckpoint | None:

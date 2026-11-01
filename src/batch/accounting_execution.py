@@ -26,6 +26,8 @@ class BatchAccountingExecution:
     stored_checkpoint: BatchAccountingCheckpoint | None = None
     dispatched: bool = False
     completion_saved: bool = False
+    # Left open for a later claim's retry: cleanup must not close it.
+    released: bool = False
 
     def completion_payload(
         self,

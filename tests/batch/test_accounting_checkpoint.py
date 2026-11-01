@@ -106,6 +106,58 @@ def test_terminal_with_foreign_event_or_owner_is_rejected(proof):
             BatchAccountingCheckpoint.model_validate(value)
 
 
+def _with_attempt(checkpoint, *, claim_epoch):
+    attempt = AccountingAttempt(
+        deployment_id="retry",
+        provider="openai",
+        model="test-model",
+        pricing_snapshot={"batch_claim_epoch": claim_epoch},
+    )
+    return BatchAccountingCheckpoint(
+        operation_id=checkpoint.operation_id,
+        claim_epoch=claim_epoch,
+        operation=checkpoint.operation.model_copy(
+            update={"attempts": checkpoint.operation.attempts + (attempt,)}
+        ),
+    )
+
+
+def test_released_proof_keeps_old_bytes_and_rejects_invalid_releases(proof):
+    _, checkpoint = proof
+    assert "released_attempts" not in checkpoint.model_dump_json()
+    released = checkpoint.model_copy(update={"released_attempts": 1})
+    assert BatchAccountingCheckpoint.model_validate_json(released.model_dump_json()) == released
+    assert released.retry_ready and not checkpoint.retry_ready
+    for value in (
+        released.model_copy(update={"released_attempts": 2}).model_dump(),
+        {**uncertain(checkpoint).model_dump(), "released_attempts": 1},
+    ):
+        with pytest.raises(ValueError, match="Invalid batch accounting release"):
+            BatchAccountingCheckpoint.model_validate(value)
+
+
+def test_only_a_released_proof_lets_a_new_claim_add_one_attempt(proof):
+    claim, checkpoint = proof
+    current = replace(claim, worker_id="new-worker", claim_epoch=2)
+    retry = _with_attempt(checkpoint, claim_epoch=2)
+    with pytest.raises(BatchAccountingUnavailable):
+        BatchAccountingWrite(current, checkpoint, retry).validate()
+    released = checkpoint.model_copy(update={"released_attempts": 1})
+    BatchAccountingWrite(claim, checkpoint, released).validate()
+    BatchAccountingWrite(current, released, retry).validate()
+    BatchAccountingWrite(current, released, uncertain(retry)).validate()
+    BatchAccountingWrite(current, released, uncertain(checkpoint, claim_epoch=2)).validate()
+    twice = _with_attempt(retry, claim_epoch=2)
+    with pytest.raises(BatchAccountingUnavailable):
+        BatchAccountingWrite(current, released, twice).validate()
+    with pytest.raises(BatchAccountingUnavailable):
+        BatchAccountingWrite(
+            claim,
+            checkpoint,
+            _with_attempt(checkpoint, claim_epoch=1).model_copy(update={"released_attempts": 2}),
+        ).validate()
+
+
 def test_new_batch_modules_have_bounded_typed_interfaces():
     for filename in (
         "accounting_checkpoint.py",

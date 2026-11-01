@@ -51,6 +51,7 @@ class BatchRetryTerminalReason(StrEnum):
     NOT_RETRYABLE = "not_retryable"
     ATTEMPTS_EXHAUSTED = "attempts_exhausted"
     BATCH_EXPIRED = "batch_expired"
+    ACCOUNTING_CLOSED = "accounting_closed"
 
 
 @dataclass(frozen=True, slots=True)

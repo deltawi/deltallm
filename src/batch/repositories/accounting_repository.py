@@ -56,6 +56,8 @@ WITH requests AS MATERIALIZED (
               AND (
                   i.accounting_checkpoint=r.checkpoint
                   OR i.accounting_checkpoint=jsonb_set(r.checkpoint,'{terminal}','null'::jsonb)
+                  OR (i.accounting_checkpoint - 'released_attempts')
+                     =jsonb_set(r.checkpoint,'{terminal}','null'::jsonb)
               )
           )
       )
