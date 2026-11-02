@@ -34,6 +34,10 @@ from src.batch.webhooks.observability import (
 )
 from src.batch.webhooks.worker import BatchWebhookOutboxWorker, BatchWebhookOutboxWorkerConfig
 from src.bootstrap.batch_runtime.core import BatchCoreComponents
+from src.bootstrap.batch_runtime.pool_sizing import (
+    completion_outbox_concurrency,
+    warn_if_batch_db_pool_is_small,
+)
 from src.bootstrap.batch_runtime.runtime import BatchRuntime
 from src.bootstrap.batch_runtime.scheduler import dynamic_config_generation
 
@@ -66,6 +70,7 @@ def start_batch_workers(
     runtime: BatchRuntime,
     core: BatchCoreComponents,
 ) -> BatchWebhookCipher | None:
+    warn_if_batch_db_pool_is_small(cfg.general_settings, getattr(app.state, "settings", None))
     native_billing = build_native_batch_billing(app.state, cfg.general_settings, repository)
     _start_executor_worker(app, cfg, repository, runtime, core, native_billing=native_billing)
     _start_completion_outbox_worker(
@@ -219,10 +224,7 @@ def _start_completion_outbox_worker(
             worker_id=_batch_worker_id("batch-completion-outbox"),
             poll_interval_seconds=general.embeddings_batch_poll_interval_seconds,
             max_batch_size=max(10, int(general.embeddings_batch_item_claim_limit or 20)),
-            max_concurrency=min(
-                8,
-                max(1, int(general.embeddings_batch_worker_concurrency or 4)),
-            ),
+            max_concurrency=completion_outbox_concurrency(general),
             lease_seconds=max(15, int(general.embeddings_batch_item_lease_seconds or 60)),
             heartbeat_interval_seconds=max(
                 1.0,
