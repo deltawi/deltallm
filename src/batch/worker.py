@@ -2346,12 +2346,43 @@ class BatchExecutorWorker:
 
     async def _process_items(self, job, items) -> None:  # noqa: ANN001
         self._sync_dependencies()
-        await self._execution_engine.process_items(
-            job,
-            items,
-            prepare_item=self._prepare_item_for_execution,
-            process_item=self._process_item,
-        )
+        slice_heartbeat = self._start_slice_lease_heartbeat(items)
+        try:
+            await self._execution_engine.process_items(
+                job,
+                items,
+                prepare_item=self._prepare_item_for_execution,
+                process_item=self._process_item,
+            )
+        finally:
+            if slice_heartbeat is not None:
+                await self._stop_heartbeat(slice_heartbeat)
+
+    def _start_slice_lease_heartbeat(self, items) -> asyncio.Task[None] | None:  # noqa: ANN001
+        # Claimed items can wait several rounds for a free slot before their own
+        # heartbeat starts. Keep the whole slice's leases fresh in one statement
+        # so a waiting item is not reclaimed by another worker before it runs.
+        owned = {
+            item.item_id: int(item.claim_epoch)
+            for item in items
+            if getattr(item, "claim_epoch", None) is not None
+        }
+        if not owned:
+            return None
+
+        async def _renew() -> bool:
+            if owned:
+                still_owned = await self.repository.renew_item_leases(
+                    item_claim_epochs=dict(owned),
+                    worker_id=self.config.worker_id,
+                    lease_seconds=self.config.item_lease_seconds,
+                )
+                # Finished, retried or lost items drop out; their own paths own them.
+                for item_id in [item_id for item_id in owned if item_id not in still_owned]:
+                    del owned[item_id]
+            return True
+
+        return self._start_heartbeat(renew=_renew, label=f"slice:{items[0].batch_id}")
 
     def _resolve_final_status(self, job) -> str:  # noqa: ANN001
         self._sync_dependencies()

@@ -5,7 +5,7 @@ import json
 import logging
 import math
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 from src.batch.models import BatchItemCreate, BatchItemRecord, BatchItemStatus
@@ -447,6 +447,42 @@ class BatchItemRepository:
             return await self._renew_item_lease_before_dispatch(args, expires_at)
         rows = await self.prisma.query_raw(RENEW_ITEM_LEASE_SQL, *args)
         return bool(rows)
+
+    async def renew_item_leases(
+        self,
+        *,
+        item_claim_epochs: Mapping[str, int],
+        worker_id: str,
+        lease_seconds: int,
+    ) -> set[str]:
+        """Renew many claimed items in one statement; returns the ids still owned."""
+        if self.prisma is None or not item_claim_epochs:
+            return set()
+        values_sql: list[str] = []
+        params: list[Any] = []
+        for item_id, claim_epoch in item_claim_epochs.items():
+            values_sql.append(f"(${len(params) + 1}, ${len(params) + 2}::bigint)")
+            params.extend((item_id, int(claim_epoch)))
+        worker_id_param = len(params) + 1
+        lease_seconds_param = len(params) + 2
+        params.extend((worker_id, lease_seconds))
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH payload(item_id, claim_epoch) AS (
+                VALUES {", ".join(values_sql)}
+            )
+            UPDATE deltallm_batch_item i
+            SET lease_expires_at = NOW() + (${lease_seconds_param} || ' seconds')::interval
+            FROM payload p
+            WHERE i.item_id = p.item_id
+              AND i.claim_epoch = p.claim_epoch
+              AND i.locked_by = ${worker_id_param}
+              AND i.status = 'in_progress'
+            RETURNING i.item_id
+            """,
+            *params,
+        )
+        return {str(row["item_id"]) for row in rows}
 
     async def _renew_item_lease_before_dispatch(
         self, args: tuple[str, str, int, int | None], expires_at: float

@@ -6436,6 +6436,78 @@ async def test_db_backed_gateway_busy_retry_gives_back_the_claimed_attempt(batch
 
 
 @pytest.mark.asyncio
+async def test_db_backed_slice_lease_renewal_keeps_only_items_this_worker_still_owns(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=line, custom_id=f"c{line}", request_body={"model": "m1"})
+            for line in range(1, 5)
+        ],
+    )
+    await repository.set_job_queued(job.batch_id, 4)
+    claim = await repository.claim_next_work(
+        worker_id="w1", max_items=4, max_work_units=100, lease_seconds=30
+    )
+    assert claim is not None
+    waiting, finished, reclaimed, stale_epoch = await repository.load_claim_items(claim.item_ids)
+    await batch_db.execute_raw(
+        "UPDATE deltallm_batch_item SET status = 'completed' WHERE item_id = $1",
+        finished.item_id,
+    )
+    await batch_db.execute_raw(
+        "UPDATE deltallm_batch_item SET locked_by = 'w2' WHERE item_id = $1",
+        reclaimed.item_id,
+    )
+
+    renewed = await repository.renew_item_leases(
+        item_claim_epochs={
+            waiting.item_id: waiting.claim_epoch,
+            finished.item_id: finished.claim_epoch,
+            reclaimed.item_id: reclaimed.claim_epoch,
+            stale_epoch.item_id: stale_epoch.claim_epoch + 1,
+        },
+        worker_id="w1",
+        lease_seconds=600,
+    )
+
+    assert renewed == {waiting.item_id}
+    rows = await batch_db.query_raw(
+        """
+        SELECT item_id, lease_expires_at > NOW() + INTERVAL '300 seconds' AS extended
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    extended = {row["item_id"]: row["extended"] for row in rows}
+    assert extended == {
+        waiting.item_id: True,
+        finished.item_id: False,
+        reclaimed.item_id: False,
+        stale_epoch.item_id: False,
+    }
+    assert (
+        await repository.renew_item_leases(item_claim_epochs={}, worker_id="w1", lease_seconds=600)
+        == set()
+    )
+
+
+@pytest.mark.asyncio
 async def test_db_backed_claim_next_work_does_not_strand_items_when_job_finalizing(
     batch_db,
 ) -> None:

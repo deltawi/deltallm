@@ -2306,6 +2306,95 @@ async def test_batch_chat_prepare_failure_save_error_does_not_stop_other_items(m
 
 
 @pytest.mark.asyncio
+async def test_batch_worker_renews_waiting_slice_items_until_each_one_ends():
+    class _RenewingRepository(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.renew_calls: list[dict] = []
+            self.renewed_twice = asyncio.Event()
+
+        async def renew_item_leases(self, **kwargs) -> set[str]:
+            self.renew_calls.append(kwargs)
+            if len(self.renew_calls) >= 2:
+                self.renewed_twice.set()
+            # chat-2 finished before the first renewal, so it is no longer ours.
+            return set(kwargs["item_claim_epochs"]) - {"chat-2"}
+
+    repo = _RenewingRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss"},
+        repository=repo,
+    )
+    worker.config.heartbeat_interval_seconds = 0.01
+    items = [
+        _build_chat_batch_item("chat-1", "a"),
+        _build_chat_batch_item("chat-2", "b"),
+        _build_chat_batch_item("chat-3", "c"),
+    ]
+    items[0].claim_epoch = 7
+    items[1].claim_epoch = 7
+    items[2].claim_epoch = 8
+
+    async def _slow_process_items(job, claimed, **kwargs) -> None:  # noqa: ANN001
+        del job, claimed, kwargs
+        await asyncio.wait_for(repo.renewed_twice.wait(), timeout=5)
+
+    worker._execution_engine.process_items = _slow_process_items  # type: ignore[method-assign]
+
+    await worker._process_items(_build_chat_batch_job(), items)
+    calls_when_done = len(repo.renew_calls)
+    await asyncio.sleep(0.05)
+
+    assert repo.renew_calls[0] == {
+        "item_claim_epochs": {"chat-1": 7, "chat-2": 7, "chat-3": 8},
+        "worker_id": "w1",
+        "lease_seconds": worker.config.item_lease_seconds,
+    }
+    assert repo.renew_calls[1]["item_claim_epochs"] == {"chat-1": 7, "chat-3": 8}
+    assert len(repo.renew_calls) == calls_when_done
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_slice_renewal_failure_does_not_stop_processing(caplog):
+    class _BusyRenewRepository(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.renew_attempts = 0
+            self.retried = asyncio.Event()
+
+        async def renew_item_leases(self, **kwargs) -> set[str]:
+            del kwargs
+            self.renew_attempts += 1
+            if self.renew_attempts >= 2:
+                self.retried.set()
+            raise DatabaseUnavailableError()
+
+    repo = _BusyRenewRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss"},
+        repository=repo,
+    )
+    worker.config.heartbeat_interval_seconds = 0.01
+    processed: list[str] = []
+
+    async def _slow_process_items(job, claimed, **kwargs) -> None:  # noqa: ANN001
+        del job, kwargs
+        await asyncio.wait_for(repo.retried.wait(), timeout=5)
+        processed.extend(item.item_id for item in claimed)
+
+    worker._execution_engine.process_items = _slow_process_items  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.WARNING, logger="src.batch.worker"):
+        await worker._process_items(
+            _build_chat_batch_job(), [_build_chat_batch_item("chat-1", "a")]
+        )
+
+    assert processed == ["chat-1"]
+    assert repo.renew_attempts >= 2
+    assert "batch lease heartbeat failed target=slice:b-chat" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_batch_worker_explicit_concurrent_mode_does_not_call_microbatch_executor(monkeypatch):
     execute_calls: list[str] = []
 
