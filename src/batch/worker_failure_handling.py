@@ -251,7 +251,8 @@ class WorkerFailureHandlingMixin:
             retry_delay_seconds=retry_delay,
             terminal_reason=terminal_reason,
         )
-        await self.repository.refresh_job_progress(batch_id)
+        # Job counters are recounted once per slice (refresh_jobs_after_claim), not
+        # per failure: the recount scans every item of the batch.
         await self._record_failure_runtime_hooks(
             job=job,
             item=item,

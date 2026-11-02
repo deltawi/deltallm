@@ -387,10 +387,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 item_ids,
                 released_item_ids,
             )
-            if not released_item_ids:
-                return False
-            await self.repository.refresh_job_progress(job.batch_id)
-            return True
+            return bool(released_item_ids)
 
         for prepared in prepared_items:
             self._record_item_failure_decision(
@@ -401,7 +398,6 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 retry_delay_seconds=retry_delay,
                 terminal_reason=None,
             )
-        await self.repository.refresh_job_progress(job.batch_id)
         logger.info(
             "batch chat microbatch retry scheduled batch_id=%s category=%s size=%s delay_seconds=%s item_ids=%s",
             job.batch_id,

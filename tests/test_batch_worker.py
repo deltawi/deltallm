@@ -1301,6 +1301,29 @@ async def test_batch_chat_releases_max_parallel_slot_after_provider_failure(monk
 
 
 @pytest.mark.asyncio
+async def test_batch_item_failure_does_not_recount_the_whole_job(monkeypatch):
+    async def _failing_execute_chat(request, payload, deployment, *, record_usage: bool = True):  # noqa: ANN001
+        del request, payload, deployment, record_usage
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", _failing_execute_chat)
+    repo = _FailureRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss"},
+        repository=repo,
+    )
+
+    await worker._process_items(
+        _build_chat_batch_job(),
+        [_build_chat_batch_item("chat-1", "a"), _build_chat_batch_item("chat-2", "b")],
+    )
+
+    assert sorted(call["item_id"] for call in repo.failed_calls) == ["chat-1", "chat-2"]
+    # The worker recounts once per slice after _process_items, not per failure.
+    assert repo.refresh_job_progress_calls == []
+
+
+@pytest.mark.asyncio
 async def test_batch_chat_max_parallel_policy_failure_does_not_mark_passive_health(monkeypatch):
     token_hash = "b" * 64
 
@@ -1795,7 +1818,8 @@ async def test_batch_worker_sync_microbatch_primary_failure_with_unsupported_fal
         "original_size": len(contents),
         "failed_size": len(contents),
     }
-    assert repo.refresh_job_progress_calls == ["b-chat"]
+    # The slice recounts job progress once when it ends, not per requeued chunk.
+    assert repo.refresh_job_progress_calls == []
     assert passive_health.calls == []
 
 
@@ -2132,7 +2156,8 @@ async def test_batch_worker_sync_microbatch_retryable_failure_requeues_chunk_and
         "original_size": 2,
         "failed_size": 2,
     }
-    assert repo.refresh_job_progress_calls == ["b-chat"]
+    # The slice recounts job progress once when it ends, not per requeued chunk.
+    assert repo.refresh_job_progress_calls == []
     assert passive_health.calls == []
 
 
