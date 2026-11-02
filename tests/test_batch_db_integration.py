@@ -6501,9 +6501,10 @@ async def test_db_backed_slice_lease_renewal_keeps_only_items_this_worker_still_
         reclaimed.item_id: False,
         stale_epoch.item_id: False,
     }
-    assert await repository.renew_item_leases(
-        item_claim_epochs={}, worker_id="w1", lease_seconds=600
-    ) == set()
+    assert (
+        await repository.renew_item_leases(item_claim_epochs={}, worker_id="w1", lease_seconds=600)
+        == set()
+    )
 
 
 @pytest.mark.asyncio
