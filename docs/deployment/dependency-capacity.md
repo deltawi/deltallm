@@ -85,6 +85,14 @@ the batch worker unless you set the value yourself. Waits on these pools show up
 `deltallm_database_allocation_events_total{outcome="queue_timeout"}` when they expire,
 and `outcome="full"` when every waiting position is taken.
 
+Size `db_pool_size` on batch worker pods for the batch work one process runs at once:
+`embeddings_batch_worker_concurrency` running items, plus the completion outbox (the
+same number, at most 8, when `embeddings_batch_completion_outbox_worker_enabled` is on),
+plus 2 for claims, the stale lease sweeper and finalization. For example, a concurrency
+of 16 needs a `db_pool_size` of at least 26. A batch worker logs a warning at startup
+when its pool is smaller. A bigger pool counts toward the PostgreSQL connection budget
+below, so to run more items at once you can also add batch worker pods instead.
+
 The telemetry acceptance and settlement allocations each reserve one bounded
 waiting position per configured connection for required writes. With ordinary
 operation intents enabled, the default telemetry total of five connections splits

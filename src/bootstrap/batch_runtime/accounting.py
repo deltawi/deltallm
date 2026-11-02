@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from prisma import Prisma
 from starlette.datastructures import State
 
@@ -12,10 +10,9 @@ from src.batch.repositories.accounting_repository import BatchAccountingReposito
 from src.batch.repository import BatchRepository
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.bootstrap.accounting_config import read_accounting_settings
+from src.bootstrap.batch_runtime.pool_sizing import batch_db_pool_size
 from src.config import GeneralSettings
 from src.services.tiers.tier_policy_service import TierPolicyService
-
-logger = logging.getLogger(__name__)
 
 
 def build_native_batch_billing(
@@ -52,14 +49,7 @@ def build_native_batch_billing(
 
 
 def batch_checkpoint_write_concurrency(general: GeneralSettings, settings: object) -> int:
-    pool_size = int(getattr(settings, "db_pool_size", None) or general.db_pool_size)
-    if general.embeddings_batch_worker_concurrency > pool_size:
-        logger.warning(
-            "batch worker concurrency %s exceeds db_pool_size %s; "
-            "items will queue for database writes, so add worker pods instead",
-            general.embeddings_batch_worker_concurrency,
-            pool_size,
-        )
+    pool_size = batch_db_pool_size(general, settings)
     configured = general.embeddings_batch_accounting_write_concurrency
     if configured > 0:
         return configured

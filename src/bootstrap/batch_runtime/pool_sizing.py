@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Claims, scheduler snapshots, the stale lease sweeper and finalization.
+BATCH_BACKGROUND_DB_CONNECTIONS = 2
+COMPLETION_OUTBOX_MAX_CONCURRENCY = 8
+
+
+def completion_outbox_concurrency(general: Any) -> int:
+    return min(
+        COMPLETION_OUTBOX_MAX_CONCURRENCY,
+        max(1, int(general.embeddings_batch_worker_concurrency or 4)),
+    )
+
+
+def batch_db_pool_size(general: Any, settings: object) -> int:
+    return int(getattr(settings, "db_pool_size", None) or general.db_pool_size)
+
+
+def warn_if_batch_db_pool_is_small(general: Any, settings: object) -> int | None:
+    """Warn when batch work on this process can need more connections than its pool.
+
+    Batch items, completion outbox saves and background batch work all use the
+    control pool (`db_pool_size`). Each running item can hold a connection at the
+    same moment (lease renewal, billing checkpoint, result save), so a pool smaller
+    than the sum makes items wait for or fail on a busy database. Returns the
+    number of connections batch work can use when it is larger than the pool.
+    """
+    if not getattr(general, "embeddings_batch_worker_enabled", False):
+        return None
+    pool_size = getattr(settings, "db_pool_size", None) or getattr(general, "db_pool_size", None)
+    if not pool_size:
+        return None
+    running_items = int(general.embeddings_batch_worker_concurrency)
+    outbox = (
+        completion_outbox_concurrency(general)
+        if getattr(general, "embeddings_batch_completion_outbox_worker_enabled", False)
+        else 0
+    )
+    needed = running_items + outbox + BATCH_BACKGROUND_DB_CONNECTIONS
+    if needed <= int(pool_size):
+        return None
+    logger.warning(
+        "batch db_pool_size %s is smaller than the %s connections batch work can use at once "
+        "(%s running items + %s completion outbox + %s background); set db_pool_size to at "
+        "least %s or lower embeddings_batch_worker_concurrency and add worker pods instead",
+        pool_size,
+        needed,
+        running_items,
+        outbox,
+        BATCH_BACKGROUND_DB_CONNECTIONS,
+        needed,
+    )
+    return needed
