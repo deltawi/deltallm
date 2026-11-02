@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from functools import partial
 import logging
 from time import perf_counter
 from typing import Any, Awaitable, Callable
@@ -12,6 +13,7 @@ from src.batch.chat_batching import (
 )
 from src.batch.chat_capacity import bind_chat_capacity
 from src.batch.chat_lease_lifecycle import ChatItemLeaseWatch, ClaimedChatAttemptCapacity
+from src.batch.work_unit_isolation import run_isolated_work_unit
 from src.router.attempt_capacity import attempt_capacity, bind_attempt_capacity
 from src.router.execution import RequestDeadline
 from src.batch.worker_types import (
@@ -111,13 +113,17 @@ class ChatDispatchMixin:
                     async with prepared_lock:
                         prepared_items.append(prepared)
                 except Exception as exc:
-                    await self._mark_item_failed(
-                        job=job,
-                        item=item,
-                        model_name=model_name,
-                        exc=exc,
-                        deployment_id=None,
-                        started_at_monotonic=started_at_monotonic,
+                    await run_isolated_work_unit(
+                        partial(
+                            self._mark_item_failed,
+                            job=job,
+                            item=item,
+                            model_name=model_name,
+                            exc=exc,
+                            deployment_id=None,
+                            started_at_monotonic=started_at_monotonic,
+                        ),
+                        batch_id=job.batch_id,
                     )
                 finally:
                     active -= 1
@@ -222,7 +228,7 @@ class ChatDispatchMixin:
                     capacity=self.config.worker_concurrency,
                 )
                 try:
-                    await work_unit()
+                    await run_isolated_work_unit(work_unit, batch_id=job.batch_id)
                 finally:
                     active -= 1
                     set_batch_worker_saturation(

@@ -22,6 +22,7 @@ from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.db.identity.key_repository import KeyRecord
+from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.models.errors import (
     BudgetExceededError,
     InvalidRequestError,
@@ -668,6 +669,49 @@ async def test_batch_model_group_deferral_metrics_use_effective_delay(monkeypatc
     assert repo.failed_calls[0]["retry_delay_seconds"] == 5
     assert counted_reasons == ["no_healthy_deployments"]
     assert observed_delays == [("no_healthy_deployments", 2)]
+
+
+@pytest.mark.asyncio
+async def test_embedding_failure_save_error_does_not_cancel_the_rest_of_the_slice(monkeypatch):
+    failure_recorded = asyncio.Event()
+    execute_inputs: list[object] = []
+
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        execute_inputs.append(payload.input)
+        if payload.input == "boom":
+            raise RuntimeError("provider failed")
+        # Still waiting on the provider when the other item's failure save fails.
+        await asyncio.wait_for(failure_recorded.wait(), timeout=5)
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+    worker, repo, _, _, _ = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    worker.config.worker_concurrency = 3
+
+    async def _busy_mark_item_failed(**kwargs) -> bool:
+        repo.failed_calls.append(kwargs)
+        failure_recorded.set()
+        raise DatabaseUnavailableError()
+
+    repo.mark_item_failed = _busy_mark_item_failed  # type: ignore[method-assign]
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello"),
+            _build_item(item_id="i2", input_value="boom"),
+            _build_item(item_id="i3", input_value="world"),
+        ],
+    )
+
+    assert sorted(execute_inputs) == ["boom", "hello", "world"]
+    assert [call["item_id"] for call in repo.failed_calls] == ["i2"]
+    assert sorted(call["item_id"] for call in repo.completed_calls) == ["i1", "i3"]
 
 
 @pytest.mark.asyncio

@@ -35,6 +35,7 @@ from src.batch.worker_types import (
 )
 from src.config import GeneralSettings
 from src.db.identity.key_repository import KeyRecord
+from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.guardrails.exceptions import GuardrailViolationError
 from src.services.identity.keys.key_service import KeyService
 from src.services.admission.limit_counter import LimitCounter
@@ -2170,6 +2171,113 @@ async def test_batch_worker_missing_chat_batching_config_keeps_concurrent_item_e
         "concurrent",
         "concurrent",
     ]
+
+
+class _BusyFailureRepository(_FakeRepository):
+    """Cannot record item failures, as when every DB connection is busy."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed_attempts: list[str] = []
+
+    async def mark_item_failed(self, **kwargs) -> bool:
+        self.failed_attempts.append(kwargs["item_id"])
+        raise DatabaseUnavailableError()
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_failure_save_error_does_not_cancel_the_rest_of_the_slice(monkeypatch):
+    execute_calls: list[str] = []
+    failure_recorded = asyncio.Event()
+
+    async def _fake_execute_chat(request, payload, deployment, *, record_usage: bool = True):  # noqa: ANN001
+        del request, deployment, record_usage
+        content = payload.messages[0].content
+        execute_calls.append(content)
+        if content == "boom":
+            raise RuntimeError("provider failed")
+        # Still waiting on the provider when the other item's failure save fails.
+        await asyncio.wait_for(failure_recorded.wait(), timeout=5)
+        return (
+            {
+                "id": f"chatcmpl-{content}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": payload.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+            },
+            5.0,
+        )
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", _fake_execute_chat)
+    repo = _BusyFailureRepository()
+    original_mark_item_failed = repo.mark_item_failed
+
+    async def _mark_item_failed(**kwargs) -> bool:
+        try:
+            return await original_mark_item_failed(**kwargs)
+        finally:
+            failure_recorded.set()
+
+    repo.mark_item_failed = _mark_item_failed  # type: ignore[method-assign]
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={
+            "provider": "vllm",
+            "model": "openai/gpt-oss-120b",
+            "api_base": "http://vllm.local/v1",
+        },
+        repository=repo,
+    )
+    worker.config.worker_concurrency = 3
+
+    await worker._process_items(
+        _build_chat_batch_job(),
+        [
+            _build_chat_batch_item("chat-1", "hello"),
+            _build_chat_batch_item("chat-2", "boom"),
+            _build_chat_batch_item("chat-3", "world"),
+        ],
+    )
+
+    assert sorted(execute_calls) == ["boom", "hello", "world"]
+    assert repo.failed_attempts == ["chat-2"]
+    assert sorted(call["item_id"] for call in repo.completed_calls) == ["chat-1", "chat-3"]
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_prepare_failure_save_error_does_not_stop_other_items(monkeypatch):
+    execute_calls: list[str] = []
+    _patch_fake_chat_execute(monkeypatch, execute_calls)
+    repo = _BusyFailureRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={
+            "provider": "vllm",
+            "model": "openai/gpt-oss-120b",
+            "api_base": "http://vllm.local/v1",
+        },
+        repository=repo,
+    )
+    worker.config.worker_concurrency = 2
+
+    await worker._process_items(
+        _build_chat_batch_job(),
+        [
+            _build_chat_batch_item("chat-1", "hello"),
+            _build_chat_batch_item("chat-2", "bad", request_overrides={"messages": "not-a-list"}),
+            _build_chat_batch_item("chat-3", "world"),
+        ],
+    )
+
+    assert repo.failed_attempts == ["chat-2"]
+    assert sorted(execute_calls) == ["hello", "world"]
+    assert sorted(call["item_id"] for call in repo.completed_calls) == ["chat-1", "chat-3"]
 
 
 @pytest.mark.asyncio
