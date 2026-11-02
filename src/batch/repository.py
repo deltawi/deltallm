@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 import logging
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from src.batch.claim_diagnostics import BatchClaimDecisionDiagnostic
 from src.batch.create.session_repository import BatchCreateSessionRepository
@@ -741,6 +741,19 @@ class BatchRepository:
             lease_seconds=lease_seconds,
             claim_epoch=claim_epoch,
             expires_at=expires_at,
+        )
+
+    async def renew_item_leases(
+        self,
+        *,
+        item_claim_epochs: Mapping[str, int],
+        worker_id: str,
+        lease_seconds: int,
+    ) -> set[str]:
+        return await self.items.renew_item_leases(
+            item_claim_epochs=item_claim_epochs,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
         )
 
     async def release_items_for_retry(

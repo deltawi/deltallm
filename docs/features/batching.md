@@ -243,6 +243,8 @@ Use `fifo_v1` only for local evaluation, very small single-tenant deployments, o
 
 `embeddings_batch_item_lease_seconds` should exceed the p99 provider call duration with margin. The default production value of `360` seconds works for most embedding and chat workloads. Keep `embeddings_batch_heartbeat_interval_seconds` well below the lease duration; `15` seconds renews the lease often enough without creating noisy database traffic.
 
+A worker claims a slice of items at once, and items can wait for a free slot before they start. On every heartbeat the worker renews the leases of all items in its slice that it still owns, in one database statement, so a waiting item is not taken by another worker before it runs. A running item also renews its own lease.
+
 Use `embeddings_batch_max_attempts: 5` for production if provider hiccups are common. Keep retry jitter enabled so workers do not retry the same provider or model group at the same instant.
 
 #### Retries with accounting v2
