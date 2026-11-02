@@ -81,6 +81,59 @@ async def test_control_and_consumer_saturation_does_not_use_foreground_slots():
         await asyncio.gather(*(pool.close() for pool in (control, consumer, auth, acceptance)))
 
 
+async def test_capacity_wait_queues_control_and_foreground_instead_of_shedding():
+    general = GeneralSettings(db_capacity_wait_seconds=2)
+    for name in ("control", "foreground"):
+        policy = DatabasePolicy.build(general, name, 1)
+        assert policy.queue_seconds == 2
+        assert policy.admission_seconds == policy.acquisition_seconds + 2
+        # The native pool deadline stays on the acquisition setting.
+        assert parse_qs(urlsplit(policy.connection_url("postgresql://db/x")).query)[
+            "pool_timeout"
+        ] == ["1"]
+    for name in ("telemetry", "telemetry_worker", "telemetry_settlement"):
+        assert DatabasePolicy.build(general, name, 1).queue_seconds == 0
+    assert DatabasePolicy.build(GeneralSettings(), "control", 1).queue_seconds == 0
+
+    allocation = DatabaseOwner(DatabasePolicy("control", 1, 0.01, 1, 0.05, 2, 0.5))
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+        return "first"
+
+    first = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+    second = asyncio.create_task(allocation.query(AsyncMock(return_value="second")))
+    await asyncio.sleep(0.05)  # Longer than the acquisition deadline alone.
+    assert allocation.gate.waiters == 1
+    finish.set()
+    assert await asyncio.gather(first, second) == ["first", "second"]
+    await allocation.close()
+
+
+async def test_capacity_wait_is_bounded_and_counts_toward_the_queue_size():
+    allocation = DatabaseOwner(DatabasePolicy("foreground", 1, 0.01, 1, 0.05, 2, 0.05))
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+
+    holder = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+    waiter = asyncio.create_task(allocation.query(AsyncMock()))
+    await asyncio.sleep(0)
+    with pytest.raises(DatabaseUnavailableError):
+        await allocation.query(AsyncMock())  # The single waiting position is taken.
+    with pytest.raises(DatabaseUnavailableError):
+        await waiter  # Waited longer than queue + acquisition.
+    finish.set()
+    await holder
+    await allocation.close()
+
+
 async def test_prisma_raw_and_model_actions_share_owner_and_copies(monkeypatch):
     allocation = owner()
     client = AllocatedPrisma(allocation=allocation)
@@ -104,6 +157,35 @@ class NativeTransaction:
         self.start = AsyncMock(return_value=self.client)
         self.commit = AsyncMock()
         self.rollback = AsyncMock()
+
+
+async def test_queued_transaction_starts_once_a_slot_frees(monkeypatch):
+    allocation = DatabaseOwner(DatabasePolicy("control", 1, 0.01, 1, 0.05, 2, 0.5))
+    native = NativeTransaction(allocation)
+    native.client._tx_id = "queued-transaction"
+    monkeypatch.setattr(Prisma, "_execute", AsyncMock(return_value={}))
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+
+    holder = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+
+    async def run_transaction():
+        async with AllocatedTransaction(allocation, native) as tx:
+            await tx._execute(method="query_raw", arguments={})
+        return "committed"
+
+    transaction = asyncio.create_task(run_transaction())
+    await asyncio.sleep(0.05)  # Longer than the acquisition deadline alone.
+    finish.set()
+    assert await transaction == "committed"
+    await holder
+    native.commit.assert_awaited_once()
+    assert allocation.gate.active == 0
+    await allocation.close()
 
 
 async def test_transaction_owns_one_slot_through_commit_and_rejects_nested_transactions(

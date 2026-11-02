@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Any, Awaitable, Iterator
 
 from src.batch.endpoints import batch_call_type_for_endpoint
+from src.batch.retry import is_gateway_busy
 from src.batch.policy import (
     BatchPolicyLease,
     acquire_batch_policy_lease,
@@ -35,6 +36,9 @@ _POLICY_RELEASE_RETRY_DRAIN_LIMIT = 16
 _POLICY_RELEASE_RETRY_QUEUE_LIMIT = 1024
 _POLICY_RELEASE_RETRY_INITIAL_SECONDS = 0.5
 _POLICY_RELEASE_RETRY_MAX_SECONDS = 30.0
+# After the provider has answered, a busy database must not throw the answer
+# away: wait and try the lease renewal or save again before giving up.
+_GATEWAY_BUSY_SAVE_DELAYS_SECONDS = (0.5, 1.0, 2.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,21 +276,27 @@ class WorkerPersistenceMixin:
             await self._release_prepared_policy_lease(prepared)
 
     async def _renew_item_lease_once(self, item_id: str, *, claim_epoch: int | None = None) -> bool:
-        try:
-            return await self.repository.renew_item_lease(
-                item_id=item_id,
-                worker_id=self.config.worker_id,
-                lease_seconds=self.config.item_lease_seconds,
-                claim_epoch=claim_epoch,
-            )
-        except Exception as exc:
-            logger.warning(
-                "batch item lease renewal before persistence failed item_id=%s error=%s",
-                item_id,
-                exc,
-                exc_info=True,
-            )
-            return False
+        busy_delays = iter(_GATEWAY_BUSY_SAVE_DELAYS_SECONDS)
+        while True:
+            try:
+                return await self.repository.renew_item_lease(
+                    item_id=item_id,
+                    worker_id=self.config.worker_id,
+                    lease_seconds=self.config.item_lease_seconds,
+                    claim_epoch=claim_epoch,
+                )
+            except Exception as exc:
+                delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                logger.warning(
+                    "batch item lease renewal before persistence failed item_id=%s retry_in_seconds=%s error=%s",
+                    item_id,
+                    delay,
+                    exc,
+                    exc_info=delay is None,
+                )
+                if delay is None:
+                    return False
+                await asyncio.sleep(delay)
 
     async def _await_with_lease_loss_cancellation(
         self,
@@ -382,7 +392,11 @@ class WorkerPersistenceMixin:
         item_ids: list[str],
         context_label: str,
     ) -> bool:
-        for attempt in range(2):
+        busy_delays = iter(_GATEWAY_BUSY_SAVE_DELAYS_SECONDS)
+        failures = 0
+        attempt = 0
+        while failures < 2:
+            attempt += 1
             try:
                 result = await self.repository.complete_items_with_outbox_bulk(
                     items=items,
@@ -393,10 +407,18 @@ class WorkerPersistenceMixin:
                     "batch completion persistence attempt failed context=%s item_ids=%s attempt=%s error=%s",
                     context_label,
                     item_ids,
-                    attempt + 1,
+                    attempt,
                     exc,
                     exc_info=True,
                 )
+                # A busy database gets short waits before it counts as a
+                # failure. The save is idempotent, so a retry after an
+                # uncertain commit returns already_completed.
+                delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                if delay is not None:
+                    await asyncio.sleep(delay)
+                else:
+                    failures += 1
                 continue
 
             if result in {"completed", "already_completed"}:
@@ -408,6 +430,7 @@ class WorkerPersistenceMixin:
                     item_ids,
                 )
                 return False
+            failures += 1
 
         try:
             requeued_item_ids = await self.repository.release_items_for_retry(

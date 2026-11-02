@@ -6392,6 +6392,50 @@ async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after
 
 
 @pytest.mark.asyncio
+async def test_db_backed_gateway_busy_retry_gives_back_the_claimed_attempt(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    await repository.create_items(
+        job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1"})],
+    )
+    await repository.set_job_queued(job.batch_id, 1)
+    claim = await repository.claim_next_work(
+        worker_id="w1", max_items=1, max_work_units=100, lease_seconds=120
+    )
+    assert claim is not None
+    [item] = await repository.load_claim_items(claim.item_ids)
+    assert item.attempts == 1
+
+    assert await repository.mark_item_failed(
+        item_id=item.item_id,
+        worker_id="w1",
+        error_body={"message": "Gateway busy", "gateway_busy_retries": 1},
+        last_error="Gateway busy",
+        retryable=True,
+        retry_delay_seconds=1,
+        claim_epoch=item.claim_epoch,
+        refund_attempt=True,
+    )
+
+    [stored] = await repository.load_claim_items([item.item_id])
+    assert stored.status == "pending"
+    assert stored.attempts == 0
+    assert stored.error_body == {"message": "Gateway busy", "gateway_busy_retries": 1}
+
+
+@pytest.mark.asyncio
 async def test_db_backed_claim_next_work_does_not_strand_items_when_job_finalizing(
     batch_db,
 ) -> None:

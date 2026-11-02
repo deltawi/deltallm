@@ -25,6 +25,7 @@ _PUBLIC_MESSAGES = {
     BatchRetryCategory.UPSTREAM_5XX: "Provider unavailable",
     BatchRetryCategory.SERVICE_UNAVAILABLE: "Provider unavailable",
     BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS: "No healthy deployments available",
+    BatchRetryCategory.GATEWAY_BUSY: "Gateway busy",
     BatchRetryCategory.INVALID_REQUEST: "Batch request was rejected",
     BatchRetryCategory.RESPONSE_SHAPE: "Provider returned an invalid response",
     BatchRetryCategory.BUDGET: "Budget exceeded",

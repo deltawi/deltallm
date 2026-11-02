@@ -7,6 +7,10 @@ class DatabaseAllocationSettings(BaseModel):
     db_foreground_pool_size: int = Field(default=8, ge=1, le=100)
     telemetry_worker_db_pool_size: int = Field(default=5, ge=1, le=100)
     db_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
+    # Control and foreground calls shed at once when their pool is busy, which
+    # keeps API latency bounded. Batch workers have no caller waiting on each
+    # query, so a short wait for a free connection beats failing the item.
+    db_capacity_wait_seconds: float = Field(default=0.0, ge=0, le=30)
     db_statement_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
     db_lock_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
     db_transaction_timeout_seconds: float = Field(default=2.0, ge=0.001, le=60)

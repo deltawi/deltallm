@@ -677,6 +677,7 @@ class BatchRepository:
         retryable: bool,
         retry_delay_seconds: int = 0,
         claim_epoch: int | None = None,
+        refund_attempt: bool = False,
     ) -> bool:
         return await self.items.mark_item_failed(
             item_id=item_id,
@@ -686,6 +687,7 @@ class BatchRepository:
             retryable=retryable,
             retry_delay_seconds=retry_delay_seconds,
             claim_epoch=claim_epoch,
+            refund_attempt=refund_attempt,
         )
 
     async def refresh_job_progress(self, batch_id: str) -> BatchJobRecord | None:

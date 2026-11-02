@@ -20,6 +20,7 @@ from src.batch.embedding_microbatch import (
 )
 from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.db.identity.key_repository import KeyRecord
 from src.models.errors import (
     BudgetExceededError,
@@ -383,8 +384,180 @@ async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
             "retryable": True,
             "retry_delay_seconds": 5,
             "claim_epoch": 0,
+            "refund_attempt": False,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_gateway_busy_retry_gives_back_the_attempt_and_retries_soon(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    monkeypatch.setattr(
+        "src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper
+    )
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 5  # The last attempt: a provider failure here would be terminal.
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=DatabaseUnavailableError(),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    [call] = repo.failed_calls
+    assert call["retryable"] is True
+    assert call["refund_attempt"] is True
+    assert call["retry_delay_seconds"] == 3
+    assert call["error_body"]["retry_category"] == "gateway_busy"
+    assert call["error_body"]["attempt"] == 4
+    assert call["error_body"]["gateway_busy_retries"] == 1
+    assert item.attempts == 5  # The caller's record is not mutated.
+
+
+@pytest.mark.asyncio
+async def test_gateway_busy_backs_off_and_stops_giving_attempts_back(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    monkeypatch.setattr(
+        "src.batch.worker_failure_handling.random.randint", lambda lower, upper: lower
+    )
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 2
+    item.error_body = {"retry_category": "gateway_busy", "gateway_busy_retries": 3}
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=DatabaseUnavailableError(),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+    assert repo.failed_calls[-1]["refund_attempt"] is True
+    assert repo.failed_calls[-1]["retry_delay_seconds"] == 8  # 24 s target, 8-24 s
+
+    item.attempts = 5
+    item.error_body = {"retry_category": "gateway_busy", "gateway_busy_retries": 10}
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=DatabaseUnavailableError(),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+    call = repo.failed_calls[-1]
+    assert call["refund_attempt"] is False
+    assert call["retryable"] is False
+    assert call["error_body"]["terminal_reason"] == "attempts_exhausted"
+    assert call["error_body"]["gateway_busy_retries"] == 11
+
+
+@pytest.mark.asyncio
+async def test_gateway_busy_after_a_funded_attempt_still_uses_the_attempt(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 2
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=DatabaseUnavailableError(),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+        native_execution=SimpleNamespace(pricing=object()),  # type: ignore[arg-type]
+    )
+
+    [call] = repo.failed_calls
+    assert call["retryable"] is True
+    assert call["refund_attempt"] is False
+    assert call["error_body"]["attempt"] == 2
+
+
+@pytest.mark.asyncio
+async def test_terminal_gateway_busy_failure_keeps_the_attempt_it_used():
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 2
+    item.accounting_checkpoint = object()  # Billing already closed: it cannot run again.
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=DatabaseUnavailableError(),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    [call] = repo.failed_calls
+    assert call["retryable"] is False
+    assert call["refund_attempt"] is False
+    assert call["error_body"]["terminal_reason"] == "accounting_closed"
+    assert call["error_body"]["attempt"] == 2
+
+
+@pytest.mark.asyncio
+async def test_busy_database_after_provider_answer_retries_lease_and_save(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    engine = worker._execution_engine
+    sleeps: list[float] = []
+
+    async def no_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("src.batch.worker_persistence.asyncio.sleep", no_sleep)
+    renew_results: list[object] = [DatabaseUnavailableError(), DatabaseUnavailableError(), True]
+    save_results: list[object] = [DatabaseUnavailableError(), "completed"]
+
+    async def renew_item_lease(**kwargs):
+        result = renew_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    async def complete_items_with_outbox_bulk(**kwargs):
+        result = save_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(repo, "renew_item_lease", renew_item_lease)
+    monkeypatch.setattr(repo, "complete_items_with_outbox_bulk", complete_items_with_outbox_bulk)
+
+    assert await engine._renew_item_lease_once("i1", claim_epoch=1) is True
+    assert await engine._persist_completion_rows_with_outbox(
+        items=[{"item_id": "i1", "claim_epoch": 1}],
+        item_ids=["i1"],
+        context_label="chat",
+    )
+    assert sleeps == [0.5, 1.0, 0.5]
+    assert repo.release_for_retry_calls == []
+
+
+@pytest.mark.asyncio
+async def test_busy_database_lease_renewal_gives_up_after_bounded_waits(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    sleeps: list[float] = []
+
+    async def no_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def renew_item_lease(**kwargs):
+        raise DatabaseUnavailableError()
+
+    monkeypatch.setattr("src.batch.worker_persistence.asyncio.sleep", no_sleep)
+    monkeypatch.setattr(repo, "renew_item_lease", renew_item_lease)
+
+    assert await worker._execution_engine._renew_item_lease_once("i1", claim_epoch=1) is False
+    assert sleeps == [0.5, 1.0, 2.0]
 
 
 @pytest.mark.asyncio

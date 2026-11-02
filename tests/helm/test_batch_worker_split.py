@@ -587,6 +587,9 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert worker_general["embeddings_batch_scheduler_claim_mode"] == "job_fifo"
     assert worker_general["embeddings_batch_worker_concurrency"] == 2
     assert worker_general["embeddings_batch_item_claim_limit"] == 10
+    # Batch pods wait briefly for a database connection; API pods fail fast.
+    assert worker_general["db_capacity_wait_seconds"] == 2
+    assert "db_capacity_wait_seconds" not in api_general
 
 
 def test_split_mode_long_name_override_keeps_worker_out_of_api_service() -> None:

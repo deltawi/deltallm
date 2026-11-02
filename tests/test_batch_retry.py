@@ -5,7 +5,15 @@ import pytest
 
 from src.batch.backpressure import BatchModelGroupDeferred
 from src.batch.chat_batching import normalize_chat_microbatch_results
-from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, classify_batch_retry
+from src.batch.error_sanitization import stable_batch_error_message
+from src.batch.retry import (
+    BatchResponseShapeError,
+    BatchRetryCategory,
+    classify_batch_retry,
+    is_gateway_busy,
+)
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+from src.db.runtime.allocated_client import DatabaseUnavailableError
 from src.models.errors import (
     AuthenticationUnavailableError,
     BudgetExceededError,
@@ -346,3 +354,18 @@ def test_authentication_unavailable_retains_its_retry_recommendation():
     assert error.retry_after == 1
     assert classify_batch_retry(error).retry_after_seconds == 1
     assert error.affects_deployment_health is False
+    assert classify_batch_retry(error).category is BatchRetryCategory.GATEWAY_BUSY
+
+
+@pytest.mark.parametrize("error", [DatabaseUnavailableError(), SpendPersistenceUnavailable()])
+def test_busy_gateway_database_is_not_reported_as_a_provider_failure(error):
+    wrapped = RuntimeError("failover exhausted")
+    attach_failover_original_error(wrapped, error)
+
+    for exc in (error, wrapped):
+        decision = classify_batch_retry(exc)
+        assert decision.retryable is True
+        assert decision.category is BatchRetryCategory.GATEWAY_BUSY
+        assert is_gateway_busy(exc)
+    assert stable_batch_error_message(BatchRetryCategory.GATEWAY_BUSY) == "Gateway busy"
+    assert not is_gateway_busy(ServiceUnavailableError(message="overloaded"))

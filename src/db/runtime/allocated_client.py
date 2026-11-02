@@ -88,10 +88,14 @@ async def _native_call(operation: Callable[[], Awaitable[T]], seconds: float) ->
 class DatabaseOwner:
     def __init__(self, policy: DatabasePolicy):
         self.policy = policy
-        # Required acceptance and receipts need a finite burst buffer. Other
-        # business allocations keep immediate shedding; health may borrow one waiter.
+        # Required acceptance and receipts need a finite burst buffer, as do
+        # allocations given a queue wait (batch workers). Others keep immediate
+        # shedding; health may borrow one waiter.
         self._business_waiters = (
-            policy.connections if policy.allocation in {"telemetry", "telemetry_settlement"} else 0
+            policy.connections
+            if policy.allocation in {"telemetry", "telemetry_settlement"}
+            or policy.queue_seconds > 0
+            else 0
         )
         self.gate = BoundedCapacityGate(
             concurrency=policy.connections, max_waiters=self._business_waiters
@@ -105,7 +109,8 @@ class DatabaseOwner:
             raise DatabaseUnavailableError()
         try:
             await self.gate.acquire(
-                timeout_seconds=min(
+                timeout_seconds=self.policy.queue_seconds
+                + min(
                     self.policy.acquisition_seconds,
                     timeout_seconds
                     if timeout_seconds is not None
@@ -140,7 +145,7 @@ class DatabaseOwner:
             task.exception()  # Observe errors after an abandoned caller.
 
     async def query(self, operation: Callable[[], Awaitable[T]]) -> T:
-        deadline = monotonic() + self.policy.acquisition_seconds + self.policy.statement_seconds
+        deadline = monotonic() + self.policy.admission_seconds + self.policy.statement_seconds
         await self.acquire()
         task = self.spawn(self._query(operation))
         return await self._wait_query(task, deadline)
@@ -318,6 +323,10 @@ class AllocatedTransaction:
         acquisition_deadline = monotonic() + self.acquisition_seconds
         await self.owner.acquire(timeout_seconds=self.acquisition_seconds)
         self._owns_slot = True
+        if self.owner.policy.queue_seconds:
+            # A caller that queued for its slot still gets the full native
+            # acquisition deadline to start the transaction.
+            acquisition_deadline = max(acquisition_deadline, monotonic() + self.acquisition_seconds)
         self.expires_at = (
             monotonic() + self.owner.policy.native_query_seconds + self.transaction_seconds
         )
