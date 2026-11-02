@@ -524,6 +524,40 @@ class BatchItemRepository:
             batch_id,
         )
 
+    async def list_cancel_requested_batches_to_settle(self, *, limit: int) -> list[str]:
+        """Return cancel-requested active jobs that still have unstarted work or none left.
+
+        Jobs whose only open items are running are left to the worker that runs them.
+        """
+        if self.prisma is None:
+            return []
+        rows = await self.prisma.query_raw(
+            """
+            SELECT j.batch_id
+            FROM deltallm_batch_job j
+            WHERE j.status IN ('queued', 'in_progress')
+              AND j.cancel_requested_at IS NOT NULL
+              AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM deltallm_batch_item i
+                        WHERE i.batch_id = j.batch_id
+                          AND i.status = 'pending'
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM deltallm_batch_item i
+                        WHERE i.batch_id = j.batch_id
+                          AND i.status = 'in_progress'
+                    )
+              )
+            ORDER BY j.cancel_requested_at ASC, j.batch_id ASC
+            LIMIT $1
+            """,
+            max(1, min(int(limit), 1_000)),
+        )
+        return [str(row["batch_id"]) for row in rows]
+
     async def list_items(self, batch_id: str) -> list[BatchItemRecord]:
         if self.prisma is None:
             return []

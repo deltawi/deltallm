@@ -22,6 +22,9 @@ class _SweeperRepository:
         self.fail = fail
         self.sweep_calls: list[dict[str, object]] = []
         self.summary_calls = 0
+        self.cancel_settle_limits: list[int] = []
+        self.cancel_settled = 0
+        self.cancel_settle_error: Exception | None = None
 
     async def sweep_expired_batch_leases(self, *, now, page_size: int, max_rows_per_run: int):  # noqa: ANN001
         self.sweep_calls.append(
@@ -34,6 +37,12 @@ class _SweeperRepository:
         if self.fail:
             raise RuntimeError("sweep failed")
         return dict(self.result)
+
+    async def settle_cancel_requests(self, *, limit: int) -> int:
+        self.cancel_settle_limits.append(limit)
+        if self.cancel_settle_error is not None:
+            raise self.cancel_settle_error
+        return self.cancel_settled
 
     async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
         del now
@@ -106,9 +115,45 @@ async def test_stale_lease_sweeper_worker_runs_bounded_pass_and_refreshes_metric
         ("jobs", "refreshed", 1),
         ("items", "skipped_active", 3),
         ("jobs", "skipped_active", 4),
+        ("jobs", "cancel_settled", 0),
     ]
+    assert repository.cancel_settle_limits == [1_000]
     assert durations and durations[0] >= 0.0
     assert published
+
+
+@pytest.mark.asyncio
+async def test_stale_lease_sweeper_settles_cancel_requests_without_a_model_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row_counts: list[tuple[str, str, int]] = []
+    monkeypatch.setattr(
+        "src.batch.stale_lease_sweeper.increment_batch_stale_lease_sweeper_rows",
+        lambda *, kind, result, count: row_counts.append((kind, result, count)),
+    )
+    repository = _SweeperRepository()
+    repository.cancel_settled = 2
+    worker = BatchStaleLeaseSweeperWorker(
+        repository=repository,
+        config=BatchStaleLeaseSweeperConfig(page_size=25),
+    )
+
+    await worker.process_once()
+
+    assert repository.cancel_settle_limits == [25]
+    assert ("jobs", "cancel_settled", 2) in row_counts
+
+
+@pytest.mark.asyncio
+async def test_stale_lease_sweeper_keeps_running_when_cancel_settling_fails() -> None:
+    repository = _SweeperRepository()
+    repository.cancel_settle_error = RuntimeError("db busy")
+    worker = BatchStaleLeaseSweeperWorker(repository=repository)
+
+    result = await worker.process_once()
+
+    assert result["items"] == 0
+    assert repository.summary_calls == 1
 
 
 @pytest.mark.asyncio

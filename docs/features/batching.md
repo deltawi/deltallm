@@ -554,7 +554,9 @@ queued --> in_progress --> finalizing --> completed
 | `cancelled` | Cancelled by the user or an admin; pending items are skipped |
 | `expired` | The batch exceeded its retention window |
 
-Public `/v1/batches` responses use OpenAI-compatible status values and response fields so OpenAI-compatible clients can parse them. Internal `queued` jobs are returned as `validating`, and an `in_progress` job with a pending cancel request is returned as `cancelling`. Other compatible statuses are returned unchanged. The public response also includes `completion_window`, `errors`, `expires_at`, `failed_at`, and `expired_at` fields.
+A cancel request cancels the batch's unstarted items right away, even when its model has no free capacity or an item is waiting for a retry. Items that are already running finish first. If that first step can't reach the database, the stale lease sweeper finishes it on its next run (every 60 s by default).
+
+Public `/v1/batches` responses use OpenAI-compatible status values and response fields so OpenAI-compatible clients can parse them. Internal `queued` jobs are returned as `validating`, and an `in_progress` or `finalizing` job with a pending cancel request is returned as `cancelling`. Other compatible statuses are returned unchanged. The public response also includes `completion_window`, `errors`, `expires_at`, `failed_at`, and `expired_at` fields.
 
 ## API Endpoints
 

@@ -1338,9 +1338,23 @@ async def cancel_batch(
         """,
         batch_id,
     )
+    status_value = dict(updated[0]).get("status") if updated else job.get("status")
+    repository = getattr(request.app.state, "batch_repository", None)
+    if repository is not None and str(status_value) in {"queued", "in_progress"}:
+        try:
+            settled = await repository.apply_cancel_request(batch_id)
+            if settled is not None:
+                status_value = getattr(settled.status, "value", settled.status)
+        except Exception:
+            # The cancel request is stored; the stale lease sweeper settles it.
+            logger.warning(
+                "admin batch cancel could not settle pending items batch_id=%s",
+                batch_id,
+                exc_info=True,
+            )
     return {
         "batch_id": batch_id,
-        "status": dict(updated[0]).get("status") if updated else job.get("status"),
+        "status": status_value,
         "cancel_requested": True,
     }
 

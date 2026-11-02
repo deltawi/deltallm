@@ -2517,6 +2517,83 @@ async def test_db_backed_terminal_webhook_reconciliation_preserves_snapshot_afte
 
 
 @pytest.mark.asyncio
+async def test_db_backed_cancel_settles_without_a_model_claim(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+
+    async def _job(item_statuses: list[str]) -> str:
+        job = await repository.create_job(
+            endpoint="/v1/chat/completions",
+            input_file_id=input_file_id,
+            model="busy-model",
+            metadata=None,
+            created_by_api_key="key-a",
+            created_by_user_id=None,
+            created_by_team_id=None,
+            expires_at=None,
+        )
+        assert job is not None
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=index,
+                    custom_id=f"line-{index}",
+                    request_body={"model": "busy-model", "messages": []},
+                    estimated_work_units=1,
+                )
+                for index in range(1, len(item_statuses) + 1)
+            ],
+        )
+        for index, item_status in enumerate(item_statuses, start=1):
+            await batch_db.execute_raw(
+                """
+                UPDATE deltallm_batch_item
+                SET status = $3,
+                    locked_by = CASE WHEN $3 = 'in_progress' THEN 'worker-a' END,
+                    lease_expires_at = CASE WHEN $3 = 'in_progress' THEN NOW() + INTERVAL '5 minutes' END,
+                    not_before_at = CASE WHEN $3 = 'pending' THEN NOW() + INTERVAL '1 hour' END
+                WHERE batch_id = $1 AND line_number = $2
+                """,
+                job.batch_id,
+                index,
+                item_status,
+            )
+        await repository.set_job_queued(job.batch_id, len(item_statuses))
+        return job.batch_id
+
+    # Every pending item waits on a retry delay, so no worker could claim them.
+    waiting_batch = await _job(["pending", "pending"])
+    running_batch = await _job(["in_progress", "pending"])
+    untouched_batch = await _job(["pending"])
+    assert await repository.request_cancel(waiting_batch) is not None
+    assert await repository.request_cancel(running_batch) is not None
+
+    assert await repository.settle_cancel_requests(limit=10) == 2
+
+    async def _statuses(batch_id: str) -> list[str]:
+        rows = await batch_db.query_raw(
+            "SELECT status FROM deltallm_batch_item WHERE batch_id = $1 ORDER BY line_number",
+            batch_id,
+        )
+        return [str(dict(row)["status"]) for row in rows]
+
+    assert await _statuses(waiting_batch) == ["cancelled", "cancelled"]
+    assert await _statuses(running_batch) == ["in_progress", "cancelled"]
+    assert await _statuses(untouched_batch) == ["pending"]
+    waiting_job = await repository.get_job(waiting_batch)
+    running_job = await repository.get_job(running_batch)
+    assert waiting_job is not None and waiting_job.status is BatchJobStatus.FINALIZING
+    assert running_job is not None and running_job.status is BatchJobStatus.IN_PROGRESS
+    # A job whose only open item is running is left to the worker running it.
+    assert await repository.settle_cancel_requests(limit=10) == 0
+
+    finalization = await repository.claim_next_finalization(worker_id="worker-b", lease_seconds=30)
+    assert finalization is not None
+    assert finalization.batch_id == waiting_batch
+
+
+@pytest.mark.asyncio
 async def test_db_backed_late_cancellation_controls_terminal_status_and_webhook_event(
     batch_db,
 ) -> None:

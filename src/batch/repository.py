@@ -1019,6 +1019,22 @@ class BatchRepository:
     async def mark_pending_items_cancelled(self, batch_id: str) -> None:
         await self.items.mark_pending_items_cancelled(batch_id)
 
+    async def apply_cancel_request(self, batch_id: str) -> BatchJobRecord | None:
+        """Cancel a cancel-requested job's unstarted items without waiting for a claim.
+
+        Items that are already running finish as usual. When nothing is left
+        running, the job moves to finalizing and any worker finalizes it.
+        """
+        await self.items.mark_pending_items_cancelled(batch_id)
+        return await self.jobs.refresh_job_progress(batch_id)
+
+    async def settle_cancel_requests(self, *, limit: int) -> int:
+        settled = 0
+        for batch_id in await self.items.list_cancel_requested_batches_to_settle(limit=limit):
+            await self.apply_cancel_request(batch_id)
+            settled += 1
+        return settled
+
     async def list_items(self, batch_id: str) -> list[BatchItemRecord]:
         return await self.items.list_items(batch_id)
 
