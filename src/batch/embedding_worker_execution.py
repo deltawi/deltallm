@@ -437,7 +437,6 @@ class EmbeddingWorkerExecutionMixin:
             if released_item_ids:
                 await self._stop_heartbeat_tasks(item_heartbeats.values())
                 item_heartbeats.clear()
-                await self.repository.refresh_job_progress(job.batch_id)
                 return True
             return False
 
@@ -448,7 +447,6 @@ class EmbeddingWorkerExecutionMixin:
             result=result,
             retry_delay_seconds=retry_delay,
         )
-        await self.repository.refresh_job_progress(job.batch_id)
         logger.info(
             "batch embedding microbatch retry scheduled batch_id=%s category=%s result=%s size=%s next_max_inputs=%s delay_seconds=%s item_ids=%s",
             job.batch_id,
