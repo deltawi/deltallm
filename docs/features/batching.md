@@ -568,6 +568,10 @@ Public `/v1/batches` responses use OpenAI-compatible status values and response 
 | `GET` | `/v1/batches/{batch_id}` | Get batch status and progress |
 | `POST` | `/v1/batches/{batch_id}/cancel` | Request cancellation of a running batch |
 
+`GET /v1/files/{file_id}/content` streams the file from storage in 256 KiB chunks, so a large output doesn't have to fit in API pod memory.
+On S3 the download reads the object as it arrives and doesn't spool it to a temp file first.
+If storage fails before the first chunk, the request returns an error. If it fails later, the download is cut off and the failure is logged and counted in `deltallm_batch_artifact_failures_total` (`operation="read"`).
+
 Operators also have admin endpoints for monitoring and repair. See [Admin Endpoints](../api/admin.md#batches).
 
 ## Configuration

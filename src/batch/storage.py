@@ -114,6 +114,14 @@ class BatchArtifactStorage:
 
         return await self.write_chunks(purpose=purpose, filename=filename, chunks=_chunks())
 
+    async def stream_bytes(self, storage_key: str, chunk_size: int = 65_536) -> AsyncIterator[bytes]:
+        """Yield an artifact for a client download, keeping memory per chunk.
+
+        Backends that buffer in ``iter_bytes`` override this to read directly.
+        """
+        async for chunk in self.iter_bytes(storage_key, chunk_size=chunk_size):
+            yield chunk
+
     async def read_bytes(self, storage_key: str) -> bytes:
         parts: list[bytes] = []
         async for chunk in self.iter_bytes(storage_key):
@@ -419,6 +427,21 @@ class S3BatchArtifactStorage(BatchArtifactStorage):
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(spool.close)
         return storage_key, total_bytes, checksum.hexdigest()
+
+    async def stream_bytes(self, storage_key: str, chunk_size: int = 65_536) -> AsyncIterator[bytes]:
+        # Read the object body as it arrives instead of spooling the whole object
+        # first, so a download needs neither the full object in memory nor on disk.
+        response = await asyncio.to_thread(self.s3.get_object, Bucket=self.bucket, Key=storage_key)
+        body = response["Body"]
+        try:
+            while True:
+                chunk = await asyncio.to_thread(body.read, chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(body.close)
 
     async def iter_bytes(self, storage_key: str, chunk_size: int = 65_536) -> AsyncIterator[bytes]:
         spool = tempfile.SpooledTemporaryFile(max_size=self.spool_max_bytes)

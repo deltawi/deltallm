@@ -13,7 +13,7 @@ from src.batch.models import (
     BatchJobStatus,
     OPENAI_BATCH_COMPLETION_WINDOW,
 )
-from src.batch.service import OPENAI_BATCH_STATUS_VALUES, BatchService
+from src.batch.service import FILE_DOWNLOAD_CHUNK_BYTES, OPENAI_BATCH_STATUS_VALUES, BatchService
 from src.metrics.batch import deltallm_batch_artifact_failures_metric
 from src.db.routing.callable_targets import CallableTargetBindingRecord
 from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
@@ -1012,3 +1012,159 @@ async def test_get_batch_denies_same_organization_for_team_owned_batch_with_diff
         )
 
     assert exc.value.status_code == 403
+
+
+def _download_file_record(*, created_by_api_key: str = "key-a") -> BatchFileRecord:
+    return BatchFileRecord(
+        file_id="f1",
+        purpose="batch_output",
+        filename="out.jsonl",
+        bytes=10,
+        status="processed",
+        storage_backend="local",
+        storage_key="batch_output/f1",
+        checksum=None,
+        created_by_api_key=created_by_api_key,
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_at=datetime.now(tz=UTC),
+        expires_at=None,
+    )
+
+
+class _DownloadRepo:
+    def __init__(self, record: BatchFileRecord) -> None:
+        self.record = record
+
+    async def get_file(self, file_id: str):  # noqa: ANN201
+        assert file_id == "f1"
+        return self.record
+
+
+class _StreamingStorage(_DummyStorage):
+    def __init__(self, chunks: list[bytes], *, fail_at: int | None = None) -> None:
+        super().__init__()
+        self.chunks = chunks
+        self.fail_at = fail_at
+        self.chunk_sizes: list[int] = []
+        self.closed = False
+
+    async def stream_bytes(self, storage_key: str, chunk_size: int = 65_536):  # noqa: ANN201
+        self.reads.append(storage_key)
+        self.chunk_sizes.append(chunk_size)
+        try:
+            for index, chunk in enumerate(self.chunks):
+                if index == self.fail_at:
+                    raise RuntimeError("storage offline")
+                yield chunk
+        finally:
+            self.closed = True
+
+    async def read_bytes(self, storage_key: str) -> bytes:
+        raise AssertionError("downloads must not read the whole file")
+
+
+@pytest.mark.asyncio
+async def test_open_file_content_streams_chunks_without_reading_whole_file() -> None:
+    storage = _StreamingStorage([b"01234", b"56789"])
+    service = BatchService(
+        repository=_DownloadRepo(_download_file_record()),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+
+    content = await service.open_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-a"))
+    chunks = [chunk async for chunk in content.chunks]
+
+    assert content.size_bytes == 10
+    assert chunks == [b"01234", b"56789"]
+    assert storage.reads == ["batch_output/f1"]
+    assert storage.chunk_sizes == [FILE_DOWNLOAD_CHUNK_BYTES]
+    assert storage.closed is True
+
+
+@pytest.mark.asyncio
+async def test_open_file_content_denies_other_owner_before_opening_storage() -> None:
+    storage = _StreamingStorage([b"secret"])
+    service = BatchService(
+        repository=_DownloadRepo(_download_file_record(created_by_api_key="key-a")),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.open_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-b"))
+
+    assert exc.value.status_code == 403
+    assert storage.reads == []
+
+
+@pytest.mark.asyncio
+async def test_open_file_content_fails_before_response_when_first_read_fails() -> None:
+    storage = _StreamingStorage([b"01234"], fail_at=0)
+    service = BatchService(
+        repository=_DownloadRepo(_download_file_record()),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+    before = _metric_counter_value(
+        deltallm_batch_artifact_failures_metric, operation="read", backend="local"
+    )
+
+    with pytest.raises(RuntimeError, match="storage offline"):
+        await service.open_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-a"))
+
+    after = _metric_counter_value(
+        deltallm_batch_artifact_failures_metric, operation="read", backend="local"
+    )
+    assert after == before + 1
+    assert storage.closed is True
+
+
+@pytest.mark.asyncio
+async def test_open_file_content_counts_failure_during_stream() -> None:
+    storage = _StreamingStorage([b"01234", b"56789"], fail_at=1)
+    service = BatchService(
+        repository=_DownloadRepo(_download_file_record()),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+    before = _metric_counter_value(
+        deltallm_batch_artifact_failures_metric, operation="read", backend="local"
+    )
+
+    content = await service.open_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-a"))
+    received: list[bytes] = []
+    with pytest.raises(RuntimeError, match="storage offline"):
+        async for chunk in content.chunks:
+            received.append(chunk)
+
+    after = _metric_counter_value(
+        deltallm_batch_artifact_failures_metric, operation="read", backend="local"
+    )
+    assert received == [b"01234"]
+    assert after == before + 1
+    assert storage.closed is True
+
+
+@pytest.mark.asyncio
+async def test_open_file_content_aclose_releases_storage_when_body_is_never_sent() -> None:
+    storage = _StreamingStorage([b"01234", b"56789"])
+    service = BatchService(
+        repository=_DownloadRepo(_download_file_record()),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+
+    content = await service.open_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-a"))
+    await content.aclose()
+
+    assert storage.closed is True
+
+
+@pytest.mark.asyncio
+async def test_open_file_content_streams_empty_file() -> None:
+    storage = _StreamingStorage([])
+    service = BatchService(
+        repository=_DownloadRepo(_download_file_record()),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+
+    content = await service.open_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-a"))
+
+    assert [chunk async for chunk in content.chunks] == []
