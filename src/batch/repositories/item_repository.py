@@ -673,24 +673,33 @@ class BatchItemRepository:
                 "oldest_pending_item_age_seconds": 0.0,
                 "oldest_in_progress_item_age_seconds": 0.0,
             }
+        # Start from active jobs and read only their open items through the
+        # (batch_id, status) index, so the cost follows active work instead of
+        # the retained item history. Open items under a terminal job never run
+        # again and are not counted.
         rows = await self.prisma.query_raw(
             """
             SELECT
-                COUNT(*) FILTER (WHERE status = 'pending') AS pending_items,
-                COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress_items,
+                COUNT(*) FILTER (WHERE i.status = 'pending') AS pending_items,
+                COUNT(*) FILTER (WHERE i.status = 'in_progress') AS in_progress_items,
                 COALESCE(
-                    EXTRACT(EPOCH FROM ($1::timestamp - MIN(CASE WHEN status = 'pending' THEN created_at END))),
+                    EXTRACT(EPOCH FROM ($1::timestamp - MIN(CASE WHEN i.status = 'pending' THEN i.created_at END))),
                     0
                 ) AS oldest_pending_item_age_seconds,
                 COALESCE(
                     EXTRACT(
                         EPOCH FROM (
-                            $1::timestamp - MIN(CASE WHEN status = 'in_progress' THEN COALESCE(started_at, created_at) END)
+                            $1::timestamp
+                            - MIN(CASE WHEN i.status = 'in_progress' THEN COALESCE(i.started_at, i.created_at) END)
                         )
                     ),
                     0
                 ) AS oldest_in_progress_item_age_seconds
-            FROM deltallm_batch_item
+            FROM deltallm_batch_job j
+            JOIN deltallm_batch_item i
+              ON i.batch_id = j.batch_id
+             AND i.status IN ('pending', 'in_progress')
+            WHERE j.status IN ('queued', 'in_progress', 'finalizing')
             """,
             now,
         )
