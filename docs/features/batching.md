@@ -262,6 +262,14 @@ An item is retried this way only while all of these hold:
 
 Otherwise the item fails with `terminal_reason` `accounting_closed` (or `attempts_exhausted`). If a worker crashes during a call, the next claim still closes that operation as uncertain without calling the provider again. Known gap: when a whole embedding micro-batch fails, its items are not retried this way yet.
 
+#### When the gateway's database is busy
+
+A batch item can also fail because DeltaLLM's own database could not take the work, not because the provider failed. These failures (`database_unavailable`, `spend_persistence_unavailable`, `billing_operation_unavailable` and `auth_fallback_unavailable`) have their own retry category, `gateway_busy`, and show as "Gateway busy" instead of "Provider unavailable".
+
+- **Batch workers wait for a connection.** The Helm chart sets `db_capacity_wait_seconds: 2` on batch worker pods, so a database call waits up to 2 seconds for a free connection instead of failing at once. API pods keep `0` so request latency stays bounded. See [Dependency capacity](../deployment/dependency-capacity.md).
+- **A short retry that does not use an attempt.** A `gateway_busy` item retries after 1 to 3 seconds, then backs off (targets 6, 12, 24, 48, then 60 seconds, with jitter) if the database stays busy. The first 10 such retries per item give the attempt back, so they do not count toward `embeddings_batch_max_attempts`. After that, or when the failure came after an accounting v2 attempt was funded, the retry uses an attempt as usual. The item's error body records the count in `gateway_busy_retries`.
+- **A provider answer is not thrown away.** If the database is busy right after the provider answered, the worker waits (0.5, 1 and 2 seconds) and tries the lease renewal or the save again before it gives up and requeues the item.
+
 The stale lease sweeper should stay enabled. It reclaims expired item and job leases even when no worker is currently scanning the affected model group.
 
 ## Quick Start

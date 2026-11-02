@@ -23,6 +23,16 @@ from src.guardrails.exceptions import GuardrailViolationError
 from src.router.execution import get_failover_original_error
 
 _NO_HEALTHY_DEPLOYMENTS_MARKER = "no healthy deployments available"
+# The gateway's own database could not take the work right now. The provider
+# was not at fault, so these failures get their own short, bounded retry.
+_GATEWAY_BUSY_CODES = frozenset(
+    {
+        "database_unavailable",
+        "spend_persistence_unavailable",
+        "billing_operation_unavailable",
+        "auth_fallback_unavailable",
+    }
+)
 
 
 class BatchResponseShapeError(ValueError):
@@ -39,6 +49,7 @@ class BatchRetryCategory(StrEnum):
     UPSTREAM_5XX = "upstream_5xx"
     SERVICE_UNAVAILABLE = "service_unavailable"
     NO_HEALTHY_DEPLOYMENTS = "no_healthy_deployments"
+    GATEWAY_BUSY = "gateway_busy"
     INVALID_REQUEST = "invalid_request"
     RESPONSE_SHAPE = "response_shape"
     BUDGET = "budget"
@@ -95,6 +106,12 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
             return BatchRetryDecision(
                 retryable=True,
                 category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS,
+                retry_after_seconds=_proxy_retry_after(exc),
+            )
+        if exc.code in _GATEWAY_BUSY_CODES:
+            return BatchRetryDecision(
+                retryable=True,
+                category=BatchRetryCategory.GATEWAY_BUSY,
                 retry_after_seconds=_proxy_retry_after(exc),
             )
         return BatchRetryDecision(
@@ -160,6 +177,14 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
         retryable=False,
         category=BatchRetryCategory.UNKNOWN,
         terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
+    )
+
+
+def is_gateway_busy(exc: BaseException) -> bool:
+    """True when the gateway's own database, not the provider, refused the work."""
+    return (
+        isinstance(exc, Exception)
+        and classify_batch_retry(exc).category is BatchRetryCategory.GATEWAY_BUSY
     )
 
 

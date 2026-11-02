@@ -51,6 +51,7 @@ general_settings:
   telemetry_db_pool_size: 5
   telemetry_worker_db_pool_size: 5
   db_acquisition_timeout_seconds: 0.2
+  db_capacity_wait_seconds: 0  # batch worker pods: 2 (Helm default)
   db_lock_timeout_seconds: 0.2
   db_statement_timeout_seconds: 1.0
   db_transaction_timeout_seconds: 2.0
@@ -74,6 +75,16 @@ commit or rollback, and permits only one outstanding native query on that transa
 Model queries, raw SQL and generated batch execution share this owner. There are no
 new per-request SQL calls or client retries.
 
+`db_capacity_wait_seconds` lets control and foreground work wait for a free slot
+instead of failing at once. It gives each of those pools one waiting position per
+connection, and a waiting call may take up to this many seconds plus the acquisition
+deadline before it fails with `database_unavailable`. Keep it at `0` on API pods so
+request latency stays bounded. Batch worker pods have no caller waiting on each query,
+and a busy pool there used to fail whole batch items, so the Helm chart sets `2` for
+the batch worker unless you set the value yourself. Waits on these pools show up as
+`deltallm_database_allocation_events_total{outcome="queue_timeout"}` when they expire,
+and `outcome="full"` when every waiting position is taken.
+
 The telemetry acceptance and settlement allocations each reserve one bounded
 waiting position per configured connection for required writes. With ordinary
 operation intents enabled, the default telemetry total of five connections splits
@@ -86,8 +97,9 @@ A readiness probe borrows one existing slot and temporarily permits one business
 waiter, bounded by the same acquisition deadline. Each allocation permits only one
 probe; cancellation retains its slot until native work ends. This prevents health
 traffic from immediately shedding settlement on a one-connection allocation.
-No extra connection is added. With all allocations enabled, there are at most
-`3 + telemetry_db_pool_size` waiting operations per process, or 352 with
+No extra connection is added. With all allocations enabled and no capacity wait, there
+are at most `3 + telemetry_db_pool_size` waiting operations per process (a batch worker
+with `db_capacity_wait_seconds` adds `db_pool_size + db_foreground_pool_size`), or 352 with
 the default telemetry total at the illustrative 44-process
 rollout ceiling below, within the existing bounded request/worker allocations.
 `deltallm_database_allocation_seconds{operation="readiness"}` measures probe time;

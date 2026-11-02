@@ -10,6 +10,7 @@ from src.database_settings import DatabaseAllocationSettings
 DatabaseAllocation = Literal[
     "control", "foreground", "telemetry", "telemetry_worker", "telemetry_settlement"
 ]
+_WAITING_ALLOCATIONS = frozenset({"control", "foreground"})
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,8 @@ class DatabasePolicy:
     statement_seconds: float
     lock_seconds: float
     transaction_seconds: float
+    # In-process wait for a free slot, before the native acquisition deadline.
+    queue_seconds: float = 0.0
 
     @classmethod
     def build(cls, config: DatabaseAllocationSettings, allocation: DatabaseAllocation, size: int):
@@ -37,7 +40,13 @@ class DatabasePolicy:
             config.db_background_transaction_timeout_seconds
             if background
             else config.db_transaction_timeout_seconds,
+            config.db_capacity_wait_seconds if allocation in _WAITING_ALLOCATIONS else 0.0,
         )
+
+    @property
+    def admission_seconds(self) -> float:
+        """Longest a caller may wait for a slot: the queue plus native acquisition."""
+        return self.queue_seconds + self.acquisition_seconds
 
     @property
     def native_query_seconds(self) -> float:

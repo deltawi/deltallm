@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 from math import ceil
 import random
@@ -27,6 +28,17 @@ from src.router.execution import get_failover_attempt_context
 
 logger = logging.getLogger(__name__)
 
+# A busy gateway database is not the provider's fault. Up to this many such
+# retries per item give back the attempt instead of using one of max_attempts.
+GATEWAY_BUSY_FREE_RETRIES = 10
+_GATEWAY_BUSY_MAX_DELAY_SECONDS = 60
+
+
+def gateway_busy_retries(item: BatchItemRecord) -> int:
+    body = item.error_body
+    value = body.get("gateway_busy_retries") if isinstance(body, dict) else None
+    return value if type(value) is int and value > 0 else 0
+
 
 class WorkerFailureHandlingMixin:
     native_billing: NativeBatchBilling | None = None
@@ -43,8 +55,23 @@ class WorkerFailureHandlingMixin:
         native_execution: BatchAccountingExecution | None = None,
     ) -> None:
         retry_decision = classify_batch_retry(exc)
+        busy_retries = gateway_busy_retries(item)
+        refund_attempt = (
+            retry_decision.category is BatchRetryCategory.GATEWAY_BUSY
+            and busy_retries < GATEWAY_BUSY_FREE_RETRIES
+            and item.attempts > 0
+            # A funded attempt counts toward the billing operation's own
+            # attempt cap, so only an unfunded attempt can be given back.
+            and (native_execution is None or native_execution.pricing is None)
+        )
+        if refund_attempt:
+            item = replace(item, attempts=item.attempts - 1)
         retry_delay = (
-            self._retry_delay_seconds(item_attempts=item.attempts, decision=retry_decision)
+            self._retry_delay_seconds(
+                item_attempts=item.attempts,
+                decision=retry_decision,
+                gateway_busy_retries=busy_retries,
+            )
             if retry_decision.retryable
             else 0
         )
@@ -67,6 +94,7 @@ class WorkerFailureHandlingMixin:
             started_at_monotonic=started_at_monotonic,
             retry_decision=retry_decision,
             retry_delay_seconds=retry_delay,
+            refund_attempt=refund_attempt,
         )
 
     async def _hold_native_billing_for_retry(
@@ -115,6 +143,7 @@ class WorkerFailureHandlingMixin:
         started_at_monotonic: float,
         retry_decision: BatchRetryDecision | None = None,
         retry_delay_seconds: int | None = None,
+        refund_attempt: bool = False,
     ) -> None:
         batch_id = job.batch_id
         failover_context = get_failover_attempt_context(exc)
@@ -126,7 +155,9 @@ class WorkerFailureHandlingMixin:
             candidate_retry_delay = retry_delay_seconds
         elif retry_decision.retryable:
             candidate_retry_delay = self._retry_delay_seconds(
-                item_attempts=item.attempts, decision=retry_decision
+                item_attempts=item.attempts,
+                decision=retry_decision,
+                gateway_busy_retries=gateway_busy_retries(item),
             )
         else:
             candidate_retry_delay = 0
@@ -154,6 +185,10 @@ class WorkerFailureHandlingMixin:
                 retry_delay_seconds=candidate_retry_delay,
             )
         )
+        if refund_attempt and not retryable:
+            # The item stops here, so its record keeps the attempt it used.
+            item = replace(item, attempts=item.attempts + 1)
+            refund_attempt = False
         retry_delay = candidate_retry_delay if retryable else 0
         error_payload = self._build_failure_error_payload(
             item=item,
@@ -172,8 +207,12 @@ class WorkerFailureHandlingMixin:
             retryable=retryable,
             retry_delay_seconds=retry_delay,
             claim_epoch=item.claim_epoch,
+            refund_attempt=refund_attempt,
         )
         if not updated and retryable:
+            if refund_attempt:
+                item = replace(item, attempts=item.attempts + 1)
+                refund_attempt = False
             await self._close_held_native_billing(item)
             retryable = False
             retry_delay = 0
@@ -261,6 +300,11 @@ class WorkerFailureHandlingMixin:
             "attempt": int(item.attempts),
             "max_attempts": int(self.config.max_attempts),
         }
+        busy_retries = gateway_busy_retries(item) + (
+            1 if decision.category is BatchRetryCategory.GATEWAY_BUSY else 0
+        )
+        if busy_retries:
+            error_payload["gateway_busy_retries"] = busy_retries
         public_code = exception_public_error_code(exc)
         if public_code is not None:
             error_payload["code"] = public_code.value
@@ -369,7 +413,20 @@ class WorkerFailureHandlingMixin:
             self.config.max_attempts,
         )
 
-    def _retry_delay_seconds(self, *, item_attempts: int, decision: BatchRetryDecision) -> int:
+    def _retry_delay_seconds(
+        self,
+        *,
+        item_attempts: int,
+        decision: BatchRetryDecision,
+        gateway_busy_retries: int | None = None,
+    ) -> int:
+        if decision.category is BatchRetryCategory.GATEWAY_BUSY:
+            step = (
+                gateway_busy_retries
+                if gateway_busy_retries is not None
+                else max(0, item_attempts - 1)
+            )
+            return self._gateway_busy_delay_seconds(step, retry_after=decision.retry_after_seconds)
         initial = max(1, int(self.config.retry_initial_seconds))
         max_delay = max(initial, int(self.config.retry_max_seconds))
         multiplier = max(1.0, float(self.config.retry_multiplier))
@@ -384,3 +441,16 @@ class WorkerFailureHandlingMixin:
 
         lower_bound = max(1, provider_delay or 0, ceil(target_delay / 2))
         return random.randint(lower_bound, target_delay)
+
+    def _gateway_busy_delay_seconds(self, step: int, *, retry_after: int | None = None) -> int:
+        """Retry soon after a busy database, backing off if it stays busy.
+
+        Targets 3, 6, 12, 24, 48, then 60 seconds; with jitter each wait is a
+        random value from a third of the target up to the target (1-3 s first).
+        """
+        ceiling = max(1, min(_GATEWAY_BUSY_MAX_DELAY_SECONDS, int(self.config.retry_max_seconds)))
+        floor = min(ceiling, max(1, retry_after or 0))
+        target = max(floor, min(ceiling, 3 * 2 ** min(max(0, step), 5)))
+        if not self.config.retry_jitter or target <= floor:
+            return target
+        return random.randint(max(floor, target // 3), target)

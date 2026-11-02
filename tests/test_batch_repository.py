@@ -3519,11 +3519,32 @@ async def test_retryable_mark_item_failed_uses_database_deadline_guard():
         60,
         "worker-1",
         7,
+        0,
     )
     assert "FROM deltallm_batch_job j" in prisma.sql
     assert "j.batch_id = i.batch_id" in prisma.sql
     assert "NOW() + ($4 || ' seconds')::interval < j.expires_at" in prisma.sql
     assert "i.claim_epoch = $6::bigint" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_retryable_mark_item_failed_can_give_back_the_claimed_attempt():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    await repository.mark_item_failed(
+        item_id="item-1",
+        worker_id="worker-1",
+        error_body={"message": "Gateway busy"},
+        last_error="Gateway busy",
+        retryable=True,
+        retry_delay_seconds=2,
+        claim_epoch=7,
+        refund_attempt=True,
+    )
+
+    assert prisma.params[-1] == 1
+    assert "attempts = GREATEST(i.attempts - $7::int, 0)" in prisma.sql
 
 
 @pytest.mark.asyncio

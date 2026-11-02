@@ -370,6 +370,7 @@ class BatchItemRepository:
         retryable: bool,
         retry_delay_seconds: int = 0,
         claim_epoch: int | None = None,
+        refund_attempt: bool = False,
     ) -> bool:
         if self.prisma is None:
             return False
@@ -377,6 +378,7 @@ class BatchItemRepository:
             logger.warning("refusing item failure update without worker ownership and claim epoch")
             return False
         if retryable:
+            # A refunded retry gives back the attempt its claim counted.
             rows = await self.prisma.query_raw(
                 """
                 UPDATE deltallm_batch_item i
@@ -385,7 +387,8 @@ class BatchItemRepository:
                     last_error = $3,
                     lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                     not_before_at = NOW() + ($4 || ' seconds')::interval,
-                    locked_by = NULL
+                    locked_by = NULL,
+                    attempts = GREATEST(i.attempts - $7::int, 0)
                 FROM deltallm_batch_job j
                 WHERE i.item_id = $1
                   AND i.locked_by = $5
@@ -401,6 +404,7 @@ class BatchItemRepository:
                 max(0, retry_delay_seconds),
                 worker_id,
                 claim_epoch,
+                1 if refund_attempt else 0,
             )
             return bool(rows)
         rows = await self.prisma.query_raw(
