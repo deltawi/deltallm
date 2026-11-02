@@ -25,6 +25,7 @@ from src.batch.retry import (
     BatchRetryDecision,
     classify_batch_retry,
 )
+from src.batch.work_unit_isolation import run_isolated_work_unit
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
 from src.batch.worker_types import (
     BatchItemLeaseLostError,
@@ -1122,7 +1123,7 @@ class EmbeddingWorkerExecutionMixin:
                     capacity=self.config.worker_concurrency,
                 )
                 try:
-                    await work_unit()
+                    await run_isolated_work_unit(work_unit, batch_id=job.batch_id)
                 finally:
                     active -= 1
                     set_batch_worker_saturation(

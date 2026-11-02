@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from functools import partial
 import logging
 from time import perf_counter
 from typing import Any, Awaitable, Callable
@@ -18,6 +19,7 @@ from src.batch.worker_failure_handling import WorkerFailureHandlingMixin
 from src.batch.worker_persistence import WorkerPersistenceMixin
 from src.batch.worker_runtime_hooks import WorkerRuntimeHooksMixin
 from src.batch.worker_types import _PreparedChatItem, _PreparedEmbeddingItem, BatchWorkerConfig
+from src.batch.work_unit_isolation import run_isolated_work_unit
 from src.metrics import set_batch_worker_saturation
 from src.models.errors import InvalidRequestError
 
@@ -211,7 +213,10 @@ class BatchExecutionEngine(
                         capacity=self.config.worker_concurrency,
                     )
                     try:
-                        await process_item_fn(job, item)
+                        await run_isolated_work_unit(
+                            partial(process_item_fn, job, item),
+                            batch_id=job.batch_id,
+                        )
                     finally:
                         active -= 1
                         set_batch_worker_saturation(
