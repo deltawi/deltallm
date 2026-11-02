@@ -233,7 +233,7 @@ Sizing rule:
 Use `smart_v1` for production batch scheduling. It composes:
 
 - work-slice claims, so workers claim bounded item slices instead of monopolizing one large job
-- model-capacity gating, so saturated models do not block idle models
+- model-capacity gating, so saturated models do not block idle models. When several models have queued work, a free worker goes to the model using the smallest share of its batch capacity (`max_in_flight`), with queue age breaking ties. Jobs on different models therefore run side by side instead of waiting for the oldest model's backlog to drain; a model running alone still gets every worker.
 - tenant fair-share, so one tenant cannot dominate a hot model queue
 - size and age ranking, so small jobs get better latency while large jobs continue making progress
 

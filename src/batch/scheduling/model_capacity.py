@@ -149,6 +149,23 @@ class _DeploymentCapacitySet:
         return self.healthy + self.recoverable
 
 
+def _spread_order(snapshot: BatchModelCapacitySnapshot) -> tuple[Any, ...]:
+    """Prefer the model using the smallest share of its batch capacity.
+
+    Workers hold one slice at a time, so oldest-first alone lets the oldest
+    model take every worker until its backlog drains while other models wait.
+    Ordering by in-flight share sends an idle worker to the least busy model;
+    queue age breaks ties, so a model running alone still gets every worker.
+    """
+    share = snapshot.in_flight_items / max(1, snapshot.max_in_flight_items)
+    return (
+        share,
+        snapshot.oldest_queue_entered_at or datetime.max.replace(tzinfo=UTC),
+        snapshot.model_group,
+        snapshot.service_tier,
+    )
+
+
 class BatchModelCapacityResolver:
     def __init__(
         self,
@@ -202,14 +219,7 @@ class BatchModelCapacityResolver:
                 self._record_skip(snapshot, reason)
             if not eligible:
                 return []
-            ordered = sorted(
-                eligible,
-                key=lambda snapshot: (
-                    snapshot.oldest_queue_entered_at or datetime.max.replace(tzinfo=UTC),
-                    snapshot.model_group,
-                    snapshot.service_tier,
-                ),
-            )
+            ordered = sorted(eligible, key=_spread_order)
             return [
                 BatchModelCapacitySelection(
                     snapshot=snapshot,
