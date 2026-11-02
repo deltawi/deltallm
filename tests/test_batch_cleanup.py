@@ -58,6 +58,11 @@ class _RepoStub:
     async def delete_file(self, file_id: str) -> None:
         self.deleted_files.append(file_id)
 
+    async def delete_expired_unreferenced_file(self, file_id: str, *, now: datetime) -> bool:
+        del now
+        self.deleted_files.append(file_id)
+        return True
+
     async def delete_terminal_webhook_outbox_before(
         self,
         *,
@@ -110,6 +115,101 @@ async def test_batch_cleanup_worker_deletes_expired_jobs_and_files():
     assert repo.cleanup_job_calls == 3
     assert repo.deleted_files == ["f-1"]
     assert storage.deleted == ["batch_output/f-1"]
+
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_deletes_file_record_before_object() -> None:
+    events: list[str] = []
+
+    class _Repo(_RepoStub):
+        async def delete_expired_unreferenced_file(self, file_id: str, *, now: datetime) -> bool:
+            events.append(f"row:{file_id}")
+            return await super().delete_expired_unreferenced_file(file_id, now=now)
+
+    class _Storage(_StorageStub):
+        async def delete(self, storage_key: str) -> None:
+            events.append(f"object:{storage_key}")
+            await super().delete(storage_key)
+
+    worker = BatchRetentionCleanupWorker(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=_Storage(),  # type: ignore[arg-type]
+        config=BatchCleanupConfig(scan_limit=10),
+    )
+
+    await worker.process_once()
+
+    assert events == ["row:f-1", "object:batch_output/f-1"]
+
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_keeps_object_when_file_became_referenced() -> None:
+    class _Repo(_RepoStub):
+        async def delete_expired_unreferenced_file(self, file_id: str, *, now: datetime) -> bool:
+            del file_id, now
+            return False
+
+    repo = _Repo()
+    storage = _StorageStub()
+    worker = BatchRetentionCleanupWorker(
+        repository=repo,  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+        config=BatchCleanupConfig(scan_limit=10),
+    )
+
+    deleted_jobs, deleted_files = await worker.process_once()
+
+    assert (deleted_jobs, deleted_files) == (2, 0)
+    assert storage.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_keeps_object_when_file_record_delete_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Repo(_RepoStub):
+        async def delete_expired_unreferenced_file(self, file_id: str, *, now: datetime) -> bool:
+            del file_id, now
+            raise RuntimeError("database unavailable")
+
+    storage = _StorageStub()
+    worker = BatchRetentionCleanupWorker(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+        config=BatchCleanupConfig(scan_limit=10),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="src.batch.cleanup"):
+        deleted_jobs, deleted_files = await worker.process_once()
+
+    assert (deleted_jobs, deleted_files) == (2, 0)
+    assert storage.deleted == []
+    assert "batch file record delete failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_counts_file_when_object_delete_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Storage(_StorageStub):
+        async def delete(self, storage_key: str) -> None:
+            del storage_key
+            raise RuntimeError("object store unavailable")
+
+    repo = _RepoStub()
+    worker = BatchRetentionCleanupWorker(
+        repository=repo,  # type: ignore[arg-type]
+        storage=_Storage(),  # type: ignore[arg-type]
+        config=BatchCleanupConfig(scan_limit=10),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="src.batch.cleanup"):
+        deleted_jobs, deleted_files = await worker.process_once()
+
+    assert (deleted_jobs, deleted_files) == (2, 1)
+    assert repo.deleted_files == ["f-1"]
+    assert "object left in storage" in caplog.text
+    assert "storage_key=batch_output/f-1" in caplog.text
 
 
 @pytest.mark.asyncio

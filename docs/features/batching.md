@@ -560,7 +560,7 @@ Public `/v1/batches` responses use OpenAI-compatible status values and response 
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `POST` | `/v1/files` | Upload a JSONL input file (`purpose=batch`) |
+| `POST` | `/v1/files` | Upload a JSONL input file (`purpose=batch`; other OpenAI purposes are accepted, unknown values return `400`) |
 | `GET` | `/v1/files/{file_id}` | Check file metadata and status |
 | `GET` | `/v1/files/{file_id}/content` | Download file content (input, output, or error) |
 | `POST` | `/v1/batches` | Create a new batch from an uploaded file |
@@ -732,6 +732,13 @@ Completed batches and their artifacts are automatically cleaned up by a backgrou
 | `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |
 | `batch_webhook_delivery_retention_days` | `30` | Days to keep delivered and failed webhook rows for inspection and replay history |
 | `batch_webhook_cleanup_max_rows_per_run` | `10000` | Maximum terminal webhook rows deleted per garbage-collection run across bounded pages |
+
+Uploaded files expire after `batch_metadata_retention_days`.
+A batch create request that names an expired input file returns `400 Input file has expired`.
+Cleanup deletes an expired file's database row first, in one statement that also checks that no batch or batch create request uses the file.
+It then deletes the stored object.
+Because the row goes first, a file that a new batch starts using at the same moment keeps its content.
+If the object delete fails, cleanup logs the storage key and leaves the object in storage.
 
 Webhook cleanup uses the same bounded garbage-collection loop.
 It processes short database pages until no eligible rows remain or it reaches `batch_webhook_cleanup_max_rows_per_run`.

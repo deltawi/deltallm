@@ -786,6 +786,71 @@ async def test_create_file_enforces_max_file_bytes() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["../../etc", "/tmp/escape", "batch/../../x", "", "BATCH"])
+async def test_create_file_rejects_unknown_purpose_before_writing(purpose: str) -> None:
+    class _Upload:
+        filename = "batch.jsonl"
+
+        async def read(self, size: int = -1):  # noqa: ARG002
+            raise AssertionError("upload should not be read")
+
+    storage = _DummyStorage()
+    service = BatchService(
+        repository=_DummyRepo(),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_file(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            upload=_Upload(),  # type: ignore[arg-type]
+            purpose=purpose,
+        )
+
+    assert exc.value.status_code == 400
+    assert "Invalid purpose" in str(exc.value.detail)
+    assert storage.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["batch", "user_data"])
+async def test_create_file_accepts_openai_purposes(purpose: str) -> None:
+    class _Upload:
+        filename = "batch.jsonl"
+
+        def __init__(self) -> None:
+            self._chunks = [b'{"custom_id":"item-1"}\n', b""]
+
+        async def read(self, size: int = -1):  # noqa: ARG002
+            return self._chunks.pop(0)
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.purposes: list[str] = []
+
+        async def create_file(self, **kwargs):  # noqa: ANN003
+            self.purposes.append(kwargs["purpose"])
+            return None
+
+    repo = _Repo()
+    service = BatchService(
+        repository=repo,  # type: ignore[arg-type]
+        storage=_DummyStorage(),  # type: ignore[arg-type]
+    )
+
+    # The stub repository returns no record, so the call ends in 503 after the purpose check.
+    with pytest.raises(HTTPException) as exc:
+        await service.create_file(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            upload=_Upload(),  # type: ignore[arg-type]
+            purpose=purpose,
+        )
+
+    assert exc.value.status_code == 503
+    assert repo.purposes == [purpose]
+
+
+@pytest.mark.asyncio
 async def test_create_file_deletes_written_artifact_when_db_record_creation_fails() -> None:
     class _Upload:
         filename = "batch.jsonl"

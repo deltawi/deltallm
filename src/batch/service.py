@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# OpenAI-compatible upload purposes. Batch input uses "batch"; the rest are
+# accepted so OpenAI clients keep working, but only these exact values.
+SUPPORTED_FILE_PURPOSES = frozenset(
+    {"assistants", "batch", "evals", "fine-tune", "user_data", "vision"}
+)
+
 OPENAI_BATCH_STATUS_VALUES = frozenset(
     {
         "validating",
@@ -213,6 +219,15 @@ class BatchService:
     async def create_file(
         self, *, auth: UserAPIKeyAuth, upload: UploadFile, purpose: str
     ) -> dict[str, Any]:
+        if purpose not in SUPPORTED_FILE_PURPOSES:
+            # The purpose becomes part of the storage key, so only known values are allowed.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Invalid purpose '{purpose[:64]}'; expected one of: "
+                    + ", ".join(sorted(SUPPORTED_FILE_PURPOSES))
+                ),
+            )
         storage_key: str | None = None
         record = None
         backend = str(getattr(self.storage, "backend_name", "local") or "local")

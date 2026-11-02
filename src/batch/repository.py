@@ -1444,3 +1444,6 @@ class BatchRepository:
 
     async def delete_file(self, file_id: str) -> None:
         await self.files.delete_file(file_id)
+
+    async def delete_expired_unreferenced_file(self, file_id: str, *, now: datetime) -> bool:
+        return await self.files.delete_expired_unreferenced_file(file_id, now=now)

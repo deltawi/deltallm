@@ -415,6 +415,8 @@ GET /v1/files/{file_id}/content
 ```
 
 Use files as the input and output artifacts for batch jobs.
+`purpose` defaults to `batch`. The gateway accepts only the OpenAI purposes `assistants`, `batch`, `evals`, `fine-tune`, `user_data`, and `vision`, and returns `400` for any other value.
+A batch can't use an input file after its `expires_at` time; the create request returns `400 Input file has expired`.
 
 ```bash
 curl http://localhost:8000/v1/files \

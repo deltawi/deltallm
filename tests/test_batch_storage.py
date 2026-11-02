@@ -335,3 +335,48 @@ async def test_s3_batch_storage_list_keys_returns_oldest_entries_first() -> None
     )
 
     assert keys == [oldest_key]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["../escape", "/tmp/absolute-escape", "batch/../../escape"])
+async def test_local_batch_storage_refuses_purpose_outside_base_dir(tmp_path: Path, purpose: str) -> None:
+    base_dir = tmp_path / "batch-artifacts"
+    storage = LocalBatchArtifactStorage(str(base_dir))
+
+    with pytest.raises(ValueError, match="outside the storage directory"):
+        await storage.write_bytes(purpose=purpose, filename="input.jsonl", content=b"{}\n")
+
+    written = [path for path in tmp_path.rglob("*") if path.is_file()]
+    assert written == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("storage_key", ["../outside.jsonl", "/etc/hostname", "batch/../../outside.jsonl"])
+async def test_local_batch_storage_refuses_keys_outside_base_dir(tmp_path: Path, storage_key: str) -> None:
+    outside = tmp_path / "outside.jsonl"
+    outside.write_bytes(b"secret\n")
+    storage = LocalBatchArtifactStorage(str(tmp_path / "batch-artifacts"))
+
+    with pytest.raises(ValueError, match="outside the storage directory"):
+        await storage.read_bytes(storage_key)
+    with pytest.raises(ValueError, match="outside the storage directory"):
+        await storage.delete(storage_key)
+
+    assert outside.read_bytes() == b"secret\n"
+
+
+@pytest.mark.asyncio
+async def test_local_batch_storage_refuses_symlink_escape(tmp_path: Path) -> None:
+    base_dir = tmp_path / "batch-artifacts"
+    storage = LocalBatchArtifactStorage(str(base_dir))
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "secret.jsonl").write_bytes(b"secret\n")
+    (base_dir / "linked").symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="outside the storage directory"):
+        await storage.read_bytes("linked/secret.jsonl")
+    with pytest.raises(ValueError, match="outside the storage directory"):
+        await storage.delete("linked/secret.jsonl")
+
+    assert (outside_dir / "secret.jsonl").exists()

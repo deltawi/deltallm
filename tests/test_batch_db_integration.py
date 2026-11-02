@@ -7851,3 +7851,80 @@ async def test_db_backed_grouped_embedding_execution_preserves_item_and_batch_to
     assert int(job_row["failed_items"] or 0) == 0
     assert job_row["output_file_id"] is not None
     assert job_row["error_file_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_db_backed_expired_file_delete_skips_referenced_and_unexpired_files(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    now = datetime.now(tz=UTC)
+    expired = now - timedelta(minutes=1)
+
+    async def _file(name: str, *, expires_at: datetime | None) -> str:
+        record = await repository.create_file(
+            purpose="batch",
+            filename=f"{name}.jsonl",
+            bytes_size=16,
+            storage_backend="local",
+            storage_key=f"seed/{name}.jsonl",
+            checksum="seed",
+            created_by_api_key="key-a",
+            created_by_user_id=None,
+            created_by_team_id=None,
+            expires_at=expires_at,
+        )
+        assert record is not None
+        return record.file_id
+
+    unreferenced = await _file("unreferenced", expires_at=expired)
+    job_input = await _file("job-input", expires_at=expired)
+    session_input = await _file("session-input", expires_at=expired)
+    not_expired = await _file("not-expired", expires_at=now + timedelta(days=1))
+    never_expires = await _file("never-expires", expires_at=None)
+
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=job_input,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    session = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id=f"batch-{uuid4().hex}",
+            endpoint="/v1/embeddings",
+            input_file_id=session_input,
+            staged_storage_backend="local",
+            staged_storage_key="seed/staged.jsonl",
+            staged_bytes=2,
+            expected_item_count=1,
+            inferred_model="m1",
+            created_by_api_key="key-a",
+        )
+    )
+    assert session is not None
+
+    results = {
+        file_id: await repository.delete_expired_unreferenced_file(file_id, now=now)
+        for file_id in (unreferenced, job_input, session_input, not_expired, never_expires)
+    }
+
+    assert results == {
+        unreferenced: True,
+        job_input: False,
+        session_input: False,
+        not_expired: False,
+        never_expires: False,
+    }
+    rows = await batch_db.query_raw("SELECT file_id FROM deltallm_batch_file")
+    assert {str(dict(row)["file_id"]) for row in rows} == {
+        job_input,
+        session_input,
+        not_expired,
+        never_expires,
+    }
+    # A second attempt on a row that is already gone is a no-op.
+    assert await repository.delete_expired_unreferenced_file(unreferenced, now=now) is False

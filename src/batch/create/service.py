@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
@@ -479,6 +480,14 @@ class BatchCreateSessionService:
             raise HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail=f"Input file exceeds embeddings_batch_max_file_bytes ({self.max_file_bytes})",
+            )
+        expires_at = getattr(file_record, "expires_at", None)
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at is not None and expires_at <= datetime.now(tz=UTC):
+            # Retention cleanup may already be deleting it.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Input file has expired"
             )
         return file_record
 
