@@ -572,6 +572,48 @@ async def test_select_model_groups_returns_all_eligible_models_in_fifo_order() -
 
 
 @pytest.mark.asyncio
+async def test_select_model_groups_prefers_the_least_busy_model() -> None:
+    older = datetime(2026, 1, 1, tzinfo=UTC)
+    newer = datetime(2026, 1, 2, tzinfo=UTC)
+    repository = _Repository(
+        backlog=[_backlog("busy", oldest=older), _backlog("idle", oldest=newer)],
+        in_flight=[
+            BatchModelInFlightRecord(
+                model_group="busy",
+                service_tier="standard",
+                in_flight_items=30,
+                in_flight_work_units=30,
+            )
+        ],
+    )
+    router = SimpleNamespace(
+        deployment_registry={
+            group: [
+                _deployment(
+                    f"dep-{group}",
+                    model_group=group,
+                    model_info={"batch_capacity": {"max_in_flight": 64}},
+                )
+            ]
+            for group in ("busy", "idle")
+        },
+        state=_State(),
+    )
+    resolver = BatchModelCapacityResolver(
+        repository=repository,
+        config=BatchModelCapacityConfig(enabled=True),
+        router=router,
+    )
+
+    selections = await resolver.select_model_groups(max_items=10, max_work_units=20)
+
+    # An idle worker goes to the model with nothing in flight, even though the
+    # busy model has older work; otherwise the busy model would take every
+    # worker until its backlog drained.
+    assert [selection.snapshot.model_group for selection in selections] == ["idle", "busy"]
+
+
+@pytest.mark.asyncio
 async def test_select_model_groups_uses_quota_capped_limits() -> None:
     repository = _Repository(backlog=[_backlog("model-a", queued_work_units=100)])
     router = SimpleNamespace(
