@@ -33,11 +33,20 @@ def _estimate_embedding_input(value: Any) -> int:
     return 1
 
 
+def _requested_completion_tokens(request_body: Mapping[str, Any]) -> int | None:
+    # Same precedence as chat execution: max_completion_tokens, then max_tokens.
+    for field in ("max_completion_tokens", "max_tokens"):
+        value = request_body.get(field)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
 def _estimate_chat_request(request_body: Mapping[str, Any]) -> int:
     prompt_units = _ceil_units(_json_char_count(request_body.get("messages") or []), 512)
-    max_tokens = request_body.get("max_tokens")
+    max_tokens = _requested_completion_tokens(request_body)
     completion_units = 1
-    if isinstance(max_tokens, int):
+    if max_tokens is not None:
         completion_units = _ceil_units(max_tokens, 256)
     return max(1, prompt_units + completion_units)
 

@@ -764,6 +764,25 @@ def test_estimate_chat_work_units_uses_prompt_and_completion_size() -> None:
 
 
 @pytest.mark.parametrize(
+    ("limits", "expected"),
+    [
+        ({"max_completion_tokens": 4096}, 2 + 16),
+        ({"max_completion_tokens": 4096, "max_tokens": 10}, 2 + 16),
+        ({"max_completion_tokens": None, "max_tokens": 4096}, 2 + 16),
+        ({"max_tokens": 4096}, 2 + 16),
+        ({}, 2 + 1),
+        ({"max_completion_tokens": True}, 2 + 1),
+    ],
+)
+def test_estimate_chat_work_units_prefers_max_completion_tokens(
+    limits: dict[str, object], expected: int
+) -> None:
+    request_body = {"messages": [{"role": "user", "content": "a" * 700}], **limits}
+
+    assert estimate_request_work_units(BATCH_ENDPOINT_CHAT_COMPLETIONS, request_body) == expected
+
+
+@pytest.mark.parametrize(
     ("work_units", "expected"),
     [
         (1, "xs"),
