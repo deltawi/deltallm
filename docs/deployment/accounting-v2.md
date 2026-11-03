@@ -460,6 +460,10 @@ Before production activation, run:
 
 PR 10 load qualification remains separate from this architectural implementation.
 
+CI runs this configuration on kind for billing, batch and database changes, and
+every night under batch and API load. See
+[Accounting v2 acceptance and nightly soak](accounting-v2-acceptance.md).
+
 ## Rollback
 
 Set `accounting_grants_enabled: false` and roll API pods to return new reservations to

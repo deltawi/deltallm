@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import ExitStack
 import hashlib
 import json
@@ -184,7 +185,12 @@ async def exercise(cluster: LifecycleCluster, values: Path, image: str, baseline
                     raise
 
 
-def prime_database(cluster: LifecycleCluster, values: Path) -> None:
+def prime_database(
+    cluster: LifecycleCluster,
+    values: Path,
+    *,
+    seeder: Callable[[Path], Awaitable[None]] | None = None,
+) -> None:
     """Migrate and seed db_only routing before creating any API deployment."""
     rendered = cluster.helm(
         "template",
@@ -218,8 +224,11 @@ def prime_database(cluster: LifecycleCluster, values: Path) -> None:
             DELTALLM_MASTER_KEY=MASTER_KEY,
             DELTALLM_SALT_KEY=SALT_KEY,
         )
-        asyncio.run(seed())
-        asyncio.run(seed_models(values))
+        if seeder is None:
+            asyncio.run(seed())
+            asyncio.run(seed_models(values))
+        else:
+            asyncio.run(seeder(values))
     cluster.event("capacity_db_only_catalog_primed")
 
 

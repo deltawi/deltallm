@@ -17,7 +17,10 @@ batch_gate: asyncio.Event | None = None
 async def models():
     return {
         "object": "list",
-        "data": [{"id": "fixed-one-token", "object": "model", "owned_by": "fixture"}],
+        "data": [
+            {"id": "fixed-one-token", "object": "model", "owned_by": "fixture"},
+            {"id": "fixed-embedding", "object": "model", "owned_by": "fixture"},
+        ],
     }
 
 
@@ -40,6 +43,30 @@ async def release_batch():
     if batch_gate is not None:
         batch_gate.set()
     return {"held": False}
+
+
+class EmbeddingRequest(BaseModel):
+    model: str
+    input: str | list[str] = Field(min_length=1)
+
+
+@app.post("/v1/embeddings")
+async def embed(request: EmbeddingRequest):
+    """Fixed four-dimension vectors at one token per input, for soak batch items."""
+    if request.model != "fixed-embedding":
+        raise HTTPException(400, "This fixture supports only the fixed embedding workload")
+    inputs = [request.input] if isinstance(request.input, str) else request.input
+    if len(inputs) > 2048:
+        raise HTTPException(400, "Too many embedding inputs")
+    return {
+        "object": "list",
+        "model": request.model,
+        "data": [
+            {"object": "embedding", "index": index, "embedding": [0.5, 0.25, 0.125, 0.0625]}
+            for index in range(len(inputs))
+        ],
+        "usage": {"prompt_tokens": len(inputs), "total_tokens": len(inputs)},
+    }
 
 
 class CompletionRequest(BaseModel):

@@ -210,6 +210,7 @@ nav:
           - Budget and prompt performance: deployment/budget-prompt-performance.md
           - Spend recovery: deployment/spend-recovery.md
           - Accounting protocol v2: deployment/accounting-v2.md
+          - Accounting v2 acceptance and soak: deployment/accounting-v2-acceptance.md
           - Accounting protocol v2 design: design/accounting-protocol-v2.md
           - Request deadlines: deployment/request-deadlines.md
           - Provider connection tuning: deployment/upstream-http.md
