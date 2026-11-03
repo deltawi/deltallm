@@ -37,6 +37,7 @@ from src.bootstrap.batch_runtime.core import BatchCoreComponents
 from src.bootstrap.batch_runtime.pool_sizing import (
     batch_result_save_concurrency,
     completion_outbox_concurrency,
+    completion_outbox_sent_mark_concurrency,
     warn_if_batch_db_pool_is_small,
 )
 from src.bootstrap.batch_runtime.runtime import BatchRuntime
@@ -235,6 +236,7 @@ def _start_completion_outbox_worker(
             poll_interval_seconds=general.embeddings_batch_poll_interval_seconds,
             max_batch_size=max(10, int(general.embeddings_batch_item_claim_limit or 20)),
             max_concurrency=completion_outbox_concurrency(general),
+            sent_mark_concurrency=completion_outbox_sent_mark_concurrency(general),
             lease_seconds=max(15, int(general.embeddings_batch_item_lease_seconds or 60)),
             heartbeat_interval_seconds=max(
                 1.0,

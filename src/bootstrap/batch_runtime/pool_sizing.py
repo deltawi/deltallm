@@ -29,6 +29,17 @@ def _extra_slices_in_flight(general: Any) -> int:
     return max(0, slices - 1)
 
 
+def completion_outbox_sent_mark_concurrency(general: Any) -> int:
+    """Native sent marks at once with write grouping on; 0 leaves them unlimited.
+
+    Below the outbox's own concurrency, so marks that finish while the database
+    is busy wait for a slot and are written together.
+    """
+    if not getattr(general, "embeddings_batch_write_grouping_enabled", False):
+        return 0
+    return max(1, completion_outbox_concurrency(general) // 4)
+
+
 def batch_db_pool_size(general: Any, settings: object) -> int:
     return int(getattr(settings, "db_pool_size", None) or general.db_pool_size)
 

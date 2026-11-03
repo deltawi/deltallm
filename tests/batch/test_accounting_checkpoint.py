@@ -168,6 +168,7 @@ def test_new_batch_modules_have_bounded_typed_interfaces():
         "accounting_provider_execution.py",
         "embedding_group_lifecycle.py",
         "repositories/completion_outbox_fences.py",
+        "completion_sent_marks.py",
     ):
         path = Path("src/batch") / filename
         source = path.read_text()

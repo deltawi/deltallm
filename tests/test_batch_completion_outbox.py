@@ -446,15 +446,16 @@ async def test_completion_outbox_worker_run_survives_iteration_failure(
     )
     calls = 0
 
-    async def _process_once() -> int:
+    async def _claim(**kwargs) -> list[BatchCompletionOutboxRecord]:  # noqa: ANN003
+        del kwargs
         nonlocal calls
         calls += 1
         if calls == 1:
             raise RuntimeError("database unavailable")
         worker.stop()
-        return 0
+        return []
 
-    worker.process_once = _process_once  # type: ignore[method-assign]
+    repository.claim_completion_outbox_due = _claim  # type: ignore[method-assign]
 
     with caplog.at_level("ERROR"):
         await asyncio.wait_for(worker.run(), timeout=0.5)

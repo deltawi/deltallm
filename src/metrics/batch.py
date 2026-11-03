@@ -208,6 +208,13 @@ deltallm_batch_write_group_size_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_completion_outbox_delivery_lag_metric = Histogram(
+    "deltallm_batch_completion_outbox_delivery_lag_seconds",
+    "Seconds from a batch completion outbox row's creation to its delivery",
+    buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 900],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_item_retry_delay_metric = Histogram(
     "deltallm_batch_item_retry_delay_seconds",
     "Batch item retry delay by retry category",
@@ -924,6 +931,10 @@ def observe_batch_write_group_size(*, kind: str, writes: int) -> None:
     deltallm_batch_write_group_size_metric.labels(kind=sanitize_label(kind)).observe(
         max(0, int(writes))
     )
+
+
+def observe_batch_completion_outbox_delivery_lag(*, lag_seconds: float) -> None:
+    deltallm_batch_completion_outbox_delivery_lag_metric.observe(max(0.0, float(lag_seconds)))
 
 
 def observe_batch_item_retry_delay(*, category: str, delay_seconds: float) -> None:
