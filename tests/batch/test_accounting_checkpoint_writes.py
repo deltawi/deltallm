@@ -1,16 +1,22 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 
-from src.batch.accounting_checkpoint import BatchAccountingUnavailable, BatchAccountingWrite
+from src.batch.accounting_checkpoint import (
+    CHECKPOINT_BATCH_MAX_ITEMS,
+    BatchAccountingUnavailable,
+    BatchAccountingWrite,
+)
 from src.batch.repositories.accounting_repository import (
     BatchAccountingRepository,
     WRITE_CHECKPOINTS_SQL,
 )
 from src.batch.selector_checkpoint import BatchSelectorClaim
 from src.bootstrap.batch_runtime.accounting import batch_checkpoint_write_concurrency
+from src.bootstrap.batch_runtime.pool_sizing import batch_result_save_concurrency
 from src.config import GeneralSettings
 from src.metrics.batch import (
     deltallm_batch_accounting_checkpoint_write_metric,
@@ -115,3 +121,112 @@ def test_write_concurrency_defaults_to_half_the_pool():
     assert batch_checkpoint_write_concurrency(general, SimpleNamespace(db_pool_size=6)) == 3
     explicit = GeneralSettings(db_pool_size=20, embeddings_batch_accounting_write_concurrency=4)
     assert batch_checkpoint_write_concurrency(explicit, SimpleNamespace(db_pool_size=None)) == 4
+
+
+class GroupingDb(FakeDb):
+    """Save every proof of a document, or none when it holds a rejected item."""
+
+    def __init__(self, *, reject=(), hold=0.05):
+        super().__init__([], hold=hold)
+        self.reject = set(reject)
+        self.documents: list[list[str]] = []
+
+    async def query_raw(self, sql, *args):
+        if sql is not WRITE_CHECKPOINTS_SQL:
+            return []
+        self.calls += 1
+        item_ids = [entry["item_id"] for entry in json.loads(args[0])]
+        self.documents.append(item_ids)
+        await asyncio.sleep(self.hold)
+        if self.reject & set(item_ids):
+            return []
+        return [{"item_id": item_id, "delivery_saved": True} for item_id in item_ids]
+
+
+async def _write_all(store, names):
+    return await asyncio.gather(
+        *(store.write_many([_write(name)], expires_at=_deadline(2)) for name in names),
+        return_exceptions=True,
+    )
+
+
+async def test_proofs_waiting_for_a_slot_are_saved_in_one_statement():
+    db = GroupingDb()
+    store = BatchAccountingRepository(db, max_concurrent_writes=1, group_waiting_writes=True)
+    results = await _write_all(store, [f"item-{index}" for index in range(5)])
+    assert results == [None] * 5
+    assert db.documents == [["item-0"], ["item-1", "item-2", "item-3", "item-4"]]
+    assert db.peak == 1
+
+
+async def test_a_rejected_group_saves_every_other_proof_alone():
+    db = GroupingDb(reject={"item-2"})
+    store = BatchAccountingRepository(db, max_concurrent_writes=1, group_waiting_writes=True)
+    rejected = _sample(deltallm_batch_accounting_checkpoint_write_metric, outcome="rejected")
+    saved = _sample(deltallm_batch_accounting_checkpoint_write_metric, outcome="saved")
+    results = await _write_all(store, ["item-0", "item-1", "item-2", "item-3"])
+    assert results[:2] == [None, None] and results[3] is None
+    assert isinstance(results[2], BatchAccountingUnavailable)
+    assert db.documents == [
+        ["item-0"],
+        ["item-1", "item-2", "item-3"],
+        ["item-1"],
+        ["item-2"],
+        ["item-3"],
+    ]
+    # Each caller is counted once, with its own answer.
+    assert _sample(deltallm_batch_accounting_checkpoint_write_metric, outcome="rejected") == (
+        rejected + 1
+    )
+    assert _sample(deltallm_batch_accounting_checkpoint_write_metric, outcome="saved") == saved + 3
+
+
+async def test_two_writes_for_one_item_are_never_grouped():
+    db = GroupingDb()
+    store = BatchAccountingRepository(db, max_concurrent_writes=1, group_waiting_writes=True)
+    await _write_all(store, ["first", "item", "other", "item"])
+    assert db.documents == [["first"], ["item", "other"], ["item"]]
+
+
+async def test_a_group_stays_within_the_proof_count_limit():
+    db = GroupingDb(hold=0.01)
+    store = BatchAccountingRepository(db, max_concurrent_writes=1, group_waiting_writes=True)
+    names = [f"item-{index}" for index in range(CHECKPOINT_BATCH_MAX_ITEMS + 3)]
+    assert await _write_all(store, names) == [None] * len(names)
+    assert [len(document) for document in db.documents] == [1, CHECKPOINT_BATCH_MAX_ITEMS, 2]
+
+
+async def test_grouping_off_keeps_one_statement_per_write():
+    db = GroupingDb()
+    store = BatchAccountingRepository(db, max_concurrent_writes=1)
+    assert await _write_all(store, ["a", "b", "c"]) == [None] * 3
+    assert db.documents == [["a"], ["b"], ["c"]]
+
+
+def test_result_saves_get_as_many_slots_only_with_grouping_on():
+    pool = SimpleNamespace(db_pool_size=None)
+    assert batch_result_save_concurrency(GeneralSettings(db_pool_size=20), pool) == 10
+    explicit = GeneralSettings(db_pool_size=20, embeddings_batch_accounting_write_concurrency=4)
+    assert batch_result_save_concurrency(explicit, pool) == 4
+    off = GeneralSettings(db_pool_size=20, embeddings_batch_write_grouping_enabled=False)
+    assert batch_result_save_concurrency(off, pool) == 0
+    assert batch_result_save_concurrency(SimpleNamespace(), pool) == 0
+
+
+async def test_a_member_about_to_time_out_does_not_shorten_its_group():
+    db = GroupingDb(hold=0.0)
+    store = BatchAccountingRepository(db, max_concurrent_writes=1, group_waiting_writes=True)
+    healthy = store._batch([_write("healthy")], expires_at=_deadline(2))
+    late = store._batch([_write("late")], expires_at=_deadline(0.01))
+    budgets: list[float] = []
+    original_tx = db.tx
+
+    def tx(*, max_wait, timeout):
+        budgets.append(timeout.total_seconds())
+        return original_tx(max_wait=max_wait, timeout=timeout)
+
+    db.tx = tx
+    assert await store._write_group([late, healthy]) is True
+    assert db.documents == [["late", "healthy"]]
+    # The healthy member's budget, split for one retry, not the late one's 10 ms.
+    assert budgets and budgets[0] > 0.5

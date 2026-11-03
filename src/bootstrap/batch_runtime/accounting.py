@@ -10,7 +10,7 @@ from src.batch.repositories.accounting_repository import BatchAccountingReposito
 from src.batch.repository import BatchRepository
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.bootstrap.accounting_config import read_accounting_settings
-from src.bootstrap.batch_runtime.pool_sizing import batch_db_pool_size
+from src.bootstrap.batch_runtime.pool_sizing import batch_write_concurrency
 from src.config import GeneralSettings
 from src.services.tiers.tier_policy_service import TierPolicyService
 
@@ -41,6 +41,7 @@ def build_native_batch_billing(
         BatchAccountingRepository(
             repository.prisma,
             max_concurrent_writes=batch_checkpoint_write_concurrency(general, settings),
+            group_waiting_writes=general.embeddings_batch_write_grouping_enabled,
         ),
         tier_policy=tier_policy,
         max_provider_attempts=config.accounting_max_provider_attempts,
@@ -49,8 +50,4 @@ def build_native_batch_billing(
 
 
 def batch_checkpoint_write_concurrency(general: GeneralSettings, settings: object) -> int:
-    pool_size = batch_db_pool_size(general, settings)
-    configured = general.embeddings_batch_accounting_write_concurrency
-    if configured > 0:
-        return configured
-    return max(1, pool_size // 2)
+    return batch_write_concurrency(general, settings)

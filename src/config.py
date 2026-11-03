@@ -932,6 +932,11 @@ class GeneralSettings(
     embeddings_batch_accounting_write_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
     # 0 means half of db_pool_size, so leases and result saves keep free connections.
     embeddings_batch_accounting_write_concurrency: int = Field(default=0, ge=0, le=100)
+    # Billing proofs and result saves that would wait for one of those write
+    # slots go out together as one statement (result saves get as many slots of
+    # their own). Off restores one statement per write, unlimited result saves,
+    # and the separate lease check before each result save.
+    embeddings_batch_write_grouping_enabled: bool = True
     embeddings_batch_item_buffer_multiplier: int = Field(default=2, ge=1, le=10)
     embeddings_batch_storage_chunk_size: int = Field(default=65_536, ge=1_024)
     embeddings_batch_finalization_page_size: int = Field(default=500, ge=10, le=10_000)

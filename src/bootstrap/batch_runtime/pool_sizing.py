@@ -21,6 +21,23 @@ def batch_db_pool_size(general: Any, settings: object) -> int:
     return int(getattr(settings, "db_pool_size", None) or general.db_pool_size)
 
 
+def batch_write_concurrency(general: Any, settings: object) -> int:
+    """Billing checkpoint writes at once; 0 configured means half the pool."""
+    configured = general.embeddings_batch_accounting_write_concurrency
+    if configured > 0:
+        return configured
+    return max(1, batch_db_pool_size(general, settings) // 2)
+
+
+def batch_result_save_concurrency(general: Any, settings: object) -> int:
+    """Result saves at once with write grouping on; 0 leaves them unlimited."""
+    if not getattr(general, "embeddings_batch_write_grouping_enabled", False):
+        return 0
+    if not (getattr(settings, "db_pool_size", None) or getattr(general, "db_pool_size", None)):
+        return 0
+    return batch_write_concurrency(general, settings)
+
+
 def warn_if_batch_db_pool_is_small(general: Any, settings: object) -> int | None:
     """Warn when batch work on this process can need more connections than its pool.
 

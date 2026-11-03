@@ -35,6 +35,7 @@ from src.batch.webhooks.observability import (
 from src.batch.webhooks.worker import BatchWebhookOutboxWorker, BatchWebhookOutboxWorkerConfig
 from src.bootstrap.batch_runtime.core import BatchCoreComponents
 from src.bootstrap.batch_runtime.pool_sizing import (
+    batch_result_save_concurrency,
     completion_outbox_concurrency,
     warn_if_batch_db_pool_is_small,
 )
@@ -111,6 +112,12 @@ def _start_executor_worker(
             item_lease_seconds=general.embeddings_batch_item_lease_seconds,
             finalization_retry_delay_seconds=general.embeddings_batch_finalization_retry_delay_seconds,
             worker_concurrency=general.embeddings_batch_worker_concurrency,
+            result_save_concurrency=batch_result_save_concurrency(
+                general, getattr(app.state, "settings", None)
+            ),
+            write_grouping_enabled=getattr(
+                general, "embeddings_batch_write_grouping_enabled", False
+            ),
             item_buffer_multiplier=general.embeddings_batch_item_buffer_multiplier,
             finalization_page_size=general.embeddings_batch_finalization_page_size,
             item_claim_limit=general.embeddings_batch_item_claim_limit,

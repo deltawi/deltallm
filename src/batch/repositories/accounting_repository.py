@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import timedelta
 import json
 import math
@@ -18,6 +19,7 @@ from src.batch.accounting_checkpoint import (
     BatchAccountingWrite,
 )
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
+from src.batch.write_groups import WriteGroups
 from src.metrics import (
     increment_batch_accounting_checkpoint_write_retry,
     observe_batch_accounting_checkpoint_write,
@@ -101,18 +103,45 @@ class _CheckpointRejected(Exception):
     """The database answered, but did not save every proof: never retried."""
 
 
+@dataclass(frozen=True, slots=True)
+class _CheckpointBatch:
+    """The proofs of one write_many call, ready to send alone or in a group."""
+
+    # The JSON array's elements, without the brackets, so groups just join them.
+    elements: str
+    item_ids: frozenset[str]
+    count: int
+    expires_at: float
+
+
 class BatchAccountingRepository:
     def __init__(
         self,
         db: Prisma,
         *,
         max_concurrent_writes: int = DEFAULT_MAX_CONCURRENT_WRITES,
+        group_waiting_writes: bool = False,
     ) -> None:
         if type(max_concurrent_writes) is not int or max_concurrent_writes < 1:
             raise ValueError("Invalid batch checkpoint write concurrency")
         self._db = db
         # Extra writers wait here instead of timing out in the shared pool.
-        self._writes = asyncio.Semaphore(max_concurrent_writes)
+        # With grouping on, proofs that wait for a slot are saved together.
+        self._writes: WriteGroups[_CheckpointBatch, bool] = WriteGroups(
+            kind="accounting_checkpoint",
+            limit=max_concurrent_writes,
+            write=self._write_group,
+            accepted=bool,
+            max_rows=CHECKPOINT_BATCH_MAX_ITEMS,
+            rows=lambda batch: batch.count,
+            # One comma per extra member; the brackets are counted once below.
+            size=lambda batch: len(batch.elements.encode()) + 1,
+            max_size=CHECKPOINT_BATCH_MAX_BYTES - 2,
+            conflicts=lambda group, batch: any(
+                not member.item_ids.isdisjoint(batch.item_ids) for member in group
+            ),
+            enabled=group_waiting_writes,
+        )
 
     async def write_many(
         self,
@@ -122,6 +151,10 @@ class BatchAccountingRepository:
     ) -> None:
         if not writes:
             return
+        await self._write(self._batch(writes, expires_at=expires_at))
+
+    @staticmethod
+    def _batch(writes: Sequence[BatchAccountingWrite], *, expires_at: float) -> _CheckpointBatch:
         if len(writes) > CHECKPOINT_BATCH_MAX_ITEMS or len(
             {write.claim.item_id for write in writes}
         ) != len(writes):
@@ -148,27 +181,51 @@ class BatchAccountingRepository:
         )
         if len(document.encode()) > CHECKPOINT_BATCH_MAX_BYTES:
             raise BatchAccountingUnavailable()
-        await self._write(document, len(writes), expires_at=expires_at)
+        return _CheckpointBatch(
+            elements=document[1:-1],
+            item_ids=frozenset(write.claim.item_id for write in writes),
+            count=len(writes),
+            expires_at=expires_at,
+        )
 
-    async def _write(self, document: str, count: int, *, expires_at: float) -> None:
+    async def _write(self, batch: _CheckpointBatch) -> None:
         started = perf_counter()
         try:
-            async with asyncio.timeout(self._budget(expires_at)):
-                async with self._writes:
-                    await self._write_with_retry(document, count, expires_at=expires_at)
-        except _CheckpointRejected:
-            observe_batch_accounting_checkpoint_write(
-                outcome="rejected", latency_seconds=perf_counter() - started
-            )
-            raise BatchAccountingUnavailable() from None
+            async with asyncio.timeout(self._budget(batch.expires_at)):
+                saved = await self._writes.run(batch)
         except Exception:
             observe_batch_accounting_checkpoint_write(
                 outcome="unavailable", latency_seconds=perf_counter() - started
             )
             raise BatchAccountingUnavailable() from None
+        if not saved:
+            observe_batch_accounting_checkpoint_write(
+                outcome="rejected", latency_seconds=perf_counter() - started
+            )
+            raise BatchAccountingUnavailable()
         observe_batch_accounting_checkpoint_write(
             outcome="saved", latency_seconds=perf_counter() - started
         )
+
+    async def _write_group(self, batches: Sequence[_CheckpointBatch]) -> bool:
+        """Save every proof of ``batches`` in one statement, or none of them."""
+        document = "[" + ",".join(batch.elements for batch in batches) + "]"
+        count = sum(batch.count for batch in batches)
+        # No member waits longer than it would alone. A member with too little
+        # time left for one attempt is about to time out on its own, so it does
+        # not set the budget and take the others down with it.
+        now = asyncio.get_running_loop().time()
+        usable = [
+            batch.expires_at
+            for batch in batches
+            if batch.expires_at - now >= CHECKPOINT_RETRY_MIN_SECONDS
+        ]
+        expires_at = min(usable) if usable else max(batch.expires_at for batch in batches)
+        try:
+            await self._write_with_retry(document, count, expires_at=expires_at)
+        except _CheckpointRejected:
+            return False
+        return True
 
     async def _write_with_retry(self, document: str, count: int, *, expires_at: float) -> None:
         remaining = self._budget(expires_at)

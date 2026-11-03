@@ -200,6 +200,14 @@ deltallm_batch_accounting_checkpoint_write_retries_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_write_group_size_metric = Histogram(
+    "deltallm_batch_write_group_size",
+    "Writes sent in one batch database statement by the write grouper, by kind",
+    ["kind"],
+    buckets=[1, 2, 4, 8, 16, 32, 64, 128],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_item_retry_delay_metric = Histogram(
     "deltallm_batch_item_retry_delay_seconds",
     "Batch item retry delay by retry category",
@@ -910,6 +918,12 @@ def observe_batch_accounting_checkpoint_write(*, outcome: str, latency_seconds: 
 
 def increment_batch_accounting_checkpoint_write_retry() -> None:
     deltallm_batch_accounting_checkpoint_write_retries_metric.inc()
+
+
+def observe_batch_write_group_size(*, kind: str, writes: int) -> None:
+    deltallm_batch_write_group_size_metric.labels(kind=sanitize_label(kind)).observe(
+        max(0, int(writes))
+    )
 
 
 def observe_batch_item_retry_delay(*, category: str, delay_seconds: float) -> None:

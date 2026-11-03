@@ -554,9 +554,8 @@ class EmbeddingWorkerExecutionMixin:
                 usage=usage,
                 reference=prepared.item.item_id,
             )
-            if item_lease_lost.is_set() or not await self._renew_item_lease_once(
-                prepared.item.item_id,
-                claim_epoch=prepared.item.claim_epoch,
+            if not await self._still_owns_item_for_save(
+                prepared, lease_lost=item_lease_lost
             ):
                 item_lease_lost.set()
                 self._observe_prepared_item_lease_lost(prepared)
@@ -827,9 +826,8 @@ class EmbeddingWorkerExecutionMixin:
             )
 
         for prepared in prepared_items:
-            if item_lease_lost.is_set() or not await self._renew_item_lease_once(
-                prepared.item.item_id,
-                claim_epoch=prepared.item.claim_epoch,
+            if not await self._still_owns_item_for_save(
+                prepared, lease_lost=item_lease_lost
             ):
                 item_lease_lost.set()
                 self._observe_prepared_items_lease_lost(prepared_items)

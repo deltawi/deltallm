@@ -228,6 +228,19 @@ Sizing rule:
 - For more batch throughput, add `batchWorker` replicas instead of raising per-pod concurrency, and check the connection budget above.
 - Watch `deltallm_batch_accounting_checkpoint_write_seconds` (by `outcome`) and `deltallm_batch_accounting_checkpoint_write_retries_total`. A rising `unavailable` count means the database or pool is saturated: lower concurrency or claim size, or add database capacity.
 
+#### Grouping writes while the database is busy
+
+With `embeddings_batch_write_grouping_enabled` on (the default), billing checkpoints and result saves that would wait for a write slot are saved together:
+
+- A write that finds a free slot goes out alone, as before, so a database that keeps up sees no change and no added delay.
+- Writes that arrive while every slot is busy wait in order. When a slot frees, the oldest one goes out together with the waiting writes behind it, as one transaction. For example, with 10 slots and 20 items finishing at once, 10 save alone and the other 10 save in one transaction.
+- Result saves get as many slots of their own as checkpoint writes (`embeddings_batch_accounting_write_concurrency`, default half of `db_pool_size`), so a burst of saves no longer takes the whole pool.
+- A group holds at most 128 checkpoints (1 MiB) or 50 result rows, and never two writes for the same item. It uses the earliest time budget of its members.
+- Every fence is still checked per item inside the statement, exactly as for a single write. For checkpoints that is the owner, claim epoch, live lease, job state and stored checkpoint. For result saves it is the owner, claim epoch and item status. A group applies to every member or to none. If the database rejects a group, or the group fails for any reason, each member is saved again alone, ahead of newer writes, so each item gets exactly the answer (or error) it would get on its own and one bad row never fails the others.
+- The separate lease check before each result save is skipped, because the save checks the same owner, claim epoch and status in its own transaction. A lost item gets `not_owned` from the save instead and follows the same path as before.
+
+`deltallm_batch_write_group_size` (by `kind`) shows how many writes each statement carried. Turn grouping off to go back to one statement per write, unlimited result saves, and the lease check before each save. The setting is read when the batch worker starts, so restart the batch workers after changing it.
+
 ### Scheduler Modes
 
 Use `smart_v1` for production batch scheduling. It composes:
@@ -669,6 +682,7 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_item_buffer_multiplier` | `2` | Multiplier on concurrency for item prefetch. Effective claim limit is `max(item_claim_limit, concurrency * buffer_multiplier)` |
 | `embeddings_batch_accounting_write_timeout_seconds` | `2.0` | Accounting v2 only. Time budget for one billing checkpoint write, including the wait for a free write slot and one retry |
 | `embeddings_batch_accounting_write_concurrency` | `0` | Accounting v2 only. Concurrent billing checkpoint writes per worker process; `0` uses half of `db_pool_size` |
+| `embeddings_batch_write_grouping_enabled` | `true` | Save billing checkpoints and result saves that would wait for a write slot together, and give result saves as many slots as checkpoint writes. `false` restores one statement per write |
 | `embeddings_batch_max_attempts` | `3` | Maximum retry attempts for a failed item |
 | `embeddings_batch_retry_initial_seconds` | `5` | Initial retry delay for retryable item failures |
 | `embeddings_batch_retry_max_seconds` | `300` | Maximum retry delay for retryable item failures, including capped `Retry-After` hints |
@@ -990,6 +1004,7 @@ The job and item gauges read only active jobs and their open items, so their cos
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
 | `deltallm_batch_accounting_checkpoint_write_seconds` | Histogram | Accounting v2 checkpoint write latency by outcome (`saved`, `rejected`, `unavailable`), including the per-process queue |
 | `deltallm_batch_accounting_checkpoint_write_retries_total` | Counter | Accounting v2 checkpoint writes retried after a timeout or database error |
+| `deltallm_batch_write_group_size` | Histogram | Writes carried by one batch statement, by `kind` (`accounting_checkpoint`, `result_save`). 1 means the write went out alone |
 
 ### Terminal webhooks
 
