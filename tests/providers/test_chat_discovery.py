@@ -68,8 +68,8 @@ async def test_catalog_and_live_discovery(contract):
     assert len(matches) == 1
     assert matches[0]["supported_modes"] == ["chat"]
     # Known data comes from the curated catalog when it has the model.
-    assert matches[0]["known_metadata"] == catalog_model_metadata(
-        contract["provider"], contract["model"]
+    assert matches[0]["known_metadata"] == (
+        catalog_model_metadata(contract["provider"], contract["model"]) or None
     )
     if contract["provider"] == "zai":
         assert not calls
