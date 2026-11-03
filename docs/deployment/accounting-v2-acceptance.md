@@ -116,6 +116,12 @@ phase fails only because the generator fell behind
 (`load_generator_fell_behind`), set the `SOAK_RUNNER` repository variable to
 a larger runner label. The workflow uses that label when it is set.
 
+Without `SOAK_RUNNER`, the latency gates are 0.5 s for chat and 0.75 s for
+embeddings instead of 50 ms and 0.25 s. On the 4-vCPU runner chat p95 measured
+0.2 to 0.3 s at 100 RPS with no errors, so the strict targets there measure
+the runner. Every other check stays the same. Each API window reports
+`host_cpu`, the busy share of the runner's CPUs, to show how loaded it was.
+
 ## Bounded state
 
 `tests/performance/soak_checks.py` lists the gauges that must return to idle:

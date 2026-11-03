@@ -72,6 +72,7 @@ jobs:
           BATCH_ITEMS: ${{ inputs.batch-items }}
           API_RATE: ${{ inputs.api-rate }}
           API_SECONDS: ${{ inputs.api-seconds }}
+          LARGER_RUNNER: ${{ vars.SOAK_RUNNER }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = pull_request ]; then
@@ -85,6 +86,13 @@ jobs:
             args="--batch-items $BATCH_ITEMS --api-rate $API_RATE --api-seconds $API_SECONDS"
           else
             args=""
+          fi
+          if [ -z "$LARGER_RUNNER" ]; then
+            # On the 4-vCPU hosted runner every pod, Postgres and the load
+            # generator share one kind node, and chat p95 measured 0.2 to 0.3 s
+            # at 100 RPS. The 50 ms gateway target needs SOAK_RUNNER; here the
+            # latency gate only catches a large regression.
+            args="$args --max-p95-seconds 0.5 --max-embedding-p95-seconds 0.75"
           fi
           echo "args=$args" >> "$GITHUB_OUTPUT"
       - name: Soak batch and API load on accounting v2

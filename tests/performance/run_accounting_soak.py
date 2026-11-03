@@ -333,6 +333,43 @@ async def embedding_arrival(url: str, *, rate: float, duration: float) -> dict[s
     return summarize(result, target_rate=rate)
 
 
+class HostCpuSampler:
+    """Busy share of the runner's CPUs, sampled once a second from /proc/stat."""
+
+    def __init__(self, path: Path = Path("/proc/stat")) -> None:
+        self.path = path
+        self.samples: list[float] = []
+
+    def _read(self) -> tuple[int, int] | None:
+        try:
+            fields = [int(value) for value in self.path.read_text().split("\n", 1)[0].split()[1:]]
+        except (OSError, ValueError):
+            return None
+        idle = fields[3] + (fields[4] if len(fields) > 4 else 0)
+        return sum(fields), idle
+
+    async def run(self) -> None:
+        previous = self._read()
+        while previous is not None:
+            await asyncio.sleep(1)
+            current = self._read()
+            if current is None:
+                return
+            total, idle = current[0] - previous[0], current[1] - previous[1]
+            if total > 0:
+                self.samples.append(1 - idle / total)
+            previous = current
+
+    def summary(self) -> dict[str, object]:
+        ordered = sorted(self.samples)
+        return {
+            "cpus": os.cpu_count(),
+            "samples": len(ordered),
+            "mean_busy": round(sum(ordered) / len(ordered), 3) if ordered else None,
+            "p95_busy": round(ordered[int(0.95 * (len(ordered) - 1))], 3) if ordered else None,
+        }
+
+
 async def api_phase(
     cluster: LifecycleCluster,
     url: str,
@@ -353,6 +390,8 @@ async def api_phase(
         duration = min(MAX_WINDOW_SECONDS, remaining)
         remaining -= duration
         stage = cluster.output / "api" / f"window-{index}"
+        cpu = HostCpuSampler()
+        sampler = asyncio.create_task(cpu.run())
         chat_task = asyncio.create_task(
             run_cluster_generator(
                 cluster,
@@ -369,6 +408,8 @@ async def api_phase(
             else None
         )
         run = await chat_task
+        sampler.cancel()
+        await asyncio.gather(sampler, return_exceptions=True)
         chat = summarize(run, target_rate=args.api_rate)
         chat_gate = api_window(chat, max_p95_seconds=args.max_p95_seconds)
         generator = generator_evidence_failures(run, target_rate=args.api_rate)
@@ -410,6 +451,9 @@ async def api_phase(
                 )
             },
             "embedding_gate": embedding_gate,
+            # The kind node shares the runner's CPUs; a busy share near 1.0
+            # means latency measures the runner, not the gateway.
+            "host_cpu": cpu.summary(),
             "passed": chat_gate["passed"] and embedding_gate["passed"],
         }
         write_json(stage / "window.json", window)

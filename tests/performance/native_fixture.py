@@ -231,10 +231,17 @@ def role_pods(cluster: LifecycleCluster, role: str) -> list[str]:
     return sorted(pods)
 
 
+# The in-cluster load generator shares the release label; only role pods count.
+GATEWAY_ROLE_PODS = (
+    GATEWAY_SELECTOR
+    + ",app.kubernetes.io/component in (api,batch-worker,accounting-request,accounting-worker)"
+)
+
+
 def pod_restarts(cluster: LifecycleCluster) -> dict[str, int]:
     """Container restarts per gateway pod. A restart clears in-memory stores."""
     payload = json.loads(
-        cluster.kubectl("get", "pods", "-l", GATEWAY_SELECTOR, "-o", "json").stdout
+        cluster.kubectl("get", "pods", "-l", GATEWAY_ROLE_PODS, "-o", "json").stdout
     )
     return {
         pod["metadata"]["name"]: sum(
