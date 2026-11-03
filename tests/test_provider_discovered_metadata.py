@@ -148,7 +148,7 @@ async def test_discovery_returns_provider_limits_for_models_missing_from_catalog
         {
             "models": [
                 {
-                    "name": "models/gemini-2.5-pro",
+                    "name": "models/gemini-test-model",
                     "inputTokenLimit": 1048576,
                     "outputTokenLimit": 65536,
                 },
