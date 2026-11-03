@@ -918,6 +918,78 @@ async def test_db_backed_stale_lease_sweeper_releases_only_expired_owned_leases(
 
 
 @pytest.mark.asyncio
+async def test_db_backed_runtime_summary_counts_only_open_items_of_active_jobs(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+
+    async def _job_with_items(statuses: list[str], *, job_status: str) -> str:
+        job = await repository.create_job(
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            model="m1",
+            metadata=None,
+            created_by_api_key="key-a",
+            created_by_user_id=None,
+            created_by_team_id=None,
+            expires_at=None,
+        )
+        assert job is not None
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=index,
+                    custom_id=f"{job_status}-{index}",
+                    request_body={"model": "m1", "input": "x"},
+                    estimated_work_units=1,
+                )
+                for index in range(1, len(statuses) + 1)
+            ],
+        )
+        for index, item_status in enumerate(statuses, start=1):
+            await batch_db.execute_raw(
+                """
+                UPDATE deltallm_batch_item
+                SET status = $3,
+                    started_at = CASE WHEN $3 = 'in_progress' THEN NOW() - INTERVAL '30 seconds' END,
+                    created_at = NOW() - INTERVAL '2 minutes'
+                WHERE batch_id = $1 AND line_number = $2
+                """,
+                job.batch_id,
+                index,
+                item_status,
+            )
+        await batch_db.execute_raw(
+            """
+            UPDATE deltallm_batch_job
+            SET status = $2::"DeltaLLM_BatchJobStatus"
+            WHERE batch_id = $1
+            """,
+            job.batch_id,
+            job_status,
+        )
+        return job.batch_id
+
+    await _job_with_items(
+        ["pending", "pending", "in_progress", "completed"], job_status="in_progress"
+    )
+    await _job_with_items(["pending"], job_status="queued")
+    # Finished history and stray open rows under terminal jobs must not count.
+    await _job_with_items(["completed", "failed", "completed"], job_status="completed")
+    await _job_with_items(["pending", "in_progress"], job_status="failed")
+
+    summary = await repository.summarize_runtime_statuses(now=datetime.now(tz=UTC))
+
+    assert summary["pending_items"] == 3
+    assert summary["in_progress_items"] == 1
+    assert summary["queued"] == 1
+    assert summary["in_progress"] == 1
+    assert summary["finalizing"] == 0
+    assert summary["oldest_pending_item_age_seconds"] >= 100
+    assert 20 <= summary["oldest_in_progress_item_age_seconds"] < 100
+
+
+@pytest.mark.asyncio
 async def test_db_backed_stale_lease_sweeper_ignores_terminal_parent_items(batch_db) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)

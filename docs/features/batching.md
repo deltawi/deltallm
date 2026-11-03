@@ -928,12 +928,14 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | Metric | Type | Description |
 |--------|------|-------------|
 | `deltallm_batch_jobs` | Gauge | Current job count by status |
-| `deltallm_batch_items` | Gauge | Current item count by status |
-| `deltallm_batch_oldest_item_age_seconds` | Gauge | Age of the oldest item by active status |
+| `deltallm_batch_items` | Gauge | Current pending and in-progress item count of queued, in-progress and finalizing jobs |
+| `deltallm_batch_oldest_item_age_seconds` | Gauge | Age of the oldest pending or in-progress item of an active job |
 | `deltallm_batch_queue_jobs` | Gauge | Current scheduler queue jobs by status, model group, tenant scope, service tier, and size class |
 | `deltallm_batch_queue_work_units` | Gauge | Current scheduler queue work units by status, model group, tenant scope, service tier, and size class |
 | `deltallm_batch_oldest_job_age_seconds` | Gauge | Age of the oldest batch job by scheduler dimensions |
 | `deltallm_batch_worker_saturation_ratio` | Gauge | Worker active/capacity ratio |
+
+The job and item gauges read only active jobs and their open items, so their cost follows active work, not the retained history of finished batches.
 
 ### Scheduler health
 

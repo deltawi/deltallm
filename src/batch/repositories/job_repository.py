@@ -723,6 +723,7 @@ class BatchJobRepository:
                 COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
                 COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing
             FROM deltallm_batch_job
+            WHERE status IN ('queued', 'in_progress', 'finalizing')
             """
         )
         row = dict(rows[0]) if rows else {}
