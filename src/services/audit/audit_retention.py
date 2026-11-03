@@ -26,24 +26,25 @@ class AuditRetentionWorker:
     async def run(self) -> None:
         self._running = True
         while self._running:
-            await self.process_once()
+            try:
+                await self.process_once()
+            except Exception:
+                # One failed pass must not end retention for the life of the process.
+                logger.exception("audit retention pass failed; retrying at the next interval")
             await asyncio.sleep(self.config.interval_seconds)
 
     def stop(self) -> None:
         self._running = False
 
     async def process_once(self) -> tuple[int, int]:
-        payload_ids = await self.repository.list_expired_payload_ids(
+        deleted_payloads = await self.repository.delete_expired_payloads(
             default_retention_days=max(1, int(self.config.payload_retention_days)),
             limit=max(1, int(self.config.scan_limit)),
         )
-        deleted_payloads = await self.repository.delete_payloads_by_ids(payload_ids)
-
-        event_ids = await self.repository.list_expired_event_ids(
+        deleted_events = await self.repository.delete_expired_events(
             default_retention_days=max(1, int(self.config.metadata_retention_days)),
             limit=max(1, int(self.config.scan_limit)),
         )
-        deleted_events = await self.repository.delete_events_by_ids(event_ids)
 
         if deleted_payloads or deleted_events:
             logger.info(
