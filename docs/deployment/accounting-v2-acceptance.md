@@ -36,13 +36,20 @@ One kind node with 2 API pods, 1 batch pod, 2 accounting request pods and
    SIGKILL to one API pod, one accounting request pod and the batch pod, 15 s
    apart. The batch completes with no failed item, without a manual restart.
 
-After each step, the run checks four things. If any check fails, the job fails:
+After each step, the run checks four things. A failed check fails the job
+once the last step has run, so one red step does not hide the others:
 
 - Every tracked in-memory gauge is back at or below its level before the step
   (see [Bounded state](#bounded-state)).
 - No pod refused accounting because a store or queue was full.
-- Accounting drains: no reserved or provisional operation, open grant,
-  pending terminal journal row, or unprojected partition is left.
+- Accounting drains within 5 minutes: no reserved or provisional operation,
+  open grant, pending terminal journal row, or unprojected partition is left.
+  If it does not, the run saves the stuck rows to
+  `<step>-unsettled-state.json` and keeps waiting up to 18 minutes, past
+  reservation and grant expiry, to show whether recovery clears them
+  (`recovered_after_target`). The step still fails. After pod loss, the killed
+  pods' reservations can only clear by expiry, so that step allows the full
+  18 minutes.
 - The new usage facts equal the successful requests and items. No operation
   is charged twice, every budget scope's committed amount equals the facts,
   and no scope holds reserved or provisional money. After pod loss, the facts

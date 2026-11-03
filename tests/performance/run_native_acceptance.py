@@ -72,6 +72,10 @@ ROLES = ("api", "batch_worker", "accounting_request", "accounting_worker")
 SLOW_PROMPT = "Lifecycle batch fixture."
 BATCH_ITEMS = 300
 SETTLE_SECONDS = 300
+# Reservations and grants a stopped pod held expire about 15 minutes after they
+# were issued; recovery then settles them. Waiting past that shows whether a
+# late drain is a slow recovery or a permanent leak.
+EXPIRY_RECOVERY_SECONDS = 1080
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -81,12 +85,14 @@ def write_json(path: Path, payload: object) -> None:
 
 async def settle(
     cluster: LifecycleCluster,
+    step: str,
     *,
     baseline: dict,
     before: dict,
     charged: int,
     allowed_extra: int = 0,
     timeout: float = SETTLE_SECONDS,
+    recovery_timeout: float = EXPIRY_RECOVERY_SECONDS,
 ) -> dict[str, object]:
     started = monotonic()
     while True:
@@ -96,6 +102,18 @@ async def settle(
         await asyncio.sleep(5)
     async with local_database() as db:
         drain = await wait_native_drain(db, timeout=timeout)
+        stuck: dict[str, list] = {}
+        if not drain["passed"]:
+            # Keep what was stuck at the target, then see whether expiry recovers it.
+            stuck = await unsettled_rows(db)
+            recovery = await wait_native_drain(db, timeout=max(0.0, recovery_timeout - timeout))
+            drain = {
+                **recovery,
+                "passed": False,
+                "target_seconds": timeout,
+                "seconds": timeout + recovery["seconds"],
+                "recovered_after_target": recovery["passed"],
+            }
         after = await accounting_snapshot(db)
         ledger = ledger_matches(
             before,
@@ -105,7 +123,6 @@ async def settle(
             scopes=await budget_scopes(db),
             allowed_extra=allowed_extra,
         )
-        stuck = {} if drain["passed"] else await unsettled_rows(db)
     drain.pop("samples", None)
     result = {
         "passed": idle["passed"] and drain["passed"] and ledger["passed"],
@@ -114,13 +131,10 @@ async def settle(
         "ledger": ledger,
     }
     if not result["passed"]:
-        # Keep the stuck rows; the step's report is lost when this raises.
-        (cluster.output / "unsettled-state.json").write_text(
+        (cluster.output / f"{step}-unsettled-state.json").write_text(
             json.dumps({**result, "stuck": stuck}, indent=2, default=str)
         )
-        raise AssertionError(
-            f"Native state did not settle: {json.dumps(result, default=str)[:4000]}"
-        )
+    # Later steps still run; exercise() fails the job after the last step.
     return result
 
 
@@ -266,7 +280,11 @@ async def fixed_replicas(cluster: LifecycleCluster, values: Path, url: str) -> l
         capacity = capacity_failures(baseline, after)
         assert capacity["passed"], capacity
         settled = await settle(
-            cluster, baseline=baseline, before=before, charged=summary["success_count"]
+            cluster,
+            f"fixed-{replicas}",
+            baseline=baseline,
+            before=before,
+            charged=summary["success_count"],
         )
         results.append(
             {"replicas": replicas, "arrival": summary, "pods_with_traffic": len(grew), **settled}
@@ -314,6 +332,7 @@ async def rollout(cluster: LifecycleCluster, values: Path, url: str) -> dict:
     batch = await finish_batch(url, batch_id, timeout=BATCH_ITEM_LEASE_SECONDS + 360)
     settled = await settle(
         cluster,
+        "rollout",
         baseline=baseline,
         before=before,
         charged=traffic["success_count"] + BATCH_ITEMS,
@@ -355,12 +374,14 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
     rejected = traffic["target_count"] - traffic["success_count"]
     settled = await settle(
         cluster,
+        "pod-loss",
         baseline=baseline,
         before=before,
         charged=traffic["success_count"] + BATCH_ITEMS,
         # A killed API pod may have charged answers its client never received.
         allowed_extra=rejected,
-        timeout=600,
+        # SIGKILL leaves the killed pods' reservations to expiry recovery.
+        timeout=EXPIRY_RECOVERY_SECONDS,
     )
     cluster.event("native_pod_loss_recovered", batch_seconds=round(batch["seconds"], 1))
     return {"killed": killed, "traffic": traffic, "batch": batch, **settled}
@@ -396,7 +417,22 @@ async def exercise(cluster: LifecycleCluster, values: Path, report: dict) -> Non
         report["rollout"] = await rollout(cluster, values, url)
         write_json(cluster.output / "native-acceptance.json", report)
         report["pod_loss"] = await pod_loss(cluster, url)
-        report["passed"] = True
+        steps = {
+            **{f"fixed-{row['replicas']}": row for row in report["fixed_replicas"]},
+            "rollout": report["rollout"],
+            "pod-loss": report["pod_loss"],
+        }
+        report["failed_steps"] = [name for name, step in steps.items() if not step["passed"]]
+        report["passed"] = not report["failed_steps"]
+        write_json(cluster.output / "native-acceptance.json", report)
+        if report["failed_steps"]:
+            raise AssertionError(
+                "Native state did not settle after: "
+                + ", ".join(
+                    f"{name} {json.dumps(steps[name], default=str)[:1500]}"
+                    for name in report["failed_steps"]
+                )
+            )
 
 
 def main() -> None:
