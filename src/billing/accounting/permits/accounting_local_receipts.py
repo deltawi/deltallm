@@ -1,10 +1,18 @@
-"""Byte-bounded immutable local issue proofs, with no financial eviction policy."""
+"""Byte-bounded immutable local issue proofs, with no financial eviction policy.
+
+A proof leaves the store only when its operation has a durable terminal (finalized
+here, or found in the terminal journal after another process finalized it) or when
+its grant has expired in the database, after which no first terminal can be written.
+"""
 
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+import hashlib
+import math
+import time
 from typing import Protocol
 from uuid import UUID
 
@@ -13,7 +21,11 @@ from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitReceipt,
 )
 from src.billing.accounting.accounting_protocol import AccountingReservation
-from src.billing.accounting.journal.accounting_terminal_receipts import TerminalReceipt
+from src.billing.accounting.journal.accounting_terminal_receipts import (
+    JournalReceipt,
+    TerminalIdentity,
+    TerminalReceipt,
+)
 from src.billing.accounting.accounting_snapshots import reservation_bytes, reservation_snapshot
 
 
@@ -96,6 +108,16 @@ class RetainedLocalReceipt:
             reservation=AccountingReservation.model_validate_json(self.reservation_json),
         )
 
+    def terminal_identity(self) -> TerminalIdentity:
+        return TerminalIdentity(
+            operation_id=self.operation_id,
+            grant_id=self.grant.grant_id,
+            grantee_id=self.grant.grantee_id,
+            fence_token=self.grant.fence_token,
+            permit_ordinal=self.permit_ordinal,
+            reservation_sha256=hashlib.sha256(self.reservation_json).hexdigest(),
+        )
+
     def same_issue(self, other: RetainedLocalReceipt) -> bool:
         excluded = {"observed_at", "observed_monotonic"}
         return (
@@ -117,16 +139,26 @@ class FrozenReceiptIdentity(Protocol):
 
 
 class LocalReceiptStore:
-    """Only an acknowledged terminal owner can remove an issued proof."""
+    """Only a durable terminal or a database-expired grant can remove an issued proof."""
 
-    def __init__(self, *, max_entries: int, max_retained_bytes: int) -> None:
+    def __init__(
+        self,
+        *,
+        max_entries: int,
+        max_retained_bytes: int,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         if not 1 <= max_entries <= 100_000:
             raise ValueError("local receipt entry capacity is invalid")
         if not 1 <= max_retained_bytes <= 64 * 1024 * 1024:
             raise ValueError("local receipt byte capacity is invalid")
         self._max_entries = max_entries
         self._max_bytes = max_retained_bytes
+        self._clock = clock
+        # Issue and release checks both move an entry to the end, so this order
+        # is also the order of each entry's last touch time.
         self._values: OrderedDict[UUID, RetainedLocalReceipt] = OrderedDict()
+        self._touched: dict[UUID, float] = {}
         self._bytes = 0
 
     @property
@@ -136,6 +168,18 @@ class LocalReceiptStore:
     @property
     def entries(self) -> int:
         return len(self._values)
+
+    @property
+    def max_entries(self) -> int:
+        return self._max_entries
+
+    @property
+    def max_retained_bytes(self) -> int:
+        return self._max_bytes
+
+    @property
+    def fill_ratio(self) -> float:
+        return max(self.entries / self._max_entries, self._bytes / self._max_bytes)
 
     def capacity_for(self, *, entries: int, retained_bytes: int) -> bool:
         if entries < 0 or retained_bytes < 0:
@@ -155,6 +199,7 @@ class LocalReceiptStore:
         if not self.capacity_for(entries=1, retained_bytes=retained.retained_bytes):
             return False
         self._values[retained.operation_id] = retained
+        self._touched[retained.operation_id] = self._clock()
         self._bytes += retained.retained_bytes
         return True
 
@@ -176,8 +221,10 @@ class LocalReceiptStore:
 
     def _commit_issue(self, values: Sequence[tuple[UUID, RetainedLocalReceipt]]) -> None:
         # No validation or model conversion may occur after the cursor commit.
+        now = self._clock()
         for operation_id, retained in values:
             self._values[operation_id] = retained
+            self._touched[operation_id] = now
             self._bytes += retained.retained_bytes
 
     def matches(self, item: AccountingReservation) -> bool:
@@ -224,8 +271,7 @@ class LocalReceiptStore:
         # can enter the removal loop. A replay can have no local charge to remove.
         for key, retained in prepared:
             if retained is not None:
-                del self._values[key]
-                self._bytes -= retained.retained_bytes
+                self._remove(key, retained)
 
     def _prepare_acknowledgement(
         self, receipt: LocalPermitReceipt, terminal: TerminalReceipt
@@ -257,12 +303,75 @@ class LocalReceiptStore:
             raise ValueError("local receipt acknowledgement does not match its issue")
         return operation_id, retained
 
-    def recovery_candidates(self, *, limit: int = 256) -> tuple[UUID, ...]:
+    def release_candidates(
+        self, *, minimum_age_seconds: float, limit: int = 256
+    ) -> tuple[RetainedLocalReceipt, ...]:
+        """Return proofs not issued or checked recently, and mark them checked now."""
         if not 1 <= limit <= 256:
-            raise ValueError("local receipt recovery slice must contain 1 to 256 entries")
+            raise ValueError("local receipt release slice must contain 1 to 256 entries")
+        if not math.isfinite(minimum_age_seconds) or not 0 < minimum_age_seconds <= 3600:
+            raise ValueError("local receipt release age is invalid")
+        now = self._clock()
         result = []
         for _ in range(min(limit, self.entries)):
             key = next(iter(self._values))
-            result.append(key)
+            if self._touched.get(key, -math.inf) > now - minimum_age_seconds:
+                break
+            result.append(self._values[key])
             self._values.move_to_end(key)
+            self._touched[key] = now
         return tuple(result)
+
+    def release_finalized(
+        self, values: Sequence[tuple[RetainedLocalReceipt, JournalReceipt]]
+    ) -> int:
+        """Remove proofs whose exact issue already has a durable journal terminal.
+
+        Another process can finalize an operation this process issued, for example
+        a batch completion delivered by another worker. The journal row is then
+        the terminal acknowledgement. A proof replaced or removed meanwhile stays.
+        """
+        if len(values) > 256:
+            raise ValueError("local receipt release exceeds its entry limit")
+        if len({proof.operation_id for proof, _ in values}) != len(values):
+            raise ValueError("local receipt release repeats an operation")
+        for proof, terminal in values:
+            if (
+                type(terminal) is not JournalReceipt
+                or terminal.operation_id != proof.operation_id
+                or terminal.protocol_generation != proof.generation
+            ):
+                raise ValueError("local receipt release does not match its issue")
+        return self._release_owned(proof for proof, _ in values)
+
+    def release_expired(
+        self, values: Sequence[RetainedLocalReceipt], *, now: float, grace_seconds: float
+    ) -> int:
+        """Remove proofs whose grant has expired in the database.
+
+        The terminal journal refuses a first terminal once its grant expires, and
+        expired-grant recovery then owns any unreported permit. ``now`` uses the
+        grant's monotonic clock; the grace covers the funding call's latency.
+        """
+        if len(values) > 256:
+            raise ValueError("local receipt release exceeds its entry limit")
+        if not math.isfinite(grace_seconds) or not 0 <= grace_seconds <= 3600:
+            raise ValueError("local receipt expiry grace is invalid")
+        if not math.isfinite(now):
+            raise ValueError("local receipt release clock is invalid")
+        if any(proof.grant.recovery_deadline + grace_seconds > now for proof in values):
+            raise ValueError("local receipt grant has not expired")
+        return self._release_owned(values)
+
+    def _release_owned(self, values: Iterable[RetainedLocalReceipt]) -> int:
+        released = 0
+        for proof in values:
+            if self._values.get(proof.operation_id) is proof:
+                self._remove(proof.operation_id, proof)
+                released += 1
+        return released
+
+    def _remove(self, key: UUID, retained: RetainedLocalReceipt) -> None:
+        del self._values[key]
+        self._touched.pop(key, None)
+        self._bytes -= retained.retained_bytes

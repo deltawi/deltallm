@@ -8,6 +8,7 @@ from src.billing.accounting.transport.accounting_http import AccountingHttpTrans
 from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
 from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
 from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.permits.accounting_local_release import LocalReceiptReleaseWorker
 from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
 from src.billing.accounting.accounting_local_runtime import LocalAccountingRuntime
 from src.billing.accounting.accounting_local_service import LocalAccountingService
@@ -24,13 +25,17 @@ class ApiAccountingRuntime:
         local: LocalAccountingRuntime,
         monitor: AccountingAdmissionMonitor,
         lifecycle: ProcessLifecycle,
+        releases: LocalReceiptReleaseWorker | None = None,
     ) -> None:
         self.local = local
         self.monitor = monitor
+        self.releases = releases
         self._lifecycle = lifecycle
 
     @property
     def worker_health(self) -> WorkerHealth:
+        # Release health is reported by metrics only: a failed lookup delays a
+        # release, and must never stop new reservations on this process.
         if self.monitor.worker_health.state is not WorkerState.READY:
             return self.monitor.worker_health
         return self.local.worker_health
@@ -39,12 +44,19 @@ class ApiAccountingRuntime:
         await self.monitor.start(expires_at=expires_at)
         await self.local.start(expires_at=expires_at)
         self._lifecycle.register_claim_stop(self.local.service.issuer.stop_admission)
+        if self.releases is not None:
+            self.releases.start()
 
     async def close(self, *, expires_at: float) -> None:
+        # Releases keep running while the local drain waits for its own proofs.
         try:
             drained = await self.local.close(expires_at=expires_at)
         finally:
-            stopped = await self.monitor.close(expires_at=expires_at)
+            try:
+                if self.releases is not None:
+                    await self.releases.close(expires_at=expires_at)
+            finally:
+                stopped = await self.monitor.close(expires_at=expires_at)
         if not drained or not stopped:
             raise RuntimeError("API accounting local drain did not complete")
 
@@ -103,4 +115,5 @@ def build_api_accounting_runtime(
         LocalAccountingRuntime(service, LocalReturnWorker(persistence, cursors, issuer)),
         monitor,
         lifecycle,
+        LocalReceiptReleaseWorker(persistence, receipts),
     )

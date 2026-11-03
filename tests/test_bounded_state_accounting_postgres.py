@@ -14,6 +14,7 @@ import pytest
 from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
 from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
 from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.permits.accounting_local_release import LocalReceiptReleaseWorker
 from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
 from src.billing.accounting.accounting_local_runtime import LocalAccountingRuntime
 from src.billing.accounting.accounting_local_service import LocalAccountingService
@@ -70,6 +71,14 @@ class Pod:
         self.runtime = LocalAccountingRuntime(
             self.service, LocalReturnWorker(lease, self.cursors, issuer, poll_seconds=0.01)
         )
+        # Shorter than the production defaults (1 s poll, 10 s recheck) so the
+        # cross-pod case drains inside the idle wait.
+        self.release = LocalReceiptReleaseWorker(
+            JournalTerminalPersistence(AccountingJournalRepository(db)),
+            self.receipts,
+            poll_seconds=0.05,
+            recheck_seconds=0.5,
+        )
 
     def state(self) -> dict[str, int]:
         return {
@@ -112,6 +121,8 @@ async def _started_pods(clients, generation: int) -> list[Pod]:
         for index in range(PODS)
     ]
     await asyncio.gather(*(pod.runtime.start(expires_at=deadline()) for pod in pods))
+    for pod in pods:
+        pod.release.start()
     return pods
 
 
@@ -128,6 +139,9 @@ async def _load(pods: list[Pod], generation: int, windows: list[str]):
 
 
 async def _close(pods: list[Pod]) -> None:
+    await asyncio.gather(
+        *(pod.release.close(expires_at=deadline()) for pod in pods), return_exceptions=True
+    )
     await asyncio.gather(
         *(pod.runtime.close(expires_at=deadline()) for pod in pods), return_exceptions=True
     )
@@ -162,15 +176,6 @@ async def test_every_pod_drains_its_local_stores_when_it_finalizes_its_own_work(
         await _close(pods)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known leak: a local receipt is released only by the pod that issued it, so "
-        "batch work finalized by another pod stays until restart. The fix that "
-        "releases it from the journal is tracked separately; remove this marker with it."
-    ),
-)
 async def test_every_pod_drains_its_receipts_when_another_pod_finalizes_its_work(accounting_db):
     """Batch shape: the completion outbox finalizes on whichever pod claims the row."""
     clients, generation = accounting_db

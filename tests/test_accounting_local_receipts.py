@@ -1,5 +1,6 @@
 """Immutable issue proofs stay inside finite entry and retained-byte bounds."""
 
+import json
 from uuid import uuid4
 
 import pytest
@@ -15,6 +16,8 @@ from src.billing.accounting.permits.accounting_local_receipts import (
     RetainedLocalReceipt,
     reservation_bytes,
 )
+from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
+from src.billing.accounting.journal.accounting_terminal_snapshots import FrozenLocalTerminal
 
 
 def acknowledgement(receipt):
@@ -76,19 +79,127 @@ async def test_duplicate_proof_is_idempotent_and_different_ordinal_is_not():
     assert store.retained_bytes == charge
 
 
-async def test_recovery_scan_rotates_only_one_bounded_slice_without_removing_proofs():
-    store = LocalReceiptStore(max_entries=300, max_retained_bytes=8 * 1024 * 1024)
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def journal_receipt(receipt, *, sequence=1):
+    return JournalReceipt(
+        protocol_generation=receipt.reservation.protocol_generation,
+        operation_id=receipt.reservation.operation_id,
+        journal_sequence=sequence,
+        outcome=AccountingOutcome.COMPLETED,
+        replayed=True,
+    )
+
+
+def ids(values):
+    return tuple(value.operation_id for value in values)
+
+
+async def test_release_scan_takes_only_due_proofs_in_bounded_rotating_slices():
+    clock = Clock()
+    store = LocalReceiptStore(max_entries=301, max_retained_bytes=8 * 1024 * 1024, clock=clock)
     receipts = [terminal().receipt for _ in range(300)]
     for receipt in receipts:
         assert store.retain(receipt)
-    assert store.recovery_candidates() == tuple(
-        item.reservation.operation_id for item in receipts[:256]
-    )
-    second = store.recovery_candidates(limit=44)
-    assert second == tuple(item.reservation.operation_id for item in receipts[256:])
-    assert store.entries == 300
-    with pytest.raises(ValueError, match="1 to 256"):
-        store.recovery_candidates(limit=257)
+    expected = tuple(item.reservation.operation_id for item in receipts)
+    clock.now += 9.9
+    assert store.release_candidates(minimum_age_seconds=10) == ()
+    clock.now += 0.1
+    assert ids(store.release_candidates(minimum_age_seconds=10)) == expected[:256]
+    late = terminal().receipt
+    assert store.retain(late)
+    assert ids(store.release_candidates(minimum_age_seconds=10)) == expected[256:]
+    # Every proof was just checked or issued, so nothing is due again yet.
+    assert store.release_candidates(minimum_age_seconds=10) == ()
+    clock.now += 10
+    assert ids(store.release_candidates(minimum_age_seconds=10, limit=3)) == expected[:3]
+    assert store.entries == 301
+    for arguments in ({"limit": 257}, {"limit": 0}):
+        with pytest.raises(ValueError, match="1 to 256"):
+            store.release_candidates(minimum_age_seconds=10, **arguments)
+    for age in (0, float("nan"), 3601):
+        with pytest.raises(ValueError, match="age is invalid"):
+            store.release_candidates(minimum_age_seconds=age)
+
+
+async def test_finalized_release_removes_only_the_exact_retained_issue():
+    clock = Clock()
+    store = LocalReceiptStore(max_entries=4, max_retained_bytes=8 * 1024 * 1024, clock=clock)
+    first, second = terminal().receipt, terminal().receipt
+    assert store.retain(first) and store.retain(second)
+    kept = store.retained_bytes
+    clock.now += 1
+    proofs = store.release_candidates(minimum_age_seconds=1)
+    with pytest.raises(ValueError, match="does not match"):
+        store.release_finalized(((proofs[0], journal_receipt(second)),))
+    with pytest.raises(ValueError, match="does not match"):
+        store.release_finalized(((proofs[0], acknowledgement(first)),))
+    with pytest.raises(ValueError, match="repeats"):
+        store.release_finalized(((proofs[0], journal_receipt(first)),) * 2)
+    assert store.entries == 2 and store.retained_bytes == kept
+    assert store.release_finalized(((proofs[0], journal_receipt(first)),)) == 1
+    assert store.get(first.reservation.operation_id) is None
+    assert store.get(second.reservation.operation_id) == second
+    assert store.retained_bytes == kept - proofs[0].retained_bytes
+    assert store.release_finalized(((proofs[0], journal_receipt(first)),)) == 0
+    # A proof this process already finalized and issued again is not the one
+    # the lookup checked, so the newer issue stays.
+    assert store.acknowledge(second, acknowledgement(second))
+    assert store.retain(second)
+    assert store.release_finalized(((proofs[1], journal_receipt(second)),)) == 0
+    assert store.entries == 1
+
+
+async def test_expired_release_waits_for_the_database_grant_expiry_and_grace():
+    store = LocalReceiptStore(max_entries=2, max_retained_bytes=8 * 1024 * 1024, clock=Clock())
+    receipt = terminal().receipt
+    assert store.retain(receipt)
+    store._touched[receipt.reservation.operation_id] = -1.0
+    (proof,) = store.release_candidates(minimum_age_seconds=1)
+    deadline = receipt.grant.recovery_deadline
+    with pytest.raises(ValueError, match="not expired"):
+        store.release_expired((proof,), now=deadline + 59.9, grace_seconds=60)
+    assert store.entries == 1
+    for now, grace in ((float("inf"), 60), (deadline + 61, -1), (deadline + 61, float("nan"))):
+        with pytest.raises(ValueError, match="invalid"):
+            store.release_expired((proof,), now=now, grace_seconds=grace)
+    assert store.release_expired((proof,), now=deadline + 60, grace_seconds=60) == 1
+    assert store.entries == store.retained_bytes == 0
+    assert store.release_expired((proof,), now=deadline + 60, grace_seconds=60) == 0
+
+
+async def test_fill_ratio_uses_the_tighter_bound():
+    receipt = terminal().receipt
+    charge = RetainedLocalReceipt.freeze(receipt).retained_bytes
+    store = LocalReceiptStore(max_entries=4, max_retained_bytes=2 * charge)
+    assert store.fill_ratio == 0
+    assert store.retain(receipt)
+    assert store.fill_ratio == 0.5
+    assert store.max_entries == 4 and store.max_retained_bytes == 2 * charge
+
+
+async def test_terminal_identity_matches_the_journal_identity():
+    value = terminal()
+    proof = RetainedLocalReceipt.freeze(value.receipt)
+    identity = proof.terminal_identity()
+    journal = json.loads(FrozenLocalTerminal(value, generation=7).journal_identity_json)
+    assert identity.model_dump(mode="json") == {
+        key: journal[key]
+        for key in (
+            "operation_id",
+            "grant_id",
+            "grantee_id",
+            "fence_token",
+            "permit_ordinal",
+            "reservation_sha256",
+        )
+    }
 
 
 async def test_unknown_operation_has_no_proof():

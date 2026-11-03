@@ -17,6 +17,7 @@ from src.billing.accounting.transport.accounting_auth import (
 from src.billing.accounting.transport.accounting_rpc_contracts import (
     LocalFundingRequest,
     LocalReturnRequest,
+    LocalTerminalLookupRequest,
     LocalTerminalRequest,
 )
 from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
@@ -43,7 +44,7 @@ def accounting_rpc_router(service: AccountingRpcService, *, signing_secret: str)
             raise HTTPException(503, "Accounting unavailable") from None
 
     async def execute(
-        request: Request, action: Literal["allocate", "return", "finalize"]
+        request: Request, action: Literal["allocate", "return", "finalize", "lookup"]
     ) -> Response:
         received_at = asyncio.get_running_loop().time()
         try:
@@ -59,6 +60,11 @@ def accounting_rpc_router(service: AccountingRpcService, *, signing_secret: str)
                     deadline = received_at + value.budget_ms / 1000
                     async with asyncio.timeout_at(deadline):
                         result = await service.return_suffixes(value, expires_at=deadline)
+                elif action == "lookup":
+                    value = LocalTerminalLookupRequest.model_validate_json(body)
+                    deadline = received_at + value.budget_ms / 1000
+                    async with asyncio.timeout_at(deadline):
+                        result = await service.lookup_terminals(value, expires_at=deadline)
                 else:
                     value = LocalTerminalRequest.model_validate_json(body)
                     deadline = received_at + value.budget_ms / 1000
@@ -85,6 +91,10 @@ def accounting_rpc_router(service: AccountingRpcService, *, signing_secret: str)
     @router.post("/finalize/local/batch")
     async def finalize(request: Request) -> Response:
         return await execute(request, "finalize")
+
+    @router.post("/terminals/local/batch")
+    async def lookup_terminals(request: Request) -> Response:
+        return await execute(request, "lookup")
 
     return router
 

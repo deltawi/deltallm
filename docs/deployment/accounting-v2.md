@@ -54,8 +54,7 @@ the durable event stream.
 - A failover deployment may run only if the first reservation covers its worst-case
   customer charge. Earlier attempts stay provisional until evidence resolves them.
 - Local queues and stores are bounded and refuse work when full. See
-  [Bounded in-memory state](bounded-state.md) for each limit, what empties it, and
-  the known receipt leak when a batch operation is finalized on another pod.
+  [Bounded in-memory state](bounded-state.md) for each limit and what empties it.
 
 ## Budget edits and native balances
 
@@ -433,6 +432,44 @@ After activation, writes to legacy key, user, team, organization, and team-model
 budget policies update the authoritative active window in the same control-plane
 transaction. Removing a hard budget expires its active window. Lowering a limit below
 committed, reserved, or provisional debit is rejected instead of creating overspend.
+
+### Local issue proofs
+
+In `local_journal` mode, each API and batch process keeps one issue proof for every
+operation it dispatched until that operation has a durable terminal. The store
+uses the finalization limits: `accounting_finalization_max_pending` entries and
+`accounting_finalization_max_pending_bytes`. Each proof is charged at least 8 KiB,
+so the default 8 MiB holds at most about 1,000 operations per process. When the
+store is full, new local reservations fail closed with HTTP 503 (batch items show
+"Gateway busy") and
+`deltallm_accounting_failures_total{queue="reservation",phase="queue",reason="queue_full"}`
+rises.
+
+A proof leaves the store in one of three ways:
+
+- The process finalizes the operation itself.
+- Another process finalized it. A batch completion can be delivered by any batch
+  worker. A release worker in every process checks proofs older than 10 seconds
+  against the terminal journal, up to 256 per request-role call, and checks each
+  running operation again every 10 seconds.
+- Its grant expired in the database more than 60 seconds ago. After that expiry
+  the journal refuses a first terminal for the operation, and expired-grant
+  recovery owns any permit no process reported.
+
+Watch these metrics on API and batch pods:
+
+| Metric | Meaning |
+|---|---|
+| `deltallm_accounting_local_receipt_fill_ratio` | Share of the store in use, by entries or bytes, whichever is higher. New reservations fail at 1. Alert above 0.8. |
+| `deltallm_accounting_local_receipts` | Proofs held |
+| `deltallm_accounting_local_receipt_bytes` | Their conservative byte charge |
+| `deltallm_accounting_local_receipt_releases_total{reason="finalized\|expired"}` | Proofs released after another process finalized them, or after grant expiry |
+| `deltallm_accounting_failures_total{queue="receipt_release",phase="lookup"}` | Failed journal lookups. Releases wait for the next check; admission is not affected. |
+
+The journal lookup is served by the accounting request pods at
+`/internal/accounting/v1/terminals/local/batch`. Upgrade them in the same release
+as API and batch pods. While an older request pod is still serving, lookups fail
+and only the expiry release runs.
 
 ## Provisional reconciliation
 

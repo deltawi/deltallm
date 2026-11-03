@@ -17,6 +17,8 @@ from src.billing.accounting.transport.accounting_rpc_contracts import (
     LocalFundingRequest,
     LocalReturnReply,
     LocalReturnRequest,
+    LocalTerminalLookupReply,
+    LocalTerminalLookupRequest,
     LocalTerminalRequest,
     funding_reply,
     rpc_batch_bytes,
@@ -186,6 +188,28 @@ class AccountingRpcService:
                 *(self.terminals.submit(QueuedTerminal(value, expires_at)) for value in snapshots)
             )
         return rpc_batch_bytes(tuple(results))
+
+    async def lookup_terminals(
+        self, request: LocalTerminalLookupRequest, *, expires_at: float
+    ) -> bytes:
+        # A read of committed terminals; it stays available during drain so a
+        # closing issuer can still release proofs another process finalized.
+        self._require_generation(request.generation)
+        results = await self._journal.find_batch(
+            request.values, generation=self._generation, expires_at=expires_at
+        )
+        return rpc_batch_bytes(
+            tuple(
+                LocalTerminalLookupReply(operation_id=value.operation_id)
+                if result is None
+                else LocalTerminalLookupReply(
+                    operation_id=value.operation_id,
+                    journal_sequence=result.journal_sequence,
+                    outcome=result.outcome,
+                )
+                for value, result in zip(request.values, results, strict=True)
+            )
+        )
 
     async def _append(self, values: Sequence[QueuedTerminal]) -> list[JournalReceipt]:
         started = perf_counter()

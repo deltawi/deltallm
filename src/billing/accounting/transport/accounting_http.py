@@ -47,6 +47,7 @@ AccountingEndpoint = Literal[
     "/finalize/local/batch",
     "/allocate/local/batch",
     "/return/local/batch",
+    "/terminals/local/batch",
 ]
 _ENDPOINTS = {
     "/health",
@@ -54,6 +55,7 @@ _ENDPOINTS = {
     "/finalize/local/batch",
     "/allocate/local/batch",
     "/return/local/batch",
+    "/terminals/local/batch",
 }
 
 

@@ -20,7 +20,12 @@ from src.billing.accounting.journal.accounting_journal_runtime import (
 )
 from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
 from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.permits.accounting_local_leases import LocalPermitFinalization
+from src.billing.accounting.permits.accounting_local_receipts import (
+    LocalReceiptStore,
+    RetainedLocalReceipt,
+)
+from src.billing.accounting.permits.accounting_local_release import LocalReceiptReleaseWorker
 from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
 from src.billing.accounting.accounting_local_runtime import LocalAccountingRuntime
 from src.billing.accounting.accounting_local_service import LocalAccountingService
@@ -29,6 +34,7 @@ from src.billing.accounting.transport.accounting_remote_leases import RemoteLoca
 from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
 from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
 from src.db.accounting.health.accounting_health import AccountingBacklogRepository
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
 from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
 from src.outbound.network_policy import OutboundNetworkPolicy
 from tests.test_accounting_local_leases_postgres import deadline
@@ -174,6 +180,77 @@ async def test_funding_and_terminal_on_different_workers_preserve_one_issue_and_
     finally:
         await local.close(expires_at=deadline())
         await transport.close()
+        for _, service in services:
+            await service.close(timeout_seconds=1)
+        assert await processing.close(expires_at=deadline())
+
+
+async def test_issuer_releases_a_proof_that_another_process_finalized(accounting_db):
+    clients, generation = accounting_db
+    db = clients[0]
+    window = str(uuid4())
+    await _create_window(db, generation, window)
+    processing = JournalProcessingWorker(
+        AccountingJournalWorkerRepository(clients[1]),
+        JournalWorkerConfig(generation=generation, worker_id="rpc-release", poll_seconds=0.01),
+    )
+    await processing.start(expires_at=deadline())
+    services = [await request_worker(client, generation, processing) for client in clients]
+    local, transport, _, _, receipts, persistence = await local_api(
+        [app for app, _ in services], generation
+    )
+    other, other_transport, _, _, _, other_persistence = await local_api(
+        [app for app, _ in services], generation
+    )
+    release = LocalReceiptReleaseWorker(persistence, receipts, recheck_seconds=0.01)
+    try:
+        await local.start(expires_at=deadline())
+        finished = handle(await local.service.reserve(_reservation(generation, window)))
+        running = handle(await local.service.reserve(_reservation(generation, window)))
+        assert receipts.entries == 2
+        # A different batch worker delivers the first completion.
+        (ack,) = await other_persistence.finalize_batch(
+            [
+                LocalPermitFinalization(
+                    receipt=finished.proof, finalization=_finalization(finished.reservation)
+                )
+            ],
+            expires_at=deadline(),
+        )
+        assert receipts.entries == 2
+        await asyncio.sleep(0.02)
+        assert await release.run_once(expires_at=deadline()) == 2
+        assert receipts.entries == 1
+        assert receipts.get(finished.reservation.operation_id) is None
+        assert receipts.get(running.reservation.operation_id) is not None
+
+        repository = AccountingJournalRepository(db)
+        exact = RetainedLocalReceipt.freeze(finished.proof).terminal_identity()
+        pending = RetainedLocalReceipt.freeze(running.proof).terminal_identity()
+        found = await repository.find_batch(
+            [exact, pending], generation=generation, expires_at=deadline()
+        )
+        assert found[0].journal_sequence == ack.journal_sequence and found[0].replayed
+        assert found[1] is None
+        # A row written for another issue of the same operation never matches.
+        for change in (
+            {"permit_ordinal": exact.permit_ordinal + 1},
+            {"grantee_id": exact.grantee_id + "-other"},
+            {"reservation_sha256": "0" * 64},
+        ):
+            assert await repository.find_batch(
+                [exact.model_copy(update=change)], generation=generation, expires_at=deadline()
+            ) == (None,)
+
+        await local.service.finalize_operation(running, _finalization(running.reservation))
+        assert receipts.entries == 0
+        assert await local.close(expires_at=deadline())
+    finally:
+        await release.close(expires_at=deadline())
+        await local.close(expires_at=deadline())
+        await other.close(expires_at=deadline())
+        await transport.close()
+        await other_transport.close()
         for _, service in services:
             await service.close(timeout_seconds=1)
         assert await processing.close(expires_at=deadline())

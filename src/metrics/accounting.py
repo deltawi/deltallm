@@ -120,6 +120,40 @@ accounting_projection_oldest_event_age = Gauge(
     registry=get_prometheus_registry(),
 )
 
+accounting_local_receipts = Gauge(
+    "deltallm_accounting_local_receipts",
+    "Local issue proofs this process holds until their operation has a durable terminal",
+    registry=get_prometheus_registry(),
+)
+accounting_local_receipt_bytes = Gauge(
+    "deltallm_accounting_local_receipt_bytes",
+    "Conservative byte charge of the local issue proofs this process holds",
+    registry=get_prometheus_registry(),
+)
+accounting_local_receipt_fill = Gauge(
+    "deltallm_accounting_local_receipt_fill_ratio",
+    "Held local issue proofs as a share of capacity, entries or bytes, whichever is higher; "
+    "new local reservations fail at 1",
+    registry=get_prometheus_registry(),
+)
+accounting_local_receipt_releases = Counter(
+    "deltallm_accounting_local_receipt_releases_total",
+    "Local issue proofs released after another process finalized them or their grant expired",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+
+def set_accounting_local_receipts(*, entries: int, retained_bytes: int, fill_ratio: float) -> None:
+    accounting_local_receipts.set(max(0, int(entries)))
+    accounting_local_receipt_bytes.set(max(0, int(retained_bytes)))
+    accounting_local_receipt_fill.set(max(0.0, float(fill_ratio)))
+
+
+def increment_accounting_local_receipt_releases(reason: str, count: int) -> None:
+    if count > 0:
+        accounting_local_receipt_releases.labels(reason=reason).inc(int(count))
+
 
 def set_accounting_queue_depth(queue: str, value: int) -> None:
     accounting_queue_depth.labels(queue=queue).set(max(0, int(value)))

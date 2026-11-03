@@ -13,7 +13,7 @@ within 5 minutes, on every pod, without a restart.**
 
 | Store | Where | Limit | Emptied by | Can another pod empty it? | Metric | Drain test |
 |---|---|---|---|---|---|---|
-| Local receipt store | API and batch pods, accounting v2 `local_journal` | `accounting_finalization_max_pending_bytes` (8 MB, about 1,100 receipts) and `accounting_finalization_max_pending` (8,192) | The finalization on the **same pod** that issued the receipt | **No. Known leak**, see below | None | `test_bounded_state_accounting_postgres.py` (cross-pod case marked as expected to fail) |
+| Local receipt store | API and batch pods, accounting v2 `local_journal` | `accounting_finalization_max_pending_bytes` (8 MB, at most about 1,000 receipts) and `accounting_finalization_max_pending` (8,192) | The finalization on the pod that issued the receipt; the pod's release worker when the terminal journal shows another pod finalized it, or 60 s after its grant expires in the database | **Yes.** Another pod's finalization is found in the journal (checked 10 s after issue, then every 10 s) | `deltallm_accounting_local_receipt_fill_ratio`, `deltallm_accounting_local_receipts`, `deltallm_accounting_local_receipt_releases_total` | `test_bounded_state_accounting_postgres.py`, `test_accounting_local_release.py` |
 | Local grant cursor store | API and batch pods, `local_journal` | `accounting_local_max_subjects` (1,024) and `accounting_reservation_max_pending_bytes` (8 MB) | Issue uses cursors up; the return worker retires a cursor when its grant's dispatch window ends (`accounting_grant_ttl_seconds`, 30 s) and returns the unused part | Not needed: each pod's return worker drains its own cursors | None | `test_bounded_state_accounting_postgres.py` |
 | Reservation microbatch queue | Every pod running accounting v2 | `accounting_reservation_max_pending` (4,096) and `accounting_reservation_max_pending_bytes` (8 MB) | The queue's own batch task; callers that leave early free their space | Not needed: per process | `deltallm_accounting_queue_depth{queue="reservation"}`, `deltallm_accounting_queue_retained_bytes` | `test_bounded_state_drain.py`, `test_bounded_state_accounting_postgres.py` |
 | Finalization microbatch queue | Every pod running accounting v2 | `accounting_finalization_max_pending` (8,192) and `accounting_finalization_max_pending_bytes` (8 MB) | Same as above | Not needed: per process | `deltallm_accounting_queue_depth{queue="finalization"}`, `deltallm_accounting_queue_retained_bytes` | Same as above |
@@ -37,37 +37,27 @@ within 5 minutes, on every pod, without a restart.**
 
 ## Known gaps
 
-### Local receipts finalized on another pod are never released
+### Local receipts finalized on another pod (fixed)
 
-A receipt is removed only when the pod that issued it finalizes the operation
-(`LocalTerminalOwner.finalize_batch`). Batch finalization goes through the
-completion outbox, and any batch pod can claim an outbox row. When pod B
-finalizes an operation that pod A issued, the journal accepts it, but A keeps
-the receipt. A's store fills after about 1,100 batch items, and every new
-reservation on A then fails with `queue_full` and shows as "Gateway busy" until
-A restarts. `LocalReceiptStore.recovery_candidates` exists but nothing calls it.
+A receipt used to be removed only when the pod that issued it finalized the
+operation. Batch finalization goes through the completion outbox, and any batch
+pod can claim an outbox row, so pod A kept receipts for work pod B finalized.
+A's store filled after about 1,000 batch items, and every new reservation on A
+then failed with `queue_full` ("Gateway busy") until A restarted.
 
-The drain test reproduces this: 3 pods each issue 24 receipts, the next pod
-finalizes them, and each pod still holds 24 receipts (about 225 KB) afterwards.
-That test is marked as expected to fail until the release fix lands. The fix
-must remove the marker.
-
-A receipt for an operation that is never finalized on any pod (for example, the
-pod that held the batch item lost its lease) has the same problem. The durable
-recovery worker expires the operation in the database, but nothing tells the
-issuing pod. The release fix should cover both cases.
-
-**Until the fix ships:** watch
-`deltallm_accounting_failures_total{phase="queue",queue="reservation",reason="queue_full"}`
-on each batch pod, and restart the batch pods when it rises. Raising
-`accounting_finalization_max_pending_bytes` only delays the stall.
+Each API and batch pod now runs a release worker. It checks receipts older than
+10 seconds against the terminal journal and frees the ones another pod
+finalized. It also frees a receipt 60 seconds after its grant expires in the
+database, which covers operations that are never finalized on any pod: after
+that expiry the journal refuses to finalize them, and the recovery worker owns
+them. The cross-pod drain test now passes without a marker. See
+[Local issue proofs](accounting-v2.md#local-issue-proofs) for the metrics.
 
 ### Stores with no fill metric
 
-The receipt store, the cursor store, the write slots and preflight capacity have
-no gauge for how full they are. Today's evidence for a full receipt store is the
-`queue_full` failure counter, which only moves after the store is already full.
-The receipt fix adds a receipt fill gauge; the others are listed for the
+The cursor store, the write slots and preflight capacity have no gauge for how
+full they are. The receipt store has one,
+`deltallm_accounting_local_receipt_fill_ratio`; the others are listed for the
 alerting work.
 
 ### Outbox rows held by a dead pod are not counted as pending
