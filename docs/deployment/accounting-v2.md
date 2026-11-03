@@ -53,6 +53,9 @@ the durable event stream.
   `deltallm_accounting_transport_drain_retries_total` counter shows these sends.
 - A failover deployment may run only if the first reservation covers its worst-case
   customer charge. Earlier attempts stay provisional until evidence resolves them.
+- Local queues and stores are bounded and refuse work when full. See
+  [Bounded in-memory state](bounded-state.md) for each limit, what empties it, and
+  the known receipt leak when a batch operation is finalized on another pod.
 
 ## Budget edits and native balances
 

@@ -346,3 +346,77 @@ async def test_native_held_retry_closes_when_requeue_is_refused(native_batch, mo
     assert [call["retryable"] for call in repo.failed_calls] == [True, False]
     assert repo.failed_calls[-1]["error_body"]["terminal_reason"] == "batch_expired"
     assert checkpoints.rows[items[0].item_id].terminal.outcome is AccountingOutcome.UNCERTAIN
+
+
+@pytest.mark.parametrize(
+    "embedding,grouped", [(False, False), (False, True), (True, False), (True, True)]
+)
+async def test_busy_proof_write_retries_the_item_on_the_same_operation(
+    native_batch, monkeypatch, embedding, grouped
+):
+    owner, checkpoints, service = native_batch
+    worker, repo, job, items = build_worker(owner, embedding=embedding, grouped=grouped)
+    worker.config.max_attempts = 3
+    service.reserve = AsyncMock(wraps=service.reserve)
+    calls, _ = provider_stubs(monkeypatch, owner, worker, embedding=embedding, grouped=grouped)
+    checkpoints.busy_dispatch_writes = 1
+    for item in items:
+        item.attempts = 1
+    await worker._process_items(job, items)
+
+    # The provider was never called, and every item is queued for a retry
+    # instead of failing for good as accounting_closed.
+    assert not calls
+    if grouped:
+        # The whole group is requeued together.
+        assert len(repo.release_for_retry_calls) == 1
+        assert not repo.failed_calls
+    else:
+        assert len(repo.failed_calls) == len(items)
+        assert all(call["retryable"] for call in repo.failed_calls)
+        assert not any("terminal_reason" in call["error_body"] for call in repo.failed_calls)
+    for item in items:
+        held = checkpoints.rows[item.item_id]
+        assert held.terminal is None and held.retry_ready
+        assert len(held.operation.attempts) == 1
+
+    retried = [
+        replace(
+            item,
+            claim_epoch=2,
+            attempts=2,
+            accounting_checkpoint=checkpoints.rows[item.item_id].model_dump(mode="json"),
+        )
+        for item in items
+    ]
+    await worker._process_items(job, retried)
+
+    assert len(calls) == 1
+    assert service.reserve.await_count == len(items)
+    assert len(repo.completed_calls) == len(items)
+    assert len(repo.completion_outbox_calls) == len(items)
+    for payload in repo.completion_outbox_calls:
+        proof = decode_checkpoint(payload["native_accounting"])
+        assert proof.terminal.outcome is AccountingOutcome.COMPLETED
+        assert len(proof.operation.attempts) == 2
+
+
+async def test_held_chat_group_fails_items_retryable_when_requeue_is_refused(
+    native_batch, monkeypatch
+):
+    owner, checkpoints, _ = native_batch
+    worker, repo, job, items = build_worker(owner, embedding=False, grouped=True)
+    worker.config.max_attempts = 3
+    calls, _ = provider_stubs(monkeypatch, owner, worker, embedding=False, grouped=True)
+    repo.release_items_for_retry = AsyncMock(side_effect=RuntimeError("busy"))
+    checkpoints.busy_dispatch_writes = 1
+    for item in items:
+        item.attempts = 1
+    await worker._process_items(job, items)
+
+    assert not calls
+    assert len(repo.failed_calls) == len(items)
+    assert all(call["retryable"] for call in repo.failed_calls)
+    for item in items:
+        held = checkpoints.rows[item.item_id]
+        assert held.terminal is None and held.retry_ready

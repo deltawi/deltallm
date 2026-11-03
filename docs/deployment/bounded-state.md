@@ -1,0 +1,91 @@
+# Bounded in-memory state
+
+DeltaLLM keeps several bounded stores and queues in memory on the accounting
+v2 and batch paths. Each one refuses new work when it is full, so a store that
+never empties turns into a permanent "Gateway busy" or 503 on that pod until
+the pod restarts. This page lists every such store, what empties it, and which
+test proves that it empties.
+
+The rule for every store: **after load ends, it returns to its idle level
+within 5 minutes, on every pod, without a restart.**
+
+## Inventory
+
+| Store | Where | Limit | Emptied by | Can another pod empty it? | Metric | Drain test |
+|---|---|---|---|---|---|---|
+| Local receipt store | API and batch pods, accounting v2 `local_journal` | `accounting_finalization_max_pending_bytes` (8 MB, about 1,100 receipts) and `accounting_finalization_max_pending` (8,192) | The finalization on the **same pod** that issued the receipt | **No. Known leak**, see below | None | `test_bounded_state_accounting_postgres.py` (cross-pod case marked as expected to fail) |
+| Local grant cursor store | API and batch pods, `local_journal` | `accounting_local_max_subjects` (1,024) and `accounting_reservation_max_pending_bytes` (8 MB) | Issue uses cursors up; the return worker retires a cursor when its grant's dispatch window ends (`accounting_grant_ttl_seconds`, 30 s) and returns the unused part | Not needed: each pod's return worker drains its own cursors | None | `test_bounded_state_accounting_postgres.py` |
+| Reservation microbatch queue | Every pod running accounting v2 | `accounting_reservation_max_pending` (4,096) and `accounting_reservation_max_pending_bytes` (8 MB) | The queue's own batch task; callers that leave early free their space | Not needed: per process | `deltallm_accounting_queue_depth{queue="reservation"}`, `deltallm_accounting_queue_retained_bytes` | `test_bounded_state_drain.py`, `test_bounded_state_accounting_postgres.py` |
+| Finalization microbatch queue | Every pod running accounting v2 | `accounting_finalization_max_pending` (8,192) and `accounting_finalization_max_pending_bytes` (8 MB) | Same as above | Not needed: per process | `deltallm_accounting_queue_depth{queue="finalization"}`, `deltallm_accounting_queue_retained_bytes` | Same as above |
+| Pre-issued permit bank | Not used | `max_subjects`, `max_retained_bytes` | | | `deltallm_accounting_permit_bank_*` | None: no runtime builds it. Only its `PermitSubject` type is used, by the local stores |
+| Batch checkpoint write slots | Batch pods, native billing | `embeddings_batch_accounting_write_concurrency` (0 means half of `db_pool_size`) | Each write frees its slot when it ends, fails or is cancelled | Not needed: per process | `deltallm_batch_write_group_size{kind="accounting_checkpoint"}` (writes only, no queue gauge) | `test_bounded_state_drain.py` |
+| Batch result save slots | Batch pods with `embeddings_batch_write_grouping_enabled` | `batch_result_save_concurrency` (from `db_pool_size`) | Same as above | Not needed: per process | `deltallm_batch_write_group_size{kind="result_save"}` | `test_bounded_state_drain.py` |
+| Outbox sent-mark slots | Batch pods, native billing | `sent_mark_concurrency` of the completion outbox worker (0 means no limit) | Same as above | Not needed: per process | `deltallm_batch_write_group_size{kind="outbox_sent"}` | `test_bounded_state_drain.py` (same slot owner as the two rows above) |
+| Batch execution slots | Batch pods | `embeddings_batch_worker_concurrency` | Each work unit frees its slot when it ends, fails or is cancelled; each slice closes its tracker | Not needed: per process | `deltallm_batch_worker_saturation_ratio` | `test_bounded_state_drain.py` |
+| Batch completion outbox | PostgreSQL table, any batch pod | Rows are durable; each claim holds a lease (`lease_seconds`, 30 s) | The pod that claimed the row marks it sent, retrying or failed | **Yes.** A row whose lease expires goes back to the queue and any pod claims it | `deltallm_batch_completion_outbox_delivery_lag_seconds`, `deltallm_batch_completion_outbox_failures_total` | `tests/batch/test_bounded_state_outbox_postgres.py` |
+| Gateway preflight capacity | Redis lease set shared by API pods, when `gateway_preflight_capacity_enabled` is on | `gateway_preflight_global_max_parallel` (300), `gateway_preflight_org_max_parallel` (100) | The response's end releases its leases; a lease that is never released expires after `gateway_preflight_lease_ttl_seconds` (30 s) | **Yes.** Leases expire in Redis, so a dead pod's capacity comes back | None | `test_bounded_state_preflight_redis.py` |
+
+### How the drain tests work
+
+- Tests that need a database or Redis start several "pods" (separate runtimes or
+  clients) against one real PostgreSQL or Redis, load them at once, and check
+  that every store returns to idle **while the pods keep running**. A store that
+  only empties on shutdown counts as a leak, because prod pods run for days.
+- Stores that live in one process (queues and slots) are overloaded in one
+  process, with failures and cancellations mixed in. The test then checks that
+  the store is idle and still serves new work.
+
+## Known gaps
+
+### Local receipts finalized on another pod are never released
+
+A receipt is removed only when the pod that issued it finalizes the operation
+(`LocalTerminalOwner.finalize_batch`). Batch finalization goes through the
+completion outbox, and any batch pod can claim an outbox row. When pod B
+finalizes an operation that pod A issued, the journal accepts it, but A keeps
+the receipt. A's store fills after about 1,100 batch items, and every new
+reservation on A then fails with `queue_full` and shows as "Gateway busy" until
+A restarts. `LocalReceiptStore.recovery_candidates` exists but nothing calls it.
+
+The drain test reproduces this: 3 pods each issue 24 receipts, the next pod
+finalizes them, and each pod still holds 24 receipts (about 225 KB) afterwards.
+That test is marked as expected to fail until the release fix lands. The fix
+must remove the marker.
+
+A receipt for an operation that is never finalized on any pod (for example, the
+pod that held the batch item lost its lease) has the same problem. The durable
+recovery worker expires the operation in the database, but nothing tells the
+issuing pod. The release fix should cover both cases.
+
+**Until the fix ships:** watch
+`deltallm_accounting_failures_total{phase="queue",queue="reservation",reason="queue_full"}`
+on each batch pod, and restart the batch pods when it rises. Raising
+`accounting_finalization_max_pending_bytes` only delays the stall.
+
+### Stores with no fill metric
+
+The receipt store, the cursor store, the write slots and preflight capacity have
+no gauge for how full they are. Today's evidence for a full receipt store is the
+`queue_full` failure counter, which only moves after the store is already full.
+The receipt fix adds a receipt fill gauge; the others are listed for the
+alerting work.
+
+### Outbox rows held by a dead pod are not counted as pending
+
+`count_pending_completion_outbox` counts only `queued` and `retrying` rows. A
+row held by a pod that died stays `processing` until its lease expires (30 s),
+so it is not in that count during that time. The drain test checks that such
+rows are delivered exactly once by the other pods, and that the dead pod's late
+answer is refused.
+
+## Adding a new bounded store
+
+Before merging a new in-memory store or queue on the accounting or batch path:
+
+1. Add a row to the table above.
+2. Make sure the work that empties it cannot land on a different pod, or give
+   it a cross-pod owner (a durable row, a lease that expires, or a release
+   driven by the journal).
+3. Add a drain test that loads it from several pods and checks it returns to
+   idle while they keep running.
+4. Export a gauge for how full it is, so an alert can fire before it is full.

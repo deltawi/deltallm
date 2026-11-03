@@ -155,11 +155,19 @@ class NativeBatchBilling:
             BatchAccountingWrite(execution.claim, old, execution.checkpoint)
             for execution, old in zip(executions, expected, strict=True)
         ]
-        await self.checkpoints.write_many(writes, expires_at=self._deadline())
+        try:
+            await self.checkpoints.write_many(writes, expires_at=self._deadline())
+        except Exception:
+            # Nothing was sent to the provider. The failure path may still keep
+            # the funded operation open for a retry (hold_unsaved_for_retry).
+            for execution in executions:
+                execution.proof_unsaved = True
+            raise
         for execution in executions:
             execution.stored_checkpoint = execution.checkpoint
             execution.item.accounting_checkpoint = execution.checkpoint.model_dump(mode="json")
             execution.dispatched = True
+            execution.proof_unsaved = False
 
     async def _prepare_attempt(
         self,

@@ -17,6 +17,7 @@ class ProviderRequestBounds:
     output_items: int = 1
     max_output_tokens: int | None = None
     input_characters: int | None = None
+    audio_seconds: int | None = None
 
     def __post_init__(self) -> None:
         for value in (self.input_items, self.output_items):
@@ -30,6 +31,8 @@ class ProviderRequestBounds:
             type(self.input_characters) is not int or not 0 <= self.input_characters < 2**31
         ):
             raise ValueError("input character count must be a bounded integer")
+        if self.audio_seconds is not None and _positive_int(self.audio_seconds) is None:
+            raise ValueError("audio duration ceiling must be a positive bounded integer")
 
 
 def conservative_provider_allowance(
@@ -93,11 +96,19 @@ def _attempt_allowance(
             _decimal_rate(info.get("output_cost_per_character")),
         )
         return bounds.input_characters * character_rate + request_rate
-    # An uploaded audio file has no provider-enforced duration or output bound.
-    # Only a request price has an enforceable ceiling on this path.
+    if call_type == "audio_transcription":
+        return _transcription_allowance(info, bounds, request_rate)
+    raise SpendPersistenceUnavailable()
+
+
+def _transcription_allowance(
+    info: Mapping[str, object],
+    bounds: ProviderRequestBounds,
+    request_rate: Decimal,
+) -> Decimal:
+    # Token and character prices have no bound the gateway can enforce on an
+    # uploaded file. A second price is bounded by the file's duration ceiling.
     unsupported = (
-        "input_cost_per_second",
-        "output_cost_per_second",
         "input_cost_per_character",
         "output_cost_per_character",
         "input_cost_per_token",
@@ -105,11 +116,17 @@ def _attempt_allowance(
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
     )
-    if call_type != "audio_transcription" or any(
-        _decimal_rate(info.get(field)) > 0 for field in unsupported
-    ):
+    if any(_decimal_rate(info.get(field)) > 0 for field in unsupported):
         raise SpendPersistenceUnavailable()
-    return request_rate
+    # Settlement charges billed seconds at the sum of both second prices.
+    second_rate = _decimal_rate(info.get("input_cost_per_second")) + _decimal_rate(
+        info.get("output_cost_per_second")
+    )
+    if second_rate == 0:
+        return request_rate
+    if bounds.audio_seconds is None:
+        raise SpendPersistenceUnavailable()
+    return bounds.audio_seconds * second_rate + request_rate
 
 
 def _token_allowance(
