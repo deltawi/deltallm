@@ -806,6 +806,14 @@ class BatchRepository:
             attempt_count=attempt_count,
         )
 
+    async def mark_completion_outbox_sent_many(
+        self,
+        marks: list[tuple[str, int]],
+        *,
+        worker_id: str,
+    ) -> frozenset[tuple[str, int]]:
+        return await self.completion_outbox.mark_sent_many(marks, worker_id=worker_id)
+
     async def mark_completion_outbox_retry(
         self,
         completion_id: str,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from src.batch.models import BatchCompletionOutboxRecord
 from src.batch.repository import BatchRepository
 from src.batch.accounting_delivery import NativeBatchCompletionDelivery
+from src.batch.completion_sent_marks import GroupedSentMarks
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.spend.spend import SpendTrackingService
 from src.metrics import (
@@ -16,6 +18,7 @@ from src.metrics import (
     increment_request,
     increment_spend,
     increment_usage,
+    observe_batch_completion_outbox_delivery_lag,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,6 +34,9 @@ class BatchCompletionOutboxWorkerConfig:
     heartbeat_interval_seconds: float = 10.0
     retry_initial_seconds: int = 5
     retry_max_seconds: int = 300
+    # Native sent marks at once; marks that would wait are written together.
+    # 0 writes every mark alone, with no limit.
+    sent_mark_concurrency: int = 0
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -53,39 +59,122 @@ class BatchCompletionOutboxWorker:
         self.app = app
         self.repository = repository
         self.config = config or BatchCompletionOutboxWorkerConfig()
-        self._native_delivery = NativeBatchCompletionDelivery(accounting, repository)
+        sent_marks = repository
+        if self.config.sent_mark_concurrency > 0:
+            sent_marks = GroupedSentMarks(repository, limit=self.config.sent_mark_concurrency)
+        self._native_delivery = NativeBatchCompletionDelivery(accounting, sent_marks)
         self._stopped = False
         self._stop_event = asyncio.Event()
         self.started = asyncio.Event()
+        # Rows being delivered, and rows claimed that wait for a free slot.
+        self._deliveries: set[asyncio.Task[None]] = set()
+        self._claimed: deque[BatchCompletionOutboxRecord] = deque()
+        self._slot_freed = asyncio.Event()
 
     def stop(self) -> None:
         self._stopped = True
         self._stop_event.set()
+        self._slot_freed.set()
+
+    def _stopping(self) -> bool:
+        return self._stopped or self._stop_event.is_set()
+
+    def _concurrency(self) -> int:
+        return max(1, int(self.config.max_concurrency))
 
     async def run(self) -> None:
+        """Keep every delivery slot busy: claim again as rows finish, not per claim."""
         self.started.set()
-        while not self._stopped and not self._stop_event.is_set():
+        try:
+            await self._claim_while_running()
+            # Stopped: finish the rows already claimed, as a stopped worker
+            # always finished its claim.
+            await self._finish_claimed()
+        except BaseException:
+            # Cancelled, or anything unexpected: never leave deliveries running
+            # behind a worker that has returned.
+            await self._cancel_deliveries()
+            raise
+
+    async def _claim_while_running(self) -> None:
+        drained = False
+        while not self._stopping():
+            self._start_claimed()
+            free = self._concurrency() - len(self._deliveries)
+            if self._claimed or free <= 0:
+                await self._wait_for_slot()
+                continue
+            if drained:
+                # The last claim emptied the due queue: rows finishing do not
+                # make new ones due, so wait the poll interval as before.
+                drained = False
+                await self._wait_for_poll()
+                continue
+            # At most one round of rows waits for a slot, so claimed rows do not
+            # sit out their lease without a heartbeat.
+            limit = max(1, min(int(self.config.max_batch_size), free + self._concurrency()))
             try:
-                processed = await self.process_once()
+                claimed = await self.repository.claim_completion_outbox_due(
+                    worker_id=self.config.worker_id,
+                    lease_seconds=self.config.lease_seconds,
+                    limit=limit,
+                )
             except Exception:
                 increment_batch_completion_outbox_failure(reason="iteration")
                 logger.exception(
                     "batch completion outbox iteration failed worker_id=%s",
                     self.config.worker_id,
                 )
-                processed = 0
-            if processed == 0:
-                if self._stopped or self._stop_event.is_set():
-                    break
-                try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(),
-                        timeout=max(0.0, float(self.config.poll_interval_seconds)),
-                    )
-                except asyncio.TimeoutError:
-                    continue
+                claimed = []
+            drained = len(claimed) < limit
+            self._claimed.extend(claimed)
+
+    def _start_claimed(self) -> None:
+        while self._claimed and len(self._deliveries) < self._concurrency():
+            record = self._claimed.popleft()
+            task = asyncio.create_task(
+                self._deliver(record), name=f"batch-completion-outbox:{record.completion_id}"
+            )
+            self._deliveries.add(task)
+            task.add_done_callback(self._delivery_done)
+
+    def _delivery_done(self, task: asyncio.Task[None]) -> None:
+        self._deliveries.discard(task)
+        self._slot_freed.set()
+
+    async def _wait_for_slot(self) -> None:
+        # No await since the caller checked, so no slot can free unseen.
+        self._slot_freed.clear()
+        if self._stopping():
+            return
+        await self._slot_freed.wait()
+
+    async def _wait_for_poll(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._stop_event.wait(),
+                timeout=max(0.0, float(self.config.poll_interval_seconds)),
+            )
+        except asyncio.TimeoutError:
+            pass
+
+    async def _finish_claimed(self) -> None:
+        while self._claimed or self._deliveries:
+            self._start_claimed()
+            self._slot_freed.clear()
+            if self._deliveries:
+                await self._slot_freed.wait()
+
+    async def _cancel_deliveries(self) -> None:
+        # Unstarted rows go back when their lease expires, as before.
+        self._claimed.clear()
+        deliveries = tuple(self._deliveries)
+        for task in deliveries:
+            task.cancel()
+        await asyncio.gather(*deliveries, return_exceptions=True)
 
     async def process_once(self) -> int:
+        """Claim once and deliver every claimed row before returning."""
         claimed = await self.repository.claim_completion_outbox_due(
             worker_id=self.config.worker_id,
             lease_seconds=self.config.lease_seconds,
@@ -98,19 +187,22 @@ class BatchCompletionOutboxWorker:
 
         async def _run(record: BatchCompletionOutboxRecord) -> None:
             async with semaphore:
-                try:
-                    await self._process_record(record)
-                except Exception:
-                    increment_batch_completion_outbox_failure(reason="record_unhandled")
-                    logger.exception(
-                        "batch completion outbox record processing failed completion_id=%s item_id=%s worker_id=%s",
-                        record.completion_id,
-                        record.item_id,
-                        self.config.worker_id,
-                    )
+                await self._deliver(record)
 
         await asyncio.gather(*[_run(record) for record in claimed])
         return len(claimed)
+
+    async def _deliver(self, record: BatchCompletionOutboxRecord) -> None:
+        try:
+            await self._process_record(record)
+        except Exception:
+            increment_batch_completion_outbox_failure(reason="record_unhandled")
+            logger.exception(
+                "batch completion outbox record processing failed completion_id=%s item_id=%s worker_id=%s",
+                record.completion_id,
+                record.item_id,
+                self.config.worker_id,
+            )
 
     async def _process_record(self, record: BatchCompletionOutboxRecord) -> None:
         payload = dict(record.payload_json or {})
@@ -173,7 +265,16 @@ class BatchCompletionOutboxWorker:
             await self._stop_heartbeat(heartbeat_task)
 
         if delivered:
+            self._observe_delivery_lag(record)
             self._publish_metrics(payload)
+
+    @staticmethod
+    def _observe_delivery_lag(record: BatchCompletionOutboxRecord) -> None:
+        created_at = _parse_datetime(record.created_at)
+        if created_at is not None:
+            observe_batch_completion_outbox_delivery_lag(
+                lag_seconds=(datetime.now(tz=UTC) - created_at).total_seconds()
+            )
 
     async def _record_durable_success(
         self, record: BatchCompletionOutboxRecord, payload: dict[str, Any]

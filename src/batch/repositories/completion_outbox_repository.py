@@ -12,6 +12,7 @@ from src.batch.repositories.completion_outbox_fences import (
     RETRY_SQL,
     FAILED_SQL,
     RENEW_SQL,
+    execute_completion_sent_many,
     execute_completion_transition,
 )
 
@@ -190,6 +191,16 @@ class BatchCompletionOutboxRepository:
             (completion_id, worker_id, attempt_count),
             attempt_count=attempt_count,
         )
+
+    async def mark_sent_many(
+        self,
+        marks: list[tuple[str, int]],
+        *,
+        worker_id: str,
+    ) -> frozenset[tuple[str, int]]:
+        if self.prisma is None:
+            return frozenset()
+        return await execute_completion_sent_many(self.prisma, marks, worker_id=worker_id)
 
     async def mark_retry(
         self,
