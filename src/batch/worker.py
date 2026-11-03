@@ -56,7 +56,6 @@ from src.metrics import (
     observe_batch_work_claim_items,
     observe_batch_work_claim_latency,
     observe_batch_work_claim_units,
-    publish_batch_runtime_summary,
     set_batch_scheduler_config_info,
     set_batch_scheduler_mode_info,
 )
@@ -674,14 +673,6 @@ class BatchExecutorWorker:
             return configured
         return self._work_claim_max_items() * 4
 
-    async def _refresh_batch_runtime_metrics(self) -> None:
-        try:
-            summary = await self.repository.summarize_runtime_statuses(now=datetime.now(tz=UTC))
-            publish_batch_runtime_summary(summary)
-        except Exception:
-            logger.debug("batch worker runtime metrics refresh failed", exc_info=True)
-            return
-
     def _scheduler_config_hash(self) -> str:
         general = self._applied_scheduler_general_settings
         if general is None:
@@ -1130,7 +1121,6 @@ class BatchExecutorWorker:
             refreshed = await self.repository.refresh_job_progress(job.batch_id)
             if refreshed and refreshed.status == BatchJobStatus.FINALIZING:
                 await self._finalize_with_retry(refreshed)
-            await self._refresh_batch_runtime_metrics()
             return True
         finally:
             self._execution_slots.publish()
@@ -1151,7 +1141,6 @@ class BatchExecutorWorker:
         )
         try:
             await self._finalize_with_retry(job)
-            await self._refresh_batch_runtime_metrics()
         finally:
             self._execution_slots.publish()
             await self._stop_heartbeat(job_heartbeat)
@@ -1328,7 +1317,6 @@ class BatchExecutorWorker:
                     self._finalization_wanted = True
                     self._execution_slots.notify()
                 break
-        await self._refresh_batch_runtime_metrics()
 
     async def _claim_next_work_slice(self):
         max_items = self._work_claim_max_items()

@@ -931,6 +931,10 @@ class GeneralSettings(
     # concurrency slots, so the next slice only fills slots the previous slice's
     # tail leaves idle. 1 restores one-slice-at-a-time claiming.
     embeddings_batch_worker_max_slices_in_flight: int = Field(default=2, ge=1, le=8)
+    # How often a batch worker process refreshes the job and item gauges
+    # (deltallm_batch_jobs, deltallm_batch_items, queue and age gauges). The
+    # refresh runs beside the claim loop, never after each work slice.
+    embeddings_batch_runtime_summary_interval_seconds: float = Field(default=15.0, ge=1.0, le=300.0)
     # Accounting v2 batch checkpoint writes. Batch is off the request latency path,
     # so writes wait for a busy pool instead of failing the item.
     embeddings_batch_accounting_write_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)

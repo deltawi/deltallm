@@ -21,6 +21,10 @@ from src.batch.completion_outbox import (
     BatchCompletionOutboxWorker,
     BatchCompletionOutboxWorkerConfig,
 )
+from src.batch.runtime_summary import (
+    BatchRuntimeSummaryWorker,
+    BatchRuntimeSummaryWorkerConfig,
+)
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.batch.accounting_native import NativeBatchBilling
 from src.billing.accounting.accounting_service import AccountingProtocolService
@@ -74,6 +78,7 @@ def start_batch_workers(
     warn_if_batch_db_pool_is_small(cfg.general_settings, getattr(app.state, "settings", None))
     native_billing = build_native_batch_billing(app.state, cfg.general_settings, repository)
     _start_executor_worker(app, cfg, repository, runtime, core, native_billing=native_billing)
+    _start_runtime_summary_worker(cfg, repository, runtime)
     _start_completion_outbox_worker(
         app,
         cfg,
@@ -212,6 +217,29 @@ def _start_executor_worker(
             config_generation=dynamic_config_generation(app),
         )
     runtime.worker_task = create_task(runtime.worker.run())
+
+
+def _start_runtime_summary_worker(
+    cfg: Any,
+    repository: BatchRepository,
+    runtime: BatchRuntime,
+) -> None:
+    # Executor processes publish the job and item gauges, as they did after
+    # each slice, but on an interval beside the claim loop.
+    general = cfg.general_settings
+    if not general.embeddings_batch_worker_enabled:
+        return
+    interval = max(
+        1.0, float(getattr(general, "embeddings_batch_runtime_summary_interval_seconds", 15.0))
+    )
+    runtime.runtime_summary_worker = BatchRuntimeSummaryWorker(
+        repository=repository,
+        config=BatchRuntimeSummaryWorkerConfig(
+            refresh_interval_seconds=interval,
+            failure_interval_seconds=min(5.0, interval),
+        ),
+    )
+    runtime.runtime_summary_task = create_task(runtime.runtime_summary_worker.run())
 
 
 def _start_completion_outbox_worker(
