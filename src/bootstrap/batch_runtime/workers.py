@@ -118,6 +118,9 @@ def _start_executor_worker(
             write_grouping_enabled=getattr(
                 general, "embeddings_batch_write_grouping_enabled", False
             ),
+            max_slices_in_flight=getattr(
+                general, "embeddings_batch_worker_max_slices_in_flight", 2
+            ),
             item_buffer_multiplier=general.embeddings_batch_item_buffer_multiplier,
             finalization_page_size=general.embeddings_batch_finalization_page_size,
             item_claim_limit=general.embeddings_batch_item_claim_limit,

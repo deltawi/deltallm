@@ -9555,8 +9555,9 @@ async def test_batch_worker_work_slice_zeros_saturation_after_success(monkeypatc
             return {"queued": 0, "in_progress": 1, "finalizing": 0}
 
     saturation_calls: list[dict] = []
+    # Saturation is published pod-wide by the execution slots the worker owns.
     monkeypatch.setattr(
-        "src.batch.worker.set_batch_worker_saturation",
+        "src.batch.worker_execution.set_batch_worker_saturation",
         lambda **kwargs: saturation_calls.append(kwargs),
     )
 

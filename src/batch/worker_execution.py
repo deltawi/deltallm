@@ -7,11 +7,13 @@ import logging
 from time import perf_counter
 from typing import Any, Awaitable, Callable
 
+from src.batch.chat_capacity import ChatAttemptCounts
 from src.batch.chat_worker_execution import ChatWorkerExecutionMixin
 from src.batch.accounting_provider_execution import AccountingProviderExecutionMixin
 from src.batch.accounting_native import NativeBatchBilling
 from src.batch.embedding_worker_execution import EmbeddingWorkerExecutionMixin
 from src.batch.embedding_group_lifecycle import EmbeddingGroupLifecycleMixin
+from src.batch.execution_slots import BatchExecutionSlots
 from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_EMBEDDINGS
 from src.batch.repository import BatchRepository
 from src.batch.worker_backpressure import WorkerBackpressureMixin
@@ -65,6 +67,18 @@ class BatchExecutionEngine(
         self._start_heartbeat_fn = start_heartbeat
         self._stop_heartbeat_fn = stop_heartbeat
         self._prepared_item_overrides: dict[str, _PreparedEmbeddingItem | _PreparedChatItem] = {}
+        # Shared by every slice this worker runs at once: the pod never has more
+        # than worker_concurrency units, or one deployment's max_in_flight answers.
+        self.execution_slots = BatchExecutionSlots(
+            capacity=lambda: self.config.worker_concurrency,
+            on_change=self._publish_worker_saturation,
+        )
+        self.chat_attempt_counts = ChatAttemptCounts()
+
+    def _publish_worker_saturation(self, active: int, capacity: int) -> None:
+        set_batch_worker_saturation(
+            worker_id=self.config.worker_id, active=active, capacity=capacity
+        )
 
     async def prepare_item_for_execution(
         self, job, item
@@ -169,9 +183,7 @@ class BatchExecutionEngine(
         process_item: Callable[[Any, Any], Awaitable[None]] | None = None,
     ) -> None:  # noqa: ANN001
         if not items:
-            set_batch_worker_saturation(
-                worker_id=self.config.worker_id, active=0, capacity=self.config.worker_concurrency
-            )
+            self.execution_slots.publish()
             return
 
         prepare_item_fn = prepare_item or self.prepare_item_for_execution
@@ -190,7 +202,6 @@ class BatchExecutionEngine(
         if job.endpoint != BATCH_ENDPOINT_EMBEDDINGS:
             raw_items: deque[Any] = deque(items)
             queue_lock = asyncio.Lock()
-            active = 0
             logger.info(
                 "batch non-microbatch item processing started batch_id=%s endpoint=%s claimed_items=%s",
                 job.batch_id,
@@ -199,30 +210,16 @@ class BatchExecutionEngine(
             )
 
             async def _runner() -> None:
-                nonlocal active
                 while True:
                     async with queue_lock:
                         if not raw_items:
                             return
                         item = raw_items.popleft()
 
-                    active += 1
-                    set_batch_worker_saturation(
-                        worker_id=self.config.worker_id,
-                        active=active,
-                        capacity=self.config.worker_concurrency,
-                    )
-                    try:
+                    async with self.execution_slots.unit(items=1):
                         await run_isolated_work_unit(
                             partial(process_item_fn, job, item),
                             batch_id=job.batch_id,
-                        )
-                    finally:
-                        active -= 1
-                        set_batch_worker_saturation(
-                            worker_id=self.config.worker_id,
-                            active=active,
-                            capacity=self.config.worker_concurrency,
                         )
 
             runner_count = min(max(1, self.config.worker_concurrency), len(items))

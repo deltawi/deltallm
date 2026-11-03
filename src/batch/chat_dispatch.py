@@ -20,10 +20,7 @@ from src.batch.worker_types import (
     _PreparedChatItem,
     _PreparedEmbeddingItem,
 )
-from src.metrics import (
-    increment_batch_chat_microbatch_fallback,
-    set_batch_worker_saturation,
-)
+from src.metrics import increment_batch_chat_microbatch_fallback
 from src.models.errors import InvalidRequestError
 
 logger = logging.getLogger(__name__)
@@ -79,7 +76,7 @@ class ChatDispatchMixin:
         prepared_items: list[_PreparedChatItem] = []
         prepared_lock = asyncio.Lock()
         queue_lock = asyncio.Lock()
-        active = 0
+        slots = self.execution_slots
 
         logger.info(
             "batch chat item planning started batch_id=%s claimed_items=%s",
@@ -88,64 +85,73 @@ class ChatDispatchMixin:
         )
 
         async def _prepare_runner() -> None:
-            nonlocal active
             while True:
                 async with queue_lock:
                     if not raw_items:
                         return
                     item = raw_items.popleft()
 
-                active += 1
-                set_batch_worker_saturation(
-                    worker_id=self.config.worker_id,
-                    active=active,
-                    capacity=self.config.worker_concurrency,
-                )
-                started_at_monotonic = perf_counter()
-                request_body = item.request_body if isinstance(item.request_body, dict) else {}
-                model_name = str(request_body.get("model") or job.model or "")
-                try:
-                    prepared = await prepare_item(job, item)
-                    if not isinstance(prepared, _PreparedChatItem):
-                        raise InvalidRequestError(
-                            message="Prepared batch chat item has an invalid execution shape"
-                        )
-                    async with prepared_lock:
-                        prepared_items.append(prepared)
-                except Exception as exc:
-                    await run_isolated_work_unit(
-                        partial(
-                            self._mark_item_failed,
-                            job=job,
-                            item=item,
-                            model_name=model_name,
-                            exc=exc,
-                            deployment_id=None,
-                            started_at_monotonic=started_at_monotonic,
-                        ),
-                        batch_id=job.batch_id,
-                    )
-                finally:
-                    active -= 1
-                    set_batch_worker_saturation(
-                        worker_id=self.config.worker_id,
-                        active=active,
-                        capacity=self.config.worker_concurrency,
-                    )
+                # Preparation takes a pod slot too, so a new slice's preflight
+                # only uses slots the previous slice's tail left idle.
+                async with slots.unit():
+                    started_at_monotonic = perf_counter()
+                    request_body = item.request_body if isinstance(item.request_body, dict) else {}
+                    model_name = str(request_body.get("model") or job.model or "")
+                    try:
+                        prepared = await prepare_item(job, item)
+                        if not isinstance(prepared, _PreparedChatItem):
+                            raise InvalidRequestError(
+                                message="Prepared batch chat item has an invalid execution shape"
+                            )
+                        async with prepared_lock:
+                            prepared_items.append(prepared)
+                    except Exception as exc:
+                        try:
+                            await run_isolated_work_unit(
+                                partial(
+                                    self._mark_item_failed,
+                                    job=job,
+                                    item=item,
+                                    model_name=model_name,
+                                    exc=exc,
+                                    deployment_id=None,
+                                    started_at_monotonic=started_at_monotonic,
+                                ),
+                                batch_id=job.batch_id,
+                            )
+                        finally:
+                            slots.settle(1)
 
         prepare_runner_count = min(max(1, self.config.worker_concurrency), len(items))
         async with asyncio.TaskGroup() as task_group:
             for _ in range(prepare_runner_count):
                 task_group.create_task(_prepare_runner())
 
-        bind_chat_capacity(prepared_items, worker_concurrency=self.config.worker_concurrency)
-        work_units: deque[Callable[[], Awaitable[None]]] = deque()
+        # Pod-wide: other open slices count against the same deployment limits.
+        capacity = bind_chat_capacity(
+            prepared_items,
+            worker_concurrency=self.config.worker_concurrency,
+            counts=self.chat_attempt_counts,
+        )
+        try:
+            await self._dispatch_prepared_chat_items(job, prepared_items)
+        finally:
+            await capacity.close()
+
+    async def _dispatch_prepared_chat_items(
+        self, job, prepared_items: list[_PreparedChatItem]
+    ) -> None:  # noqa: ANN001
+        slots = self.execution_slots
+        work_units: deque[tuple[int, Callable[[], Awaitable[None]]]] = deque()
         by_deployment: dict[tuple[str, str], list[_PreparedChatItem]] = {}
 
         def _queue_single(prepared: _PreparedChatItem, *, mode: str) -> None:
             work_units.append(
-                lambda prepared=prepared, mode=mode: self._execute_prepared_chat_item(
-                    job, prepared, batch_execution_mode=mode
+                (
+                    1,
+                    lambda prepared=prepared, mode=mode: self._execute_prepared_chat_item(
+                        job, prepared, batch_execution_mode=mode
+                    ),
                 )
             )
 
@@ -202,8 +208,11 @@ class ChatDispatchMixin:
                     _queue_single(prepared, mode="sync_microbatch_fallback")
                 for chunk in chunks:
                     work_units.append(
-                        lambda chunk=list(chunk): self._execute_prepared_chat_microbatch_chunk(
-                            job, chunk
+                        (
+                            len(chunk),
+                            lambda chunk=list(chunk): self._execute_prepared_chat_microbatch_chunk(
+                                job, chunk
+                            ),
                         )
                     )
 
@@ -211,31 +220,16 @@ class ChatDispatchMixin:
             return
 
         work_lock = asyncio.Lock()
-        active = 0
 
         async def _execution_runner() -> None:
-            nonlocal active
             while True:
                 async with work_lock:
                     if not work_units:
                         return
-                    work_unit = work_units.popleft()
+                    item_count, work_unit = work_units.popleft()
 
-                active += 1
-                set_batch_worker_saturation(
-                    worker_id=self.config.worker_id,
-                    active=active,
-                    capacity=self.config.worker_concurrency,
-                )
-                try:
+                async with slots.unit(items=item_count):
                     await run_isolated_work_unit(work_unit, batch_id=job.batch_id)
-                finally:
-                    active -= 1
-                    set_batch_worker_saturation(
-                        worker_id=self.config.worker_id,
-                        active=active,
-                        capacity=self.config.worker_concurrency,
-                    )
 
         runner_count = min(max(1, self.config.worker_concurrency), len(work_units))
         async with asyncio.TaskGroup() as task_group:

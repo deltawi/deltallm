@@ -256,6 +256,14 @@ Use `fifo_v1` only for local evaluation, very small single-tenant deployments, o
 
 `embeddings_batch_item_lease_seconds` should exceed the p99 provider call duration with margin. The default production value of `360` seconds works for most embedding and chat workloads. Keep `embeddings_batch_heartbeat_interval_seconds` well below the lease duration; `15` seconds renews the lease often enough without creating noisy database traffic.
 
+#### Keeping worker slots busy between slices
+
+A worker no longer waits for every item of a slice to finish before it claims the next one. Once every item of its current slice has started and a slot is free, it claims the next slice, which can come from another job. Both slices take their slots from the same pool, so a process still never runs more than `embeddings_batch_worker_concurrency` items (or chat preparations) at once, and two chat slices on the same deployment share that deployment's `max_in_flight`. Finalizing a finished job also runs beside the slices instead of in front of them.
+
+`embeddings_batch_worker_max_slices_in_flight` (default `2`) caps how many slices one process holds. Each slice keeps its own claim, leases, and cancellation, exactly as before, and an embedding slice still sends one grouped upstream call at a time. Set it to `1` to go back to claiming one slice at a time. Only work-slice scheduling (`slice_v1` and later) uses it.
+
+A worker can hold up to `embeddings_batch_worker_concurrency + embeddings_batch_work_claim_max_items` claimed items while a slice's last items run. If a model's batch capacity is tight, keep `work_claim_max_items` close to the worker concurrency so claimed items don't sit waiting.
+
 A worker claims a slice of items at once, and items can wait for a free slot before they start. On every heartbeat the worker renews the leases of all items in its slice that it still owns, in one database statement, so a waiting item is not taken by another worker before it runs. A running item also renews its own lease.
 
 Use `embeddings_batch_max_attempts: 5` for production if provider hiccups are common. Keep retry jitter enabled so workers do not retry the same provider or model group at the same instant.
@@ -677,7 +685,8 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_worker_enabled` | `true` | Run the batch worker in this instance |
 | `embeddings_batch_completion_outbox_worker_enabled` | `true` | Run the completion outbox worker in this instance |
 | `embeddings_batch_poll_interval_seconds` | `1.0` | How often the worker checks for new work when idle |
-| `embeddings_batch_worker_concurrency` | `4` | Maximum concurrent item executions per worker iteration |
+| `embeddings_batch_worker_concurrency` | `4` | Maximum items one worker process runs at once, across all the slices it runs |
+| `embeddings_batch_worker_max_slices_in_flight` | `2` | Work slices one worker process runs at once. The next slice only uses slots the previous slice's last items leave idle. `1` claims one slice at a time |
 | `embeddings_batch_item_claim_limit` | `20` | Maximum items claimed per worker iteration |
 | `embeddings_batch_item_buffer_multiplier` | `2` | Multiplier on concurrency for item prefetch. Effective claim limit is `max(item_claim_limit, concurrency * buffer_multiplier)` |
 | `embeddings_batch_accounting_write_timeout_seconds` | `2.0` | Accounting v2 only. Time budget for one billing checkpoint write, including the wait for a free write slot and one retry |
