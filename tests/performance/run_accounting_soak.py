@@ -236,7 +236,7 @@ async def probe_phase(
         charged=outcome["completed_items"],
         idle_seconds=args.idle_seconds,
     )
-    cluster.event("soak_probe_finished", passed=outcome["passed"], seconds=round(elapsed, 1))
+    cluster.event("soak_probe_finished", passed=outcome["passed"], probe_seconds=round(elapsed, 1))
     return {
         "outcome": outcome,
         "timeout_seconds": args.probe_seconds,
@@ -298,7 +298,7 @@ async def api_phase(
     )
     windows, charged, remaining = [], 0, args.api_seconds
     index = 0
-    cluster.event("soak_api_started", rate=args.api_rate, seconds=args.api_seconds)
+    cluster.event("soak_api_started", rate=args.api_rate, duration=args.api_seconds)
     while remaining > 0:
         duration = min(MAX_WINDOW_SECONDS, remaining)
         remaining -= duration

@@ -265,3 +265,20 @@ async def test_busy_batch_create_is_retried_and_recorded(monkeypatch) -> None:
         )
     assert batch_id == "batch-1"
     assert [(row["path"], row["status"]) for row in retries] == [("/v1/batches", 503)]
+
+
+@pytest.mark.parametrize("runner", ["run_accounting_soak.py", "run_native_acceptance.py"])
+def test_runner_events_do_not_use_reserved_fields(runner) -> None:
+    import ast
+
+    tree = ast.parse((REPOSITORY / "tests/performance" / runner).read_text())
+    reserved = [
+        (node.lineno, keyword.arg)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "event"
+        for keyword in node.keywords
+        if keyword.arg in {"event", "seconds"}
+    ]
+    assert reserved == []
