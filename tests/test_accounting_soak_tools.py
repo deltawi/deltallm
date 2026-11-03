@@ -321,3 +321,10 @@ def test_restart_or_replacement_counts_as_restarted() -> None:
         "batch-a",
         "batch-b",
     ]
+
+
+def test_receipt_counters_are_not_idle_gauges() -> None:
+    assert checks._idle_gauge("deltallm_accounting_local_receipt_fill_ratio")
+    assert checks._idle_gauge("deltallm_accounting_local_receipts")
+    assert not checks._idle_gauge("deltallm_accounting_local_receipt_releases_total")
+    assert not checks._idle_gauge("deltallm_accounting_local_receipt_releases_created")

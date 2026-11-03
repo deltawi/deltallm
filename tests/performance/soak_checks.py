@@ -23,11 +23,13 @@ IDLE_GAUGES: tuple[str, ...] = (
     "deltallm_accounting_queue_retained_bytes",
     "deltallm_batch_model_in_flight_items",
 )
-# Store fill gauges added later (receipts, cursors, permits) are picked up by
-# name, so a new gauge is checked without editing this file.
-# No receipt or cursor fill gauge exists yet; the pattern picks one up as soon
-# as it ships (plan PR 1) without a change here.
-IDLE_GAUGE_PATTERN = re.compile(r"^deltallm_accounting_\w*(receipt|cursor)\w*$")
+# Store fill gauges (receipts, cursors, permits) are picked up by name, so a
+# new gauge is checked without editing this file: today the local receipt
+# count, bytes and fill ratio. Counters such as the receipt release total only
+# grow, so they are left out.
+IDLE_GAUGE_PATTERN = re.compile(
+    r"^deltallm_accounting_\w*(receipt|cursor)\w*(?<!_total)(?<!_created)$"
+)
 # The accounting refusal that means a bounded store or queue was full. A full
 # local receipt store on a batch pod is counted here (2026-11-03 soak: about
 # 10,000 per run). Any increase during a soak is a failure: the load is sized

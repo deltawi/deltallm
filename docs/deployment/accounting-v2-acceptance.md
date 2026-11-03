@@ -123,9 +123,9 @@ a larger runner label. The workflow uses that label when it is set.
 - `deltallm_accounting_queue_depth` and `deltallm_accounting_queue_retained_bytes`
   (reservation, finalization and RPC terminal queues).
 - `deltallm_batch_model_in_flight_items`.
-- Any `deltallm_accounting_*` gauge whose name contains `receipt` or `cursor`.
-  No such gauge exists yet. A fill gauge for the local receipt or cursor
-  store is checked as soon as it ships.
+- Any `deltallm_accounting_*` gauge whose name contains `receipt` or `cursor`,
+  today the local receipt store's count, bytes and fill ratio. Counters such as
+  `deltallm_accounting_local_receipt_releases_total` are left out.
 
 If a pod replaced another during the run, its gauges must be back at zero.
 `deltallm_accounting_failures_total` must not grow for the `queue_full`
