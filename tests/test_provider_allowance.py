@@ -246,3 +246,25 @@ def test_chat_bounds_use_the_final_model_values():
     assert validated_provider_request_bounds(payload) == ProviderRequestBounds(
         output_items=2, max_output_tokens=50
     )
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+def test_chat_bounds_read_either_output_limit_name(field):
+    payload = ChatCompletionRequest(
+        model="test", messages=[{"role": "user", "content": "test"}], **{field: 100}
+    )
+
+    bounds = validated_provider_request_bounds(payload)
+
+    assert bounds == ProviderRequestBounds(output_items=1, max_output_tokens=100)
+    # A sent limit above the declared default (20) reserves for the sent limit.
+    assert allowance(bounds) == Decimal("9.3")
+
+
+def test_chat_bounds_without_an_output_limit_use_the_declared_default():
+    payload = ChatCompletionRequest(model="test", messages=[{"role": "user", "content": "test"}])
+
+    bounds = validated_provider_request_bounds(payload)
+
+    assert bounds.max_output_tokens is None
+    assert allowance(bounds) == Decimal("4.5")

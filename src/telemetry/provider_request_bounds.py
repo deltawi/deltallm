@@ -20,9 +20,14 @@ ValidatedProviderRequest = (
 
 def validated_provider_request_bounds(payload: ValidatedProviderRequest) -> ProviderRequestBounds:
     if isinstance(payload, ChatCompletionRequest):
-        return ProviderRequestBounds(
-            output_items=payload.n or 1, max_output_tokens=payload.max_tokens
+        # The request model accepts only one of the two names. Routing and the
+        # provider payload use max_completion_tokens first; the reservation must too.
+        output_limit = (
+            payload.max_completion_tokens
+            if payload.max_completion_tokens is not None
+            else payload.max_tokens
         )
+        return ProviderRequestBounds(output_items=payload.n or 1, max_output_tokens=output_limit)
     if isinstance(payload, ImageGenerationRequest):
         return ProviderRequestBounds(output_items=payload.n or 1)
     if isinstance(payload, AudioSpeechRequest):

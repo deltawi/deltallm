@@ -299,7 +299,10 @@ async def test_single_member_reservation_is_unchanged_by_the_failover_scope():
         await accounting.close()
 
 
-async def test_admission_uses_transformed_shape_without_reading_original_body():
+@pytest.mark.parametrize("output_limit_field", ["max_tokens", "max_completion_tokens"])
+async def test_admission_uses_transformed_shape_without_reading_original_body(
+    output_limit_field: str,
+):
     repository = _AccountingRepository()
     accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
     accounting.start()
@@ -309,7 +312,10 @@ async def test_admission_uses_transformed_shape_without_reading_original_body():
     request = _request(accounting, ingestion, body={"model": "gpt-test", "max_tokens": 1, "n": 1})
     request.json = AsyncMock(side_effect=AssertionError("must not parse the body again"))
     payload = ChatCompletionRequest(
-        model="gpt-test", messages=[{"role": "user", "content": "test"}], max_tokens=100, n=3
+        model="gpt-test",
+        messages=[{"role": "user", "content": "test"}],
+        n=3,
+        **{output_limit_field: 100},
     )
     execute = AsyncMock(return_value="provider-result")
     try:

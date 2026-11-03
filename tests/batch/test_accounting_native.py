@@ -178,6 +178,21 @@ async def test_completed_batch_prices_are_frozen_before_provider_and_exact(nativ
     )
 
 
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+async def test_sent_output_limit_above_the_model_default_is_funded(native_batch, field):
+    owner, _, _ = native_batch
+    executions, _, auth, deployment = subjects(owner)
+    # The deployment declares max_output_tokens 10; the request allows 400.
+    payload = ChatCompletionRequest(
+        model="gpt-oss", messages=[{"role": "user", "content": "hello"}], **{field: 400}
+    )
+    await fund(owner, executions, payload, auth, deployment)
+    execution = executions[0]
+    usage = {"prompt_tokens": 5, "completion_tokens": 300, "prompt_tokens_cached": 0}
+    execution.completion_payload({"completed_at": datetime.now(UTC).isoformat()}, usage)
+    assert execution.checkpoint.terminal.exact_charge == Decimal("0.605")
+
+
 async def test_cleanup_lost_reply_keeps_identical_terminal_bytes(native_batch):
     owner, checkpoints, _ = native_batch
     executions, payload, auth, deployment = subjects(owner)
