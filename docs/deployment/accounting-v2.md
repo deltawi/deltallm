@@ -147,6 +147,44 @@ closed and require investigation. Keep applied migrations unchanged.
 The native qualification must include requests without `x-request-id`. A run
 that always supplies this header does not prove that normal clients are safe.
 
+### Find the cause of a blocked reporting page
+
+The reporting function rejects an invalid accepted event with a fixed code, for
+example `accounting_read_model_attribution` or `accounting_read_model_charge`.
+The worker retries the same page and does not skip the event. When the reporting
+worker cannot become ready at startup, the startup error shows the last failure:
+
+```text
+read-model processing did not become ready before its startup deadline
+(last failure: unknown:accounting_read_model_attribution partition=3 sequences=41-57)
+```
+
+The worker also writes one warning when a failure starts or changes, and one
+line when it recovers:
+
+```text
+Accounting read-model processing failed: worker=<id> unknown:accounting_read_model_attribution partition=3 sequences=41-57
+Accounting database call failed: operation=project_read_model reason=unknown rejection=accounting_read_model_attribution sqlstate=P0001 error_type=RawQueryError
+```
+
+Every accounting database call writes the second line at most once each 30
+seconds for each operation and cause. The log contains only the operation, the
+failure class, the SQLSTATE, and a fixed `accounting_*` code. It never contains
+database error text, because that text can contain tenant data.
+
+Use the partition and sequence range to find the events:
+
+```sql
+SELECT sequence, operation_id, outcome, payload_json->'spend' AS spend
+FROM deltallm_accounting_events
+WHERE generation = <generation> AND accounting_partition = 3
+  AND sequence BETWEEN 41 AND 57
+ORDER BY sequence;
+```
+
+Do not delete the event or reset a checkpoint. Find the code path that wrote the
+invalid event and fix it.
+
 ### Grant execution policy
 
 Apply migration `20261010083000_accounting_grant_execution_policy` before the

@@ -241,8 +241,21 @@ async def test_one_bad_record_rolls_back_facts_audit_rollups_and_checkpoint(acco
             path.strip("{}").split(","),
             json.dumps(value),
         )
-    with pytest.raises(AccountingProtocolUnavailable):
+    with pytest.raises(AccountingProtocolUnavailable) as raised:
         await repo.materialize(page, expires_at=deadline())
+    # The fixed SQL code reaches the worker log, so operators see the real cause.
+    assert (
+        raised.value.rejection
+        == {
+            "spend_attribution": "accounting_read_model_attribution",
+            "audit_attribution": "accounting_read_model_audit",
+            "charge": "accounting_read_model_charge",
+            "usage": "accounting_read_model_usage",
+            "audit_content": "accounting_read_model_audit",
+            "audit_id_collision": "accounting_read_model_identity",
+            "fact_identity": "accounting_read_model_identity",
+        }[change]
+    )
     assert await effects(db, generation) == preexisting
     checkpoint = await db.query_raw(
         "SELECT last_sequence,lease_token FROM deltallm_accounting_projection_checkpoints WHERE projection_name='accounting-read-model-v2' AND generation=$1 AND accounting_partition=$2",
