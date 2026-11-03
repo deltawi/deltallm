@@ -34,7 +34,10 @@ One kind node with 2 API pods, 1 batch pod, 2 accounting request pods and
    API traffic are in flight. The batch completes with no failed item.
 3. **Pod loss.** During another 300-item batch and API traffic, the run sends
    SIGKILL to one API pod, one accounting request pod and the batch pod, 15 s
-   apart. The batch completes with no failed item, without a manual restart.
+   apart. The batch completes without a manual restart. An item whose billing
+   proof was lost in the kill may fail with "Batch billing proof is
+   unavailable", because it may already have reached the provider and must not
+   run twice. Any other failed item fails the step.
 
 After each step, the run checks four things. A failed check fails the job
 once the last step has run, so one red step does not hide the others:
@@ -42,7 +45,8 @@ once the last step has run, so one red step does not hide the others:
 - Every tracked in-memory gauge is back at or below its level before the step
   (see [Bounded state](#bounded-state)).
 - No pod refused accounting because a store or queue was full.
-- Accounting drains within 5 minutes: no reserved or provisional operation,
+- Accounting drains within 5 minutes: no reserved or provisional operation
+  (after pod loss, no reserved operation),
   open grant, pending terminal journal row, or unprojected partition is left.
   If it does not, the run saves the stuck rows to
   `<step>-unsettled-state.json` and keeps waiting up to 18 minutes, past
@@ -56,6 +60,14 @@ once the last step has run, so one red step does not hide the others:
   and no scope holds reserved or provisional money. After pod loss, the facts
   may also include answers that a killed pod charged but its client never
   received. They can never be more than the failed requests.
+- After pod loss only, a killed pod cannot prove whether the provider answered
+  its in-flight work, so that money stays provisional by design. The run
+  checks it is bounded and exact (`killed_work` in the report): no reservation
+  stays open, no more operations are held than were in flight (two batch pods'
+  worth plus the failed requests), every failed batch item holds its money,
+  only the killed pods' own grants keep an unreturned remainder, and each
+  scope's provisional amount equals those held operations and remainders.
+  A graceful rollout must still leave nothing provisional.
 
 Batch volume stays under about 1,100 items per pod, one pod's default receipt
 store. Volume is tested by the nightly soak.

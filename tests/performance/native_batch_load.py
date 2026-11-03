@@ -194,7 +194,9 @@ async def item_stats(db: Prisma, batch_ids: list[str]) -> list[dict]:
             "COALESCE(max(attempts),0)::int AS max_attempts,"
             "COALESCE(max(EXTRACT(EPOCH FROM (completed_at-created_at))),0)::float8 "
             "AS slowest_item_seconds,"
-            "array_remove(array_agg(DISTINCT left(last_error,120)),NULL) AS last_errors "
+            "array_remove(array_agg(DISTINCT left(last_error,120)),NULL) AS last_errors,"
+            "array_remove(array_agg(DISTINCT left(last_error,120)) "
+            "FILTER (WHERE status='failed'),NULL) AS failed_errors "
             "FROM deltallm_batch_item WHERE batch_id=ANY($1::text[]) GROUP BY batch_id "
             "ORDER BY batch_id LIMIT 32",
             batch_ids,

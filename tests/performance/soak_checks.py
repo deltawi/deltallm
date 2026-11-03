@@ -210,8 +210,12 @@ def ledger_matches(
     duplicates: int,
     scopes: Iterable[Mapping[str, str]],
     allowed_extra: int = 0,
+    held_provisional: Mapping[str, Decimal] | None = None,
 ) -> dict[str, object]:
     """Native usage facts match successful work once, and budgets hold no open money.
+
+    ``held_provisional`` is the provisional money each scope type may hold
+    after a pod was killed; it is zero everywhere else.
 
     ``charged`` is the work the clients saw succeed. ``allowed_extra`` covers
     requests in flight when a pod was killed: the gateway may have charged a
@@ -223,7 +227,8 @@ def ledger_matches(
     scope_ok = {scope["scope_type"] for scope in scopes} == BUDGET_SCOPE_TYPES and all(
         Decimal(scope["committed"]) == total
         and Decimal(scope["reserved"]) == 0
-        and Decimal(scope["provisional"]) == 0
+        and Decimal(scope["provisional"])
+        == (held_provisional or {}).get(scope["scope_type"], Decimal(0))
         for scope in scopes
     )
     failures = []
@@ -245,4 +250,51 @@ def ledger_matches(
         "allowed_extra": allowed_extra,
         "duplicate_operations": duplicates,
         "scopes": scopes,
+    }
+
+
+def killed_work_held(
+    before: Mapping[str, str],
+    after: Mapping[str, str],
+    *,
+    scopes_before: Iterable[Mapping[str, str]],
+    max_in_flight: int,
+    failed_items: int,
+) -> dict[str, object]:
+    """Work a SIGKILL interrupted keeps its money provisional, and nothing else does.
+
+    A killed pod cannot prove whether the provider answered, so its in-flight
+    operations and the unreturned rest of its own grants stay provisional. The
+    check bounds that: no reservation stays open, no more operations than were
+    in flight are held, every failed batch item holds its money, surviving pods
+    returned their grants, and each scope holds exactly the held money.
+    """
+    delta = {
+        name: Decimal(str(after[name])) - Decimal(str(before[name]))
+        for name in (
+            "provisional_operations",
+            "operation_provisional",
+            "killed_grant_provisional",
+            "surviving_grant_provisional",
+        )
+    }
+    failures = []
+    if int(after["reserved_operations"]):
+        failures.append("reservations_left_open")
+    if delta["provisional_operations"] > max_in_flight:
+        failures.append("more_held_operations_than_in_flight")
+    if delta["provisional_operations"] < failed_items:
+        failures.append("failed_items_without_held_money")
+    if delta["surviving_grant_provisional"]:
+        failures.append("surviving_pod_left_grant_provisional")
+    held = delta["operation_provisional"] + delta["killed_grant_provisional"]
+    if held < 0:
+        failures.append("held_money_went_negative")
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "held_provisional": {
+            scope["scope_type"]: Decimal(scope["provisional"]) + held for scope in scopes_before
+        },
+        **{name: str(value) for name, value in delta.items()},
     }

@@ -37,6 +37,8 @@ ROLE_SELECTORS = {
     "accounting_request": GATEWAY_SELECTOR + ",app.kubernetes.io/component=accounting-request",
     "accounting_worker": GATEWAY_SELECTOR + ",app.kubernetes.io/component=accounting-worker",
 }
+# Items one batch pod runs at once.
+BATCH_CONCURRENCY = 20
 BATCH_ITEM_LEASE_SECONDS = 120
 # Three batch pods at 20 runners each.
 BATCH_MODEL_MAX_IN_FLIGHT = 60
@@ -156,7 +158,7 @@ def native_values(
         embeddings_batch_scheduler_mode="smart_v1",
         embeddings_batch_scheduler_claim_mode="work_slice",
         embeddings_batch_model_capacity_enabled=True,
-        embeddings_batch_worker_concurrency=20,
+        embeddings_batch_worker_concurrency=BATCH_CONCURRENCY,
         embeddings_batch_item_claim_limit=50,
         embeddings_batch_work_claim_max_items=50,
         embeddings_batch_max_attempts=5,

@@ -328,3 +328,100 @@ def test_receipt_counters_are_not_idle_gauges() -> None:
     assert checks._idle_gauge("deltallm_accounting_local_receipts")
     assert not checks._idle_gauge("deltallm_accounting_local_receipt_releases_total")
     assert not checks._idle_gauge("deltallm_accounting_local_receipt_releases_created")
+
+
+def held(**changes) -> dict:
+    return {
+        "reserved_operations": "0",
+        "provisional_operations": "1",
+        "operation_provisional": "0.02",
+        "killed_grant_provisional": "0",
+        "surviving_grant_provisional": "0.01",
+        **changes,
+    }
+
+
+def provisional_scopes(provisional: str) -> list[dict]:
+    return [
+        {"scope_type": name, "committed": "0.000105", "reserved": "0", "provisional": provisional}
+        for name in ("api_key", "organization", "team", "user")
+    ]
+
+
+def test_killed_work_holds_bounded_money_and_scopes_match_it() -> None:
+    # One op was already provisional before the kills; it is carried, not added.
+    before = held()
+    after = held(
+        provisional_operations="4",
+        operation_provisional="0.08",
+        killed_grant_provisional="0.05",
+    )
+    result = checks.killed_work_held(
+        before,
+        after,
+        scopes_before=provisional_scopes("0.03"),
+        max_in_flight=5,
+        failed_items=3,
+    )
+    assert result["passed"], result
+    assert set(result["held_provisional"].values()) == {checks.Decimal("0.14")}
+    assert checks.ledger_matches(
+        snapshot(10, "0.00007"),
+        snapshot(15, "0.000105"),
+        charged=5,
+        duplicates=0,
+        scopes=provisional_scopes("0.14"),
+        held_provisional=result["held_provisional"],
+    )["passed"]
+    # Any other provisional amount in a scope is a mismatch.
+    assert not checks.ledger_matches(
+        snapshot(10, "0.00007"),
+        snapshot(15, "0.000105"),
+        charged=5,
+        duplicates=0,
+        scopes=provisional_scopes("0.15"),
+        held_provisional=result["held_provisional"],
+    )["passed"]
+
+
+@pytest.mark.parametrize(
+    ("changes", "failed_items", "failure"),
+    [
+        ({"reserved_operations": "1"}, 0, "reservations_left_open"),
+        ({"provisional_operations": "7"}, 0, "more_held_operations_than_in_flight"),
+        ({"provisional_operations": "2"}, 2, "failed_items_without_held_money"),
+        ({"surviving_grant_provisional": "0.02"}, 0, "surviving_pod_left_grant_provisional"),
+    ],
+)
+def test_killed_work_check_names_what_was_lost(changes, failed_items, failure) -> None:
+    result = checks.killed_work_held(
+        held(),
+        held(**changes),
+        scopes_before=provisional_scopes("0.03"),
+        max_in_flight=5,
+        failed_items=failed_items,
+    )
+    assert failure in result["failures"] and not result["passed"]
+
+
+def test_only_lost_billing_proof_failures_are_accepted_after_a_kill() -> None:
+    from src.batch.public_errors import BatchPublicErrorCode
+    from tests.performance.run_native_acceptance import held_items_only
+
+    lost = BatchPublicErrorCode.ACCOUNTING_CHECKPOINT_UNAVAILABLE.message
+    batch = {
+        "passed": False,
+        "failures": ["items_failed"],
+        "failed": 2,
+        "items": [{"failed_errors": [lost]}],
+    }
+    held_items_only(batch)
+    assert batch["passed"] and batch["held_items"] == 2
+    other = {
+        "passed": False,
+        "failures": ["items_failed"],
+        "failed": 1,
+        "items": [{"failed_errors": [lost, "Upstream returned 500"]}],
+    }
+    held_items_only(other)
+    assert not other["passed"] and other["failures"] == ["items_failed"]

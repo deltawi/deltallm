@@ -10,7 +10,10 @@ path production runs, on one disposable kind node:
    batch are in flight. The batch completes, nothing is charged twice.
 3. Pod loss: SIGKILL an API pod, an accounting request pod and the batch pod
    during load. The batch completes, accounting drains without a restart, and
-   no work is charged twice.
+   no work is charged twice. A killed pod cannot prove whether the provider
+   answered its in-flight work, so that work, and the unreturned rest of the
+   killed pods' own grants, may stay provisional. That money is bounded and
+   matched exactly; batch items it covers fail instead of running twice.
 
 After each step every bounded in-memory store and queue must return to its
 pre-load level, accounting must drain, and budgets must hold no open money.
@@ -30,6 +33,7 @@ from time import monotonic
 
 import httpx
 
+from src.batch.public_errors import BatchPublicErrorCode
 from tests.performance.capacity_fixture import capacity_release, install_edge
 from scripts.measure_gateway_load import RequestResult, run_constant_arrival, summarize
 from tests.performance.capacity_load import PAYLOAD, arrival, rejection_code
@@ -48,6 +52,7 @@ from tests.performance.native_batch_load import (
 )
 from tests.performance.native_fixture import (
     collect_role_logs,
+    BATCH_CONCURRENCY,
     BATCH_ITEM_LEASE_SECONDS,
     follow_role_logs,
     native_values,
@@ -71,6 +76,7 @@ from tests.performance.soak_checks import (
     counter_delta,
     counter_total,
     gauges_returned_to_idle,
+    killed_work_held,
     ledger_matches,
 )
 
@@ -101,7 +107,14 @@ async def settle(
     allowed_extra: int = 0,
     timeout: float = SETTLE_SECONDS,
     recovery_timeout: float = EXPIRY_RECOVERY_SECONDS,
+    killed: dict | None = None,
 ) -> dict[str, object]:
+    """Wait for gauges and accounting to settle, then check the ledger.
+
+    ``killed`` names the SIGKILLed pods with the held-money snapshot taken
+    before the kills; their interrupted work may stay provisional, bounded by
+    ``killed_work_held``. Every other step must leave nothing provisional.
+    """
     started = monotonic()
     while True:
         idle = gauges_returned_to_idle(baseline, await scrape_roles(cluster, ROLES))
@@ -111,12 +124,13 @@ async def settle(
             break
         await asyncio.sleep(5)
     async with local_database() as db:
-        drain = await drain_or_unsafe(db, timeout=timeout)
+        wait_drain = drain_or_unsafe if killed is None else drain_held_or_unsafe
+        drain = await wait_drain(db, timeout=timeout)
         stuck: dict[str, list] = {}
         if not drain["passed"]:
             # Keep what was stuck at the target, then see whether expiry recovers it.
             stuck = await unsettled_rows(db)
-            recovery = await drain_or_unsafe(db, timeout=max(0.0, recovery_timeout - timeout))
+            recovery = await wait_drain(db, timeout=max(0.0, recovery_timeout - timeout))
             drain = {
                 **recovery,
                 "passed": False,
@@ -125,6 +139,15 @@ async def settle(
                 "recovered_after_target": recovery["passed"],
             }
         after = await accounting_snapshot(db)
+        held = None
+        if killed is not None:
+            held = killed_work_held(
+                killed["money"],
+                await held_money(db, killed["pods"]),
+                scopes_before=killed["scopes"],
+                max_in_flight=killed["max_in_flight"],
+                failed_items=killed["failed_items"],
+            )
         ledger = ledger_matches(
             before,
             after,
@@ -132,14 +155,20 @@ async def settle(
             duplicates=await duplicate_operations(db),
             scopes=await budget_scopes(db),
             allowed_extra=allowed_extra,
+            held_provisional=None if held is None else held["held_provisional"],
         )
     drain.pop("samples", None)
     result = {
-        "passed": idle["passed"] and drain["passed"] and ledger["passed"],
+        "passed": idle["passed"]
+        and drain["passed"]
+        and ledger["passed"]
+        and (held is None or held["passed"]),
         "idle": idle,
         "accounting_drain": drain,
         "ledger": ledger,
     }
+    if held is not None:
+        result["killed_work"] = held
     if not result["passed"]:
         (cluster.output / f"{step}-unsettled-state.json").write_text(
             json.dumps({**result, "stuck": stuck}, indent=2, default=str)
@@ -161,6 +190,60 @@ UNSETTLED_QUERIES = {
     "WHERE o.accounting_generation=1 AND o.accounting_state IN ('reserved','provisional') "
     "ORDER BY e.sequence LIMIT 30",
 }
+
+
+# Money a SIGKILL may leave provisional: operations with no proof of their
+# outcome and the unreturned rest of the killed pods' own grants. A grant's
+# owner id starts with the pod's hostname.
+HELD_MONEY_SQL = """
+SELECT
+ (SELECT count(*)::bigint FROM deltallm_billing_operations
+  WHERE accounting_generation=1 AND accounting_state='reserved') AS reserved_operations,
+ (SELECT count(*)::bigint FROM deltallm_billing_operations
+  WHERE accounting_generation=1 AND accounting_state='provisional') AS provisional_operations,
+ (SELECT COALESCE(sum(provisional_debit_exact),0)::text FROM deltallm_billing_operations
+  WHERE accounting_generation=1 AND accounting_state='provisional') AS operation_provisional,
+ (SELECT COALESCE(sum(unknown_provisional_exact),0)::text FROM deltallm_accounting_grants
+  WHERE generation=1 AND split_part(grantee_id,':',1)=ANY($1::text[])) AS killed_grant_provisional,
+ (SELECT COALESCE(sum(unknown_provisional_exact),0)::text FROM deltallm_accounting_grants
+  WHERE generation=1 AND NOT split_part(grantee_id,':',1)=ANY($1::text[]))
+  AS surviving_grant_provisional
+"""
+
+
+async def held_money(db, pods: list[str]) -> dict[str, str]:
+    async with asyncio.timeout(5):
+        rows = await db.query_raw(HELD_MONEY_SQL, pods)
+    return {name: str(value) for name, value in rows[0].items()}
+
+
+async def drain_held_or_unsafe(db, *, timeout: float) -> dict[str, object]:
+    """Drain where provisional operations may stay; reservations may not."""
+    started = monotonic()
+    while True:
+        state = await accounting_snapshot(db)
+        reserved = int((await held_money(db, []))["reserved_operations"])
+        if state["unsafe_windows"]:
+            return {
+                "passed": False,
+                "error": "unsafe budget state",
+                "seconds": None,
+                "state": state,
+            }
+        settled = reserved == 0 and all(
+            state[field] == 0
+            for field in (
+                "open_grants",
+                "terminal_pending",
+                "report_pending_partitions",
+                "spend_pending",
+                "audit_pending",
+            )
+        )
+        elapsed = monotonic() - started
+        if settled or elapsed >= timeout:
+            return {"passed": settled, "seconds": elapsed, "state": state}
+        await asyncio.sleep(2)
 
 
 async def unsettled_rows(db) -> dict[str, list]:
@@ -242,6 +325,20 @@ async def finish_batch(url: str, batch_id: str, *, timeout: float) -> dict:
         "failed": counts["failed"],
         "items": stats,
     }
+
+
+def held_items_only(batch: dict) -> None:
+    """After a SIGKILL, accept failed items only when their billing proof was lost.
+
+    Such an item may have reached the provider, so it fails instead of running
+    twice; ``killed_work_held`` then checks that each one still holds its money.
+    """
+    lost = BatchPublicErrorCode.ACCOUNTING_CHECKPOINT_UNAVAILABLE.message
+    errors = {error for row in batch["items"] for error in row["failed_errors"]}
+    if "items_failed" in batch["failures"] and errors <= {lost}:
+        batch["failures"].remove("items_failed")
+        batch["held_items"] = batch["failed"]
+        batch["passed"] = not batch["failures"]
 
 
 async def counted_arrival(url: str, *, rate: float, duration: float) -> dict:
@@ -374,8 +471,14 @@ async def rollout(cluster: LifecycleCluster, values: Path, url: str) -> dict:
 
 async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
     baseline = await scrape_roles(cluster, ROLES)
+    targets = {
+        role: (await asyncio.to_thread(role_pods, cluster, role))[0]
+        for role in ("api", "accounting_request", "batch_worker")
+    }
     async with local_database() as db:
         before = await accounting_snapshot(db)
+        money = await held_money(db, list(targets.values()))
+        scopes = await budget_scopes(db)
     create_retries: list[dict] = []
     batch_id = await start_slow_batch(url, "native-pod-loss", create_retries)
 
@@ -383,8 +486,7 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
         killed = []
         # Let the batch settle into steady work before the first loss.
         await asyncio.sleep(10)
-        for role in ("api", "accounting_request", "batch_worker"):
-            pod = (await asyncio.to_thread(role_pods, cluster, role))[0]
+        for role, pod in targets.items():
             container = await asyncio.to_thread(cluster.kill_container, pod)
             killed.append({"role": role, "pod": pod, "container": container})
             cluster.event("native_pod_killed", role=role, pod=pod)
@@ -407,6 +509,7 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
             await asyncio.sleep(2)
     await wait_edge(url)
     batch = await finish_batch(url, batch_id, timeout=BATCH_ITEM_LEASE_SECONDS + 600)
+    held_items_only(batch)
     rejected = traffic["target_count"] - traffic["success_count"]
     settled = await settle(
         cluster,
@@ -418,6 +521,16 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
         allowed_extra=rejected,
         # SIGKILL leaves the killed pods' reservations to expiry recovery.
         timeout=EXPIRY_RECOVERY_SECONDS,
+        killed={
+            "pods": list(targets.values()),
+            "money": money,
+            "scopes": scopes,
+            # Killing the accounting request pod and then the batch pod can
+            # each interrupt one batch pod's worth of items; each failed API
+            # request was interrupted at most once.
+            "max_in_flight": 2 * BATCH_CONCURRENCY + rejected,
+            "failed_items": batch["failed"],
+        },
     )
     cluster.event("native_pod_loss_recovered", batch_seconds=round(batch["seconds"], 1))
     settled["passed"] = settled["passed"] and batch["passed"]
