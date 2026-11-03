@@ -128,10 +128,11 @@ async def batch_phase(
     cluster.event("soak_batch_started", jobs=len(plan), items=args.batch_items)
     async with client(url) as http:
         started = monotonic()
+        create_retries: list[dict] = []
         batch_ids = list(
             await asyncio.gather(
                 *(
-                    submit_job(http, endpoint, f"soak-{index}", count)
+                    submit_job(http, endpoint, f"soak-{index}", count, retries=create_retries)
                     for index, (endpoint, count) in enumerate(plan)
                 )
             )
@@ -176,6 +177,8 @@ async def batch_phase(
     report = {
         "plan": [{"endpoint": endpoint, "items": count} for endpoint, count in plan],
         "submit_seconds": submitted,
+        # Busy answers to concurrent uploads and creates, retried like a client.
+        "create_retries": create_retries,
         "outcome": outcome,
         "verified_output_rows": verified,
         "items": stats,
@@ -454,6 +457,8 @@ def markdown(report: dict, args: argparse.Namespace) -> str:
             f"{outcome['completed_items']:,} done, {outcome['failed_items']:,} failed, "
             f"{outcome['items_per_second']:.1f} items/s (target {args.min_batch_items_per_second}) "
             f"{' '.join(outcome['failures'])} |",
+            f"| Batch: create retries (busy, retried) | info | "
+            f"{len(batch.get('create_retries', []))} |",
             f"| Batch: no full-store refusals | {mark(batch['accounting_capacity_refusals']['passed'])} | "
             f"{batch['accounting_capacity_refusals']['capacity_refusals'] or 'none'} |",
             f"| Batch: stores idle after load | {mark(settled['idle']['passed'])} | "

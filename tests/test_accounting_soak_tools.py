@@ -234,3 +234,30 @@ def test_native_values_apply_the_shipped_bundle_with_batch(tmp_path, monkeypatch
     assert calls and calls[0][0]["metadata"]["name"] == "deltallm-accounting-rpc"
     with pytest.raises(ValueError):
         native_values(cluster, "gateway:unit", api_replicas=2, batch_replicas=4)
+
+
+@pytest.mark.asyncio
+async def test_busy_batch_create_is_retried_and_recorded(monkeypatch) -> None:
+    from tests.performance import native_batch_load
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(native_batch_load.asyncio, "sleep", no_sleep)
+    answers = iter([503, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/files":
+            return httpx.Response(200, json={"id": "file-1"})
+        status = next(answers)
+        return httpx.Response(status, json={"id": "batch-1"} if status == 200 else {"error": {}})
+
+    retries: list[dict] = []
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://fixture"
+    ) as http:
+        batch_id = await native_batch_load.submit_job(
+            http, CHAT_ENDPOINT, "job", 2, retries=retries
+        )
+    assert batch_id == "batch-1"
+    assert [(row["path"], row["status"]) for row in retries] == [("/v1/batches", 503)]

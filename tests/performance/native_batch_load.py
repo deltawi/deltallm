@@ -67,10 +67,41 @@ def client(url: str, *, timeout: float = 60) -> httpx.AsyncClient:
     )
 
 
-async def submit_job(http: httpx.AsyncClient, endpoint: str, prefix: str, count: int) -> str:
+RETRY_STATUSES = {429, 503}
+RETRY_DELAYS = (1, 2, 4, 8, 16)
+
+
+async def _post_with_retry(
+    http: httpx.AsyncClient, path: str, retries: list[dict], **request: object
+) -> httpx.Response:
+    """Retry 429/503 as a client following x-should-retry would, and record each retry."""
+    for delay in (*RETRY_DELAYS, None):
+        response = await http.post(path, **request)
+        if response.status_code not in RETRY_STATUSES or delay is None:
+            return response
+        if len(retries) < 256:
+            retries.append(
+                {"path": path, "status": response.status_code, "body": response.text[:200]}
+            )
+        await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+async def submit_job(
+    http: httpx.AsyncClient,
+    endpoint: str,
+    prefix: str,
+    count: int,
+    *,
+    retries: list[dict] | None = None,
+) -> str:
+    """Upload and create one job. Busy answers are retried and listed in ``retries``."""
+    retries = [] if retries is None else retries
     rows = batch_rows(endpoint, prefix, count)
-    uploaded = await http.post(
+    uploaded = await _post_with_retry(
+        http,
         "/v1/files",
+        retries,
         data={"purpose": "batch"},
         files={
             "file": (
@@ -84,8 +115,10 @@ async def submit_job(http: httpx.AsyncClient, endpoint: str, prefix: str, count:
         raise AssertionError(
             f"Batch upload failed with {uploaded.status_code}: {uploaded.text[:500]}"
         )
-    created = await http.post(
+    created = await _post_with_retry(
+        http,
         "/v1/batches",
+        retries,
         json={
             "input_file_id": uploaded.json()["id"],
             "endpoint": endpoint,
