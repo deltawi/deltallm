@@ -105,6 +105,7 @@ async def settle(
             scopes=await budget_scopes(db),
             allowed_extra=allowed_extra,
         )
+        stuck = {} if drain["passed"] else await unsettled_rows(db)
     drain.pop("samples", None)
     result = {
         "passed": idle["passed"] and drain["passed"] and ledger["passed"],
@@ -113,10 +114,33 @@ async def settle(
         "ledger": ledger,
     }
     if not result["passed"]:
+        # Keep the stuck rows; the step's report is lost when this raises.
+        (cluster.output / "unsettled-state.json").write_text(
+            json.dumps({**result, "stuck": stuck}, indent=2, default=str)
+        )
         raise AssertionError(
             f"Native state did not settle: {json.dumps(result, default=str)[:4000]}"
         )
     return result
+
+
+UNSETTLED_QUERIES = {
+    "operations": "SELECT to_jsonb(o) AS row FROM deltallm_billing_operations o "
+    "WHERE accounting_generation=1 AND accounting_state IN ('reserved','provisional') LIMIT 10",
+    "grants": "SELECT to_jsonb(g) AS row FROM deltallm_accounting_grants g "
+    "WHERE generation=1 AND state<>'closed' LIMIT 10",
+}
+
+
+async def unsettled_rows(db) -> dict[str, list]:
+    """Operations and grants that kept accounting from draining, for the evidence."""
+    rows: dict[str, list] = {}
+    for name, query in UNSETTLED_QUERIES.items():
+        try:
+            rows[name] = [row["row"] for row in await db.query_raw(query)]
+        except Exception as error:  # Diagnostics must not hide the drain failure.
+            rows[name] = [f"query failed: {type(error).__name__}"]
+    return rows
 
 
 async def start_slow_batch(url: str, prefix: str) -> str:
