@@ -36,6 +36,8 @@ ROLE_SELECTORS = {
     "accounting_worker": GATEWAY_SELECTOR + ",app.kubernetes.io/component=accounting-worker",
 }
 BATCH_ITEM_LEASE_SECONDS = 120
+# Three batch pods at 20 runners each.
+BATCH_MODEL_MAX_IN_FLIGHT = 60
 SMALL_ROLE_RESOURCES = {
     "requests": {"cpu": "100m", "memory": "256Mi"},
     "limits": {"cpu": "2", "memory": "1Gi"},
@@ -119,6 +121,10 @@ def native_values(
     path = capacity_values(cluster, image)
     values = apply_native_overlay(cluster, yaml.safe_load(path.read_text()))
     values["config"]["model_list"].append(embedding_model())
+    for model in values["config"]["model_list"]:
+        # Strict model capacity (fail_open false, as in production) refuses to
+        # claim for a model with no known limit, so each model declares one.
+        model["model_info"]["batch_capacity"] = {"max_in_flight": BATCH_MODEL_MAX_IN_FLIGHT}
     # Helm merges this map into values-capacity-fixture.yaml; the list is replaced.
     extended = values.setdefault("dependencyCapacity", {}).setdefault("extended", {})
     extended["providerDomains"] = {

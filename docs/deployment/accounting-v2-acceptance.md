@@ -18,7 +18,9 @@ provider, so provider limits never affect the result.
 Both start from the strict production values, the capacity fixture, and then
 `values-accounting-native.yaml`. Batch is on, with the production scheduler
 shape (`smart_v1`, work slices, model capacity, 20 runners per pod, 50-item
-claims, 5 attempts). The receipt store and other bounded stores keep their
+claims, 5 attempts). Strict model capacity stays on, so each fixture model
+declares `batch_capacity.max_in_flight` (60, three pods of 20 runners), as a
+production model must. The receipt store and other bounded stores keep their
 shipped defaults, so a leak shows at the same point it would in production.
 
 ## Accounting v2 acceptance

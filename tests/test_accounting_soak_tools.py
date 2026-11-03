@@ -227,6 +227,10 @@ def test_native_values_apply_the_shipped_bundle_with_batch(tmp_path, monkeypatch
         "concurrency-fixture",
         EMBEDDING_MODEL,
     ]
+    assert {
+        model["model_info"]["batch_capacity"]["max_in_flight"]
+        for model in values["config"]["model_list"]
+    } == {60}
     assert values["dependencyCapacity"]["extended"]["providerDomains"]["local-mock"][
         "modelIds"
     ] == ["fixed-one-token", EMBEDDING_DEPLOYMENT]
