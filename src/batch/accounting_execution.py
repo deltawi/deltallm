@@ -28,6 +28,9 @@ class BatchAccountingExecution:
     completion_saved: bool = False
     # Left open for a later claim's retry: cleanup must not close it.
     released: bool = False
+    # The proof for this claim's new attempt could not be saved, so the
+    # provider was not called for it. The funded operation is still open.
+    proof_unsaved: bool = False
 
     def completion_payload(
         self,

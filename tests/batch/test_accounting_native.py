@@ -9,6 +9,7 @@ import pytest
 from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.batch.accounting_delivery import NativeBatchCompletionDelivery
 from src.batch.accounting_native import NativeBatchBilling, decode_checkpoint
+from src.batch.accounting_retry_hold import hold_unsaved_for_retry
 from src.batch.selector_identity import batch_selector_operation_id
 from src.billing.accounting.accounting_protocol import (
     AccountingOutcome,
@@ -31,9 +32,21 @@ class Checkpoints:
         self.rows, self.calls = {}, []
         self.lose_terminal_reply = False
         self.lose_dispatch_reply = False
+        # Pre-call proof writes refused before anything is saved (busy pool).
+        self.busy_dispatch_writes = 0
+        self.busy_writes = 0
 
     async def write_many(self, writes, *, expires_at):
         assert expires_at > asyncio.get_running_loop().time()
+        if self.busy_writes:
+            self.busy_writes -= 1
+            raise BatchAccountingUnavailable()
+        if self.busy_dispatch_writes and all(
+            write.checkpoint.terminal is None and not write.checkpoint.released_attempts
+            for write in writes
+        ):
+            self.busy_dispatch_writes -= 1
+            raise BatchAccountingUnavailable()
         for write in writes:
             write.validate()
             current = self.rows.get(write.claim.item_id)
@@ -433,3 +446,131 @@ async def test_release_is_refused_when_the_write_fails(native_batch):
     await owner.close_group(executions)
     stored = checkpoints.rows[executions[0].claim.item_id]
     assert stored.terminal.outcome is AccountingOutcome.UNCERTAIN
+
+
+async def test_unsaved_proof_is_held_open_and_the_next_claim_adds_an_attempt(native_batch):
+    owner, checkpoints, service = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    service.reserve = AsyncMock(wraps=service.reserve)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    execution = executions[0]
+    assert execution.proof_unsaved and not execution.dispatched
+    assert execution.claim.item_id not in checkpoints.rows
+    assert await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert execution.released and not execution.proof_unsaved
+    # Cleanup leaves the held operation open.
+    await owner.close_group(executions)
+    stored = checkpoints.rows[execution.claim.item_id]
+    assert stored.retry_ready and stored.terminal is None
+    assert len(stored.operation.attempts) == 1
+    assert execution.item.accounting_checkpoint == stored.model_dump(mode="json")
+
+    item = replace(execution.item, claim_epoch=2, locked_by="w2")
+    current = owner.bind(_build_chat_batch_job(), item, worker_id="w2", auth=auth)
+    await fund(owner, [current], payload, auth, deployment)
+    assert service.reserve.await_count == 1
+    stored = checkpoints.rows[current.claim.item_id]
+    assert len(stored.operation.attempts) == 2 and not stored.retry_ready
+    usage = {"prompt_tokens": 5, "completion_tokens": 2, "prompt_tokens_cached": 0}
+    current.completion_payload({"completed_at": datetime.now(UTC).isoformat()}, usage)
+    assert current.checkpoint.terminal.outcome is AccountingOutcome.COMPLETED
+    assert current.checkpoint.terminal.exact_charge == Decimal("0.009")
+
+
+async def test_unsaved_group_proofs_are_held_in_one_write(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner, count=3, embedding=True)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    writes = len(checkpoints.calls)
+    assert await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert len(checkpoints.calls) == writes + 1
+    assert len(checkpoints.calls[-1]) == 3
+    assert all(checkpoints.rows[e.claim.item_id].retry_ready for e in executions)
+
+
+async def test_unsaved_retry_after_a_release_keeps_the_release_without_a_write(native_batch):
+    owner, checkpoints, _ = native_batch
+    _, payload, auth, deployment = subjects(owner)
+    current = await released_retry(owner, checkpoints, auth, payload, deployment)
+    before = checkpoints.rows[current.claim.item_id]
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, [current], payload, auth, deployment)
+    writes = len(checkpoints.calls)
+    assert await hold_unsaved_for_retry(
+        owner, [current], retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    # The unsent attempt is dropped, so it does not use up the attempt limit.
+    assert len(checkpoints.calls) == writes
+    assert checkpoints.rows[current.claim.item_id] == before
+    assert current.checkpoint == before and current.released
+    assert decode_checkpoint(current.item.accounting_checkpoint) == before
+    await owner.close_group([current])
+    assert checkpoints.rows[current.claim.item_id] == before
+
+
+async def test_unsaved_failover_attempt_releases_the_dispatched_one(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    await fund(owner, executions, payload, auth, deployment)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    assert await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    stored = checkpoints.rows[executions[0].claim.item_id]
+    assert stored.retry_ready and len(stored.operation.attempts) == 1
+
+
+async def test_hold_is_refused_for_a_saved_proof(native_batch):
+    owner, _, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    # A saved proof is the provider-retry path's job, not this one.
+    await fund(owner, executions, payload, auth, deployment)
+    assert not await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+
+
+async def test_hold_is_refused_near_expiry_or_when_its_write_fails(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    assert not await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=300, claim_margin_seconds=14 * 60
+    )
+    checkpoints.busy_writes = 1
+    assert not await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert executions[0].proof_unsaved and not executions[0].released
+    # Not held: cleanup closes it without a provider call.
+    await owner.close_group(executions)
+    stored = checkpoints.rows[executions[0].claim.item_id]
+    assert stored.terminal.outcome is AccountingOutcome.NOT_DISPATCHED
+
+
+async def test_hold_is_refused_at_the_attempt_limit(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    for _ in range(2):
+        await fund(owner, executions, payload, auth, deployment)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    # Two saved attempts leave no room for another under a limit of two.
+    owner.max_provider_attempts = 2
+    assert not await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )

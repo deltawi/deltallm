@@ -93,9 +93,15 @@ LEFT JOIN deltallm_batch_completion_outbox AS o ON o.item_id=u.item_id
 """
 
 
-# A second attempt runs only when at least this much of the budget is left.
+# Another try runs only when at least this much of the budget is left.
 CHECKPOINT_RETRY_MIN_SECONDS = 0.25
-CHECKPOINT_RETRY_JITTER_SECONDS = (0.02, 0.1)
+# A full pool sheds a write at once, so one quick retry often lands in the
+# same busy moment. Busy writes are tried up to this many times, pausing a
+# little longer each time (half to all of 50, 100, 200, 400, 400 ms), all
+# inside the same write budget.
+CHECKPOINT_WRITE_MAX_TRIES = 6
+CHECKPOINT_RETRY_FIRST_PAUSE_SECONDS = 0.05
+CHECKPOINT_RETRY_MAX_PAUSE_SECONDS = 0.4
 DEFAULT_MAX_CONCURRENT_WRITES = 8
 
 
@@ -228,20 +234,32 @@ class BatchAccountingRepository:
         return True
 
     async def _write_with_retry(self, document: str, count: int, *, expires_at: float) -> None:
-        remaining = self._budget(expires_at)
-        if remaining < 2 * CHECKPOINT_RETRY_MIN_SECONDS:
-            await self._write_once(document, count, budget=remaining)
-            return
-        try:
-            await self._write_once(document, count, budget=remaining / 2)
-            return
-        except _CheckpointRejected:
-            raise
-        except Exception:
-            # Same proofs again: a committed first try is accepted or rejected, never doubled.
+        for tries in range(1, CHECKPOINT_WRITE_MAX_TRIES + 1):
+            remaining = self._budget(expires_at)
+            final = (
+                tries == CHECKPOINT_WRITE_MAX_TRIES or remaining < 2 * CHECKPOINT_RETRY_MIN_SECONDS
+            )
+            try:
+                # A try that hangs leaves half the budget for the next one.
+                await self._write_once(
+                    document, count, budget=remaining if final else remaining / 2
+                )
+                return
+            except _CheckpointRejected:
+                raise
+            except Exception:
+                if final:
+                    raise
+            # Same proofs again: a committed earlier try is accepted or
+            # rejected, never doubled.
             increment_batch_accounting_checkpoint_write_retry()
-        await asyncio.sleep(random.uniform(*CHECKPOINT_RETRY_JITTER_SECONDS))
-        await self._write_once(document, count, budget=self._budget(expires_at))
+            pause = min(
+                CHECKPOINT_RETRY_MAX_PAUSE_SECONDS,
+                CHECKPOINT_RETRY_FIRST_PAUSE_SECONDS * 2 ** (tries - 1),
+            )
+            # Never pause into the time the next try needs.
+            spare = self._budget(expires_at) - CHECKPOINT_RETRY_MIN_SECONDS
+            await asyncio.sleep(max(0.0, min(random.uniform(pause / 2, pause), spare)))
 
     async def _write_once(self, document: str, count: int, *, budget: float) -> None:
         async with asyncio.timeout(budget):

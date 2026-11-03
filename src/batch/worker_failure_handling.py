@@ -12,6 +12,7 @@ from src.batch.error_sanitization import persisted_batch_error_message
 from src.batch.models import BatchItemRecord, BatchJobRecord
 from src.batch.accounting_native import NativeBatchBilling, native_retry_ready
 from src.batch.accounting_execution import BatchAccountingExecution
+from src.batch.accounting_retry_hold import hold_unsaved_for_retry
 from src.batch.public_errors import exception_public_error_code
 from src.batch.retry import (
     BatchRetryCategory,
@@ -112,12 +113,20 @@ class WorkerFailureHandlingMixin:
         after the last one fails.
         """
         owner = self.native_billing
-        if (
-            owner is None
-            or not decision.retryable
-            or item.attempts >= self.config.max_attempts
-            or item.accounting_checkpoint is None
-        ):
+        if owner is None or not decision.retryable or item.attempts >= self.config.max_attempts:
+            return False
+        if native_execution is not None and native_execution.released:
+            # Already held open, for example before a group requeue was refused.
+            return native_retry_ready(item.accounting_checkpoint)
+        if native_execution is not None and native_execution.proof_unsaved:
+            # The proof write failed before the provider call: hold, don't close.
+            return await hold_unsaved_for_retry(
+                owner,
+                [native_execution],
+                retry_delay_seconds=retry_delay_seconds,
+                claim_margin_seconds=int(self.config.item_lease_seconds),
+            )
+        if item.accounting_checkpoint is None:
             return False
         if native_execution is None or native_execution.pricing is None:
             # This claim never added an attempt: an earlier release still holds.
