@@ -282,3 +282,24 @@ def test_runner_events_do_not_use_reserved_fields(runner) -> None:
         if keyword.arg in {"event", "seconds"}
     ]
     assert reserved == []
+
+
+@pytest.mark.asyncio
+async def test_busy_status_poll_is_skipped(monkeypatch) -> None:
+    from tests.performance import native_batch_load
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(native_batch_load.asyncio, "sleep", no_sleep)
+    answers = iter([503, 200])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        status = next(answers)
+        return httpx.Response(status, json={"status": "completed"} if status == 200 else {})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://fixture"
+    ) as http:
+        final, _elapsed, timed_out = await native_batch_load.wait_jobs(http, ["b"], timeout=60)
+    assert not timed_out and final["b"]["status"] == "completed"

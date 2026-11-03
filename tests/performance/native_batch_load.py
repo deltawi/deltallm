@@ -143,7 +143,13 @@ async def wait_jobs(
         for batch_id in batch_ids:
             if batch_id in final:
                 continue
-            response = await http.get("/v1/batches/" + batch_id)
+            try:
+                response = await http.get("/v1/batches/" + batch_id)
+            except httpx.TransportError:
+                # A poll is only an observation; a pod in rollout may drop it.
+                continue
+            if response.status_code in RETRY_STATUSES:
+                continue
             if response.status_code != 200:
                 raise AssertionError(f"Batch read failed with {response.status_code}")
             document = response.json()
