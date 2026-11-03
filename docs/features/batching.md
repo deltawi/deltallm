@@ -694,6 +694,11 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_scheduler_max_candidate_jobs_per_flow` | `50` | Bound candidate job reads per active flow |
 | `embeddings_batch_small_job_fast_lane_enabled` | `false` | Leave disabled unless rank-based `smart_v1` scheduling is not enough |
 
+Estimated work units come from the request size.
+A chat item counts one unit per 512 characters of serialized `messages`, plus one unit per 256 requested output tokens (one unit when no limit is set).
+The output limit is `max_completion_tokens` when set, otherwise `max_tokens`, the same order the worker uses when it sends the request.
+An embeddings item counts one unit per 256 characters or tokens of `input`.
+
 The scheduler counts a healthy deployment's configured capacity normally.
 An unhealthy deployment with an expired cooldown contributes exactly one temporary slot for the shared half-open recovery attempt.
 Its full configured capacity becomes available only after that attempt succeeds.
