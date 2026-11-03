@@ -299,7 +299,8 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
         exc: Exception,
         decision: BatchRetryDecision,
     ) -> bool:
-        if any(prepared.item.accounting_checkpoint is not None for prepared in prepared_items):
+        unsaved = self._unsaved_native_group(prepared_items)
+        if unsaved is None and self._group_has_stored_proof(prepared_items):
             # Funded items fail one by one: each keeps its operation open for
             # its own retry or closes it.
             return False
@@ -358,6 +359,10 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
             failed_size=chunk_size,
         )
         safe_error_message = persisted_batch_error_message(exc, decision)
+        if not await self._hold_unsaved_native_group(
+            unsaved, prepared_items, retry_delay_seconds=retry_delay
+        ):
+            return False
         try:
             released_item_ids = await self.repository.release_items_for_retry(
                 item_ids=item_ids,

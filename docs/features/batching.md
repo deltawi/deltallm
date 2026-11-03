@@ -220,7 +220,7 @@ Keep at least 20 percent spare database capacity during normal operation. For ex
 
 ### Accounting v2 checkpoint writes
 
-With accounting v2, each batch item saves a billing checkpoint before the provider call, and a closing one if the item fails. The write waits up to `embeddings_batch_accounting_write_timeout_seconds` (default 2 seconds). If the first try times out or hits a database error, it retries once with the time left. Each worker process runs at most `embeddings_batch_accounting_write_concurrency` writes at once (default: half of `db_pool_size`), so the rest of the pool stays free for lease renewals and result saves. Extra items wait in memory instead of failing.
+With accounting v2, each batch item saves a billing checkpoint before the provider call, and a closing one if the item fails. The write waits up to `embeddings_batch_accounting_write_timeout_seconds` (default 2 seconds). If a try times out or hits a database error, such as a full connection pool, it is tried again, up to 6 tries in all. The pauses between tries grow from about 50 ms to 400 ms, and every try stays inside the same time budget. A write the database answers but refuses (for example, the item is no longer owned by this worker) is never retried. Each worker process runs at most `embeddings_batch_accounting_write_concurrency` writes at once (default: half of `db_pool_size`), so the rest of the pool stays free for lease renewals and result saves. Extra items wait in memory instead of failing.
 
 Sizing rule:
 
@@ -295,7 +295,15 @@ An item is retried this way only while all of these hold:
 - its operation has attempts left under `accounting_max_provider_attempts` (default 3; the reservation is sized for this many calls)
 - the reservation (14 minutes from the first call) outlives the retry delay plus `embeddings_batch_item_lease_seconds`
 
-Otherwise the item fails with `terminal_reason` `accounting_closed` (or `attempts_exhausted`). If a worker crashes during a call, the next claim still closes that operation as uncertain without calling the provider again. Known gap: when a whole embedding micro-batch fails, its items are not retried this way yet.
+Otherwise the item fails with `terminal_reason` `accounting_closed` (or `attempts_exhausted`). If a worker crashes during a call, the next claim still closes that operation as uncertain without calling the provider again. Known gap: when a whole embedding micro-batch fails after the provider call, its items are not retried this way yet.
+
+If the checkpoint written before the provider call cannot be saved even after its retries (usually a busy database), the provider is not called. Instead of closing the operation, which would end the item as `accounting_closed`, the worker holds it open for a retry:
+
+- On an item's first claim, the operation is stored with its attempt released, so the next claim adds one attempt under the same funding. That unsent attempt counts toward `accounting_max_provider_attempts`.
+- On a later claim, the new attempt is simply dropped. The stored checkpoint is already released, so nothing is written and the attempt limit is not used up.
+- A chat or embedding micro-batch whose checkpoints were not saved is requeued as a whole, with every operation held in one write.
+
+The same limits as above apply. If the hold itself cannot be saved either, the worker falls back to closing the operation, and the item fails as `accounting_closed`. The item's error says `batch_accounting_checkpoint_unavailable` while it waits for its retry.
 
 #### When the gateway's database is busy
 
@@ -702,7 +710,7 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_runtime_summary_interval_seconds` | `15.0` | How often each worker process refreshes the job, item and queue gauges (1 to 300). The refresh runs beside the claim loop |
 | `embeddings_batch_item_claim_limit` | `20` | Maximum items claimed per worker iteration |
 | `embeddings_batch_item_buffer_multiplier` | `2` | Multiplier on concurrency for item prefetch. Effective claim limit is `max(item_claim_limit, concurrency * buffer_multiplier)` |
-| `embeddings_batch_accounting_write_timeout_seconds` | `2.0` | Accounting v2 only. Time budget for one billing checkpoint write, including the wait for a free write slot and one retry |
+| `embeddings_batch_accounting_write_timeout_seconds` | `2.0` | Accounting v2 only. Time budget for one billing checkpoint write, including the wait for a free write slot and up to 5 retries |
 | `embeddings_batch_accounting_write_concurrency` | `0` | Accounting v2 only. Concurrent billing checkpoint writes per worker process; `0` uses half of `db_pool_size` |
 | `embeddings_batch_write_grouping_enabled` | `true` | Save billing checkpoints, result saves and accounting v2 outbox sent marks that would wait for a write slot together, and give result saves as many slots as checkpoint writes. `false` restores one statement per write |
 | `embeddings_batch_max_attempts` | `3` | Maximum retry attempts for a failed item |

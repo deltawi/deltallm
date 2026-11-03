@@ -8,6 +8,7 @@ import logging
 from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.batch.accounting_execution import BatchAccountingExecution
 from src.batch.accounting_native import NativeBatchBilling
+from src.batch.accounting_retry_hold import hold_unsaved_for_retry
 from src.batch.models import BatchJobRecord
 from src.batch.worker_types import _PreparedChatItem, _PreparedEmbeddingItem
 from src.models.requests import EmbeddingRequest
@@ -92,6 +93,50 @@ class AccountingProviderExecutionMixin:
         except (BatchAccountingUnavailable, TimeoutError):
             # The shared grant retains its debit. The durable claim can recover.
             logger.warning("Native batch cleanup remains pending under its durable claim")
+
+    def _unsaved_native_group(
+        self, prepared_items: Sequence[PreparedBatchItem]
+    ) -> list[BatchAccountingExecution] | None:
+        """The group's executions when none of its new proofs were saved.
+
+        Such a group never reached the provider, so it may be requeued whole
+        once its funded operations are held open (_hold_unsaved_native_group).
+        """
+        if self.native_billing is None or not prepared_items:
+            return None
+        executions = [prepared.native_accounting for prepared in prepared_items]
+        if any(execution is None or not execution.proof_unsaved for execution in executions):
+            return None
+        return executions
+
+    @staticmethod
+    def _group_has_stored_proof(prepared_items: Sequence[PreparedBatchItem]) -> bool:
+        return any(prepared.item.accounting_checkpoint is not None for prepared in prepared_items)
+
+    async def _hold_unsaved_native_group(
+        self,
+        unsaved: Sequence[BatchAccountingExecution] | None,
+        prepared_items: Sequence[PreparedBatchItem],
+        *,
+        retry_delay_seconds: int,
+    ) -> bool:
+        """True when the group may be requeued whole.
+
+        A group whose new proofs were not saved never reached the provider: it
+        is requeued once its funded operations are held open. If the hold is
+        refused, only a group with no stored proof is requeued, as before.
+        """
+        owner = self.native_billing
+        if unsaved is None:
+            return True
+        if owner is not None and await hold_unsaved_for_retry(
+            owner,
+            unsaved,
+            retry_delay_seconds=retry_delay_seconds,
+            claim_margin_seconds=int(self.config.item_lease_seconds),
+        ):
+            return True
+        return not self._group_has_stored_proof(prepared_items)
 
     @staticmethod
     def _native_completion_saved(prepared_items: Sequence[PreparedBatchItem]) -> None:

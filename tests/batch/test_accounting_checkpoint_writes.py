@@ -11,6 +11,7 @@ from src.batch.accounting_checkpoint import (
     BatchAccountingWrite,
 )
 from src.batch.repositories.accounting_repository import (
+    CHECKPOINT_WRITE_MAX_TRIES,
     BatchAccountingRepository,
     WRITE_CHECKPOINTS_SQL,
 )
@@ -81,6 +82,32 @@ async def test_timeout_is_retried_once_within_the_budget():
     await BatchAccountingRepository(db).write_many([_write()], expires_at=_deadline(2))
     assert db.calls == 2
     assert _sample(deltallm_batch_accounting_checkpoint_write_retries_metric) == retries + 1
+
+
+async def test_busy_pool_is_retried_until_the_write_lands():
+    # A full pool sheds a write at once: three quick refusals in a row.
+    db = FakeDb(["timeout", "timeout", "timeout", "saved"])
+    retries = _sample(deltallm_batch_accounting_checkpoint_write_retries_metric)
+    await BatchAccountingRepository(db).write_many([_write()], expires_at=_deadline(2))
+    assert db.calls == 4
+    assert _sample(deltallm_batch_accounting_checkpoint_write_retries_metric) == retries + 3
+
+
+async def test_busy_retries_stop_at_the_try_limit():
+    db = FakeDb(["timeout"] * (CHECKPOINT_WRITE_MAX_TRIES + 2))
+    with pytest.raises(BatchAccountingUnavailable):
+        await BatchAccountingRepository(db).write_many([_write()], expires_at=_deadline(5))
+    assert db.calls == CHECKPOINT_WRITE_MAX_TRIES
+
+
+async def test_busy_retries_stay_inside_the_budget():
+    db = FakeDb(["timeout"] * 50, hold=0.05)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(BatchAccountingUnavailable):
+        await BatchAccountingRepository(db).write_many([_write()], expires_at=_deadline(0.6))
+    assert loop.time() - started < 0.7
+    assert 2 <= db.calls < CHECKPOINT_WRITE_MAX_TRIES
 
 
 async def test_rejected_write_is_not_retried():

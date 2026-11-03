@@ -163,6 +163,7 @@ def test_new_batch_modules_have_bounded_typed_interfaces():
         "accounting_checkpoint.py",
         "repositories/accounting_repository.py",
         "accounting_native.py",
+        "accounting_retry_hold.py",
         "accounting_execution.py",
         "accounting_delivery.py",
         "accounting_provider_execution.py",
