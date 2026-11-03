@@ -211,6 +211,7 @@ nav:
           - Spend recovery: deployment/spend-recovery.md
           - Accounting protocol v2: deployment/accounting-v2.md
           - Accounting protocol v2 design: design/accounting-protocol-v2.md
+          - Bounded in-memory state: deployment/bounded-state.md
           - Request deadlines: deployment/request-deadlines.md
           - Provider connection tuning: deployment/upstream-http.md
           - Provider connection pool design: design/upstream-http-pool.md
