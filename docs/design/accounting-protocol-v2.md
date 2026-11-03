@@ -50,6 +50,16 @@ one. Fallback groups resolved later (model-router groups) and context or content
 fallbacks are not in the plan; a failover there that needs a larger allowance still
 fails closed. The unused part of the allowance is returned at finalization.
 
+Media calls size their allowance from the final request too. Speech uses its
+character count. Transcription with a per-request price reserves that price.
+Transcription with a per-second price reserves a duration ceiling taken from the
+uploaded file: the exact length of an uncompressed WAV (times its channel count,
+since some providers bill each channel), otherwise the file size at 4 kbit/s,
+and never less than 10 seconds. The charge is the real duration the provider
+reports. A provider gives no duration limit, so a file that beats the ceiling is
+charged the full reservation instead of a charge accounting would reject.
+Transcription with token or character prices still fails closed.
+
 Realtime, batch completion, and selector billing now use typed adapters to the
 same authority. Real-database mixed-feature checks cover exact charges, all five
 budget scopes, replay, uncertain results, and unused funding. The temporary

@@ -358,6 +358,13 @@ This endpoint accepts multipart form data.
 As in the OpenAI API, `json` and `verbose_json` return a JSON object, and `text`, `srt` and `vtt`
 return the transcript itself as `text/plain` (`text/vtt` for `vtt`).
 
+Models priced per second are charged for the duration the provider reports.
+With accounting v2, DeltaLLM first reserves a ceiling from the file: the exact
+length of a PCM WAV, or the file size at 4 kbit/s for other formats (at least
+10 seconds). The unused part is returned when the request finishes. For example,
+a 25 MB MP3 on a model priced at $0.04 per hour reserves about $0.56 per
+provider attempt. Uploading WAV keeps the reservation close to the real cost.
+
 Public transcription requests remain OpenAI-compatible when the selected deployment is ElevenLabs.
 DeltaLLM sends uploaded audio to the native `POST /v1/speech-to-text` endpoint.
 It maps public `language` to `language_code` and maps `temperature`.

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import ROUND_FLOOR, Decimal
 from time import perf_counter
 from typing import Any
 
@@ -11,9 +14,10 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from src.audio.elevenlabs_stt import execute_elevenlabs_stt
+from src.audio.transcription_duration import transcription_seconds_ceiling
 from src.audio.transcription_formats import render_srt, render_vtt
 from src.billing.charges.audio_usage import normalize_transcription_usage
-from src.billing.pricing.cost import compute_billing_result
+from src.billing.pricing.cost import BillingResult, compute_billing_result
 from src.billing.pricing.tier_pricing import attach_pricing_metadata
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.router.runtime_generation import pin_routing_runtime_generation
@@ -54,6 +58,7 @@ from src.telemetry.spend_operation import (
     billing_write_context,
     durable_provider_call,
     operation_pricing,
+    reserved_charge_ceiling,
 )
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
@@ -79,6 +84,10 @@ from src.services.admission.preflight_capacity import (
 from src.routers.response_cost import record_response_cost, response_cost_headers
 
 DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS = 600.0
+# BillingResult costs carry ten decimal places.
+_COST_QUANTUM = Decimal("0.0000000001")
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["audio"])
 
@@ -304,6 +313,8 @@ async def audio_transcriptions(
     def track_attempt(deployment):  # noqa: ANN001
         capture_attempted_deployment(request, deployment)
 
+    bounds = ProviderRequestBounds(audio_seconds=transcription_seconds_ceiling(file_content))
+
     try:
         data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
@@ -312,7 +323,7 @@ async def audio_transcriptions(
                 request,
                 model=model,
                 call_type="audio_transcription",
-                bounds=ProviderRequestBounds(),
+                bounds=bounds,
                 deployment=dep,
                 execute=lambda: _execute_stt(
                     request,
@@ -362,10 +373,15 @@ async def audio_transcriptions(
             model=model,
             deployment=served_deployment,
         )
-        billing = compute_billing_result(
-            mode="audio_transcription",
-            usage=usage,
-            model_info=pricing.customer_model_info,
+        billing = _charge_within_reservation(
+            request,
+            compute_billing_result(
+                mode="audio_transcription",
+                usage=usage,
+                model_info=pricing.customer_model_info,
+            ),
+            model=model,
+            bounds=bounds,
         )
         provider_billing = compute_billing_result(
             mode="audio_transcription",
@@ -624,6 +640,39 @@ async def audio_transcriptions(
             ),
         )
         raise
+
+
+def _charge_within_reservation(
+    request: Request,
+    billing: BillingResult,
+    *,
+    model: str,
+    bounds: ProviderRequestBounds,
+) -> BillingResult:
+    """Cap a charge at the accounting v2 reservation made before the call.
+
+    The reservation comes from a duration ceiling derived from the file, not a
+    limit the provider enforces. Accounting rejects a charge above it, so an
+    audio file that beats the ceiling is charged the full reservation instead.
+    """
+    ceiling = reserved_charge_ceiling(request)
+    if ceiling is None or Decimal(str(billing.cost)) <= ceiling:
+        return billing
+    capped = ceiling.quantize(_COST_QUANTUM, rounding=ROUND_FLOOR)
+    logger.warning(
+        "audio transcription charge capped at its reservation",
+        extra={
+            "model": model,
+            "charge": billing.cost,
+            "reserved": str(ceiling),
+            "audio_seconds_ceiling": bounds.audio_seconds,
+        },
+    )
+    return replace(
+        billing,
+        cost=float(capped),
+        usage_snapshot={**billing.usage_snapshot, "uncapped_cost": billing.cost},
+    )
 
 
 def _resolve_upstream_response_format(

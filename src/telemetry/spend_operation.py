@@ -75,6 +75,19 @@ def operation_handle(request: Request) -> ProviderOperationHandle | None:
     return value
 
 
+def reserved_charge_ceiling(request: Request) -> Decimal | None:
+    """Return the accounting v2 allowance this request reserved, if any.
+
+    Accounting rejects a completed charge above its reservation, so a caller
+    whose ceiling is an estimate rather than a provider-enforced limit checks
+    its charge against this value before finalizing.
+    """
+    handle = operation_handle(request)
+    if isinstance(handle, AccountingOperationHandle):
+        return handle.reservation.allowance
+    return None
+
+
 def billing_write_context(request: Request) -> dict[str, object]:
     context: dict[str, object] = {"event_id": get_or_create_billing_event_id(request)}
     handle = operation_handle(request)
