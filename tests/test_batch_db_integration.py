@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import io
 import json
 import logging
 import os
@@ -143,6 +144,9 @@ class _FakeS3Client:
     def download_fileobj(self, bucket: str, key: str, fileobj) -> None:  # noqa: ANN001
         fileobj.write(self.objects[(bucket, key)])
         fileobj.seek(0)
+
+    def get_object(self, *, Bucket: str, Key: str):  # noqa: ANN201, N803
+        return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
 
     def delete_object(self, *, Bucket: str, Key: str) -> None:
         self.objects.pop((Bucket, Key), None)

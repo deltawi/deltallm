@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import StreamingResponse
 
 from src.batch.access import can_access_owned_resource
 from src.middleware.auth import require_api_key
@@ -133,23 +133,28 @@ async def get_file_content(request: Request, file_id: str):
     auth = request.state.user_api_key
     try:
         service = _batch_service_or_404(request)
-        content = await service.get_file_content(file_id=file_id, auth=auth)
-        await emit_audit_event(
-            request=request,
-            request_start=request_start,
-            action=AuditAction.FILE_CONTENT_READ_REQUEST,
-            status="success",
-            actor_type="api_key",
-            actor_id=auth.user_id or auth.api_key,
-            organization_id=getattr(auth, "organization_id", None),
-            api_key=auth.api_key,
-            resource_type="file",
-            resource_id=file_id,
-            request_payload={"file_id": file_id},
-            response_payload={"size_bytes": len(content)},
-            metadata={"route": request.url.path},
-        )
-        return Response(content=content, media_type="application/jsonl")
+        content = await service.open_file_content(file_id=file_id, auth=auth)
+        try:
+            await emit_audit_event(
+                request=request,
+                request_start=request_start,
+                action=AuditAction.FILE_CONTENT_READ_REQUEST,
+                status="success",
+                actor_type="api_key",
+                actor_id=auth.user_id or auth.api_key,
+                organization_id=getattr(auth, "organization_id", None),
+                api_key=auth.api_key,
+                resource_type="file",
+                resource_id=file_id,
+                request_payload={"file_id": file_id},
+                response_payload={"size_bytes": content.size_bytes},
+                metadata={"route": request.url.path},
+            )
+        except BaseException:
+            await content.aclose()
+            raise
+        # Stream the file so a large output never sits whole in API pod memory.
+        return StreamingResponse(content.chunks, media_type="application/jsonl")
     except Exception as exc:
         await emit_audit_event(
             request=request,

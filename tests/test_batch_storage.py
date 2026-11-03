@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import io
 import os
 from pathlib import Path
 
@@ -68,6 +69,9 @@ class _FakeS3Client:
         fileobj.write(self.objects[(bucket, key)])
         fileobj.seek(0)
 
+    def get_object(self, *, Bucket: str, Key: str):  # noqa: ANN201, N803
+        return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
+
     def delete_object(self, *, Bucket: str, Key: str) -> None:
         self.objects.pop((Bucket, Key), None)
         self.modified_at.pop((Bucket, Key), None)
@@ -129,6 +133,86 @@ async def test_s3_batch_storage_skips_uploading_empty_write() -> None:
     assert size == 0
     assert checksum
     assert client.objects == {}
+
+
+@pytest.mark.asyncio
+async def test_s3_batch_storage_stream_bytes_reads_body_in_chunks_without_spooling() -> None:
+    class _Body:
+        def __init__(self, payload: bytes) -> None:
+            self.payload = payload
+            self.reads: list[int] = []
+            self.closed = False
+
+        def read(self, amt: int) -> bytes:
+            self.reads.append(amt)
+            chunk, self.payload = self.payload[:amt], self.payload[amt:]
+            return chunk
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _Client(_FakeS3Client):
+        def __init__(self) -> None:
+            super().__init__()
+            self.body: _Body | None = None
+
+        def download_fileobj(self, bucket: str, key: str, fileobj) -> None:  # noqa: ANN001
+            raise AssertionError("downloads must not spool the whole object")
+
+        def get_object(self, *, Bucket: str, Key: str):  # noqa: ANN201, N803
+            self.body = _Body(self.objects[(Bucket, Key)])
+            return {"Body": self.body}
+
+    client = _Client()
+    storage = S3BatchArtifactStorage(bucket="batch-bucket", prefix="prefix", client=client)
+    storage_key, _size, _checksum = await storage.write_bytes(
+        purpose="batch_output", filename="out.jsonl", content=b"0123456789"
+    )
+
+    chunks = [chunk async for chunk in storage.stream_bytes(storage_key, chunk_size=4)]
+
+    assert chunks == [b"0123", b"4567", b"89"]
+    assert client.body is not None
+    assert client.body.reads == [4, 4, 4, 4]
+    assert client.body.closed is True
+
+
+@pytest.mark.asyncio
+async def test_s3_batch_storage_stream_bytes_closes_body_when_consumer_stops_early() -> None:
+    closed: list[bool] = []
+
+    class _Body(io.BytesIO):
+        def close(self) -> None:
+            closed.append(True)
+            super().close()
+
+    class _Client(_FakeS3Client):
+        def get_object(self, *, Bucket: str, Key: str):  # noqa: ANN201, N803
+            return {"Body": _Body(self.objects[(Bucket, Key)])}
+
+    client = _Client()
+    storage = S3BatchArtifactStorage(bucket="batch-bucket", prefix="prefix", client=client)
+    storage_key, _size, _checksum = await storage.write_bytes(
+        purpose="batch_output", filename="out.jsonl", content=b"0123456789"
+    )
+
+    stream = storage.stream_bytes(storage_key, chunk_size=4)
+    assert await anext(stream) == b"0123"
+    await stream.aclose()
+
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_local_batch_storage_stream_bytes_round_trip(tmp_path: Path) -> None:
+    storage = LocalBatchArtifactStorage(str(tmp_path / "batch-artifacts"))
+    storage_key, _size, _checksum = await storage.write_bytes(
+        purpose="batch_output", filename="out.jsonl", content=b"0123456789"
+    )
+
+    chunks = [chunk async for chunk in storage.stream_bytes(storage_key, chunk_size=4)]
+
+    assert chunks == [b"0123", b"4567", b"89"]
 
 
 @pytest.mark.asyncio

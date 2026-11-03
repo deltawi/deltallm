@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from src.batch.service import BatchFileContentStream
 from src.services.prompts.prompt_registry import PromptProvenance, PromptRenderOutput
 
 
@@ -70,6 +71,15 @@ class _FakeBatchService:
     async def get_file_content(self, file_id: str, auth):  # noqa: ANN201, ANN001
         del auth
         return f'{{"id":"{file_id}"}}'.encode("utf-8")
+
+    async def open_file_content(self, file_id: str, auth):  # noqa: ANN201, ANN001
+        content = await self.get_file_content(file_id=file_id, auth=auth)
+
+        async def _chunks():  # noqa: ANN202
+            yield content
+
+        chunks = _chunks()
+        return BatchFileContentStream(size_bytes=len(content), chunks=chunks, source=chunks)
 
     async def create_embeddings_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
@@ -366,6 +376,8 @@ async def test_files_and_batches_emit_audit_success(client, test_app):
 
     response = await client.get("/v1/files/file-1/content", headers=headers)
     assert response.status_code == 200
+    assert response.content == b'{"id":"file-1"}'
+    assert response.headers["content-type"].startswith("application/jsonl")
 
     response = await client.post(
         "/v1/batches",

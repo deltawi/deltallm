@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,7 @@ from src.services.tiers.tier_policy_service import TierPolicyService
 
 if TYPE_CHECKING:
     from src.batch.create import BatchCreateSessionService
+    from src.batch.models import BatchFileRecord
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,25 @@ OPENAI_BATCH_STATUS_VALUES = frozenset(
 class BatchCreateResponseResult:
     response: dict[str, Any]
     audit_metadata: dict[str, Any]
+
+
+# Downloads are streamed in chunks of this size, so memory per download stays small.
+FILE_DOWNLOAD_CHUNK_BYTES = 262_144
+
+
+@dataclass(frozen=True)
+class BatchFileContentStream:
+    size_bytes: int
+    chunks: AsyncIterator[bytes]
+    source: AsyncIterator[bytes]
+
+    async def aclose(self) -> None:
+        """Close the storage stream, also when the body was never iterated."""
+        for iterator in (self.chunks, self.source):
+            closer = getattr(iterator, "aclose", None)
+            if closer is not None:
+                with contextlib.suppress(Exception):
+                    await closer()
 
 
 class BatchService:
@@ -265,7 +286,7 @@ class BatchService:
                 await self._cleanup_unrecorded_artifact(storage_key=storage_key, backend=backend)
             raise
 
-    async def get_file_content(self, *, file_id: str, auth: UserAPIKeyAuth) -> bytes:
+    async def _load_readable_file(self, *, file_id: str, auth: UserAPIKeyAuth) -> BatchFileRecord:
         file_record = await self.repository.get_file(file_id)
         if file_record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
@@ -276,6 +297,65 @@ class BatchService:
             auth=auth,
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File access denied")
+        return file_record
+
+    def _log_file_read_failure(
+        self, *, file_id: str, file_record: BatchFileRecord, exc: BaseException
+    ) -> None:
+        backend = str(file_record.storage_backend or "unknown")
+        increment_batch_artifact_failure(operation="read", backend=backend)
+        logger.warning(
+            "batch artifact read failed file_id=%s backend=%s storage_key=%s error=%s",
+            file_id,
+            backend,
+            file_record.storage_key,
+            exc,
+        )
+
+    async def open_file_content(
+        self, *, file_id: str, auth: UserAPIKeyAuth
+    ) -> BatchFileContentStream:
+        """Open a file for download without loading it into memory.
+
+        The first chunk is read here, so a missing object or an unavailable
+        backend fails before any response bytes are sent.
+        """
+        file_record = await self._load_readable_file(file_id=file_id, auth=auth)
+        try:
+            chunks = self._storage_for_backend(file_record.storage_backend).stream_bytes(
+                file_record.storage_key, chunk_size=FILE_DOWNLOAD_CHUNK_BYTES
+            )
+        except Exception as exc:
+            self._log_file_read_failure(file_id=file_id, file_record=file_record, exc=exc)
+            raise
+        try:
+            first_chunk = await anext(chunks, b"")
+        except Exception as exc:
+            self._log_file_read_failure(file_id=file_id, file_record=file_record, exc=exc)
+            with contextlib.suppress(Exception):
+                await chunks.aclose()
+            raise
+
+        async def _body() -> AsyncIterator[bytes]:
+            try:
+                if first_chunk:
+                    yield first_chunk
+                async for chunk in chunks:
+                    yield chunk
+            except Exception as exc:
+                # Headers are already sent; the client sees a cut-off download.
+                self._log_file_read_failure(file_id=file_id, file_record=file_record, exc=exc)
+                raise
+            finally:
+                with contextlib.suppress(Exception):
+                    await chunks.aclose()
+
+        return BatchFileContentStream(
+            size_bytes=int(file_record.bytes or 0), chunks=_body(), source=chunks
+        )
+
+    async def get_file_content(self, *, file_id: str, auth: UserAPIKeyAuth) -> bytes:
+        file_record = await self._load_readable_file(file_id=file_id, auth=auth)
         backend = str(file_record.storage_backend or "unknown")
         try:
             return await self._storage_for_backend(file_record.storage_backend).read_bytes(
