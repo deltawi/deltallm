@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import logging
 import random
 from time import perf_counter
-from typing import Any, Awaitable, Iterator
+from typing import Any, Awaitable, Iterator, Sequence
 
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.retry import is_gateway_busy
@@ -23,6 +23,7 @@ from src.batch.worker_types import (
     _PreparedChatItem,
     _PreparedEmbeddingItem,
 )
+from src.batch.write_groups import WriteGroups
 from src.billing.pricing.tier_pricing import (
     PricingResolution,
     TokenBillingResolution,
@@ -39,6 +40,9 @@ _POLICY_RELEASE_RETRY_MAX_SECONDS = 30.0
 # After the provider has answered, a busy database must not throw the answer
 # away: wait and try the lease renewal or save again before giving up.
 _GATEWAY_BUSY_SAVE_DELAYS_SECONDS = (0.5, 1.0, 2.0)
+# Rows one grouped result save may write, across all its members.
+RESULT_SAVE_GROUP_MAX_ROWS = 50
+_SAVED_RESULTS = frozenset({"completed", "already_completed"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +65,11 @@ class _BatchItemCosts:
         yield self.billed_cost
         yield self.provider_cost
         yield self.pricing
+
+
+def _shares_an_item(group: Sequence[list[dict[str, Any]]], rows: list[dict[str, Any]]) -> bool:
+    ids = {str(row["item_id"]) for row in rows}
+    return any(str(row["item_id"]) in ids for member in group for row in member)
 
 
 def _policy_release_retry_delay_seconds(attempt_count: int) -> float:
@@ -275,6 +284,64 @@ class WorkerPersistenceMixin:
         for prepared in prepared_items:
             await self._release_prepared_policy_lease(prepared)
 
+    async def _still_owns_item_for_save(
+        self,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
+        *,
+        lease_lost: asyncio.Event,
+    ) -> bool:
+        """False when the item is known lost; with grouping the save fences the rest."""
+        if lease_lost.is_set():
+            return False
+        if getattr(self.config, "write_grouping_enabled", False):
+            # The result save checks the same owner, claim epoch and status in
+            # its own transaction, so a separate check first is one more query.
+            return True
+        return await self._renew_item_lease_once(
+            prepared.item.item_id, claim_epoch=prepared.item.claim_epoch
+        )
+
+    def _result_save_groups(self) -> WriteGroups[list[dict[str, Any]], str] | None:
+        limit = int(getattr(self.config, "result_save_concurrency", 0) or 0)
+        if limit <= 0 or not getattr(self.config, "write_grouping_enabled", False):
+            return None
+        groups = getattr(self, "_result_saves", None)
+        if groups is None:
+            groups = WriteGroups(
+                kind="result_save",
+                limit=limit,
+                write=self._save_result_group,
+                accepted=lambda result: result in _SAVED_RESULTS,
+                max_rows=RESULT_SAVE_GROUP_MAX_ROWS,
+                rows=len,
+                conflicts=_shares_an_item,
+            )
+            self._result_saves = groups
+        return groups
+
+    async def _save_result_rows(self, items: list[dict[str, Any]]) -> str:
+        groups = self._result_save_groups()
+        if groups is None:
+            return await self.repository.complete_items_with_outbox_bulk(
+                items=items,
+                worker_id=self.config.worker_id,
+            )
+        return await groups.run(items)
+
+    async def _save_result_group(self, members: Sequence[list[dict[str, Any]]]) -> str:
+        if len(members) == 1:
+            return await self.repository.complete_items_with_outbox_bulk(
+                items=members[0],
+                worker_id=self.config.worker_id,
+            )
+        # A group that is not accepted is split and saved again alone, and only
+        # those answers count as duplicate or lost completions.
+        return await self.repository.complete_items_with_outbox_bulk(
+            items=[row for member in members for row in member],
+            worker_id=self.config.worker_id,
+            count_rejections=False,
+        )
+
     async def _renew_item_lease_once(self, item_id: str, *, claim_epoch: int | None = None) -> bool:
         busy_delays = iter(_GATEWAY_BUSY_SAVE_DELAYS_SECONDS)
         while True:
@@ -398,10 +465,7 @@ class WorkerPersistenceMixin:
         while failures < 2:
             attempt += 1
             try:
-                result = await self.repository.complete_items_with_outbox_bulk(
-                    items=items,
-                    worker_id=self.config.worker_id,
-                )
+                result = await self._save_result_rows(items)
             except Exception as exc:
                 logger.warning(
                     "batch completion persistence attempt failed context=%s item_ids=%s attempt=%s error=%s",

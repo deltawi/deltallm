@@ -112,6 +112,10 @@ class BatchWorkerConfig:
     item_lease_seconds: int = 360
     finalization_retry_delay_seconds: int = 60
     worker_concurrency: int = 4
+    # Result saves that would wait for one of these slots are saved together.
+    # 0 (or grouping off) leaves result saves unlimited, one statement each.
+    result_save_concurrency: int = 0
+    write_grouping_enabled: bool = False
     item_buffer_multiplier: int = 2
     finalization_page_size: int = 500
     item_claim_limit: int = 20
