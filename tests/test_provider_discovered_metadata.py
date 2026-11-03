@@ -155,7 +155,7 @@ async def test_discovery_returns_provider_limits_for_models_missing_from_catalog
             ]
         },
     )
-    assert models["gemini-2.5-pro"]["known_metadata"] == {
+    assert models["gemini-test-model"]["known_metadata"] == {
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
     }
