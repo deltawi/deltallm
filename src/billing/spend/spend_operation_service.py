@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from src.billing.spend.spend_operations import OperationHandle, SpendPersistenceUnavailable
-from src.db.billing.spend_operations import SpendOperationRepository
+from src.db.billing.spend_operations import ReceiptRejected, SpendOperationRepository
 from src.metrics.spend_ingestion import (
     increment_spend_ingestion_failure,
     set_spend_ingestion_backlog,
@@ -19,6 +19,13 @@ if TYPE_CHECKING:
     from prisma import Prisma
 
 logger = logging.getLogger(__name__)
+
+# The provider call has already run when its receipt is written. One slow
+# statement (a busy database, a lock wait behind a starting replica) must not
+# turn that answer into a 503. The fenced receipt accepts an exact repeat,
+# including after a timed-out attempt committed late, so it is written again.
+RECEIPT_ATTEMPT_SECONDS = 0.25
+RECEIPT_ATTEMPTS = 3
 
 
 class SpendOperationService:
@@ -56,18 +63,25 @@ class SpendOperationService:
         # A usable final response cannot prove earlier failed attempts were free.
         metadata["unresolved_prior_attempts"] = handle.unresolved_prior_attempts()
         frozen["metadata"] = metadata
-        try:
-            await self.settlement.accept(
-                event_id=str(handle.event_id),
-                owner_token=str(handle.owner_token),
-                payload=frozen,
-                expires_at=asyncio.get_running_loop().time() + 0.25,
-            )
+        for attempt in range(1, RECEIPT_ATTEMPTS + 1):
+            try:
+                await self.settlement.accept(
+                    event_id=str(handle.event_id),
+                    owner_token=str(handle.owner_token),
+                    payload=frozen,
+                    expires_at=asyncio.get_running_loop().time() + RECEIPT_ATTEMPT_SECONDS,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if attempt < RECEIPT_ATTEMPTS and not isinstance(exc, ReceiptRejected):
+                    increment_spend_ingestion_failure("operation_receipt_retry")
+                    continue
+                increment_spend_ingestion_failure("operation_receipt")
+                logger.warning("spend operation failed stage=operation_receipt")
+                raise SpendPersistenceUnavailable() from None
             record_operation_transition("accepted")
-        except Exception:
-            increment_spend_ingestion_failure("operation_receipt")
-            logger.warning("spend operation failed stage=operation_receipt")
-            raise SpendPersistenceUnavailable() from None
+            return
 
     async def unknown(self, handle: OperationHandle) -> None:
         try:

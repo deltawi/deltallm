@@ -139,6 +139,7 @@ LABEL_VALUES = {
     "stage": {
         "operation_admission",
         "operation_receipt",
+        "operation_receipt_retry",
         "operation_unknown",
         "operation_recovery",
     },

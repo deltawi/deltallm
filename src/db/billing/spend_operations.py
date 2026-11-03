@@ -28,6 +28,10 @@ _RELEASE_RETRY_DELAYS_SECONDS = (0.0, 0.05, 0.25)
 _RELEASES: set[asyncio.Task] = set()
 
 
+class ReceiptRejected(BillingOperationUnavailable):
+    """The fenced receipt matched no reservation; repeating it cannot change that."""
+
+
 class SpendOperationRepository:
     def __init__(self, db: Prisma) -> None:
         self.db = db
@@ -176,7 +180,7 @@ class SpendOperationRepository:
             expires_at=expires_at,
         )
         if not rows:
-            raise BillingOperationUnavailable()
+            raise ReceiptRejected()
 
     async def mark_unknown(self, *, event_id: str, owner_token: str, expires_at: float) -> bool:
         rows = await self._settlement_statement(
