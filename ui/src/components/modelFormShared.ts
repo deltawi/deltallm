@@ -27,6 +27,41 @@ export type ModelMode =
 
 export type ChatBatchingMode = '' | 'disabled' | 'concurrent' | 'sync_microbatch';
 
+export const CHAT_CAPABILITY_OPTIONS = [
+  { key: 'streaming', label: 'Streaming', description: 'stream: true responses' },
+  { key: 'tools', label: 'Tool calling', description: 'tools and tool_choice' },
+  { key: 'json_object', label: 'JSON mode', description: 'response_format json_object' },
+  { key: 'json_schema', label: 'Structured outputs', description: 'response_format json_schema' },
+  { key: 'image', label: 'Image input', description: 'image_url content parts' },
+  { key: 'audio', label: 'Audio input', description: 'input_audio content parts' },
+  { key: 'file', label: 'File input', description: 'file content parts such as PDFs' },
+  { key: 'multiple_choices', label: 'Multiple choices', description: 'n greater than 1' },
+] as const;
+
+export type ChatCapabilityKey = (typeof CHAT_CAPABILITY_OPTIONS)[number]['key'];
+export type ChatCapabilityFlags = Record<ChatCapabilityKey, boolean>;
+
+export const EMPTY_CHAT_CAPABILITIES: ChatCapabilityFlags = {
+  streaming: false,
+  tools: false,
+  json_object: false,
+  json_schema: false,
+  image: false,
+  audio: false,
+  file: false,
+  multiple_choices: false,
+};
+
+function chatCapabilitiesFromModelInfo(value: unknown): ChatCapabilityFlags | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const declared = value as Record<string, unknown>;
+  const flags = { ...EMPTY_CHAT_CAPABILITIES };
+  for (const option of CHAT_CAPABILITY_OPTIONS) {
+    flags[option.key] = declared[option.key] === true;
+  }
+  return flags;
+}
+
 export interface ModelModeOption {
   value: ModelMode;
   label: string;
@@ -108,6 +143,10 @@ export interface ModelFormValues {
   priority: string;
   tags: string;
   access_groups: string;
+  chat_capabilities_declared: boolean;
+  /** Set when the user turns off a saved declaration, so the save removes it. */
+  chat_capabilities_cleared: boolean;
+  chat_capabilities: ChatCapabilityFlags;
   input_cost_per_token: string;
   output_cost_per_token: string;
   input_cost_per_token_cache_hit: string;
@@ -172,6 +211,9 @@ export const EMPTY_FORM: ModelFormValues = {
   priority: '',
   tags: '',
   access_groups: '',
+  chat_capabilities_declared: false,
+  chat_capabilities_cleared: false,
+  chat_capabilities: EMPTY_CHAT_CAPABILITIES,
   input_cost_per_token: '',
   output_cost_per_token: '',
   input_cost_per_token_cache_hit: '',
@@ -417,6 +459,12 @@ export function buildModelPayload(
   model_info.tags = form.tags ? commaSeparatedListOrUndef(form.tags) : undefined;
   model_info.access_groups = form.access_groups ? commaSeparatedListOrUndef(form.access_groups) : undefined;
   model_info.weight = numOrUndef(form.weight);
+  if (form.mode === 'chat' && form.chat_capabilities_declared) {
+    model_info.chat_capabilities = { ...form.chat_capabilities };
+  } else if (form.chat_capabilities_cleared) {
+    delete model_info.chat_capabilities;
+  }
+  // Otherwise a saved declaration is kept as is; an undeclared model stays "unknown".
 
   if (form.mode === 'chat') {
     model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
@@ -554,6 +602,9 @@ export function formFromModel(
     priority: strOrEmpty(mi.priority),
     tags: Array.isArray(mi.tags) ? mi.tags.join(', ') : '',
     access_groups: Array.isArray(mi.access_groups) ? mi.access_groups.join(', ') : '',
+    chat_capabilities_declared: chatCapabilitiesFromModelInfo(mi.chat_capabilities) !== null,
+    chat_capabilities_cleared: false,
+    chat_capabilities: chatCapabilitiesFromModelInfo(mi.chat_capabilities) || EMPTY_CHAT_CAPABILITIES,
     input_cost_per_token: strOrEmpty(mi.input_cost_per_token),
     output_cost_per_token: strOrEmpty(mi.output_cost_per_token),
     input_cost_per_token_cache_hit: strOrEmpty(mi.input_cost_per_token_cache_hit),

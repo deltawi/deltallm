@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { AuthSsoConfig, ModelDeploymentDetail, Principal } from '../src/lib/api';
 import { normalizeProvider, providerDisplayName } from '../src/lib/providers';
 import {
+  EMPTY_CHAT_CAPABILITIES,
   EMPTY_FORM,
   buildModelPayload,
   formFromModel,
@@ -521,4 +522,51 @@ test('parameter values keep their JSON types', () => {
   assert.deepEqual(parseParamValue('{"a":1}'), { a: 1 });
   assert.equal(parseParamValue('high'), 'high');
   assert.equal(parseParamValue('{oops'), '{oops');
+});
+
+test('declared chat capabilities are saved as the full flag set', () => {
+  const payload = buildModelPayload(
+    chatForm({
+      chat_capabilities_declared: true,
+      chat_capabilities: { ...EMPTY_CHAT_CAPABILITIES, streaming: true, tools: true },
+    }),
+    EMPTY_REQUEST_SHAPING,
+    { chat_capabilities: { image: true } },
+  );
+  assert.deepEqual(payload.model_info.chat_capabilities, {
+    ...EMPTY_CHAT_CAPABILITIES,
+    streaming: true,
+    tools: true,
+  });
+});
+
+test('turning the declaration off removes saved capabilities', () => {
+  const payload = buildModelPayload(
+    chatForm({ chat_capabilities_declared: false, chat_capabilities_cleared: true }),
+    EMPTY_REQUEST_SHAPING,
+    { chat_capabilities: { tools: true } },
+  );
+  assert.equal('chat_capabilities' in payload.model_info, false);
+});
+
+test('an undeclared new model saves no capabilities', () => {
+  const payload = buildModelPayload(chatForm(), EMPTY_REQUEST_SHAPING, {});
+  assert.equal('chat_capabilities' in payload.model_info, false);
+});
+
+test('edit form loads saved capabilities as declared and round-trips them', () => {
+  const model: ModelDeploymentDetail = {
+    deployment_id: 'deployment-1',
+    model_name: 'support',
+    provider: 'openai',
+    deltallm_params: { provider: 'openai', model: 'gpt-4o-mini' },
+    model_info: { mode: 'chat', chat_capabilities: { tools: true, streaming: true, bogus: true } },
+  };
+  const { form } = formFromModel(model);
+  assert.equal(form.chat_capabilities_declared, true);
+  assert.equal(form.chat_capabilities_cleared, false);
+  assert.deepEqual(form.chat_capabilities, { ...EMPTY_CHAT_CAPABILITIES, tools: true, streaming: true });
+
+  const unset = formFromModel({ ...model, model_info: { mode: 'chat' } }).form;
+  assert.equal(unset.chat_capabilities_declared, false);
 });

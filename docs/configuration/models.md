@@ -125,8 +125,9 @@ supports input/output token prices, optional `input_cost_per_token_cache_hit`, a
 Batch token rates do not affect this real-time call. Configure zero prices explicitly only when
 the provider call is truly free. Customers pay the frozen selector provider cost without markup.
 
-File configuration and the admin model API accept this metadata. Existing model-form saves preserve
-these fields; configure the flags through the API or file until guided editing is delivered.
+File configuration, the admin model API and the **Capabilities** section of the admin model form
+accept this metadata. Model-form saves keep a declaration made elsewhere unless an admin turns it
+off in the form.
 Changes affecting an active selector are revalidated, and updated
 capabilities participate in response-cache identity. See [model-router activation](router.md#model-router-policy-contract)
 for required outbox, context policy, capacity, data handling and soft-budget settings.

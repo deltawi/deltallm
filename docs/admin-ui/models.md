@@ -237,6 +237,16 @@ an explicit `mode: concurrent` override with that limit. **Disabled** ignores
 numeric batching fields. If **Sync microbatch** is selected, **Upstream Max
 Size** is required and must be at least `2`.
 
+## Capabilities
+
+Chat deployments have a **Capabilities** section: streaming, tool calling, JSON mode, structured outputs, image, audio and file input, and multiple choices.
+
+- **Declare capabilities** is off by default, which means unknown. Nothing is saved and routing is unchanged.
+- When it is on, the checked features are saved to `model_info.chat_capabilities`. Model-router (selector) Route Groups require this declaration on every member, and they only send a request to a member whose checked features cover what the request needs. An unchecked box therefore excludes the model from those requests.
+- Turning the switch off on a saved model removes the declaration.
+
+Check only what this deployment can really handle through DeltaLLM. See [model-router capability metadata](../configuration/models.md#model-router-capability-and-price-metadata).
+
 ## Access Groups
 
 The model form has an **Access Groups** field for authorization groups.

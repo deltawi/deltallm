@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from 'react';
 import RealtimeModelFields from './models/RealtimeModelFields';
+import ChatCapabilitiesFields from './models/ChatCapabilitiesFields';
 import Card from './Card';
 import { ChevronDown, ExternalLink } from 'lucide-react';
 import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
@@ -1333,6 +1334,27 @@ export default function ModelForm({
             </div>
             {batchCapacityFields}
           </div>
+        </CollapsibleCard>
+      )}
+
+      {mode === 'chat' && (
+        <CollapsibleCard
+          title="Capabilities"
+          badge={form.chat_capabilities_declared ? <CountBadge count={Object.values(form.chat_capabilities).filter(Boolean).length} /> : null}
+        >
+          <ChatCapabilitiesFields
+            declared={form.chat_capabilities_declared}
+            capabilities={form.chat_capabilities}
+            onDeclaredChange={(declared) => setForm((current) => ({
+              ...current,
+              chat_capabilities_declared: declared,
+              chat_capabilities_cleared: !declared,
+            }))}
+            onCapabilityChange={(key, supported) => setForm((current) => ({
+              ...current,
+              chat_capabilities: { ...current.chat_capabilities, [key]: supported },
+            }))}
+          />
         </CollapsibleCard>
       )}
 
