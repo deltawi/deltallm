@@ -60,6 +60,12 @@ once the last step has run, so one red step does not hide the others:
 Batch volume stays under about 1,100 items per pod, one pod's default receipt
 store. Volume is tested by the nightly soak.
 
+The `accounting-v2-acceptance` artifact keeps a live log of every API and
+accounting pod during the rollout and pod-loss steps under `follow/`, because
+a rollout deletes pods before their logs can be read. A step that leaves
+money provisional also saves the operations, grants and terminal events
+that hold it, and each traffic summary lists its rejection codes.
+
 The job is advisory for now. It runs and reports on each matching pull
 request, but the required `test` check does not depend on it yet.
 
@@ -73,7 +79,7 @@ and the run fails if any phase fails.
 |---|---|---|
 | Batch | 12 jobs at once, 20,000 items, chat and embedding jobs alternating | Every job completes, no item fails, at least 50 items/s from first upload to last job done, no full-store refusal |
 | After batch | Idle | Within 5 minutes every tracked gauge returns to its level before load, accounting drains, facts equal completed items, nothing charged twice |
-| Probe | One new 500-item chat job | It completes with no failed item within 120 s, with no pod restarted. This catches state that only a restart would clear |
+| Probe | One new 500-item chat job | It completes with no failed item within 120 s, with no pod restarted. This catches state that only a restart would clear. A probe that times out is cancelled, so its retries do not load the API phase |
 | API | 300 chat RPS on 2 API pods for 30 minutes, in 10-minute windows, from an in-cluster generator, plus 10 embedding RPS from the runner | In each window: no 5xx, no transport error, success at least 99.9 %, chat p95 at most 50 ms, and the generator kept its rate |
 | After API | Idle | The same checks as after batch |
 

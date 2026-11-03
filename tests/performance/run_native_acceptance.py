@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 from contextlib import ExitStack
 import json
 import os
@@ -31,7 +32,7 @@ import httpx
 
 from tests.performance.capacity_fixture import capacity_release, install_edge
 from scripts.measure_gateway_load import RequestResult, run_constant_arrival, summarize
-from tests.performance.capacity_load import PAYLOAD, arrival
+from tests.performance.capacity_load import PAYLOAD, arrival, rejection_code
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.gateway_concurrency_fixture import MODEL
 from tests.performance.lifecycle_cluster import LOAD_KEY, MASTER_KEY, SALT_KEY, LifecycleCluster
@@ -48,6 +49,7 @@ from tests.performance.native_batch_load import (
 from tests.performance.native_fixture import (
     collect_role_logs,
     BATCH_ITEM_LEASE_SECONDS,
+    follow_role_logs,
     native_values,
     role_pods,
     scrape_roles,
@@ -151,6 +153,13 @@ UNSETTLED_QUERIES = {
     "WHERE accounting_generation=1 AND accounting_state IN ('reserved','provisional') LIMIT 10",
     "grants": "SELECT to_jsonb(g) AS row FROM deltallm_accounting_grants g "
     "WHERE generation=1 AND state<>'closed' LIMIT 10",
+    # The terminal event names why an operation stayed provisional.
+    "events": "SELECT jsonb_build_object('operation_id',e.operation_id,'event_type',e.event_type,"
+    "'outcome',e.outcome,'occurred_at',e.occurred_at,'payload',e.payload_json,"
+    "'audit',e.audit_envelope_json) AS row FROM deltallm_accounting_events e "
+    "JOIN deltallm_billing_operations o USING (operation_id) "
+    "WHERE o.accounting_generation=1 AND o.accounting_state IN ('reserved','provisional') "
+    "ORDER BY e.sequence LIMIT 30",
 }
 
 
@@ -252,14 +261,20 @@ async def counted_arrival(url: str, *, rate: float, duration: float) -> dict:
                 )
             except httpx.HTTPError as error:
                 return RequestResult(status_code=None, error=type(error).__name__)
+            if response.status_code != 200:
+                rejection_codes[rejection_code(response)] += 1
             return RequestResult(
                 status_code=response.status_code, bytes_received=len(response.content)
             )
 
+        rejection_codes: Counter[str] = Counter()
         result = await run_constant_arrival(
             rate=rate, duration_seconds=duration, max_in_flight=64, request=request
         )
-    return summarize(result, target_rate=rate)
+    return {
+        **summarize(result, target_rate=rate),
+        "rejection_codes": dict(sorted(rejection_codes.items())),
+    }
 
 
 def body_bytes(scrape: dict) -> dict[str, float]:
@@ -442,9 +457,11 @@ async def exercise(cluster: LifecycleCluster, values: Path, report: dict) -> Non
             assert (await http.get(url + "/metrics")).status_code == 404
         report["fixed_replicas"] = await fixed_replicas(cluster, values, url)
         write_json(cluster.output / "native-acceptance.json", report)
-        report["rollout"] = await rollout(cluster, values, url)
+        with follow_role_logs(cluster, "rollout"):
+            report["rollout"] = await rollout(cluster, values, url)
         write_json(cluster.output / "native-acceptance.json", report)
-        report["pod_loss"] = await pod_loss(cluster, url)
+        with follow_role_logs(cluster, "pod-loss"):
+            report["pod_loss"] = await pod_loss(cluster, url)
         steps = {
             **{f"fixed-{row['replicas']}": row for row in report["fixed_replicas"]},
             "rollout": report["rollout"],

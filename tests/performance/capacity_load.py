@@ -90,6 +90,7 @@ async def arrival(
             rate=rate, duration_seconds=duration, max_in_flight=128, request=request
         )
     summary = summarize(result, target_rate=rate)
+    summary["rejection_codes"] = dict(sorted(rejection_codes.items()))
     write_results(result, summary, output)
     assert_valid_arrival(
         result,

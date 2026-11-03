@@ -9,10 +9,12 @@ and the batch worker role on the same database.
 from __future__ import annotations
 
 import asyncio
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import json
 import os
 from pathlib import Path
+import subprocess
+import threading
 
 import httpx
 from prometheus_client.parser import text_string_to_metric_families
@@ -22,7 +24,7 @@ from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploym
 from tests.performance.capacity_fixture import capacity_values
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.gateway_concurrency_fixture import MODEL, seed
-from tests.performance.lifecycle_cluster import LifecycleCluster
+from tests.performance.lifecycle_cluster import NAMESPACE, LifecycleCluster
 from tests.performance.lifecycle_fixtures import CHART, PROVIDER_KEEPALIVE_SECONDS
 
 EMBEDDING_MODEL = "embedding-fixture"
@@ -283,6 +285,93 @@ def collect_role_logs(cluster: LifecycleCluster) -> None:
         except Exception as error:
             payload = "Log collection failed: " + type(error).__name__ + "\n"
         (destination / f"{name}.log").write_text(payload)
+
+
+FOLLOWED_ROLES = ("api", "accounting_request", "accounting_worker")
+FOLLOW_POLL_SECONDS = 2.0
+
+
+@contextmanager
+def follow_role_logs(cluster: LifecycleCluster, step: str, roles=FOLLOWED_ROLES):
+    """Stream each pod's log to a file while a disruptive step runs.
+
+    A rollout deletes pods, so their logs are gone before the step ends. New
+    pods are picked up on the next poll; a follower that exits early (pod not
+    running yet) is started again. Batch pods are left out: when their store is
+    full they log thousands of refusals.
+    """
+    destination = cluster.output / "follow" / step
+    destination.mkdir(parents=True, exist_ok=True)
+    selector = ",".join(
+        [
+            GATEWAY_SELECTOR,
+            "app.kubernetes.io/component in ("
+            + ",".join(ROLE_SELECTORS[role].rsplit("=", 1)[1] for role in roles)
+            + ")",
+        ]
+    )
+    followers: dict[str, subprocess.Popen] = {}
+    stop = threading.Event()
+
+    def start(pod: str) -> None:
+        log = (destination / f"{pod}.log").open("a")
+        try:
+            followers[pod] = subprocess.Popen(
+                [
+                    "kubectl",
+                    "--kubeconfig",
+                    cluster.kubeconfig,
+                    "-n",
+                    NAMESPACE,
+                    "logs",
+                    "--follow",
+                    "--timestamps",
+                    "--all-containers",
+                    pod,
+                ],
+                stdout=log,
+                stderr=log,
+            )
+        finally:
+            log.close()
+
+    def poll() -> None:
+        while not stop.is_set():
+            try:
+                result = cluster.kubectl(
+                    "get",
+                    "pods",
+                    "-l",
+                    selector,
+                    "-o",
+                    "name",
+                    "--request-timeout=5s",
+                    check=False,
+                    timeout=15,
+                )
+                for line in result.stdout.split():
+                    pod = line.removeprefix("pod/")
+                    running = followers.get(pod)
+                    if (running is None or running.poll() is not None) and len(followers) < 32:
+                        start(pod)
+            except Exception:  # Diagnostics never fail the step.
+                pass
+            stop.wait(FOLLOW_POLL_SECONDS)
+
+    thread = threading.Thread(target=poll, name=f"follow-{step}", daemon=True)
+    thread.start()
+    try:
+        yield destination
+    finally:
+        stop.set()
+        thread.join(timeout=20)
+        for process in followers.values():
+            process.terminate()
+        for process in followers.values():
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
 
 def parse_metrics(text: str) -> dict[str, list[tuple[dict[str, str], float]]]:

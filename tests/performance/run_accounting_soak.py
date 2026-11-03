@@ -24,6 +24,8 @@ import os
 from pathlib import Path
 from time import monotonic
 
+import httpx
+
 from scripts.measure_gateway_load import RequestResult, run_constant_arrival, summarize
 from tests.performance.cluster_load_generator import run_cluster_generator
 from tests.performance.gateway_concurrency_dependencies import local_database
@@ -227,6 +229,17 @@ async def batch_phase(
     return report
 
 
+PROBE_CANCEL_SECONDS = 90
+
+
+async def cancel_job(http: httpx.AsyncClient, batch_id: str) -> bool:
+    try:
+        response = await http.post(f"/v1/batches/{batch_id}/cancel")
+    except httpx.TransportError:
+        return False
+    return response.status_code == 200
+
+
 async def probe_phase(
     cluster: LifecycleCluster, url: str, args: argparse.Namespace, restarts: dict[str, int]
 ) -> dict[str, object]:
@@ -238,6 +251,14 @@ async def probe_phase(
         started = monotonic()
         batch_id = await submit_job(http, CHAT_ENDPOINT, "soak-probe", args.probe_items)
         final, elapsed, timed_out = await wait_jobs(http, [batch_id], timeout=args.probe_seconds)
+        cancelled = False
+        if timed_out:
+            # A stuck probe keeps the batch pods retrying through the API phase,
+            # which would then measure CPU contention instead of the API.
+            cancelled = await cancel_job(http, batch_id)
+            settled_jobs, _, _ = await wait_jobs(http, [batch_id], timeout=PROBE_CANCEL_SECONDS)
+            if settled_jobs.get(batch_id):
+                final = settled_jobs
     # A job never read back counts as not completed rather than aborting the run.
     document = final.get(batch_id) or {
         "status": "unreadable",
@@ -263,6 +284,7 @@ async def probe_phase(
     cluster.event("soak_probe_finished", passed=outcome["passed"], probe_seconds=round(elapsed, 1))
     return {
         "outcome": outcome,
+        "cancelled_after_timeout": cancelled,
         "timeout_seconds": args.probe_seconds,
         "after_load": settled,
         "passed": outcome["passed"] and settled["passed"],
