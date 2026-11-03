@@ -64,6 +64,20 @@ class BatchStaleLeaseSweeperWorker:
         except Exception:
             logger.debug("batch stale lease sweeper metrics refresh failed", exc_info=True)
 
+    async def _settle_cancel_requests(self) -> int:
+        # A cancel only sets a flag; workers act on it when they claim the job,
+        # which needs free model capacity and a runnable item. Settle requested
+        # cancels here so they never wait on the model.
+        try:
+            return int(
+                await self.repository.settle_cancel_requests(
+                    limit=max(1, min(int(self.config.page_size or 1), 1_000))
+                )
+            )
+        except Exception:
+            logger.warning("batch stale lease sweeper could not settle cancel requests", exc_info=True)
+            return 0
+
     async def process_once(self) -> dict[str, int]:
         started = perf_counter()
         now = datetime.now(tz=UTC)
@@ -102,11 +116,20 @@ class BatchStaleLeaseSweeperWorker:
             result="skipped_active",
             count=skipped_active_jobs,
         )
+        cancel_settled_jobs = await self._settle_cancel_requests()
+        increment_batch_stale_lease_sweeper_rows(
+            kind="jobs",
+            result="cancel_settled",
+            count=cancel_settled_jobs,
+        )
         observe_batch_stale_lease_sweeper_duration(duration_seconds=perf_counter() - started)
 
-        if items or jobs:
+        if items or jobs or cancel_settled_jobs:
             logger.info(
-                "batch stale lease sweeper reclaimed items=%s released_jobs=%s", items, jobs
+                "batch stale lease sweeper reclaimed items=%s released_jobs=%s cancel_settled_jobs=%s",
+                items,
+                jobs,
+                cancel_settled_jobs,
             )
         await self._refresh_batch_runtime_metrics(now=now)
         return {

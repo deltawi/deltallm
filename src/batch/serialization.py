@@ -14,7 +14,10 @@ def _public_batch_status(job: BatchJobRecord) -> str:
     status_value = str(job.status or "")
     if status_value == BatchJobStatus.QUEUED.value:
         return "validating"
-    if status_value == BatchJobStatus.IN_PROGRESS.value and job.cancel_requested_at is not None:
+    if (
+        status_value in {BatchJobStatus.IN_PROGRESS.value, BatchJobStatus.FINALIZING.value}
+        and job.cancel_requested_at is not None
+    ):
         return "cancelling"
     return status_value
 

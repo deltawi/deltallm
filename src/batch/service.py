@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from fastapi import HTTPException, UploadFile, status
 
 from src.batch.access import can_access_owned_resource
-from src.batch.models import BatchItemCreate
+from src.batch.models import BatchItemCreate, BatchJobStatus
 from src.batch.request_validation import parse_batch_input_line
 from src.batch.repository import BatchRepository
 from src.batch.scheduling import estimate_request_work_units, resolve_model_group
@@ -513,6 +513,12 @@ class BatchService:
         job = await self.repository.request_cancel(batch_id)
         if job is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+        try:
+            if job.status in {BatchJobStatus.QUEUED, BatchJobStatus.IN_PROGRESS}:
+                job = await self.repository.apply_cancel_request(batch_id) or job
+        except Exception:
+            # The cancel request is stored; the stale lease sweeper settles it.
+            logger.warning("batch cancel could not settle pending items batch_id=%s", batch_id, exc_info=True)
         return self.job_to_response(job)
 
     def file_to_response(self, file_record) -> dict[str, Any]:

@@ -119,6 +119,81 @@ def test_job_to_response_maps_cancel_requested_in_progress_to_openai_cancelling_
     assert response["status"] in OPENAI_BATCH_STATUS_VALUES
 
 
+def test_job_to_response_maps_cancel_requested_finalizing_to_openai_cancelling_status() -> None:
+    response = _service().job_to_response(
+        _batch_job(status=BatchJobStatus.FINALIZING, cancel_requested_at=datetime.now(tz=UTC))
+    )
+
+    assert response["status"] == "cancelling"
+
+
+class _CancelRepo:
+    def __init__(self, job: BatchJobRecord, *, settle_error: Exception | None = None) -> None:
+        self.job = job
+        self.settle_error = settle_error
+        self.applied: list[str] = []
+
+    async def get_job(self, batch_id: str) -> BatchJobRecord:
+        del batch_id
+        return self.job
+
+    async def request_cancel(self, batch_id: str) -> BatchJobRecord:
+        del batch_id
+        self.job.cancel_requested_at = datetime.now(tz=UTC)
+        return self.job
+
+    async def apply_cancel_request(self, batch_id: str) -> BatchJobRecord:
+        self.applied.append(batch_id)
+        if self.settle_error is not None:
+            raise self.settle_error
+        self.job.status = BatchJobStatus.FINALIZING
+        return self.job
+
+
+def _cancel_service(repository: _CancelRepo) -> BatchService:
+    return BatchService(repository=repository, storage=_DummyStorage())  # type: ignore[arg-type]
+
+
+def _cancel_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="key-a")
+
+
+@pytest.mark.asyncio
+async def test_cancel_batch_cancels_unstarted_items_right_away() -> None:
+    repository = _CancelRepo(_batch_job(status=BatchJobStatus.QUEUED))
+
+    response = await _cancel_service(repository).cancel_batch(
+        batch_id="batch-1", auth=_cancel_auth()
+    )
+
+    assert repository.applied == ["batch-1"]
+    assert response["status"] == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_cancel_batch_keeps_the_request_when_settling_fails() -> None:
+    repository = _CancelRepo(
+        _batch_job(status=BatchJobStatus.IN_PROGRESS), settle_error=RuntimeError("db busy")
+    )
+
+    response = await _cancel_service(repository).cancel_batch(
+        batch_id="batch-1", auth=_cancel_auth()
+    )
+
+    assert repository.applied == ["batch-1"]
+    assert response["status"] == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_cancel_batch_leaves_finalizing_and_terminal_jobs_alone() -> None:
+    for status in (BatchJobStatus.FINALIZING, BatchJobStatus.COMPLETED):
+        repository = _CancelRepo(_batch_job(status=status))
+
+        await _cancel_service(repository).cancel_batch(batch_id="batch-1", auth=_cancel_auth())
+
+        assert repository.applied == []
+
+
 @pytest.mark.parametrize(
     "status",
     [
