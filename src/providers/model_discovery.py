@@ -7,6 +7,11 @@ import httpx
 from src.config import ModelMode
 from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES, ChatProviderProfile
 from src.providers.chat_discovery import fetch_chat_models
+from src.providers.discovered_metadata import (
+    gemini_metadata,
+    merge_known_metadata,
+    openai_style_metadata,
+)
 from src.providers.discovery_runtime import DiscoveryUnavailable, ProviderDiscoveryRuntime
 from src.providers.model_catalog import (
     canonical_catalog_provider,
@@ -50,6 +55,7 @@ def _provider_model_option(
     label: str,
     provider: str,
     supported_modes: list[ModelMode] | None = None,
+    discovered_metadata: dict[str, float | int] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": model_id,
@@ -57,12 +63,17 @@ def _provider_model_option(
         "provider": provider,
         "source": "provider_api",
         "supported_modes": list(supported_modes or []),
-        "known_metadata": catalog_model_metadata(provider, model_id),
+        "known_metadata": merge_known_metadata(
+            catalog_model_metadata(provider, model_id), discovered_metadata
+        ),
     }
 
 
 def _extract_openai_style_models(payload: Any, *, provider: str) -> list[dict[str, Any]]:
-    items = payload.get("data") if isinstance(payload, dict) else None
+    # Together returns a bare list instead of {"data": [...]}.
+    items = payload if isinstance(payload, list) else (
+        payload.get("data") if isinstance(payload, dict) else None
+    )
     if not isinstance(items, list):
         return []
 
@@ -79,6 +90,9 @@ def _extract_openai_style_models(payload: Any, *, provider: str) -> list[dict[st
                 model_id=model_id,
                 label=label,
                 provider=provider,
+                discovered_metadata=openai_style_metadata(
+                    item, provider=canonical_catalog_provider(provider)
+                ),
             )
         )
     return models
@@ -126,6 +140,7 @@ def _extract_gemini_models(payload: Any, *, provider: str) -> list[dict[str, Any
                 model_id=model_id,
                 label=label,
                 provider=provider,
+                discovered_metadata=gemini_metadata(item),
             )
         )
     return models
@@ -317,9 +332,11 @@ def _merge_model_options(
             }
             continue
 
-        existing_metadata = dict(existing.get("known_metadata") or {})
-        next_metadata = dict(option.get("known_metadata") or {})
-        merged_metadata = existing_metadata or next_metadata or None
+        # Catalog options come first, so their values win per key and the
+        # provider list fills only what the catalog lacks.
+        merged_metadata = merge_known_metadata(
+            existing.get("known_metadata"), option.get("known_metadata")
+        )
 
         existing_modes = set(existing.get("supported_modes") or [])
         next_modes = set(option.get("supported_modes") or [])
@@ -386,6 +403,7 @@ async def _discover_chat_profile(
                     label=item.name or item.id,
                     provider=provider,
                     supported_modes=list(item.supported_modes),
+                    discovered_metadata=dict(item.metadata),
                 )
                 for item in result.models
             ]

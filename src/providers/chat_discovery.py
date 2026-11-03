@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from src.config import ModelMode
 from src.providers.chat_profiles import ChatProviderProfile
+from src.providers.discovered_metadata import mistral_metadata
 from src.providers.model_catalog import catalog_models_for_provider
 
 from src.providers.discovery_runtime import (
@@ -26,6 +28,7 @@ class _OpenAIModel(BaseModel):
 
 class DiscoveredChatModel(_OpenAIModel):
     supported_modes: tuple[ModelMode, ...] = ("chat",)
+    metadata: dict[str, float | int] = Field(default_factory=dict)
 
 
 class _OpenAIModelList(BaseModel):
@@ -42,6 +45,7 @@ class _MistralModel(BaseModel):
     capabilities: _MistralCapabilities = Field(default_factory=_MistralCapabilities)
     archived: bool = False
     aliases: list[str] = Field(default_factory=list, max_length=64)
+    max_context_length: Any = None
 
 
 class _MistralModelList(BaseModel):
@@ -65,7 +69,12 @@ def _parse_mistral_models(body: bytes) -> ChatModelDiscovery:
             modes.append("embedding")
         if modes:
             models.append(
-                DiscoveredChatModel(id=item.id, name=item.name, supported_modes=tuple(modes))
+                DiscoveredChatModel(
+                    id=item.id,
+                    name=item.name,
+                    supported_modes=tuple(modes),
+                    metadata=mistral_metadata(item.max_context_length),
+                )
             )
     return ChatModelDiscovery(tuple(models))
 
