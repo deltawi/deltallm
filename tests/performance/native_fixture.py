@@ -287,7 +287,7 @@ def collect_role_logs(cluster: LifecycleCluster) -> None:
         (destination / f"{name}.log").write_text(payload)
 
 
-FOLLOWED_ROLES = ("api", "accounting_request", "accounting_worker")
+FOLLOWED_ROLES = ("api", "accounting_request", "accounting_worker", "batch_worker")
 FOLLOW_POLL_SECONDS = 2.0
 
 
@@ -297,8 +297,8 @@ def follow_role_logs(cluster: LifecycleCluster, step: str, roles=FOLLOWED_ROLES)
 
     A rollout deletes pods, so their logs are gone before the step ends. New
     pods are picked up on the next poll; a follower that exits early (pod not
-    running yet) is started again. Batch pods are left out: when their store is
-    full they log thousands of refusals.
+    running yet) is started again. The acceptance batches are small, so batch
+    pods are followed too; the soak does not follow pods.
     """
     destination = cluster.output / "follow" / step
     destination.mkdir(parents=True, exist_ok=True)
