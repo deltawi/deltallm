@@ -303,3 +303,21 @@ async def test_busy_status_poll_is_skipped(monkeypatch) -> None:
     ) as http:
         final, _elapsed, timed_out = await native_batch_load.wait_jobs(http, ["b"], timeout=60)
     assert not timed_out and final["b"]["status"] == "completed"
+
+
+def test_ledger_requires_every_budget_scope_type() -> None:
+    before, after = snapshot(10, "0.00007"), snapshot(15, "0.000105")
+    missing_org = [row for row in scopes("0.000105") if row["scope_type"] != "organization"]
+    result = checks.ledger_matches(before, after, charged=5, duplicates=0, scopes=missing_org)
+    assert result["failures"] == ["budget_scopes_do_not_match_facts"]
+
+
+def test_restart_or_replacement_counts_as_restarted() -> None:
+    from tests.performance.native_fixture import restarted_since
+
+    baseline = {"batch-a": 0, "api-a": 1}
+    assert restarted_since(baseline, {"batch-a": 0, "api-a": 1}) == []
+    assert restarted_since(baseline, {"batch-a": 1, "api-a": 1, "batch-b": 0}) == [
+        "batch-a",
+        "batch-b",
+    ]

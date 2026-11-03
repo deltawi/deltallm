@@ -39,6 +39,7 @@ from tests.performance.native_batch_load import (
     CHAT_ENDPOINT,
     budget_scopes,
     client,
+    submit_job,
     duplicate_operations,
     item_stats,
     verify_outputs,
@@ -51,7 +52,11 @@ from tests.performance.native_fixture import (
     scrape_roles,
     seed_native_fixture,
 )
-from tests.performance.native_qualification_economics import accounting_snapshot, wait_native_drain
+from tests.performance.native_qualification_economics import (
+    accounting_snapshot,
+    drain_or_unsafe,
+    wait_native_drain,
+)
 from tests.performance.run_accounting_diagnostic import activate_accounting
 from tests.performance.run_capacity_acceptance import prime_database, wait_edge
 from tests.performance.run_native_qualification import (
@@ -97,21 +102,23 @@ async def settle(
     started = monotonic()
     while True:
         idle = gauges_returned_to_idle(baseline, await scrape_roles(cluster, ROLES))
-        if idle["passed"] or monotonic() - started >= timeout:
+        # Gauges are in-memory and recover on their own; only accounting may
+        # need to wait for expiry, so the idle wait stays at the target.
+        if idle["passed"] or monotonic() - started >= min(timeout, SETTLE_SECONDS):
             break
         await asyncio.sleep(5)
     async with local_database() as db:
-        drain = await wait_native_drain(db, timeout=timeout)
+        drain = await drain_or_unsafe(db, timeout=timeout)
         stuck: dict[str, list] = {}
         if not drain["passed"]:
             # Keep what was stuck at the target, then see whether expiry recovers it.
             stuck = await unsettled_rows(db)
-            recovery = await wait_native_drain(db, timeout=max(0.0, recovery_timeout - timeout))
+            recovery = await drain_or_unsafe(db, timeout=max(0.0, recovery_timeout - timeout))
             drain = {
                 **recovery,
                 "passed": False,
                 "target_seconds": timeout,
-                "seconds": timeout + recovery["seconds"],
+                "seconds": timeout + (recovery["seconds"] or 0),
                 "recovered_after_target": recovery["passed"],
             }
         after = await accounting_snapshot(db)
@@ -157,7 +164,7 @@ async def unsettled_rows(db) -> dict[str, list]:
     return rows
 
 
-async def start_slow_batch(url: str, prefix: str) -> str:
+async def start_slow_batch(url: str, prefix: str, retries: list[dict]) -> str:
     rows = [
         {
             "custom_id": f"{prefix}-{index}",
@@ -173,28 +180,11 @@ async def start_slow_batch(url: str, prefix: str) -> str:
         for index in range(BATCH_ITEMS)
     ]
     async with client(url) as http:
-        uploaded = await http.post(
-            "/v1/files",
-            data={"purpose": "batch"},
-            files={
-                "file": (
-                    f"{prefix}.jsonl",
-                    "\n".join(json.dumps(row) for row in rows),
-                    "application/jsonl",
-                )
-            },
+        # The same busy retry as the soak: a pod left busy by the previous step
+        # may answer 503 with x-should-retry.
+        batch_id = await submit_job(
+            http, CHAT_ENDPOINT, prefix, BATCH_ITEMS, retries=retries, rows=rows
         )
-        assert uploaded.status_code == 200, uploaded.text[:500]
-        created = await http.post(
-            "/v1/batches",
-            json={
-                "input_file_id": uploaded.json()["id"],
-                "endpoint": CHAT_ENDPOINT,
-                "completion_window": "24h",
-            },
-        )
-        assert created.status_code == 200, created.text[:500]
-        batch_id = created.json()["id"]
     async with local_database() as db:
         deadline = monotonic() + 60
         while monotonic() < deadline:
@@ -212,24 +202,27 @@ async def start_slow_batch(url: str, prefix: str) -> str:
 async def finish_batch(url: str, batch_id: str, *, timeout: float) -> dict:
     async with client(url) as http:
         final, elapsed, timed_out = await wait_jobs(http, [batch_id], timeout=timeout)
-        document = final[batch_id]
+        document = final.get(batch_id) or {
+            "status": "unreadable",
+            "request_counts": {"completed": 0, "failed": 0},
+        }
         async with local_database() as db:
             stats = await item_stats(db, [batch_id])
-        assert not timed_out, f"batch did not settle in {timeout:.0f} s: {stats}"
         counts = document["request_counts"]
-        failures = []
+        # Every outcome is reported, not raised, so later steps still run.
+        failures = ["timed_out"] if timed_out else []
         if document["status"] != "completed":
             failures.append("job_not_completed")
         if counts["failed"]:
             failures.append("items_failed")
         if counts["completed"] + counts["failed"] != BATCH_ITEMS:
             failures.append("item_count_mismatch")
-        # Failed items are reported, not raised, so the step still checks the ledger.
-        if (
-            document.get("output_file_id")
-            and await verify_outputs(http, document) != counts["completed"]
-        ):
-            failures.append("output_rows_mismatch")
+        if document.get("output_file_id"):
+            try:
+                if await verify_outputs(http, document) != counts["completed"]:
+                    failures.append("output_rows_mismatch")
+            except AssertionError:
+                failures.append("output_rows_invalid")
     return {
         "passed": not failures,
         "failures": failures,
@@ -303,6 +296,8 @@ async def fixed_replicas(cluster: LifecycleCluster, values: Path, url: str) -> l
             baseline=baseline,
             before=before,
             charged=summary["success_count"],
+            # No pod stops here, so nothing waits on expiry; keep the job in budget.
+            recovery_timeout=SETTLE_SECONDS,
         )
         results.append(
             {"replicas": replicas, "arrival": summary, "pods_with_traffic": len(grew), **settled}
@@ -315,7 +310,8 @@ async def rollout(cluster: LifecycleCluster, values: Path, url: str) -> dict:
     baseline = await scrape_roles(cluster, ROLES)
     async with local_database() as db:
         before = await accounting_snapshot(db)
-    batch_id = await start_slow_batch(url, "native-rollout")
+    create_retries: list[dict] = []
+    batch_id = await start_slow_batch(url, "native-rollout", create_retries)
     cluster.event("native_rollout_started_with_batch", batch_id=batch_id)
     rolled = asyncio.create_task(
         asyncio.to_thread(
@@ -357,14 +353,15 @@ async def rollout(cluster: LifecycleCluster, values: Path, url: str) -> dict:
     )
     cluster.event("native_rollout_completed", batch_seconds=round(batch["seconds"], 1))
     settled["passed"] = settled["passed"] and batch["passed"]
-    return {"traffic": traffic, "batch": batch, **settled}
+    return {"traffic": traffic, "batch": batch, "create_retries": create_retries, **settled}
 
 
 async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
     baseline = await scrape_roles(cluster, ROLES)
     async with local_database() as db:
         before = await accounting_snapshot(db)
-    batch_id = await start_slow_batch(url, "native-pod-loss")
+    create_retries: list[dict] = []
+    batch_id = await start_slow_batch(url, "native-pod-loss", create_retries)
 
     async def kill_one_of_each() -> list[dict]:
         killed = []
@@ -408,7 +405,13 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
     )
     cluster.event("native_pod_loss_recovered", batch_seconds=round(batch["seconds"], 1))
     settled["passed"] = settled["passed"] and batch["passed"]
-    return {"killed": killed, "traffic": traffic, "batch": batch, **settled}
+    return {
+        "killed": killed,
+        "traffic": traffic,
+        "batch": batch,
+        "create_retries": create_retries,
+        **settled,
+    }
 
 
 async def exercise(cluster: LifecycleCluster, values: Path, report: dict) -> None:

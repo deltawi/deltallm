@@ -10,6 +10,8 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal
 import re
 
+from tests.performance.native_qualification_economics import BUDGET_SCOPE_TYPES
+
 Samples = Mapping[str, list[tuple[dict[str, str], float]]]
 Scrape = Mapping[str, Mapping[str, object]]
 
@@ -23,10 +25,14 @@ IDLE_GAUGES: tuple[str, ...] = (
 )
 # Store fill gauges added later (receipts, cursors, permits) are picked up by
 # name, so a new gauge is checked without editing this file.
+# No receipt or cursor fill gauge exists yet; the pattern picks one up as soon
+# as it ships (plan PR 1) without a change here.
 IDLE_GAUGE_PATTERN = re.compile(r"^deltallm_accounting_\w*(receipt|cursor)\w*$")
-# Accounting refusals that mean a bounded store or queue was full. Any increase
-# during a soak is a failure: the load is sized below every configured bound.
-CAPACITY_FAILURE_REASONS = frozenset({"queue_full", "capacity_full", "receipts_full"})
+# The accounting refusal that means a bounded store or queue was full. A full
+# local receipt store on a batch pod is counted here (2026-11-03 soak: about
+# 10,000 per run). Any increase during a soak is a failure: the load is sized
+# below every configured bound.
+CAPACITY_FAILURE_REASONS = frozenset({"queue_full"})
 
 
 def _idle_gauge(name: str) -> bool:
@@ -212,7 +218,7 @@ def ledger_matches(
     facts = int(after["facts"]) - int(before["facts"])  # type: ignore[arg-type]
     total = Decimal(str(after["fact_charge"]))
     scopes = list(scopes)
-    scope_ok = bool(scopes) and all(
+    scope_ok = {scope["scope_type"] for scope in scopes} == BUDGET_SCOPE_TYPES and all(
         Decimal(scope["committed"]) == total
         and Decimal(scope["reserved"]) == 0
         and Decimal(scope["provisional"]) == 0

@@ -28,7 +28,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: nightly-soak-${{ github.event.pull_request.number || github.ref }}
+  # Scheduled, manual and pull request runs each keep their own group, so a
+  # manual run never cancels the nightly one.
+  group: nightly-soak-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

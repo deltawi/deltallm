@@ -229,6 +229,26 @@ def role_pods(cluster: LifecycleCluster, role: str) -> list[str]:
     return sorted(pods)
 
 
+def pod_restarts(cluster: LifecycleCluster) -> dict[str, int]:
+    """Container restarts per gateway pod. A restart clears in-memory stores."""
+    payload = json.loads(
+        cluster.kubectl("get", "pods", "-l", GATEWAY_SELECTOR, "-o", "json").stdout
+    )
+    return {
+        pod["metadata"]["name"]: sum(
+            status.get("restartCount", 0) for status in pod["status"].get("containerStatuses", [])
+        )
+        for pod in payload["items"]
+    }
+
+
+def restarted_since(baseline: dict[str, int], current: dict[str, int]) -> list[str]:
+    """Pods that restarted a container, or were replaced, since ``baseline``."""
+    return sorted(
+        pod for pod, count in current.items() if pod not in baseline or count > baseline[pod]
+    )
+
+
 def parse_metrics(text: str) -> dict[str, list[tuple[dict[str, str], float]]]:
     """Return samples by sample name; counters keep their ``_total`` suffix."""
     samples: dict[str, list[tuple[dict[str, str], float]]] = {}

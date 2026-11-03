@@ -12,6 +12,7 @@ from prisma import Prisma
 from tests.performance.gateway_concurrency_fixture import MODEL
 from tests.performance.lifecycle_cluster import LOAD_KEY
 from tests.performance.native_fixture import EMBEDDING_MODEL
+from tests.performance.native_qualification_economics import BUDGET_WINDOWS_QUERY
 
 TERMINAL = {"completed", "failed", "expired", "cancelled"}
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -94,10 +95,14 @@ async def submit_job(
     count: int,
     *,
     retries: list[dict] | None = None,
+    rows: list[dict] | None = None,
 ) -> str:
-    """Upload and create one job. Busy answers are retried and listed in ``retries``."""
+    """Upload and create one job. Busy answers are retried and listed in ``retries``.
+
+    ``rows`` replaces the default soak rows, for callers that need another prompt.
+    """
     retries = [] if retries is None else retries
-    rows = batch_rows(endpoint, prefix, count)
+    rows = batch_rows(endpoint, prefix, count) if rows is None else rows
     uploaded = await _post_with_retry(
         http,
         "/v1/files",
@@ -207,9 +212,4 @@ async def duplicate_operations(db: Prisma) -> int:
 
 async def budget_scopes(db: Prisma) -> list[dict]:
     async with asyncio.timeout(5):
-        return await db.query_raw(
-            "SELECT scope_type,committed_exact::text AS committed,"
-            "reserved_exact::text AS reserved,provisional_exact::text AS provisional "
-            "FROM deltallm_accounting_budget_windows "
-            "WHERE protocol_name='primary' AND generation=1 ORDER BY scope_type LIMIT 65"
-        )
+        return await db.query_raw(BUDGET_WINDOWS_QUERY)

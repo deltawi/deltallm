@@ -42,11 +42,17 @@ from tests.performance.native_batch_load import (
 from tests.performance.native_fixture import (
     EMBEDDING_MODEL,
     native_values,
+    pod_restarts,
+    restarted_since,
     role_pods,
     scrape_roles,
     seed_native_fixture,
 )
-from tests.performance.native_qualification_economics import accounting_snapshot, wait_native_drain
+from tests.performance.native_qualification_economics import (
+    accounting_snapshot,
+    drain_or_unsafe,
+    wait_native_drain,
+)
 from tests.performance.run_accounting_diagnostic import activate_accounting
 from tests.performance.run_capacity_acceptance import prime_database, wait_edge
 from tests.performance.capacity_fixture import capacity_release
@@ -94,14 +100,20 @@ async def settle(
     cluster: LifecycleCluster,
     *,
     baseline_scrape: dict,
+    restarts: dict[str, int],
     before: dict,
     charged: int,
     idle_seconds: float,
 ) -> dict[str, object]:
-    """After a phase: stores idle, accounting drained, facts match the successful work."""
+    """After a phase: stores idle, accounting drained, facts match the successful work.
+
+    No gateway container may have restarted since the soak began: a restart
+    clears the in-memory stores the soak is there to watch.
+    """
     idle = await wait_idle(cluster, baseline_scrape, timeout=idle_seconds)
+    restarted = restarted_since(restarts, await asyncio.to_thread(pod_restarts, cluster))
     async with local_database() as db:
-        drain = await wait_native_drain(db, timeout=idle_seconds)
+        drain = await drain_or_unsafe(db, timeout=idle_seconds)
         after = await accounting_snapshot(db)
         ledger = ledger_matches(
             before,
@@ -112,15 +124,20 @@ async def settle(
         )
     drain.pop("samples", None)
     return {
-        "passed": idle["passed"] and drain["passed"] and ledger["passed"],
+        "passed": idle["passed"] and drain["passed"] and ledger["passed"] and not restarted,
         "idle": idle,
         "accounting_drain": drain,
         "ledger": ledger,
+        "restarted_pods": restarted,
     }
 
 
 async def batch_phase(
-    cluster: LifecycleCluster, url: str, args: argparse.Namespace, baseline: dict
+    cluster: LifecycleCluster,
+    url: str,
+    args: argparse.Namespace,
+    baseline: dict,
+    restarts: dict[str, int],
 ) -> dict[str, object]:
     async with local_database() as db:
         before = await accounting_snapshot(db)
@@ -170,6 +187,7 @@ async def batch_phase(
     settled = await settle(
         cluster,
         baseline_scrape=baseline,
+        restarts=restarts,
         before=before,
         charged=outcome["completed_items"],
         idle_seconds=args.idle_seconds,
@@ -209,7 +227,7 @@ async def batch_phase(
 
 
 async def probe_phase(
-    cluster: LifecycleCluster, url: str, args: argparse.Namespace
+    cluster: LifecycleCluster, url: str, args: argparse.Namespace, restarts: dict[str, int]
 ) -> dict[str, object]:
     """A fresh job after the soak must finish promptly: no state needs a pod restart."""
     async with local_database() as db:
@@ -219,7 +237,11 @@ async def probe_phase(
         started = monotonic()
         batch_id = await submit_job(http, CHAT_ENDPOINT, "soak-probe", args.probe_items)
         final, elapsed, timed_out = await wait_jobs(http, [batch_id], timeout=args.probe_seconds)
-    document = final[batch_id]
+    # A job never read back counts as not completed rather than aborting the run.
+    document = final.get(batch_id) or {
+        "status": "unreadable",
+        "request_counts": {"completed": 0, "failed": 0},
+    }
     outcome = batch_outcome(
         [document],
         expected_items=args.probe_items,
@@ -232,6 +254,7 @@ async def probe_phase(
     settled = await settle(
         cluster,
         baseline_scrape=baseline,
+        restarts=restarts,
         before=before,
         charged=outcome["completed_items"],
         idle_seconds=args.idle_seconds,
@@ -288,7 +311,11 @@ async def embedding_arrival(url: str, *, rate: float, duration: float) -> dict[s
 
 
 async def api_phase(
-    cluster: LifecycleCluster, url: str, image: str, args: argparse.Namespace
+    cluster: LifecycleCluster,
+    url: str,
+    image: str,
+    args: argparse.Namespace,
+    restarts: dict[str, int],
 ) -> dict[str, object]:
     async with local_database() as db:
         before = await accounting_snapshot(db)
@@ -371,6 +398,7 @@ async def api_phase(
     settled = await settle(
         cluster,
         baseline_scrape=baseline,
+        restarts=restarts,
         before=before,
         charged=charged,
         idle_seconds=args.idle_seconds,
@@ -424,18 +452,21 @@ async def exercise(
         if not initial["passed"]:
             raise RuntimeError("Accounting startup did not reach an empty baseline")
         baseline = await scrape_roles(cluster, ROLES)
+        restarts = await asyncio.to_thread(pod_restarts, cluster)
         write_json(
             cluster.output / "baseline-gauges.json",
             {pod: entry["role"] for pod, entry in baseline.items()},
         )
         report["topology"] = topology
         if args.batch_items:
-            report["batch"] = await batch_phase(cluster, url, args, baseline)
+            report["batch"] = await batch_phase(cluster, url, args, baseline, restarts)
             write_json(cluster.output / "soak-report.json", report)
-            report["probe"] = await probe_phase(cluster, url, args)
+            report["probe"] = await probe_phase(cluster, url, args, restarts)
             write_json(cluster.output / "soak-report.json", report)
         if args.api_seconds:
-            report["api"] = await api_phase(cluster, url, image, args)
+            report["api"] = await api_phase(cluster, url, image, args, restarts)
+        restarted = restarted_since(restarts, await asyncio.to_thread(pod_restarts, cluster))
+        report["restarts"] = {"passed": not restarted, "restarted_pods": restarted}
         report["passed"] = all(
             section["passed"]
             for name, section in report.items()
@@ -498,6 +529,12 @@ def markdown(report: dict, args: argparse.Namespace) -> str:
             f"{settled['ledger']['new_facts']:,} facts for {settled['ledger']['charged_requests']:,} requests "
             f"{' '.join(settled['ledger']['failures'])} "
             f"{refusal_detail(api['accounting_capacity_refusals'])} |"
+        )
+    restarts = report.get("restarts")
+    if restarts:
+        lines.append(
+            f"| No gateway container restarted during the soak | {mark(restarts['passed'])} | "
+            f"{', '.join(restarts['restarted_pods']) or 'none'} |"
         )
     lines += ["", f"Overall: {mark(bool(report.get('passed')))}", ""]
     return "\n".join(lines)

@@ -12,7 +12,7 @@ provider, so provider limits never affect the result.
 
 | Run | When | Workflow | Runner |
 |---|---|---|---|
-| Accounting v2 acceptance | Every pull request or push to main that changes `src/billing`, `src/batch`, `src/db`, `prisma`, the Helm chart or `tests/performance`, and every night | `native-acceptance.yml` (from `ci.yml` and `nightly-soak.yml`) | `tests/performance/run_native_acceptance.py` |
+| Accounting v2 acceptance | Every pull request or push to main that changes `src/billing`, `src/batch`, `src/db`, `src/metrics`, `src/bootstrap`, the accounting RPC, the config loader, `prisma`, the Helm chart, the `Dockerfile`, `uv.lock` or `tests/performance`, and every night | `native-acceptance.yml` (from `ci.yml` and `nightly-soak.yml`) | `tests/performance/run_native_acceptance.py` |
 | Nightly soak | 02:30 UTC on main, on demand, and in short form on pull requests that change the soak | `nightly-soak.yml` | `tests/performance/run_accounting_soak.py` |
 
 Both start from the strict production values, the capacity fixture, and then
@@ -47,9 +47,10 @@ once the last step has run, so one red step does not hide the others:
   If it does not, the run saves the stuck rows to
   `<step>-unsettled-state.json` and keeps waiting up to 18 minutes, past
   reservation and grant expiry, to show whether recovery clears them
-  (`recovered_after_target`). The step still fails. After pod loss, the killed
+  (`recovered_after_target`). The step still fails. The fixed replica steps
+  stop no pod, so they do not wait for expiry. After pod loss, the killed
   pods' reservations can only clear by expiry, so that step allows the full
-  18 minutes.
+  18 minutes. Unsafe budget state is reported as a failed drain, not raised.
 - The new usage facts equal the successful requests and items. No operation
   is charged twice, every budget scope's committed amount equals the facts,
   and no scope holds reserved or provisional money. After pod loss, the facts
@@ -117,13 +118,17 @@ a larger runner label. The workflow uses that label when it is set.
   (reservation, finalization and RPC terminal queues).
 - `deltallm_batch_model_in_flight_items`.
 - Any `deltallm_accounting_*` gauge whose name contains `receipt` or `cursor`.
-  A new fill gauge for the local receipt or cursor store is checked as soon
-  as it ships.
+  No such gauge exists yet. A fill gauge for the local receipt or cursor
+  store is checked as soon as it ships.
 
 If a pod replaced another during the run, its gauges must be back at zero.
-`deltallm_accounting_failures_total` must not grow for the `queue_full`,
-`capacity_full` or `receipts_full` reasons. All other reasons are reported
-but do not fail the run.
+`deltallm_accounting_failures_total` must not grow for the `queue_full`
+reason. A batch pod whose local receipt store is full counts here. All other
+reasons are reported but do not fail the run.
+
+In the soak, no gateway container may restart or be replaced. A restart
+clears the in-memory stores, so it would hide a leak. The summary lists any
+restarted pod.
 
 To check a new store, add its gauge to `IDLE_GAUGES`, or give it a name the
 pattern already matches.
