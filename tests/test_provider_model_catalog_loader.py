@@ -11,6 +11,7 @@ from src.providers.model_catalog import (
 from src.providers.model_catalog_loader import (
     ProviderCatalogDocument,
     get_provider_catalog,
+    load_provider_catalogs,
     provider_catalog_summary,
     reload_provider_catalogs,
 )
@@ -26,7 +27,7 @@ def test_provider_catalog_loader_returns_expected_providers() -> None:
 def test_provider_catalog_summary_includes_provenance() -> None:
     summary = {item["provider"]: item for item in provider_catalog_summary()}
 
-    assert summary["openai"]["last_verified_at"] == "2026-04-01"
+    assert summary["openai"]["last_verified_at"] == "2026-11-03"
     assert summary["openai"]["model_count"] >= 10
     assert summary["elevenlabs"]["last_verified_at"] == "2026-06-13"
     assert summary["elevenlabs"]["model_count"] == 5
@@ -46,7 +47,9 @@ def test_catalog_models_for_provider_filters_by_mode() -> None:
 
 
 def test_catalog_models_for_elevenlabs_filters_audio_modes() -> None:
-    speech_models = {item["id"] for item in catalog_models_for_provider("elevenlabs", mode="audio_speech")}
+    speech_models = {
+        item["id"] for item in catalog_models_for_provider("elevenlabs", mode="audio_speech")
+    }
     transcription_models = {
         item["id"] for item in catalog_models_for_provider("elevenlabs", mode="audio_transcription")
     }
@@ -155,3 +158,39 @@ def test_catalog_validation_rejects_duplicate_aliases_across_models() -> None:
                 ],
             }
         )
+
+
+def test_catalog_never_prefills_batch_prices() -> None:
+    # Batch prices are what DeltaLLM bills for its own Batch API, which calls the
+    # provider's regular API. Pre-filling a provider's batch discount would bill
+    # batch items below what the provider charges.
+    batch_keys = {
+        "batch_input_cost_per_token",
+        "batch_output_cost_per_token",
+        "batch_price_multiplier",
+    }
+    for document in load_provider_catalogs().values():
+        for model in document.models:
+            assert not batch_keys.intersection(model.metadata), (document.provider, model.id)
+
+
+def test_current_chat_models_have_prices_and_limits() -> None:
+    expected = {
+        "openai": ["gpt-6.1-sol", "gpt-5.5", "gpt-5.4", "gpt-4o"],
+        "anthropic": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
+        "deepseek": ["deepseek-flash", "deepseek-v4-pro"],
+    }
+    for provider, model_ids in expected.items():
+        for model_id in model_ids:
+            metadata = catalog_model_metadata(provider, model_id)
+            assert metadata is not None, (provider, model_id)
+            assert metadata["input_cost_per_token"] > 0
+            assert metadata["output_cost_per_token"] > 0
+            assert metadata["input_cost_per_token_cache_hit"] > 0
+            assert metadata["max_tokens"] > 0
+            assert metadata["max_output_tokens"] > 0
+    for model_id in ["gemini-3.1-pro-preview", "gemini-2.5-flash"]:
+        metadata = catalog_model_metadata("gemini", model_id)
+        assert metadata is not None
+        assert metadata["input_cost_per_token"] > 0
+        assert metadata["input_cost_per_token_cache_hit"] > 0

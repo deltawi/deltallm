@@ -1,27 +1,60 @@
 {
   "provider": "deepseek",
-  "last_verified_at": "2026-09-09",
+  "last_verified_at": "2026-11-03",
   "source_type": "official_docs",
   "sources": [
     {
       "label": "DeepSeek API models",
       "url": "https://api-docs.deepseek.com/"
+    },
+    {
+      "label": "DeepSeek pricing",
+      "url": "https://api-docs.deepseek.com/quick_start/pricing"
     }
   ],
   "models": [
+    {
+      "id": "deepseek-flash",
+      "label": "DeepSeek Flash",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ],
+      "metadata": {
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000012,
+        "input_cost_per_token_cache_hit": 0.000000006,
+        "max_tokens": 1000000,
+        "max_output_tokens": 384000
+      }
+    },
     {
       "id": "deepseek-v4-flash",
       "status": "active",
       "supported_modes": [
         "chat"
-      ]
+      ],
+      "metadata": {
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000012,
+        "input_cost_per_token_cache_hit": 0.000000006,
+        "max_tokens": 1000000,
+        "max_output_tokens": 384000
+      }
     },
     {
       "id": "deepseek-v4-pro",
       "status": "active",
       "supported_modes": [
         "chat"
-      ]
+      ],
+      "metadata": {
+        "input_cost_per_token": 0.00000132,
+        "output_cost_per_token": 0.00000396,
+        "input_cost_per_token_cache_hit": 0.000000044,
+        "max_tokens": 1000000,
+        "max_output_tokens": 384000
+      }
     }
   ]
 }

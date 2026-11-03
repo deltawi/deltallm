@@ -1,15 +1,20 @@
 {
   "provider": "mistral",
-  "last_verified_at": "2026-10-19",
+  "last_verified_at": "2026-11-03",
   "source_type": "official_docs",
   "sources": [
     {"label": "Mistral models", "url": "https://docs.mistral.ai/models"},
     {"label": "Mistral function calling", "url": "https://docs.mistral.ai/studio/conversations/function-calling"},
     {"label": "Mistral embeddings", "url": "https://docs.mistral.ai/api/endpoint/embeddings"},
-    {"label": "Codestral Embed", "url": "https://docs.mistral.ai/resources/cookbooks/mistral-embeddings-code_embedding"}
+    {"label": "Codestral Embed", "url": "https://docs.mistral.ai/resources/cookbooks/mistral-embeddings-code_embedding"},
+    {"label": "Mistral pricing", "url": "https://mistral.ai/pricing"}
   ],
   "models": [
-    {"id": "mistral-large-latest", "supported_modes": ["chat"]},
+    {
+      "id": "mistral-large-latest",
+      "supported_modes": ["chat"],
+      "metadata": {"input_cost_per_token": 0.0000005, "output_cost_per_token": 0.0000015}
+    },
     {"id": "mistral-medium-latest", "supported_modes": ["chat"]},
     {"id": "mistral-small-latest", "supported_modes": ["chat"]},
     {"id": "codestral-latest", "supported_modes": ["chat"]},

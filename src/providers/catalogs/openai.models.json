@@ -1,6 +1,6 @@
 {
   "provider": "openai",
-  "last_verified_at": "2026-04-01",
+  "last_verified_at": "2026-11-03",
   "source_type": "official_docs",
   "sources": [
     {
@@ -10,9 +10,156 @@
     {
       "label": "OpenAI GPT Image 1.5 model page",
       "url": "https://developers.openai.com/api/docs/models/gpt-image-1.5"
+    },
+    {
+      "label": "OpenAI API pricing",
+      "url": "https://developers.openai.com/api/docs/pricing"
     }
   ],
   "models": [
+    {
+      "id": "gpt-6-astra",
+      "label": "GPT-6 Astra",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00005,
+        "input_cost_per_token_cache_hit": 0.000001,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "label": "GPT-6.1 Sol",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_hit": 0.0000001,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "label": "GPT-6.1 Terra",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "input_cost_per_token_cache_hit": 0.00000005,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-6-sol",
+      "label": "GPT-6 Sol",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_hit": 0.0000002,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-6-luna",
+      "label": "GPT-6 Luna",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000005,
+        "input_cost_per_token_cache_hit": 0.00000001,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "label": "GPT-5.6 Sol",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000004,
+        "output_cost_per_token": 0.00002,
+        "input_cost_per_token_cache_hit": 0.0000004,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "label": "GPT-5.6 Terra",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000012,
+        "input_cost_per_token_cache_hit": 0.0000002,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "label": "GPT-5.6 Luna",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000012,
+        "input_cost_per_token_cache_hit": 0.00000002,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.5",
+      "label": "GPT-5.5",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.00003,
+        "input_cost_per_token_cache_hit": 0.0000005,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.2",
+      "label": "GPT-5.2",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000175,
+        "output_cost_per_token": 0.000014,
+        "input_cost_per_token_cache_hit": 0.000000175,
+        "max_tokens": 400000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.1",
+      "label": "GPT-5.1",
+      "status": "deprecated",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000125,
+        "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_hit": 0.000000125,
+        "max_tokens": 400000,
+        "max_output_tokens": 128000
+      }
+    },
     {
       "id": "gpt-5.4",
       "label": "GPT-5.4",
@@ -34,7 +181,7 @@
       "metadata": {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.0000045,
-        "input_cost_per_token_cache_hit": 0.00000008,
+        "input_cost_per_token_cache_hit": 0.000000075,
         "max_tokens": 400000,
         "max_output_tokens": 128000
       }
@@ -201,31 +348,46 @@
       "id": "tts-1",
       "label": "tts-1",
       "status": "active",
-      "supported_modes": ["audio_speech"]
+      "supported_modes": ["audio_speech"],
+      "metadata": {
+        "input_cost_per_character": 0.000015
+      }
     },
     {
       "id": "tts-1-hd",
       "label": "tts-1-hd",
       "status": "active",
-      "supported_modes": ["audio_speech"]
+      "supported_modes": ["audio_speech"],
+      "metadata": {
+        "input_cost_per_character": 0.00003
+      }
     },
     {
       "id": "gpt-4o-transcribe",
       "label": "GPT-4o transcribe",
       "status": "active",
-      "supported_modes": ["audio_transcription"]
+      "supported_modes": ["audio_transcription"],
+      "metadata": {
+        "input_cost_per_second": 0.0001
+      }
     },
     {
       "id": "gpt-4o-mini-transcribe",
       "label": "GPT-4o mini transcribe",
       "status": "active",
-      "supported_modes": ["audio_transcription"]
+      "supported_modes": ["audio_transcription"],
+      "metadata": {
+        "input_cost_per_second": 0.00005
+      }
     },
     {
       "id": "whisper-1",
       "label": "whisper-1",
       "status": "legacy",
-      "supported_modes": ["audio_transcription"]
+      "supported_modes": ["audio_transcription"],
+      "metadata": {
+        "input_cost_per_second": 0.0001
+      }
     }
   ]
 }
