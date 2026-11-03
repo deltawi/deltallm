@@ -41,7 +41,6 @@ from tests.performance.native_batch_load import (
 )
 from tests.performance.native_fixture import (
     EMBEDDING_MODEL,
-    artifact_volume,
     native_values,
     role_pods,
     scrape_roles,
@@ -528,7 +527,6 @@ def main() -> None:
     report: dict[str, object] = {"passed": False}
     with cluster.owned(args.image):
         install_native_dependencies(cluster, args.image)
-        artifact_volume(cluster)
         values = native_values(cluster, args.image, api_replicas=2, batch_replicas=3)
         prime_database(cluster, values, seeder=seed_native_fixture)
         try:

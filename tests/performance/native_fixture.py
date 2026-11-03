@@ -109,8 +109,9 @@ def native_values(
 ) -> Path:
     """Production-strict capacity values with native accounting and batch on one node.
 
-    One kind node lets every role share one ReadWriteOnce artifact volume, the
-    same single-node local storage the lifecycle fixture uses. Production
+    One kind node lets every role share the fixture's ReadWriteOnce ``artifacts``
+    volume (created by ``install_dependencies``), the same single-node local
+    storage the lifecycle fixture uses. Production
     multi-node batch uses S3; artifact storage is not what these runs measure.
     """
     if not 1 <= api_replicas <= 4 or not 0 <= batch_replicas <= 3 or not 1 <= request_replicas <= 2:
@@ -163,22 +164,6 @@ def native_values(
     profile.write_text(yaml.safe_dump(values["config"]))
     os.environ["DELTALLM_CONFIG_PATH"] = str(profile)
     return path
-
-
-def artifact_volume(cluster: LifecycleCluster) -> None:
-    cluster.apply(
-        [
-            {
-                "apiVersion": "v1",
-                "kind": "PersistentVolumeClaim",
-                "metadata": {"name": "artifacts"},
-                "spec": {
-                    "accessModes": ["ReadWriteOnce"],
-                    "resources": {"requests": {"storage": "2Gi"}},
-                },
-            }
-        ]
-    )
 
 
 async def seed_native_fixture(values: Path) -> None:
