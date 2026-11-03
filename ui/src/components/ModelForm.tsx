@@ -43,6 +43,7 @@ import {
   validateRequestShaping,
   type RequestShapingForm,
 } from './models/requestShaping';
+import { applyKnownMetadata, type AutofilledValues } from './models/metadataAutofill';
 
 let collapsibleIdCounter = 0;
 const MODEL_BATCH_CONFIG_DOCS_URL = 'https://deltallm.readthedocs.io/en/latest/admin-ui/models/#chat-batch-execution';
@@ -147,66 +148,6 @@ function defaultParameterHint(provider: string, mode: ModelMode): DefaultParamet
     keyPlaceholder: 'Key (e.g. voice)',
     valuePlaceholder: 'Value (e.g. alloy)',
   };
-}
-
-type MetadataAutofillField =
-  | 'input_cost_per_token'
-  | 'output_cost_per_token'
-  | 'input_cost_per_token_cache_hit'
-  | 'output_cost_per_token_cache_hit'
-  | 'max_context_window'
-  | 'max_input_tokens'
-  | 'max_output_tokens'
-  | 'output_vector_size'
-  | 'input_cost_per_image'
-  | 'input_cost_per_character'
-  | 'output_cost_per_character'
-  | 'input_cost_per_second'
-  | 'output_cost_per_second'
-  | 'input_cost_per_audio_token'
-  | 'output_cost_per_audio_token'
-  | 'batch_price_multiplier'
-  | 'batch_input_cost_per_token'
-  | 'batch_output_cost_per_token';
-
-const MODEL_METADATA_FIELDS: Record<string, MetadataAutofillField> = {
-  input_cost_per_token: 'input_cost_per_token',
-  output_cost_per_token: 'output_cost_per_token',
-  input_cost_per_token_cache_hit: 'input_cost_per_token_cache_hit',
-  output_cost_per_token_cache_hit: 'output_cost_per_token_cache_hit',
-  max_tokens: 'max_context_window',
-  max_input_tokens: 'max_input_tokens',
-  max_output_tokens: 'max_output_tokens',
-  output_vector_size: 'output_vector_size',
-  input_cost_per_image: 'input_cost_per_image',
-  input_cost_per_character: 'input_cost_per_character',
-  output_cost_per_character: 'output_cost_per_character',
-  input_cost_per_second: 'input_cost_per_second',
-  output_cost_per_second: 'output_cost_per_second',
-  input_cost_per_audio_token: 'input_cost_per_audio_token',
-  output_cost_per_audio_token: 'output_cost_per_audio_token',
-  batch_price_multiplier: 'batch_price_multiplier',
-  batch_input_cost_per_token: 'batch_input_cost_per_token',
-  batch_output_cost_per_token: 'batch_output_cost_per_token',
-};
-
-function applyKnownMetadataToForm(
-  current: ModelFormValues,
-  metadata: ProviderModelOption['known_metadata'],
-): ModelFormValues {
-  if (!metadata) return current;
-
-  let changed = false;
-  const next = { ...current };
-  for (const metadataKey of Object.keys(MODEL_METADATA_FIELDS) as Array<keyof typeof MODEL_METADATA_FIELDS>) {
-    const formField = MODEL_METADATA_FIELDS[metadataKey];
-    const rawValue = metadata[metadataKey];
-    if (rawValue == null) continue;
-    if (next[formField]) continue;
-    next[formField] = String(rawValue);
-    changed = true;
-  }
-  return changed ? next : current;
 }
 
 function findProviderModelOption(options: ProviderModelOption[], modelId: string): ProviderModelOption | null {
@@ -373,6 +314,7 @@ export default function ModelForm({
     () => Boolean(initialValues?.api_model_id || initialValues?.api_model_slug),
   );
   const [credentialCreateOpen, setCredentialCreateOpen] = useState(false);
+  const [autofilledValues, setAutofilledValues] = useState<AutofilledValues>({});
   const [recentlyCreatedCredential, setRecentlyCreatedCredential] = useState<NamedCredential | null>(null);
   const accessGroupInputRef = useRef<AccessGroupTokenInputHandle | null>(null);
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<{
@@ -460,6 +402,11 @@ export default function ModelForm({
   const selectedProviderPreset = providerPresets.find((preset) => preset.provider === credentialProvider || preset.provider === form.provider);
   const selectedNamedCredential = availableNamedCredentials.find((credential) => credential.credential_id === form.named_credential_id) || null;
   const selectedModelOption = findProviderModelOption(modelOptions, form.model);
+  const autofilledCount = Object.entries(autofilledValues)
+    .filter(([field, value]) => form[field as keyof AutofilledValues] === value)
+    .length;
+  const canFillFromKnownMetadata = Boolean(selectedModelOption?.known_metadata)
+    && applyKnownMetadata(form, autofilledValues, selectedModelOption?.known_metadata || null).form !== form;
   const chatBatchingDisabled = form.chat_batching_mode === 'disabled';
   const chatBatchingSyncMicrobatch = form.chat_batching_mode === 'sync_microbatch';
   const supportsBatchCapacity = mode === 'chat' || mode === 'embedding';
@@ -500,6 +447,12 @@ export default function ModelForm({
     if (form.keep_existing_named_credential) return;
     const preset = providerPresets.find((item) => item.provider === provider);
     invalidateLiveDiscovery();
+    if (form.provider !== provider) {
+      // The model is cleared below, so prices and limits it filled go too.
+      const cleared = applyKnownMetadata(form, autofilledValues, null);
+      setAutofilledValues(cleared.autofilled);
+      setForm(cleared.form);
+    }
     setForm((current) => ({
       ...current,
       provider,
@@ -597,10 +550,21 @@ export default function ModelForm({
   const updateModelValue = (value: string) => {
     clearValidation('model');
     const matchedOption = findProviderModelOption(modelOptions, value);
-    setForm((current) => {
-      const next = { ...current, model: value };
-      return applyKnownMetadataToForm(next, matchedOption?.known_metadata || null);
-    });
+    // Fields filled for the previous value follow the new one, so typing
+    // "gpt-4o" does not keep the prices of "gpt-4" matched on the way.
+    const applied = applyKnownMetadata(
+      { ...form, model: value },
+      autofilledValues,
+      matchedOption?.known_metadata || null,
+    );
+    setAutofilledValues(applied.autofilled);
+    setForm(applied.form);
+  };
+
+  const fillFromKnownMetadata = () => {
+    const applied = applyKnownMetadata(form, autofilledValues, selectedModelOption?.known_metadata || null);
+    setAutofilledValues(applied.autofilled);
+    setForm(applied.form);
   };
 
   const refreshProviderModels = async () => {
@@ -1025,9 +989,20 @@ export default function ModelForm({
                 </button>
               </div>
             ) : null}
-            {selectedModelOption?.known_metadata ? (
+            {autofilledCount > 0 ? (
               <p className="mt-1 text-xs text-emerald-700">
-                Known pricing and limit metadata is available for this model. Empty fields below will be filled automatically.
+                Filled {autofilledCount} pricing and limit field{autofilledCount === 1 ? '' : 's'} from known data for this model. They follow the model you pick until you edit them. Check them before saving.
+              </p>
+            ) : canFillFromKnownMetadata ? (
+              <p className="mt-1 text-xs text-gray-500">
+                Known pricing and limit data exists for this model.{' '}
+                <button
+                  type="button"
+                  onClick={fillFromKnownMetadata}
+                  className="font-medium text-brand-primary hover:underline"
+                >
+                  Fill empty fields
+                </button>
               </p>
             ) : null}
             {selectedProviderPreset && (
