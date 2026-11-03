@@ -363,11 +363,15 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
     traffic = await counted_arrival(url, rate=5, duration=60)
     write_json(cluster.output / "pod-loss-traffic.json", traffic)
     killed = await killer
-    async with asyncio.timeout(300):
-        while any(
-            len(await asyncio.to_thread(role_pods, cluster, role)) != count
+
+    def roles_ready() -> bool:
+        return all(
+            len(role_pods(cluster, role)) == count
             for role, count in (("api", 2), ("accounting_request", 2), ("batch_worker", 1))
-        ):
+        )
+
+    async with asyncio.timeout(300):
+        while not await asyncio.to_thread(roles_ready):
             await asyncio.sleep(2)
     await wait_edge(url)
     batch = await finish_batch(url, batch_id, timeout=BATCH_ITEM_LEASE_SECONDS + 600)
