@@ -95,7 +95,7 @@ class LocalAccountingRuntime:
             self._started = True
         except BaseException as error:
             if isinstance(error, AccountingProtocolUnavailable):
-                logger.error("Local accounting startup probe failed: reason=%s", error.reason)
+                logger.error("Local accounting startup probe failed: reason=%s", error.detail)
             self._service.issuer.stop_admission()
             await self.close(expires_at=expires_at)
             self._state = WorkerState.FAILED

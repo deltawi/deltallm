@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import random
 from time import monotonic
@@ -28,6 +29,8 @@ from src.telemetry.lifecycle import (
     stop_tasks_before_deadline,
     wait_for_startup,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ReadModelPersistence(Protocol):
@@ -70,6 +73,7 @@ class ReadModelProcessingWorker:
         self._closing = False
         self._stop_failed = False
         self._failures = 0
+        self._last_failure: str | None = None
         self._progress_health = progress_health or ReadModelHealth(self._config.generation)
         if self._progress_health.generation != self._config.generation:
             raise ValueError("Reporting lanes must share one protocol generation")
@@ -133,12 +137,17 @@ class ReadModelProcessingWorker:
             if self._task is None:
                 self._startup_deadline = expires_at
                 self._task = asyncio.create_task(self._run(), name="accounting-read-model")
-            await wait_for_startup(
-                started=self._started,
-                task=self._task,
-                timeout_seconds=max(0, expires_at - asyncio.get_running_loop().time()),
-                worker_name="read-model processing",
-            )
+            try:
+                await wait_for_startup(
+                    started=self._started,
+                    task=self._task,
+                    timeout_seconds=max(0, expires_at - asyncio.get_running_loop().time()),
+                    worker_name="read-model processing",
+                )
+            except TimeoutError as exc:
+                if self._last_failure is None:
+                    raise
+                raise TimeoutError(f"{exc} (last failure: {self._last_failure})") from None
             health = self.worker_health
             if health.state is not WorkerState.READY and health.detail != "read_model_age_limit":
                 raise RuntimeError("read-model processing did not become ready")
@@ -218,8 +227,15 @@ class ReadModelProcessingWorker:
                 count = await self.run_once(expires_at=end)
                 await self._refresh_progress(expires_at=end)
                 self._state = WorkerState.STOPPING if self._closing else WorkerState.READY
+                if self._last_failure is not None:
+                    logger.info(
+                        "Accounting read-model processing recovered: worker=%s",
+                        self._config.worker_id,
+                    )
+                    self._last_failure = None
                 self._failures = 0
-            except (AccountingProtocolUnavailable, TimeoutError):
+            except (AccountingProtocolUnavailable, TimeoutError) as exc:
+                self._record_failure(exc)
                 self._idle.reset()
                 increment_accounting_projection("read_model_run", "unavailable")
                 if self._observe_progress:
@@ -248,6 +264,24 @@ class ReadModelProcessingWorker:
                 await asyncio.wait_for(self._wake.wait(), timeout=random.uniform(wait * 0.8, wait))
             except TimeoutError:
                 pass
+
+    def _record_failure(self, exc: AccountingProtocolUnavailable | TimeoutError) -> None:
+        detail = exc.detail if isinstance(exc, AccountingProtocolUnavailable) else "timeout"
+        claim = self._claim
+        if claim is not None:
+            detail = (
+                f"{detail} partition={claim.accounting_partition} "
+                f"sequences={claim.sequences[0]}-{claim.sequences[-1]}"
+            )
+        if detail != self._last_failure:
+            # Log when a failure streak starts or changes. A stuck page retries
+            # with backoff and must not write one line per attempt.
+            logger.warning(
+                "Accounting read-model processing failed: worker=%s %s",
+                self._config.worker_id,
+                detail,
+            )
+        self._last_failure = detail
 
     async def _refresh_progress(self, *, expires_at: float) -> None:
         if not self._observe_progress:

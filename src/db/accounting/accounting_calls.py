@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
+import re
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from time import perf_counter
@@ -11,6 +13,15 @@ from typing import Protocol
 
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
 from src.metrics.accounting import observe_accounting_database_call
+
+logger = logging.getLogger(__name__)
+
+# Accounting SQL functions raise fixed codes such as accounting_read_model_attribution.
+# Only these fixed codes are logged. Other database text can contain customer data.
+_REJECTION_CODE = re.compile(r"accounting_[a-z0-9_]{1,96}")
+_SQLSTATE = re.compile(r"[0-9A-Z]{5}")
+_LOG_INTERVAL_SECONDS = 30.0
+_LOG_KEYS_MAX = 256
 
 
 class AccountingQueryClient(Protocol):
@@ -27,9 +38,20 @@ class AccountingResultFailure(StrEnum):
 class AccountingProtocolUnavailable(RuntimeError):
     """Protocol error with a fixed operator-visible reason."""
 
-    def __init__(self, reason: AcceptanceFailure | AccountingResultFailure) -> None:
+    def __init__(
+        self,
+        reason: AcceptanceFailure | AccountingResultFailure,
+        *,
+        rejection: str | None = None,
+    ) -> None:
         super().__init__("accounting protocol unavailable")
         self.reason = reason.value
+        # A fixed accounting SQL code, never free database text.
+        self.rejection = rejection
+
+    @property
+    def detail(self) -> str:
+        return self.reason if self.rejection is None else f"{self.reason}:{self.rejection}"
 
 
 class AccountingDatabaseCalls:
@@ -57,7 +79,11 @@ class AccountingDatabaseCalls:
             raise
         except Exception as exc:
             observe_accounting_database_call(operation, perf_counter() - started, "error")
-            raise AccountingProtocolUnavailable(classify_acceptance_failure(exc)) from None
+            failure = AccountingProtocolUnavailable(
+                classify_acceptance_failure(exc), rejection=accounting_rejection_code(exc)
+            )
+            _log_failure(operation, failure, type(exc).__name__, database_sqlstate(exc))
+            raise failure from None
         observe_accounting_database_call(operation, perf_counter() - started, "success")
         return rows
 
@@ -65,6 +91,75 @@ class AccountingDatabaseCalls:
         """Keep one statement window for exact ambiguity recovery."""
 
         return expires_at - self.statement_budget_seconds
+
+
+def database_sqlstate(exc: BaseException) -> str | None:
+    """Return the PostgreSQL SQLSTATE of a failed statement, if there is one."""
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    for _ in range(4):
+        if current is None or id(current) in seen:
+            return None
+        seen.add(id(current))
+        sqlstate = _own_sqlstate(current)
+        if sqlstate is not None:
+            return sqlstate
+        current = current.__cause__
+    return None
+
+
+def _own_sqlstate(exc: BaseException) -> str | None:
+    meta = getattr(exc, "meta", None)
+    sqlstate = meta.get("code") if isinstance(meta, Mapping) else None
+    sqlstate = sqlstate or getattr(exc, "sqlstate", None)
+    return sqlstate if isinstance(sqlstate, str) and _SQLSTATE.fullmatch(sqlstate) else None
+
+
+def accounting_rejection_code(exc: BaseException) -> str | None:
+    """Return the fixed code an accounting SQL function raised, if there is one."""
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    for _ in range(4):
+        if current is None or id(current) in seen:
+            return None
+        seen.add(id(current))
+        if _own_sqlstate(current) == "P0001":
+            text = str(current).strip().removeprefix("ERROR:").strip()
+            return text if _REJECTION_CODE.fullmatch(text) else None
+        current = current.__cause__
+    return None
+
+
+_last_logged: dict[tuple[str, str, str | None, str | None], float] = {}
+
+
+def _log_failure(
+    operation: str,
+    failure: AccountingProtocolUnavailable,
+    error_type: str,
+    sqlstate: str | None,
+) -> None:
+    # Keep one line per operation and failure kind for each interval. A stuck
+    # page retries often, and the data plane must not flood the log.
+    key = (operation, failure.reason, failure.rejection, sqlstate)
+    now = perf_counter()
+    last = _last_logged.get(key)
+    if last is not None and now - last < _LOG_INTERVAL_SECONDS:
+        return
+    if last is None and len(_last_logged) >= _LOG_KEYS_MAX:
+        _last_logged.clear()
+    _last_logged[key] = now
+    logger.warning(
+        "Accounting database call failed: operation=%s reason=%s rejection=%s "
+        "sqlstate=%s error_type=%s",
+        operation,
+        failure.reason,
+        failure.rejection or "-",
+        sqlstate or "-",
+        error_type,
+    )
 
 
 def outcome_may_be_ambiguous(exc: AccountingProtocolUnavailable) -> bool:
