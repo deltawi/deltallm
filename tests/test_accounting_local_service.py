@@ -1,7 +1,7 @@
 """Shared local accounting keeps proof identity and bounded byte queues."""
 
 import asyncio
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -42,6 +42,8 @@ from tests.test_accounting_request_path import (
     _priced_cache_entry,
     _request,
 )
+
+_CACHE_STARTED_AT = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
 
 
 class FundingOwner(Funding):
@@ -154,7 +156,12 @@ async def test_paid_cache_keeps_local_proof_and_uses_the_same_terminal_owner():
     service.start()
     try:
         await CacheMiddleware(AsyncMock())._record_cache_hit_accounting(
-            request, "/v1/chat/completions", "gpt-test", "cache:test", _priced_cache_entry()
+            request,
+            "/v1/chat/completions",
+            "gpt-test",
+            "cache:test",
+            _priced_cache_entry(),
+            started_at=_CACHE_STARTED_AT,
         )
         operation = operation_handle(request)
         written = persistence.calls[0][0]

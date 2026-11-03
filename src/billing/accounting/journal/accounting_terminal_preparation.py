@@ -32,6 +32,11 @@ def prepare_accounting_charge(
     # Non-HTTP callers also need a stable reporting ID across terminal retries.
     if not valid_request_id(accepted.get("request_id")):
         accepted["request_id"] = str(reservation.operation_id)
+    # Reporting rejects a completed event without both times, and one rejected
+    # event blocks its whole partition. Use the terminal instant for a missing time.
+    for field in ("start_time", "end_time"):
+        if accepted.get(field) is None:
+            accepted[field] = occurred_at
     return AccountingFinalization(
         protocol_generation=reservation.protocol_generation,
         operation_id=reservation.operation_id,

@@ -1,6 +1,7 @@
 """Journal acknowledgements use the shared owner without fake event keys."""
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -14,6 +15,8 @@ from src.billing.accounting.journal.accounting_terminal_receipts import JournalR
 from tests.test_accounting_local_issue import deadline
 from tests.test_accounting_local_leases import terminal
 from tests.test_accounting_local_receipts import acknowledgement
+
+_CACHE_STARTED_AT = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
 
 
 def state(count=2):
@@ -193,6 +196,7 @@ async def test_provider_and_paid_cache_keep_the_same_journal_acceptance_owner(pa
                 "gpt-test",
                 "cache:test",
                 _priced_cache_entry(),
+                started_at=_CACHE_STARTED_AT,
             )
             operation = operation_handle(request)
         written = journal.append_batch.call_args.args[0][0]
