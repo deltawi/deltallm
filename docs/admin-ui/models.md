@@ -113,6 +113,25 @@ Each tab loads when you first open it.
 - pricing metadata for spend tracking
 - default request parameters
 
+## Model Suggestions
+
+The **Upstream model** field suggests models from DeltaLLM's built-in catalog. After you add a provider key or pick a named credential, **Refresh provider models** also loads the provider's live model list.
+
+Suggestions can carry known prices and limits that pre-fill the form:
+
+| Source | What it adds |
+|---|---|
+| Built-in catalog | Curated prices and limits. These win when both sources have a value. |
+| Anthropic model list | Max input and max output tokens |
+| Gemini model list | Max input and max output tokens |
+| Groq model list | Context window and max output tokens |
+| Mistral model list | Context window |
+| OpenRouter model list | Context window, max output tokens, input, output and cached-input prices |
+| Together model list | Context window, input and output prices |
+| vLLM, Fireworks and other OpenAI-compatible lists | Context window when the list reports it |
+
+Values that are missing, negative or out of range are ignored.
+
 ## Recommended First Deployment
 
 For a simple first deployment:
