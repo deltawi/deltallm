@@ -249,6 +249,42 @@ def restarted_since(baseline: dict[str, int], current: dict[str, int]) -> list[s
     )
 
 
+def collect_role_logs(cluster: LifecycleCluster) -> None:
+    """Bounded logs per role, previous containers included, and cluster events.
+
+    The shared gateway log is cut at 5,000 lines, which busy batch pods fill on
+    their own; per-role files keep the API pods visible. Previous container
+    logs and events explain a restart. A failed diagnostic never replaces the
+    original failure.
+    """
+    destination = cluster.output / "roles"
+    destination.mkdir(parents=True, exist_ok=True)
+    commands = {
+        "events": ("get", "events", "--sort-by=.lastTimestamp", "-o", "wide"),
+        **{
+            f"{role}{suffix}": (
+                "logs",
+                "-l",
+                selector,
+                "--all-containers",
+                "--prefix",
+                "--tail=2000",
+                "--max-log-requests=8",
+                *flags,
+            )
+            for role, selector in ROLE_SELECTORS.items()
+            for suffix, flags in (("", ()), ("-previous", ("--previous",)))
+        },
+    }
+    for name, arguments in commands.items():
+        try:
+            result = cluster.kubectl(*arguments, "--request-timeout=10s", check=False, timeout=30)
+            payload = (result.stdout + result.stderr)[-2 * 1024 * 1024 :]
+        except Exception as error:
+            payload = "Log collection failed: " + type(error).__name__ + "\n"
+        (destination / f"{name}.log").write_text(payload)
+
+
 def parse_metrics(text: str) -> dict[str, list[tuple[dict[str, str], float]]]:
     """Return samples by sample name; counters keep their ``_total`` suffix."""
     samples: dict[str, list[tuple[dict[str, str], float]]] = {}

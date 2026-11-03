@@ -46,6 +46,7 @@ from tests.performance.native_batch_load import (
     wait_jobs,
 )
 from tests.performance.native_fixture import (
+    collect_role_logs,
     BATCH_ITEM_LEASE_SECONDS,
     native_values,
     role_pods,
@@ -483,6 +484,7 @@ def main() -> None:
         finally:
             write_json(cluster.output / "native-acceptance.json", report)
             collect_native_logs(cluster)
+            collect_role_logs(cluster)
     cluster.event("native_acceptance_completed")
 
 

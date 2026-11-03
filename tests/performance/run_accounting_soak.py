@@ -40,6 +40,7 @@ from tests.performance.native_batch_load import (
     wait_jobs,
 )
 from tests.performance.native_fixture import (
+    collect_role_logs,
     EMBEDDING_MODEL,
     native_values,
     pod_restarts,
@@ -585,6 +586,7 @@ def main() -> None:
             write_json(cluster.output / "soak-report.json", report)
             (cluster.output / "summary.md").write_text(markdown(report, args))
             collect_native_logs(cluster)
+            collect_role_logs(cluster)
     cluster.event("soak_completed", passed=report["passed"])
     if not report["passed"]:
         raise SystemExit(1)
