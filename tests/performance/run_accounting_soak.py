@@ -443,6 +443,13 @@ async def exercise(
         )
 
 
+def refusal_detail(refusals: dict) -> str:
+    if refusals["passed"]:
+        return ""
+    total = sum(refusals["capacity_refusals"].values())
+    return f"full-store refusals during the phase: {total:,.0f}"
+
+
 def markdown(report: dict, args: argparse.Namespace) -> str:
     def mark(passed: bool) -> str:
         return "pass" if passed else "**FAIL**"
@@ -489,7 +496,8 @@ def markdown(report: dict, args: argparse.Namespace) -> str:
         lines.append(
             f"| API: stores idle, accounting drained, charged once | {mark(settled['passed'] and api['accounting_capacity_refusals']['passed'])} | "
             f"{settled['ledger']['new_facts']:,} facts for {settled['ledger']['charged_requests']:,} requests "
-            f"{' '.join(settled['ledger']['failures'])} |"
+            f"{' '.join(settled['ledger']['failures'])} "
+            f"{refusal_detail(api['accounting_capacity_refusals'])} |"
         )
     lines += ["", f"Overall: {mark(bool(report.get('passed')))}", ""]
     return "\n".join(lines)
