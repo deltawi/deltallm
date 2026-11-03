@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.batch.scheduling.modes import resolve_scheduler_modes_from_settings
+
 logger = logging.getLogger(__name__)
 
 # Claims, scheduler snapshots, the stale lease sweeper and finalization.
@@ -15,6 +17,16 @@ def completion_outbox_concurrency(general: Any) -> int:
         COMPLETION_OUTBOX_MAX_CONCURRENCY,
         max(1, int(general.embeddings_batch_worker_concurrency or 4)),
     )
+
+
+def _extra_slices_in_flight(general: Any) -> int:
+    # A slice that has finished its items releases leftovers, refreshes its job
+    # and may finalize it while the next slice's items already run. Only
+    # work-slice scheduling runs more than one slice.
+    if not resolve_scheduler_modes_from_settings(general).active_uses_work_slice:
+        return 0
+    slices = int(getattr(general, "embeddings_batch_worker_max_slices_in_flight", 1) or 1)
+    return max(0, slices - 1)
 
 
 def batch_db_pool_size(general: Any, settings: object) -> int:
@@ -58,7 +70,8 @@ def warn_if_batch_db_pool_is_small(general: Any, settings: object) -> int | None
         if getattr(general, "embeddings_batch_completion_outbox_worker_enabled", False)
         else 0
     )
-    needed = running_items + outbox + BATCH_BACKGROUND_DB_CONNECTIONS
+    background = BATCH_BACKGROUND_DB_CONNECTIONS + _extra_slices_in_flight(general)
+    needed = running_items + outbox + background
     if needed <= int(pool_size):
         return None
     logger.warning(
@@ -69,7 +82,7 @@ def warn_if_batch_db_pool_is_small(general: Any, settings: object) -> int | None
         needed,
         running_items,
         outbox,
-        BATCH_BACKGROUND_DB_CONNECTIONS,
+        background,
         needed,
     )
     return needed

@@ -927,6 +927,10 @@ class GeneralSettings(
     embeddings_batch_item_lease_seconds: int = Field(default=360, ge=30)
     embeddings_batch_finalization_retry_delay_seconds: int = Field(default=60, ge=1)
     embeddings_batch_worker_concurrency: int = Field(default=4, ge=1, le=100)
+    # Work slices one batch worker runs at once. They share the worker's
+    # concurrency slots, so the next slice only fills slots the previous slice's
+    # tail leaves idle. 1 restores one-slice-at-a-time claiming.
+    embeddings_batch_worker_max_slices_in_flight: int = Field(default=2, ge=1, le=8)
     # Accounting v2 batch checkpoint writes. Batch is off the request latency path,
     # so writes wait for a busy pool instead of failing the item.
     embeddings_batch_accounting_write_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)

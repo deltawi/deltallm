@@ -116,6 +116,7 @@ class BatchWorkerConfig:
     # 0 (or grouping off) leaves result saves unlimited, one statement each.
     result_save_concurrency: int = 0
     write_grouping_enabled: bool = False
+    max_slices_in_flight: int = 2
     item_buffer_multiplier: int = 2
     finalization_page_size: int = 500
     item_claim_limit: int = 20

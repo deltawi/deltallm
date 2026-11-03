@@ -42,7 +42,6 @@ from src.metrics import (
     increment_batch_microbatch_requests,
     observe_batch_microbatch_retry_delay,
     observe_batch_microbatch_size,
-    set_batch_worker_saturation,
 )
 from src.models.requests import EmbeddingRequest
 from src.models.request_serialization import dump_request_for_preflight
@@ -936,7 +935,7 @@ class EmbeddingWorkerExecutionMixin:
         grouped_chunk_available.set()
         grouped_chunk_in_flight = False
         grouped_chunk_blocked = object()
-        active = 0
+        slots = self.execution_slots
 
         logger.info(
             "batch embedding microbatch planner started batch_id=%s claimed_items=%s",
@@ -1056,22 +1055,26 @@ class EmbeddingWorkerExecutionMixin:
         async def _wait_for_grouped_chunk_slot() -> None:
             await grouped_chunk_available.wait()
 
-        async def _plan_next_work_unit():
+        async def _plan_next_work_unit() -> tuple[int, Callable[[], Awaitable[None]]] | None:
+            # Returns (items the unit starts, unit). Zero items: waits, no slot.
+            # Planning (one prepare at a time per slice) holds no pod slot: a
+            # planner holding one while a finished chunk waits for planning_lock
+            # to give its slot back would deadlock.
             nonlocal grouped_chunk_in_flight
             async with planning_lock:
                 if planned_work_units:
-                    return planned_work_units.popleft()
+                    return 1, planned_work_units.popleft()
 
                 seed = await _pop_next_candidate(allow_grouped_chunks=not grouped_chunk_in_flight)
                 while seed is None:
                     if planned_work_units:
-                        return planned_work_units.popleft()
+                        return 1, planned_work_units.popleft()
                     return None
                 if seed is grouped_chunk_blocked:
-                    return _wait_for_grouped_chunk_slot
+                    return 0, _wait_for_grouped_chunk_slot
 
                 if not seed.microbatch_eligible or seed.effective_upstream_max_batch_inputs <= 1:
-                    return lambda seed=seed: self._process_item_with_prepared_override(
+                    return 1, lambda seed=seed: self._process_item_with_prepared_override(
                         job,
                         seed,
                         process_item=process_item,
@@ -1103,30 +1106,21 @@ class EmbeddingWorkerExecutionMixin:
                 _requeue_deferred_candidates(deferred_candidates)
                 grouped_chunk_in_flight = True
                 grouped_chunk_available.clear()
-                return lambda chunk=list(chunk): _run_grouped_chunk(chunk)
+                return len(chunk), lambda chunk=list(chunk): _run_grouped_chunk(chunk)
 
         async def _runner() -> None:
-            nonlocal active
             while True:
-                work_unit = await _plan_next_work_unit()
-                if work_unit is None:
+                planned = await _plan_next_work_unit()
+                if planned is None:
                     return
-
-                active += 1
-                set_batch_worker_saturation(
-                    worker_id=self.config.worker_id,
-                    active=active,
-                    capacity=self.config.worker_concurrency,
-                )
-                try:
+                item_count, work_unit = planned
+                if item_count <= 0:
+                    # Waiting for this slice's grouped chunk holds no pod slot.
                     await run_isolated_work_unit(work_unit, batch_id=job.batch_id)
-                finally:
-                    active -= 1
-                    set_batch_worker_saturation(
-                        worker_id=self.config.worker_id,
-                        active=active,
-                        capacity=self.config.worker_concurrency,
-                    )
+                    continue
+
+                async with slots.unit(items=item_count):
+                    await run_isolated_work_unit(work_unit, batch_id=job.batch_id)
 
         runner_count = min(max(1, self.config.worker_concurrency), len(items))
         async with asyncio.TaskGroup() as task_group:

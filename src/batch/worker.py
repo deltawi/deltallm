@@ -8,6 +8,7 @@ import logging
 import random
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
@@ -18,6 +19,7 @@ from src.batch.claim_diagnostics import (
     ClaimDecisionLogLimiter,
     claim_decision_reason_category,
 )
+from src.batch.execution_slots import BatchExecutionSlots, SliceTracker
 from src.batch.models import BatchJobStatus
 from src.batch.repository import BatchRepository
 from src.batch.scheduling.modes import (
@@ -57,7 +59,6 @@ from src.metrics import (
     publish_batch_runtime_summary,
     set_batch_scheduler_config_info,
     set_batch_scheduler_mode_info,
-    set_batch_worker_saturation,
 )
 from src.router.usage import record_router_usage
 from src.routers.embeddings import _execute_embedding
@@ -97,6 +98,15 @@ __all__ = [
 ]
 
 
+@dataclass(slots=True)
+class _PooledWork:
+    kind: str
+    # Runs when the task was cancelled before its first step, so it never
+    # reached its own finally (release claimed items, or the job lease).
+    release_unstarted: Callable[[], Awaitable[None]]
+    started: bool = False
+
+
 def _optional_worker_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -129,6 +139,9 @@ class BatchExecutorWorker:
         self._fair_share_flow_lock_busy_attempts: dict[tuple[str, str], int] = {}
         self._fair_share_flow_lock_busy_until: dict[tuple[str, str], float] = {}
         self._shadow_tasks: set[asyncio.Task[None]] = set()
+        # Slices (and at most one finalization) the claim loop runs at once.
+        self._pool_tasks: dict[asyncio.Task[None], _PooledWork] = {}
+        self._finalization_wanted = False
         self._claim_decision_log_limiter = ClaimDecisionLogLimiter(
             window_seconds=_CLAIM_DECISION_INFO_WINDOW_SECONDS,
             max_keys=_CLAIM_DECISION_INFO_MAX_KEYS,
@@ -226,7 +239,11 @@ class BatchExecutorWorker:
         try:
             while self._running:
                 try:
-                    did_work = await self.process_once()
+                    if self._slice_pool_enabled():
+                        did_work = await self._fill_slice_pool()
+                    else:
+                        await self._wait_for_pool_tasks()
+                        did_work = await self.process_once()
                 except Exception:
                     logger.exception("batch worker iteration failed")
                     await asyncio.sleep(self.config.poll_interval_seconds)
@@ -234,13 +251,194 @@ class BatchExecutorWorker:
                 if did_work:
                     self._reset_idle_backoff()
                 else:
-                    await asyncio.sleep(self._next_idle_poll_delay_seconds())
+                    await self._idle_wait(self._next_idle_poll_delay_seconds())
+        except asyncio.CancelledError:
+            await self._cancel_pool_tasks()
+            raise
         finally:
-            await self._cancel_shadow_tasks()
+            try:
+                await self._finish_pool_tasks()
+            finally:
+                await self._cancel_shadow_tasks()
+
+    async def _idle_wait(self, delay_seconds: float) -> None:
+        if not self._pool_tasks:
+            await asyncio.sleep(delay_seconds)
+            return
+        # A running slice's items count against model and tenant capacity, so
+        # retry as soon as one ends instead of sleeping out the idle backoff.
+        await asyncio.wait(
+            tuple(self._pool_tasks),
+            timeout=delay_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
     def stop(self) -> None:
         self._stop_requested = True
         self._running = False
+        # Wake a pool loop waiting for a free slot so it can drain and return.
+        self._execution_slots.notify()
+
+    @property
+    def _execution_slots(self) -> BatchExecutionSlots:
+        return self._execution_engine.execution_slots
+
+    def _max_slices_in_flight(self) -> int:
+        return max(1, int(getattr(self.config, "max_slices_in_flight", 1) or 1))
+
+    def _slice_pool_enabled(self) -> bool:
+        return self._max_slices_in_flight() > 1 and scheduler_mode_uses_work_slice(
+            self._active_scheduler_mode()
+        )
+
+    def _slices_in_flight(self) -> int:
+        return sum(1 for work in self._pool_tasks.values() if work.kind == "slice")
+
+    def _finalization_in_flight(self) -> bool:
+        return any(work.kind == "finalization" for work in self._pool_tasks.values())
+
+    def _slice_pool_has_room(self) -> bool:
+        # Claim again only once every claimed item has started and a slot is
+        # idle, so the new slice fills the old slice's tail instead of queueing.
+        slots = self._execution_slots
+        return (
+            self._slices_in_flight() < self._max_slices_in_flight()
+            and slots.waiting == 0
+            and slots.free > 0
+        )
+
+    async def _fill_slice_pool(self) -> bool:
+        self._reap_pool_tasks()
+        if not self._slice_pool_has_room():
+            if self._finalization_wanted and not self._finalization_in_flight():
+                self._finalization_wanted = False
+                await self._start_pooled_finalization()
+                return True
+            await self._execution_slots.wait_changed(
+                timeout=max(0.05, float(self.config.poll_interval_seconds or 1.0))
+            )
+            self._reap_pool_tasks()
+            return True
+        active_mode = await self._begin_iteration()
+        if not scheduler_mode_uses_work_slice(active_mode):
+            return True
+        if (
+            self.config.finalization_first or self._finalization_wanted
+        ) and not self._finalization_in_flight():
+            self._finalization_wanted = False
+            if await self._start_pooled_finalization():
+                return True
+        claim, claim_latency_seconds = await self._claim_observed_work_slice(active_mode)
+        if claim is None:
+            return await self._after_empty_work_claim(
+                active_mode=active_mode,
+                claim_latency_seconds=claim_latency_seconds,
+                finalize=self._start_pooled_finalization,
+            )
+        tracker = self._execution_slots.open_slice(len(claim.item_ids))
+
+        async def _release_unstarted() -> None:
+            self._execution_slots.close_slice(tracker)
+            await self.repository.release_claim_items(
+                item_ids=claim.item_ids, worker_id=self.config.worker_id
+            )
+
+        self._start_pooled(
+            "slice",
+            lambda: self._run_pooled_work_slice(claim, active_mode=active_mode, tracker=tracker),
+            release_unstarted=_release_unstarted,
+            name=f"batch-slice:{claim.claim_id}",
+        )
+        return True
+
+    async def _start_pooled_finalization(self) -> bool:
+        """Claim one finalization and run it beside the slices, not in front of them."""
+        if self._finalization_in_flight():
+            return False
+        job = await self._claim_finalization()
+        if job is None:
+            return False
+
+        async def _release_unstarted() -> None:
+            await self.repository.release_job_lease(
+                batch_id=job.batch_id, worker_id=self.config.worker_id
+            )
+
+        self._start_pooled(
+            "finalization",
+            lambda: self._process_finalization_job(job),
+            release_unstarted=_release_unstarted,
+            name=f"batch-finalization:{job.batch_id}",
+        )
+        return True
+
+    def _start_pooled(
+        self,
+        kind: str,
+        work: Callable[[], Awaitable[None]],
+        *,
+        release_unstarted: Callable[[], Awaitable[None]],
+        name: str,
+    ) -> None:
+        pooled = _PooledWork(kind=kind, release_unstarted=release_unstarted)
+
+        async def _run() -> None:
+            pooled.started = True
+            try:
+                await work()
+            except Exception:
+                logger.exception("batch worker %s failed task=%s", kind, name)
+                # Hold this place for one poll, as a failed iteration always
+                # paused, so a failing dependency is not claimed against in a loop.
+                await asyncio.sleep(self.config.poll_interval_seconds)
+
+        task = asyncio.create_task(_run(), name=name)
+        self._pool_tasks[task] = pooled
+
+    async def _run_pooled_work_slice(
+        self, claim: Any, *, active_mode: str, tracker: SliceTracker
+    ) -> None:
+        await self._process_claimed_work_slice(
+            claim, active_mode=active_mode, tracker=tracker, finalize_inline=False
+        )
+
+    def _reap_pool_tasks(self) -> None:
+        for task in [task for task in self._pool_tasks if task.done()]:
+            del self._pool_tasks[task]
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                task.result()
+
+    async def _wait_for_pool_tasks(self) -> None:
+        if not self._pool_tasks:
+            return
+        await asyncio.gather(*tuple(self._pool_tasks), return_exceptions=True)
+        self._reap_pool_tasks()
+
+    async def _finish_pool_tasks(self) -> None:
+        # A stopped worker finishes the slices it claimed, as it always finished
+        # its one slice. A cancelled drain cancels them instead.
+        try:
+            await self._wait_for_pool_tasks()
+        except asyncio.CancelledError:
+            await self._cancel_pool_tasks()
+            raise
+
+    async def _cancel_pool_tasks(self) -> None:
+        pooled = dict(self._pool_tasks)
+        if not pooled:
+            return
+        for task in pooled:
+            task.cancel()
+        await asyncio.gather(*pooled, return_exceptions=True)
+        self._reap_pool_tasks()
+        # A task cancelled before its first step never ran its own cleanup.
+        for work in pooled.values():
+            if work.started:
+                continue
+            try:
+                await work.release_unstarted()
+            except Exception:
+                logger.warning("batch worker could not release unstarted %s", work.kind)
 
     def _reset_idle_backoff(self) -> None:
         self._idle_backoff_attempts = 0
@@ -508,6 +706,12 @@ class BatchExecutorWorker:
         return self._applied_scheduler_config_generation
 
     async def process_once(self) -> bool:
+        active_mode = await self._begin_iteration()
+        if scheduler_mode_uses_work_slice(active_mode):
+            return await self._process_once_work_slice()
+        return await self._process_once_job_fifo()
+
+    async def _begin_iteration(self) -> str:
         await self._execution_engine._drain_policy_lease_release_retries()
         self._reap_shadow_tasks()
         active_mode = self._active_scheduler_mode()
@@ -518,9 +722,7 @@ class BatchExecutorWorker:
             shadow_mode=shadow_mode,
             config_hash=self._scheduler_config_hash(),
         )
-        if scheduler_mode_uses_work_slice(active_mode):
-            return await self._process_once_work_slice()
-        return await self._process_once_job_fifo()
+        return active_mode
 
     def _active_scheduler_mode(self) -> str:
         if self.config.scheduler_mode:
@@ -897,11 +1099,7 @@ class BatchExecutorWorker:
             latency_seconds=time.perf_counter() - claim_started,
         )
         if job is None:
-            set_batch_worker_saturation(
-                worker_id=self.config.worker_id,
-                active=0,
-                capacity=self.config.worker_concurrency,
-            )
+            self._execution_slots.publish()
             return False
         logger.info("batch claimed id=%s status=%s", job.batch_id, job.status)
         job_heartbeat = self._start_heartbeat(
@@ -935,11 +1133,7 @@ class BatchExecutorWorker:
             await self._refresh_batch_runtime_metrics()
             return True
         finally:
-            set_batch_worker_saturation(
-                worker_id=self.config.worker_id,
-                active=0,
-                capacity=self.config.worker_concurrency,
-            )
+            self._execution_slots.publish()
             await self._stop_heartbeat(job_heartbeat)
             await self.repository.release_job_lease(
                 batch_id=job.batch_id, worker_id=self.config.worker_id
@@ -959,25 +1153,24 @@ class BatchExecutorWorker:
             await self._finalize_with_retry(job)
             await self._refresh_batch_runtime_metrics()
         finally:
-            set_batch_worker_saturation(
-                worker_id=self.config.worker_id,
-                active=0,
-                capacity=self.config.worker_concurrency,
-            )
+            self._execution_slots.publish()
             await self._stop_heartbeat(job_heartbeat)
             await self.repository.release_job_lease(
                 batch_id=job.batch_id, worker_id=self.config.worker_id
             )
 
-    async def _try_process_finalization_claim(self) -> bool:
+    async def _claim_finalization(self):  # noqa: ANN202
         job = await self.repository.claim_next_finalization(
             worker_id=self.config.worker_id,
             lease_seconds=self.config.job_lease_seconds,
         )
+        increment_batch_finalization_claim(result="empty" if job is None else "claimed")
+        return job
+
+    async def _try_process_finalization_claim(self) -> bool:
+        job = await self._claim_finalization()
         if job is None:
-            increment_batch_finalization_claim(result="empty")
             return False
-        increment_batch_finalization_claim(result="claimed")
         await self._process_finalization_job(job)
         return True
 
@@ -986,6 +1179,16 @@ class BatchExecutorWorker:
             return True
 
         active_mode = self._active_scheduler_mode()
+        claim, claim_latency_seconds = await self._claim_observed_work_slice(active_mode)
+        if claim is None:
+            return await self._after_empty_work_claim(
+                active_mode=active_mode, claim_latency_seconds=claim_latency_seconds
+            )
+        tracker = self._execution_slots.open_slice(len(claim.item_ids))
+        await self._process_claimed_work_slice(claim, active_mode=active_mode, tracker=tracker)
+        return True
+
+    async def _claim_observed_work_slice(self, active_mode: str) -> tuple[Any | None, float]:
         claim_started = time.perf_counter()
         claim = await self._claim_next_work_slice()
         claim_latency_seconds = time.perf_counter() - claim_started
@@ -998,27 +1201,7 @@ class BatchExecutorWorker:
             latency_seconds=claim_latency_seconds,
         )
         if claim is None:
-            increment_batch_work_claim(result="empty", claim_mode=active_mode)
-            set_batch_worker_saturation(
-                worker_id=self.config.worker_id,
-                active=0,
-                capacity=self.config.worker_concurrency,
-            )
-            # Try finalization fallback first to avoid running the empty-claim
-            # diagnostic when there's actually work to do; the diagnostic is a
-            # multi-EXISTS query worth saving on every successful fallback.
-            if not self.config.finalization_first and await self._try_process_finalization_claim():
-                return True
-            diagnostic = await self._empty_work_claim_diagnostic(active_mode=active_mode)
-            increment_batch_claim_empty_job(reason=diagnostic.reason)
-            self._record_blocked_claim_decision(diagnostic, active_mode=active_mode)
-            self._log_claim_decision(
-                "empty",
-                diagnostic,
-                active_mode=active_mode,
-                latency_seconds=claim_latency_seconds,
-            )
-            return False
+            return None, claim_latency_seconds
 
         increment_batch_work_claim(result="claimed", claim_mode=active_mode)
         observe_batch_work_claim_items(
@@ -1037,7 +1220,57 @@ class BatchExecutorWorker:
             claim.claimed_work_units,
             extra=self._claim_success_log_extra(claim, active_mode=active_mode),
         )
+        return claim, claim_latency_seconds
 
+    async def _after_empty_work_claim(
+        self,
+        *,
+        active_mode: str,
+        claim_latency_seconds: float,
+        finalize: Callable[[], Awaitable[bool]] | None = None,
+    ) -> bool:
+        increment_batch_work_claim(result="empty", claim_mode=active_mode)
+        self._execution_slots.publish()
+        # Try finalization fallback first to avoid running the empty-claim
+        # diagnostic when there's actually work to do; the diagnostic is a
+        # multi-EXISTS query worth saving on every successful fallback.
+        finalize = finalize or self._try_process_finalization_claim
+        if not self.config.finalization_first and await finalize():
+            return True
+        diagnostic = await self._empty_work_claim_diagnostic(active_mode=active_mode)
+        increment_batch_claim_empty_job(reason=diagnostic.reason)
+        self._record_blocked_claim_decision(diagnostic, active_mode=active_mode)
+        self._log_claim_decision(
+            "empty",
+            diagnostic,
+            active_mode=active_mode,
+            latency_seconds=claim_latency_seconds,
+        )
+        return False
+
+    async def _process_claimed_work_slice(
+        self,
+        claim: Any,
+        *,
+        active_mode: str,
+        tracker: SliceTracker,
+        finalize_inline: bool = True,
+    ) -> None:
+        slots = self._execution_slots
+        # Units this slice starts (and only those) count down its waiting items.
+        token = slots.bind_slice(tracker)
+        try:
+            await self._run_claimed_work_slice(
+                claim, active_mode=active_mode, finalize_inline=finalize_inline
+            )
+        finally:
+            slots.unbind_slice(token)
+            slots.close_slice(tracker)
+
+    async def _run_claimed_work_slice(
+        self, claim: Any, *, active_mode: str, finalize_inline: bool
+    ) -> None:
+        slots = self._execution_slots
         # Cancel branch already releases items explicitly; skip the redundant
         # finally release in that case to save one DB round trip per cancel.
         needs_finally_release = True
@@ -1046,7 +1279,7 @@ class BatchExecutorWorker:
             if job is None:
                 logger.warning("batch work slice skipped after missing job id=%s", claim.batch_id)
                 increment_batch_work_claim(result="missing_job", claim_mode=active_mode)
-                return True
+                return
 
             if job.cancel_requested_at is not None:
                 await self.repository.release_claim_items(
@@ -1057,6 +1290,7 @@ class BatchExecutorWorker:
                 needs_finally_release = False
             else:
                 items = await self.repository.load_claim_items(claim.item_ids)
+                slots.set_waiting(len(items))
                 if not items:
                     logger.warning(
                         "batch work slice skipped after missing claimed items id=%s", claim.batch_id
@@ -1067,6 +1301,9 @@ class BatchExecutorWorker:
                 else:
                     await self._process_items(job, items)
         finally:
+            # Every item has run (or never will): let the worker claim again
+            # while this slice releases leftovers and refreshes its job.
+            slots.set_waiting(0)
             if needs_finally_release:
                 released = await self.repository.release_claim_items(
                     item_ids=claim.item_ids,
@@ -1079,19 +1316,19 @@ class BatchExecutorWorker:
                         claim.claim_id,
                         released,
                     )
-            set_batch_worker_saturation(
-                worker_id=self.config.worker_id,
-                active=0,
-                capacity=self.config.worker_concurrency,
-            )
+            self._execution_slots.publish()
 
         refreshed_jobs = await self.repository.refresh_jobs_after_claim([claim.batch_id])
         for refreshed in refreshed_jobs:
             if refreshed.status == BatchJobStatus.FINALIZING:
-                await self._try_process_finalization_claim()
+                if finalize_inline:
+                    await self._try_process_finalization_claim()
+                else:
+                    # The claim loop finalizes it beside the other slices.
+                    self._finalization_wanted = True
+                    self._execution_slots.notify()
                 break
         await self._refresh_batch_runtime_metrics()
-        return True
 
     async def _claim_next_work_slice(self):
         max_items = self._work_claim_max_items()

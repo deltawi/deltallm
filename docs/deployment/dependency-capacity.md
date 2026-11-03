@@ -88,10 +88,14 @@ and `outcome="full"` when every waiting position is taken.
 Size `db_pool_size` on batch worker pods for the batch work one process runs at once:
 `embeddings_batch_worker_concurrency` running items, plus the completion outbox (the
 same number, at most 8, when `embeddings_batch_completion_outbox_worker_enabled` is on),
-plus 2 for claims, the stale lease sweeper and finalization. For example, a concurrency
-of 16 needs a `db_pool_size` of at least 26. A batch worker logs a warning at startup
-when its pool is smaller. A bigger pool counts toward the PostgreSQL connection budget
-below, so to run more items at once you can also add batch worker pods instead.
+plus 2 for claims, the stale lease sweeper and finalization, plus 1 for each extra slice
+the worker runs at once with work-slice scheduling
+(`embeddings_batch_worker_max_slices_in_flight` minus 1; a slice that has finished its
+items saves its leftovers and job progress while the next one runs).
+For example, a concurrency of 16 with the default 2 slices needs a `db_pool_size` of at
+least 27. A batch worker logs a warning at startup when its pool is smaller. A bigger
+pool counts toward the PostgreSQL connection budget below, so to run more items at once
+you can also add batch worker pods instead.
 
 The telemetry acceptance and settlement allocations each reserve one bounded
 waiting position per configured connection for required writes. With ordinary
