@@ -664,3 +664,37 @@ async def test_a_read_failure_after_sending_is_never_sent_again():
         assert len(calls) == 1
     finally:
         await client.close()
+
+
+async def test_a_first_lookup_is_tried_again_inside_the_deadline():
+    resolutions, paths = [], []
+
+    async def resolve(hostname, port):
+        resolutions.append(hostname)
+        if len(resolutions) < 3:
+            raise OutboundResolutionError()
+        return ("8.8.8.8",)
+
+    async def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, content=b"[]")
+
+    client = counted_transport(handler, resolve)
+    try:
+        assert (
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+            == b"[]"
+        )
+        # One checked address serves every endpoint.
+        await client.request(
+            "/allocate/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+        )
+        assert len(resolutions) == 3
+        assert paths == [
+            "/internal/accounting/v1/finalize/local/batch",
+            "/internal/accounting/v1/allocate/local/batch",
+        ]
+    finally:
+        await client.close()

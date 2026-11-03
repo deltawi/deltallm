@@ -43,6 +43,7 @@ DRAINING_REPLY_MAX_BYTES = 4096
 # The accounting service name is a stable in-cluster address. A checked answer
 # is reused for this long, and an older one is kept for when a lookup fails.
 ACCOUNTING_RESOLUTION_TTL_SECONDS = 30.0
+ACCOUNTING_RESOLUTION_ATTEMPTS = 3
 
 
 AccountingEndpoint = Literal[
@@ -91,7 +92,7 @@ class AccountingHttpTransport:
         self._secret = signing_secret
         self._closed = False
         self._network_policy = network_policy or OutboundNetworkPolicy()
-        self._targets: dict[str, tuple[float, ResolvedOutboundTarget]] = {}
+        self._target: tuple[float, ResolvedOutboundTarget] | None = None
         self._client = httpx.AsyncClient(
             base_url=str(url),
             transport=transport,
@@ -187,39 +188,45 @@ class AccountingHttpTransport:
                 await asyncio.sleep(pause)
         raise AssertionError("unreachable")
 
-    async def _resolve(self, path: str) -> ResolvedOutboundTarget:
-        """Check the service address, reusing a recent answer for the same path.
+    async def _resolve(self) -> ResolvedOutboundTarget:
+        """Check the service address, reusing a recent answer for every endpoint.
 
-        A failed lookup happens before any byte is sent. When this process has
-        already checked an address for the path, that address is used instead,
-        because a busy cluster DNS must not turn into a lost finalization.
+        A lookup happens before any byte is sent, so a failed one is safe to
+        repeat. When this process has already checked an address, that address
+        is used instead; otherwise the lookup is tried again inside the caller's
+        deadline. A busy cluster DNS must not turn into a lost finalization.
         """
-        now = asyncio.get_running_loop().time()
-        cached = self._targets.get(path)
-        if cached is not None and now - cached[0] < ACCOUNTING_RESOLUTION_TTL_SECONDS:
+        loop = asyncio.get_running_loop()
+        cached = self._target
+        if cached is not None and loop.time() - cached[0] < ACCOUNTING_RESOLUTION_TTL_SECONDS:
             return cached[1]
-        try:
-            target = await self._network_policy.resolve(str(self._client.base_url.join(path)))
-        except OutboundResolutionError:
-            if cached is None:
-                raise
-            accounting_resolution_fallbacks.inc()
-            return cached[1]
-        self._targets[path] = (asyncio.get_running_loop().time(), target)
-        return target
+        for attempt in range(1, ACCOUNTING_RESOLUTION_ATTEMPTS + 1):
+            try:
+                target = await self._network_policy.resolve(str(self._client.base_url))
+            except OutboundResolutionError:
+                if cached is not None:
+                    accounting_resolution_fallbacks.inc()
+                    return cached[1]
+                if attempt == ACCOUNTING_RESOLUTION_ATTEMPTS:
+                    raise
+                await asyncio.sleep(ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS * attempt)
+                continue
+            self._target = (loop.time(), target)
+            return target
+        raise AssertionError("unreachable")
 
     async def _request_target(
         self, path: str, body: bytes, headers: dict[str, str], remaining: float, expires_at: float
     ) -> bytes:
         async with asyncio.timeout_at(expires_at):
-            target = await self._resolve(path)
+            target = await self._resolve()
             headers["Host"] = target.host_header
             extensions = (
                 {} if target.sni_hostname is None else {"sni_hostname": target.sni_hostname}
             )
             async with self._client.stream(
                 "GET" if path == ACCOUNTING_INTERNAL_PREFIX + "/health" else "POST",
-                target.connection_url,
+                target.connection_url.rstrip("/") + path,
                 content=body,
                 headers=headers,
                 timeout=httpx.Timeout(remaining),

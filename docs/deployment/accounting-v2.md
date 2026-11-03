@@ -53,8 +53,10 @@ the durable event stream.
   because it never carried the request. No other failure is sent again. The
   `deltallm_accounting_transport_drain_retries_total` counter shows these sends.
 - API and batch pods reuse a checked accounting service address for 30 seconds,
-  and keep using the last checked address when a cluster DNS lookup fails. A busy
-  DNS server during a rollout then cannot leave a finished call provisional. The
+  and keep using the last checked address when a cluster DNS lookup fails. A
+  first lookup that fails is tried up to three times inside the call's deadline.
+  A busy DNS server during a rollout then cannot leave a finished call
+  provisional. The
   `deltallm_accounting_transport_resolution_fallbacks_total` counter shows these
   calls.
 - An accounting worker that starts while the database is busy repeats its

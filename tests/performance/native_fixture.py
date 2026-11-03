@@ -273,7 +273,7 @@ def collect_role_logs(cluster: LifecycleCluster) -> None:
     commands = {
         "events": ("get", "events", "--sort-by=.lastTimestamp", "-o", "wide"),
         **{
-            f"{role}{suffix}": (
+            role: (
                 "logs",
                 "-l",
                 selector,
@@ -281,10 +281,8 @@ def collect_role_logs(cluster: LifecycleCluster) -> None:
                 "--prefix",
                 "--tail=2000",
                 "--max-log-requests=8",
-                *flags,
             )
             for role, selector in ROLE_SELECTORS.items()
-            for suffix, flags in (("", ()), ("-previous", ("--previous",)))
         },
     }
     for name, arguments in commands.items():
@@ -294,6 +292,47 @@ def collect_role_logs(cluster: LifecycleCluster) -> None:
         except Exception as error:
             payload = "Log collection failed: " + type(error).__name__ + "\n"
         (destination / f"{name}.log").write_text(payload)
+    for role, selector in ROLE_SELECTORS.items():
+        (destination / f"{role}-previous.log").write_text(previous_logs(cluster, selector))
+
+
+def previous_logs(cluster: LifecycleCluster, selector: str) -> str:
+    """The last run of each restarted container, named by pod and container.
+
+    ``--all-containers --previous`` fails as soon as one container (an init
+    container) never restarted, so each restarted container is asked for alone.
+    """
+    try:
+        listed = cluster.kubectl(
+            "get", "pods", "-l", selector, "-o", "json", "--request-timeout=10s", timeout=30
+        )
+        pods = json.loads(listed.stdout)["items"]
+    except Exception as error:
+        return "Log collection failed: " + type(error).__name__ + "\n"
+    parts = []
+    for pod in pods:
+        name = pod["metadata"]["name"]
+        for status in pod.get("status", {}).get("containerStatuses", []):
+            if not status.get("restartCount"):
+                continue
+            try:
+                result = cluster.kubectl(
+                    "logs",
+                    name,
+                    "-c",
+                    status["name"],
+                    "--previous",
+                    "--timestamps",
+                    "--tail=3000",
+                    "--request-timeout=10s",
+                    check=False,
+                    timeout=30,
+                )
+                text = result.stdout + result.stderr
+            except Exception as error:
+                text = "Log collection failed: " + type(error).__name__ + "\n"
+            parts.append(f"===== {name}/{status['name']} (previous) =====\n{text[-1024 * 1024 :]}")
+    return "\n".join(parts) or "No container restarted.\n"
 
 
 FOLLOWED_ROLES = ("api", "accounting_request", "accounting_worker", "batch_worker")

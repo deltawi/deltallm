@@ -78,7 +78,11 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             # Short run that proves the soak itself on a pull request. 4,000 items
             # put about 1,300 on each batch pod, past one 8 MB receipt store.
-            args="--batch-items 4000 --batch-timeout 900 --api-rate 100 --api-seconds 120"
+            # At 100 RPS the hosted runner's CPU sat at 96% (p95) and an API pod
+            # missed its liveness probe; 50 RPS still keeps every role busy.
+            rate=100
+            if [ -z "$LARGER_RUNNER" ]; then rate=50; fi
+            args="--batch-items 4000 --batch-timeout 900 --api-rate $rate --api-seconds 120"
           elif [ "$EVENT" = workflow_dispatch ]; then
             for value in "$BATCH_ITEMS" "$API_RATE" "$API_SECONDS"; do
               [[ "$value" =~ ^[0-9]+$ ]] || { echo "Inputs must be whole numbers"; exit 1; }
@@ -92,7 +96,9 @@ jobs:
             # generator share one kind node, and chat p95 measured 0.2 to 0.3 s
             # at 100 RPS. The 50 ms gateway target needs SOAK_RUNNER; here the
             # latency gate only catches a large regression.
+            # Batch throughput measured 36 to 54 items/s there between runs.
             args="$args --max-p95-seconds 0.5 --max-embedding-p95-seconds 0.75"
+            args="$args --min-batch-items-per-second 30"
           fi
           echo "args=$args" >> "$GITHUB_OUTPUT"
       - name: Soak batch and API load on accounting v2

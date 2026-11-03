@@ -131,8 +131,15 @@ a larger runner label. The workflow uses that label when it is set.
 Without `SOAK_RUNNER`, the latency gates are 0.5 s for chat and 0.75 s for
 embeddings instead of 50 ms and 0.25 s. On the 4-vCPU runner chat p95 measured
 0.2 to 0.3 s at 100 RPS with no errors, so the strict targets there measure
-the runner. Every other check stays the same. Each API window reports
-`host_cpu`, the busy share of the runner's CPUs, to show how loaded it was.
+the runner. The batch throughput floor is 30 items/s instead of 50, since it
+measured 36 to 54 items/s between runs there. The pull request run sends 50
+chat RPS instead of 100: at 100 RPS the runner's CPU was 96 % busy (p95) and
+an API pod missed its liveness probe. Every other check stays the same. Each
+API window reports `host_cpu`, the busy share of the runner's CPUs, to show
+how loaded it was.
+
+After a run, `roles/<role>-previous.log` holds the last run of every container
+that restarted, so a probe kill shows what the pod was doing.
 
 ## Bounded state
 
