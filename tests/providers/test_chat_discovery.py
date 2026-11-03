@@ -11,6 +11,7 @@ from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
 from src.providers.discovery_runtime import MAX_DISCOVERY_BYTES, ProviderDiscoveryRuntime
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.providers.healthcheck import probe_provider_health
+from src.providers.model_catalog import catalog_model_metadata
 from src.providers.model_discovery import discover_provider_models
 
 
@@ -66,7 +67,10 @@ async def test_catalog_and_live_discovery(contract):
     matches = [item for item in result["data"] if item["id"] == contract["model"]]
     assert len(matches) == 1
     assert matches[0]["supported_modes"] == ["chat"]
-    assert matches[0]["known_metadata"] is None
+    # Known data comes from the curated catalog when it has the model.
+    assert matches[0]["known_metadata"] == catalog_model_metadata(
+        contract["provider"], contract["model"]
+    )
     if contract["provider"] == "zai":
         assert not calls
         assert result["warnings"]
