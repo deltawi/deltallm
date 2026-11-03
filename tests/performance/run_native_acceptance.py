@@ -216,11 +216,29 @@ async def finish_batch(url: str, batch_id: str, *, timeout: float) -> dict:
         async with local_database() as db:
             stats = await item_stats(db, [batch_id])
         assert not timed_out, f"batch did not settle in {timeout:.0f} s: {stats}"
-        assert document["status"] == "completed", (document, stats)
-        assert document["request_counts"]["completed"] == BATCH_ITEMS, (document, stats)
-        assert document["request_counts"]["failed"] == 0, (document, stats)
-        assert await verify_outputs(http, document) == BATCH_ITEMS
-    return {"batch_id": batch_id, "seconds": elapsed, "items": stats}
+        counts = document["request_counts"]
+        failures = []
+        if document["status"] != "completed":
+            failures.append("job_not_completed")
+        if counts["failed"]:
+            failures.append("items_failed")
+        if counts["completed"] + counts["failed"] != BATCH_ITEMS:
+            failures.append("item_count_mismatch")
+        # Failed items are reported, not raised, so the step still checks the ledger.
+        if (
+            document.get("output_file_id")
+            and await verify_outputs(http, document) != counts["completed"]
+        ):
+            failures.append("output_rows_mismatch")
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "batch_id": batch_id,
+        "seconds": elapsed,
+        "completed": counts["completed"],
+        "failed": counts["failed"],
+        "items": stats,
+    }
 
 
 async def counted_arrival(url: str, *, rate: float, duration: float) -> dict:
@@ -335,9 +353,10 @@ async def rollout(cluster: LifecycleCluster, values: Path, url: str) -> dict:
         "rollout",
         baseline=baseline,
         before=before,
-        charged=traffic["success_count"] + BATCH_ITEMS,
+        charged=traffic["success_count"] + batch["completed"],
     )
     cluster.event("native_rollout_completed", batch_seconds=round(batch["seconds"], 1))
+    settled["passed"] = settled["passed"] and batch["passed"]
     return {"traffic": traffic, "batch": batch, **settled}
 
 
@@ -381,13 +400,14 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
         "pod-loss",
         baseline=baseline,
         before=before,
-        charged=traffic["success_count"] + BATCH_ITEMS,
+        charged=traffic["success_count"] + batch["completed"],
         # A killed API pod may have charged answers its client never received.
         allowed_extra=rejected,
         # SIGKILL leaves the killed pods' reservations to expiry recovery.
         timeout=EXPIRY_RECOVERY_SECONDS,
     )
     cluster.event("native_pod_loss_recovered", batch_seconds=round(batch["seconds"], 1))
+    settled["passed"] = settled["passed"] and batch["passed"]
     return {"killed": killed, "traffic": traffic, "batch": batch, **settled}
 
 
