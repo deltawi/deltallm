@@ -22,12 +22,13 @@ from src.billing.accounting.transport.accounting_auth import (
 from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.ingress import DRAINING_CODE
-from src.metrics.accounting import accounting_drain_retries
+from src.metrics.accounting import accounting_drain_retries, accounting_resolution_fallbacks
 from src.outbound.http import suppress_httpcore_debug_traces
 from src.outbound.network_policy import (
     OutboundNetworkPolicy,
     OutboundPolicyError,
     OutboundResolutionError,
+    ResolvedOutboundTarget,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,9 @@ ACCOUNTING_HTTP_KEEPALIVE_EXPIRY_SECONDS = 4.0
 ACCOUNTING_DRAIN_RETRY_ATTEMPTS = 3
 ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS = 0.05
 DRAINING_REPLY_MAX_BYTES = 4096
+# The accounting service name is a stable in-cluster address. A checked answer
+# is reused for this long, and an older one is kept for when a lookup fails.
+ACCOUNTING_RESOLUTION_TTL_SECONDS = 30.0
 
 
 AccountingEndpoint = Literal[
@@ -87,6 +91,7 @@ class AccountingHttpTransport:
         self._secret = signing_secret
         self._closed = False
         self._network_policy = network_policy or OutboundNetworkPolicy()
+        self._targets: dict[str, tuple[float, ResolvedOutboundTarget]] = {}
         self._client = httpx.AsyncClient(
             base_url=str(url),
             transport=transport,
@@ -156,11 +161,12 @@ class AccountingHttpTransport:
     async def _request_with_drain_retry(
         self, path: str, body: bytes, headers: dict[str, str], expires_at: float
     ) -> bytes:
-        """Send again only when a draining pod refused the call before running it.
+        """Send again only when the call cannot have reached a handler.
 
-        The draining reply is written by ingress admission before the request
-        reaches any handler, so the call did nothing and a second send cannot
-        repeat work. The reply closes its connection, so the next send opens a
+        A draining reply is written by ingress admission before the request
+        reaches any handler, and a refused connection never carried the body,
+        so in both cases the call did nothing and a second send cannot repeat
+        work. The draining reply closes its connection, so the next send opens a
         connection to a pod that is still serving. Every other failure, including
         a timeout or a reset after the body was sent, stays a single attempt.
         """
@@ -168,22 +174,45 @@ class AccountingHttpTransport:
             remaining = expires_at - asyncio.get_running_loop().time()
             try:
                 return await self._request_target(path, body, headers, remaining, expires_at)
-            except _DrainingReject as reject:
+            except (_DrainingReject, httpx.ConnectError) as refused:
                 pause = ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS * attempt
                 if (
                     attempt == ACCOUNTING_DRAIN_RETRY_ATTEMPTS
                     or expires_at - asyncio.get_running_loop().time() <= pause
                 ):
-                    raise reject.error from None
+                    if isinstance(refused, _DrainingReject):
+                        raise refused.error from None
+                    raise
                 accounting_drain_retries.inc()
                 await asyncio.sleep(pause)
         raise AssertionError("unreachable")
+
+    async def _resolve(self, path: str) -> ResolvedOutboundTarget:
+        """Check the service address, reusing a recent answer for the same path.
+
+        A failed lookup happens before any byte is sent. When this process has
+        already checked an address for the path, that address is used instead,
+        because a busy cluster DNS must not turn into a lost finalization.
+        """
+        now = asyncio.get_running_loop().time()
+        cached = self._targets.get(path)
+        if cached is not None and now - cached[0] < ACCOUNTING_RESOLUTION_TTL_SECONDS:
+            return cached[1]
+        try:
+            target = await self._network_policy.resolve(str(self._client.base_url.join(path)))
+        except OutboundResolutionError:
+            if cached is None:
+                raise
+            accounting_resolution_fallbacks.inc()
+            return cached[1]
+        self._targets[path] = (asyncio.get_running_loop().time(), target)
+        return target
 
     async def _request_target(
         self, path: str, body: bytes, headers: dict[str, str], remaining: float, expires_at: float
     ) -> bytes:
         async with asyncio.timeout_at(expires_at):
-            target = await self._network_policy.resolve(str(self._client.base_url.join(path)))
+            target = await self._resolve(path)
             headers["Host"] = target.host_header
             extensions = (
                 {} if target.sni_hostname is None else {"sni_hostname": target.sni_hostname}

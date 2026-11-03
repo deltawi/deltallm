@@ -49,8 +49,17 @@ the durable event stream.
 - A draining accounting request pod refuses new calls with `gateway_draining` and
   closes the connection. The API pod sends that call again, up to two more times
   inside the same deadline, so a rollout does not turn a successful provider call
-  into a provisional debit. No other failure is sent again. The
+  into a provisional debit. A refused connection is sent again the same way,
+  because it never carried the request. No other failure is sent again. The
   `deltallm_accounting_transport_drain_retries_total` counter shows these sends.
+- API and batch pods reuse a checked accounting service address for 30 seconds,
+  and keep using the last checked address when a cluster DNS lookup fails. A busy
+  DNS server during a rollout then cannot leave a finished call provisional. The
+  `deltallm_accounting_transport_resolution_fallbacks_total` counter shows these
+  calls.
+- An accounting worker that starts while the database is busy repeats its
+  idempotent setup statements until its startup deadline, instead of exiting on
+  the first slow statement.
 - A failover deployment may run only if the first reservation covers its worst-case
   customer charge. Earlier attempts stay provisional until evidence resolves them.
 - Local queues and stores are bounded and refuse work when full. See

@@ -64,7 +64,12 @@ accounting_failures = Counter(
 )
 accounting_drain_retries = Counter(
     "deltallm_accounting_transport_drain_retries_total",
-    "Accounting calls sent again because a draining pod refused them before running them",
+    "Accounting calls sent again because a draining pod or a refused connection stopped them before they ran",
+    registry=get_prometheus_registry(),
+)
+accounting_resolution_fallbacks = Counter(
+    "deltallm_accounting_transport_resolution_fallbacks_total",
+    "Accounting calls that used this process's last checked service address after a failed lookup",
     registry=get_prometheus_registry(),
 )
 accounting_reservation_decisions = Counter(

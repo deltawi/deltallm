@@ -19,7 +19,10 @@ from src.billing.accounting.health.accounting_read_model_health import (
     ReadModelHealth,
     ReadModelProgress,
 )
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.accounting_calls import (
+    AccountingProtocolUnavailable,
+    retry_idempotent_startup_call,
+)
 from src.db.accounting.permits.accounting_permit_results import invalid_result
 from src.metrics.accounting import increment_accounting_projection
 from src.telemetry.worker_idle import IdleWorkerPoll
@@ -131,8 +134,11 @@ class ReadModelProcessingWorker:
             raise RuntimeError("read-model processing cannot restart after close")
         try:
             async with asyncio.timeout_at(expires_at):
-                await self._persistence.initialize(
-                    generation=self._config.generation, expires_at=expires_at
+                await retry_idempotent_startup_call(
+                    lambda: self._persistence.initialize(
+                        generation=self._config.generation, expires_at=expires_at
+                    ),
+                    expires_at=expires_at,
                 )
             if self._task is None:
                 self._startup_deadline = expires_at

@@ -13,7 +13,10 @@ from pydantic import Field, model_validator
 
 from src.billing.charges.selector_charge import FrozenBillingContract
 from src.concurrency import CapacityGateFull
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.accounting_calls import (
+    AccountingProtocolUnavailable,
+    retry_idempotent_startup_call,
+)
 from src.db.accounting.permits.accounting_permit_results import invalid_result
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.telemetry.lifecycle import WorkerHealth, WorkerHealthSource, WorkerState
@@ -106,8 +109,11 @@ class ProjectionPresencePublisher:
         self._enter()
         try:
             async with asyncio.timeout_at(expires_at):
-                await self._persistence.initialize(
-                    generation=self.generation, expires_at=expires_at
+                await retry_idempotent_startup_call(
+                    lambda: self._persistence.initialize(
+                        generation=self.generation, expires_at=expires_at
+                    ),
+                    expires_at=expires_at,
                 )
                 await self._acquire(expires_at=expires_at)
         finally:

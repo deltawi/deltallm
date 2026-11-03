@@ -6,10 +6,10 @@ import asyncio
 import logging
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from enum import StrEnum
 from time import perf_counter
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
 from src.metrics.accounting import observe_accounting_database_call
@@ -22,6 +22,25 @@ _REJECTION_CODE = re.compile(r"accounting_[a-z0-9_]{1,96}")
 _SQLSTATE = re.compile(r"[0-9A-Z]{5}")
 _LOG_INTERVAL_SECONDS = 30.0
 _LOG_KEYS_MAX = 256
+# A process that starts while the database is busy waits for it, up to its
+# startup deadline, instead of exiting on one slow statement.
+STARTUP_RETRY_PAUSE_SECONDS = 0.1
+STARTUP_RETRY_MAX_PAUSE_SECONDS = 1.0
+_STARTUP_RETRY_REASONS = frozenset(
+    failure.value
+    for failure in (
+        AcceptanceFailure.DEADLINE,
+        AcceptanceFailure.POOL_TIMEOUT,
+        AcceptanceFailure.CLIENT_POOL_TIMEOUT,
+        AcceptanceFailure.LOCK_TIMEOUT,
+        AcceptanceFailure.STATEMENT_CANCELLED,
+        AcceptanceFailure.TRANSACTION_EXPIRED,
+        AcceptanceFailure.CONNECTION,
+        AcceptanceFailure.DATABASE_UNAVAILABLE,
+    )
+)
+
+_T = TypeVar("_T")
 
 
 class AccountingQueryClient(Protocol):
@@ -91,6 +110,29 @@ class AccountingDatabaseCalls:
         """Keep one statement window for exact ambiguity recovery."""
 
         return expires_at - self.statement_budget_seconds
+
+
+async def retry_idempotent_startup_call(
+    call: Callable[[], Awaitable[_T]], *, expires_at: float
+) -> _T:
+    """Repeat an idempotent startup statement while the database is briefly busy.
+
+    Only availability failures are repeated, and never past ``expires_at``.
+    A rejected or invalid result is raised at once.
+    """
+    pause = STARTUP_RETRY_PAUSE_SECONDS
+    while True:
+        try:
+            return await call()
+        except AccountingProtocolUnavailable as failure:
+            if (
+                failure.rejection is not None
+                or failure.reason not in _STARTUP_RETRY_REASONS
+                or expires_at - asyncio.get_running_loop().time() <= pause
+            ):
+                raise
+        await asyncio.sleep(pause)
+        pause = min(pause * 2, STARTUP_RETRY_MAX_PAUSE_SECONDS)
 
 
 def database_sqlstate(exc: BaseException) -> str | None:
