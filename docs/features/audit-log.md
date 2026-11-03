@@ -176,6 +176,17 @@ Per-organization overrides:
 - `metadata.audit_metadata_retention_days`
 - `metadata.audit_payload_retention_days`
 
+Each pass deletes up to `general_settings.audit_retention_scan_limit` expired
+payloads and up to the same number of expired events, oldest first. Passes run
+every `general_settings.audit_retention_interval_seconds`. Each delete is one
+SQL statement. It works when the audit ID columns are `uuid` (created by
+migrations) or `text` (created by `prisma db push`). More than one replica can
+run retention at the same time, because the statement skips rows that another
+replica has locked.
+
+If a pass fails, the worker logs `audit retention pass failed` with the error
+and tries again at the next interval. A failed pass does not stop retention.
+
 ## Upgrade Note: Resource History Index
 
 The Audit Logs event panel lists recent events on the same resource. A migration adds the index

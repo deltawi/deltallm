@@ -142,15 +142,19 @@ async def test_audit_repository_retention_queries_cast_interval_days_to_int():
     prisma = FakePrisma()
     repo = AuditRepository(prisma)
 
-    assert await repo.list_expired_event_ids(default_retention_days=365, limit=50) == []
+    assert await repo.delete_expired_events(default_retention_days=365, limit=50) == 0
     assert prisma.last_query is not None
+    assert "uuid[]" not in prisma.last_query
+    assert "FOR UPDATE OF e SKIP LOCKED" in prisma.last_query
     assert "make_interval(days => GREATEST(" in prisma.last_query
     assert "$1::int" in prisma.last_query
     assert ")::int)" in prisma.last_query
     assert prisma.last_args == (365, 50)
 
-    assert await repo.list_expired_payload_ids(default_retention_days=90, limit=25) == []
+    assert await repo.delete_expired_payloads(default_retention_days=90, limit=25) == 0
     assert prisma.last_query is not None
+    assert "uuid[]" not in prisma.last_query
+    assert "FOR UPDATE OF p SKIP LOCKED" in prisma.last_query
     assert "make_interval(days => GREATEST(" in prisma.last_query
     assert "$1::int" in prisma.last_query
     assert ")::int)" in prisma.last_query

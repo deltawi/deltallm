@@ -244,74 +244,69 @@ class AuditRepository:
             return False
         return bool(rows[0].get("audit_content_storage_enabled", False))
 
-    async def list_expired_event_ids(self, *, default_retention_days: int, limit: int) -> list[str]:
+    # Retention selects and deletes in one statement. The ids never leave the
+    # database, so the statement works when the id columns are uuid or text.
+    # SKIP LOCKED lets more than one replica run retention at the same time.
+    async def delete_expired_events(self, *, default_retention_days: int, limit: int) -> int:
         if self.prisma is None:
-            return []
+            return 0
         rows = await self.prisma.query_raw(
             f"""
-            SELECT e.event_id
-            FROM deltallm_auditevent e
-            LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
-            WHERE e.occurred_at < NOW() - make_interval(days => GREATEST(
-                COALESCE((o.metadata->>'{AUDIT_METADATA_RETENTION_DAYS_KEY}')::int, $1::int),
-                1
-            )::int)
-            ORDER BY e.occurred_at ASC
-            LIMIT $2
+            WITH expired AS (
+                SELECT e.event_id
+                FROM deltallm_auditevent e
+                LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
+                WHERE e.occurred_at < NOW() - make_interval(days => GREATEST(
+                    COALESCE((o.metadata->>'{AUDIT_METADATA_RETENTION_DAYS_KEY}')::int, $1::int),
+                    1
+                )::int)
+                ORDER BY e.occurred_at ASC
+                LIMIT $2
+                FOR UPDATE OF e SKIP LOCKED
+            ),
+            deleted AS (
+                DELETE FROM deltallm_auditevent d
+                USING expired
+                WHERE d.event_id = expired.event_id
+                RETURNING 1
+            )
+            SELECT count(*)::int AS deleted FROM deleted
             """,
             max(1, int(default_retention_days)),
             max(1, int(limit)),
         )
-        return [str(row.get("event_id")) for row in rows if row.get("event_id")]
+        return _deleted_count(rows)
 
-    async def list_expired_payload_ids(
-        self, *, default_retention_days: int, limit: int
-    ) -> list[str]:
+    async def delete_expired_payloads(self, *, default_retention_days: int, limit: int) -> int:
         if self.prisma is None:
-            return []
+            return 0
         rows = await self.prisma.query_raw(
             f"""
-            SELECT p.payload_id
-            FROM deltallm_auditpayload p
-            JOIN deltallm_auditevent e ON e.event_id = p.event_id
-            LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
-            WHERE p.created_at < NOW() - make_interval(days => GREATEST(
-                COALESCE((o.metadata->>'{AUDIT_PAYLOAD_RETENTION_DAYS_KEY}')::int, $1::int),
-                1
-            )::int)
-            ORDER BY p.created_at ASC
-            LIMIT $2
+            WITH expired AS (
+                SELECT p.payload_id
+                FROM deltallm_auditpayload p
+                JOIN deltallm_auditevent e ON e.event_id = p.event_id
+                LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
+                WHERE p.created_at < NOW() - make_interval(days => GREATEST(
+                    COALESCE((o.metadata->>'{AUDIT_PAYLOAD_RETENTION_DAYS_KEY}')::int, $1::int),
+                    1
+                )::int)
+                ORDER BY p.created_at ASC
+                LIMIT $2
+                FOR UPDATE OF p SKIP LOCKED
+            ),
+            deleted AS (
+                DELETE FROM deltallm_auditpayload d
+                USING expired
+                WHERE d.payload_id = expired.payload_id
+                RETURNING 1
+            )
+            SELECT count(*)::int AS deleted FROM deleted
             """,
             max(1, int(default_retention_days)),
             max(1, int(limit)),
         )
-        return [str(row.get("payload_id")) for row in rows if row.get("payload_id")]
-
-    async def delete_payloads_by_ids(self, payload_ids: list[str]) -> int:
-        if self.prisma is None or not payload_ids:
-            return 0
-        rows = await self.prisma.query_raw(
-            """
-            DELETE FROM deltallm_auditpayload
-            WHERE payload_id = ANY($1::uuid[])
-            RETURNING payload_id
-            """,
-            payload_ids,
-        )
-        return len(rows)
-
-    async def delete_events_by_ids(self, event_ids: list[str]) -> int:
-        if self.prisma is None or not event_ids:
-            return 0
-        rows = await self.prisma.query_raw(
-            """
-            DELETE FROM deltallm_auditevent
-            WHERE event_id = ANY($1::uuid[])
-            RETURNING event_id
-            """,
-            event_ids,
-        )
-        return len(rows)
+        return _deleted_count(rows)
 
     @staticmethod
     def _to_event_record(row: dict[str, Any]) -> AuditEventRecord:
@@ -361,3 +356,9 @@ class AuditRepository:
             redacted=bool(row.get("redacted", False)),
             created_at=created_at if isinstance(created_at, datetime) else None,
         )
+
+
+def _deleted_count(rows: list[dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+    return int(rows[0].get("deleted") or 0)
