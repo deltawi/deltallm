@@ -125,6 +125,16 @@ For a simple first deployment:
 
 If you do not set a `deployment_id`, DeltaLLM creates one automatically.
 
+## Auto-filled Prices and Limits
+
+When the upstream model matches a suggestion that has known data, the form fills prices and limits (for example input and output price per token, cached input price, context window, and max output tokens).
+
+- Auto-filled fields follow the model you pick. If you change the model, they switch to the new model's values, or clear when the new model has no known data.
+- A field you edit yourself is never changed again by auto-fill.
+- When you edit a saved model, its saved values are kept. If known data exists, **Fill empty fields** fills only the fields that are still empty.
+
+Always check auto-filled prices against your provider contract before saving. They are used for spend tracking.
+
 ## ElevenLabs Audio Deployments
 
 ElevenLabs deployments use the same public DeltaLLM audio routes as other providers, but DeltaLLM calls the native ElevenLabs upstream APIs behind the scenes.
