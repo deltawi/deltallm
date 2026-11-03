@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 import json
 from decimal import Decimal
 from types import SimpleNamespace
@@ -30,6 +31,8 @@ from src.telemetry.spend_operation import (
     reserve_mcp_tool_hops,
     settle_mcp_hop,
 )
+
+_CACHE_STARTED_AT = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
 
 
 class _AccountingRepository:
@@ -378,7 +381,12 @@ async def test_configured_accounting_cannot_fall_back_when_its_owner_is_missing(
             )
         else:
             await CacheMiddleware(AsyncMock())._record_cache_hit_accounting(
-                request, "/v1/chat/completions", "gpt-test", "cache:test", _priced_cache_entry()
+                request,
+                "/v1/chat/completions",
+                "gpt-test",
+                "cache:test",
+                _priced_cache_entry(),
+                started_at=_CACHE_STARTED_AT,
             )
     execute.assert_not_awaited()
     ingestion.writer.log_spend.assert_not_called()
@@ -414,7 +422,12 @@ async def test_paid_cache_hit_uses_the_same_reservation_and_finalization_owner()
     request.json = AsyncMock(side_effect=AssertionError("cache billing must not read the body"))
     try:
         await CacheMiddleware(AsyncMock())._record_cache_hit_accounting(
-            request, "/v1/chat/completions", "gpt-test", "cache:test", _priced_cache_entry()
+            request,
+            "/v1/chat/completions",
+            "gpt-test",
+            "cache:test",
+            _priced_cache_entry(),
+            started_at=_CACHE_STARTED_AT,
         )
         assert len(repository.reservations) == 1
         assert repository.reservations[0].allowance == Decimal("0.135")
@@ -427,6 +440,9 @@ async def test_paid_cache_hit_uses_the_same_reservation_and_finalization_owner()
         terminal = repository.finalizations[0]
         assert terminal.exact_charge == Decimal("0.135")
         assert terminal.spend_payload["cache_hit"] is True
+        started = datetime.fromisoformat(terminal.spend_payload["start_time"])
+        ended = datetime.fromisoformat(terminal.spend_payload["end_time"])
+        assert started == _CACHE_STARTED_AT and ended >= started
         assert terminal.spend_payload["metadata"]["provider_cost"] == 0
         assert terminal.audit_envelope["payload"]["event"]["metadata"]["cache_hit"] is True
         ingestion.writer.log_spend.assert_not_called()
@@ -450,6 +466,7 @@ async def test_exhausted_budget_cannot_serve_a_paid_cache_hit():
                 "gpt-test",
                 "cache:test",
                 _priced_cache_entry(),
+                started_at=_CACHE_STARTED_AT,
             )
         assert len(repository.reservations) == 1
         assert repository.finalizations == []

@@ -185,6 +185,41 @@ ORDER BY sequence;
 Do not delete the event or reset a checkpoint. Find the code path that wrote the
 invalid event and fix it.
 
+### Cache hits and blocked reporting records
+
+Before this fix, a response cache hit wrote an accepted event with no
+`start_time` and no `end_time`. The reporting function rejected this event with
+`accounting_read_model_attribution`. The worker retried the same page and did
+not continue, so the accounting worker could not become ready. This applies
+when accounting v2 and the response cache are both on.
+
+Apply migration `20261103100000_accounting_reporting_event_times` before the
+corrected image. It changes only the reporting function. For a completed event
+with a missing or null time, reporting uses the event's `occurred_at` (the
+finalization instant). If only `start_time` is missing, reporting uses the
+`end_time`. The reporting row shows a latency of zero for these events. The
+accepted event and its source hash remain unchanged. Charge, attribution, audit,
+fencing, and replay checks remain active. An invalid time value still fails
+closed. No second charge is created.
+
+The corrected image records the real start and end time of each cache hit. It
+also fills a missing time with the finalization instant before it accepts any
+completed event, so other paths cannot write such an event again.
+
+To find events that the migration recovers:
+
+```sql
+SELECT count(*), min(created_at), max(created_at)
+FROM deltallm_accounting_events
+WHERE outcome = 'completed'
+  AND (payload_json->'spend'->>'start_time' IS NULL
+    OR payload_json->'spend'->>'end_time' IS NULL);
+```
+
+Do not edit these events by hand. After the migration, restart the accounting
+workers and let the blocked page retry. If you already edited events by hand,
+they remain valid and the migration does not change them.
+
 ### Grant execution policy
 
 Apply migration `20261010083000_accounting_grant_execution_policy` before the

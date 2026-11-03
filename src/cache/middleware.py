@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -130,6 +131,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
         }
 
     async def dispatch(self, request: Request, call_next):
+        # Cache hits finish here, so this is the start time of a cache-hit request.
+        started_at = datetime.now(tz=UTC)
         request.state.response_cache_eligibility = ResponseCacheEligibility()
         backend: CacheBackend | None = getattr(request.app.state, "cache_backend", None)
         key_builder: CacheKeyBuilder | None = getattr(request.app.state, "cache_key_builder", None)
@@ -233,7 +236,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                         if context is not None:
                             await context.finish(0)
                         await self._record_cache_hit_accounting(
-                            request, endpoint, model, cache_key, cached
+                            request, endpoint, model, cache_key, cached, started_at=started_at
                         )
                         return StreamingResponse(
                             streaming_handler.reconstruct_sse_stream(
@@ -274,7 +277,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                     if context is not None:
                         await context.finish(0)
                     await self._record_cache_hit_accounting(
-                        request, endpoint, model, cache_key, cached_entry
+                        request, endpoint, model, cache_key, cached_entry, started_at=started_at
                     )
                     response = self._cached_json_response(cached_entry.response, cache_key)
                     response.headers.update(response_cost_headers(request))
@@ -416,6 +419,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
         model: str,
         cache_key: str,
         entry: CacheEntry,
+        *,
+        started_at: datetime,
     ) -> None:
         auth = getattr(request.state, "user_api_key", None)
         if auth is None:
@@ -559,6 +564,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 cost=request_cost,
                 metadata=spend_metadata,
                 cache_hit=True,
+                # Accounting v2 reporting requires both times on every completed event.
+                start_time=started_at,
+                end_time=datetime.now(tz=UTC),
             ),
         )
 

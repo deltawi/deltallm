@@ -64,3 +64,63 @@ def test_valid_caller_id_does_not_replace_the_economic_operation_id():
         )
         assert terminal.spend_payload["request_id"] == "same-caller-id"
         assert terminal.operation_id == reserved.operation_id
+
+
+def _operation():
+    reserved = reservation()
+    return AccountingOperationHandle(
+        reservation=reserved,
+        dispatch_token=reserved.owner_token,
+        accounting_partition=0,
+        attempts=(
+            AccountingAttempt(
+                deployment_id="deployment-1",
+                provider="openai",
+                model="model-group",
+                pricing_snapshot=reserved.pricing_snapshot,
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize("missing", ["both", "start_time", "end_time"])
+def test_terminal_preparation_fills_a_missing_time_with_the_terminal_instant(missing):
+    started = datetime(2026, 11, 3, 9, 59, tzinfo=UTC)
+    ended = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
+    occurred_at = datetime(2026, 11, 3, 10, 1, tzinfo=UTC)
+    payload = {"cost_exact": "0.75", "start_time": started, "end_time": ended}
+    # A missing key and a null value are both treated as missing.
+    if missing in ("both", "start_time"):
+        del payload["start_time"]
+    if missing in ("both", "end_time"):
+        payload["end_time"] = None
+    terminal = prepare_accounting_charge(
+        _operation(), payload=payload, occurred_at=occurred_at, audit_envelope={}
+    )
+    expected = {
+        "both": (occurred_at, occurred_at),
+        "start_time": (occurred_at, ended),
+        "end_time": (started, occurred_at),
+    }[missing]
+    assert (
+        tuple(
+            datetime.fromisoformat(str(terminal.spend_payload[field]))
+            for field in ("start_time", "end_time")
+        )
+        == expected
+    )
+    # The caller's payload is not changed.
+    assert ("start_time" in payload) is (missing == "end_time")
+
+
+def test_terminal_preparation_keeps_times_that_the_caller_sent():
+    started = datetime(2026, 11, 3, 9, 59, tzinfo=UTC)
+    ended = datetime(2026, 11, 3, 10, 0, tzinfo=UTC)
+    terminal = prepare_accounting_charge(
+        _operation(),
+        payload={"cost_exact": "0.75", "start_time": started, "end_time": ended},
+        occurred_at=datetime(2026, 11, 3, 10, 1, tzinfo=UTC),
+        audit_envelope={},
+    )
+    assert datetime.fromisoformat(str(terminal.spend_payload["start_time"])) == started
+    assert datetime.fromisoformat(str(terminal.spend_payload["end_time"])) == ended

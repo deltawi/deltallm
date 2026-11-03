@@ -36,8 +36,9 @@ async def test_blocked_old_projection_recovers_after_the_forward_migration(accou
             "CREATE FUNCTION deltallm_accounting_audit_row", 1
         )[0]
     )
+    # Restore the latest reporting function, which keeps this ID correction.
     correction = (
-        migrations / "20261010130000_accounting_reporting_request_ids/migration.sql"
+        migrations / "20261103100000_accounting_reporting_event_times/migration.sql"
     ).read_text()
     corrected_function = (
         "CREATE OR REPLACE FUNCTION"
