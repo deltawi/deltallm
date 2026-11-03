@@ -1,11 +1,15 @@
 {
   "provider": "zai",
-  "last_verified_at": "2026-09-09",
+  "last_verified_at": "2026-11-03",
   "source_type": "official_docs",
   "sources": [
     {
       "label": "Z.ai model overview",
       "url": "https://docs.z.ai/guides/overview/quick-start"
+    },
+    {
+      "label": "Z.ai pricing",
+      "url": "https://docs.z.ai/guides/overview/pricing"
     }
   ],
   "models": [
@@ -14,21 +18,36 @@
       "status": "active",
       "supported_modes": [
         "chat"
-      ]
+      ],
+      "metadata": {
+        "input_cost_per_token": 0.0000014,
+        "output_cost_per_token": 0.0000044,
+        "input_cost_per_token_cache_hit": 0.00000026
+      }
     },
     {
       "id": "glm-5.3-flash",
       "status": "active",
       "supported_modes": [
         "chat"
-      ]
+      ],
+      "metadata": {
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000005,
+        "input_cost_per_token_cache_hit": 0.00000003
+      }
     },
     {
       "id": "glm-5.2",
       "status": "active",
       "supported_modes": [
         "chat"
-      ]
+      ],
+      "metadata": {
+        "input_cost_per_token": 0.0000014,
+        "output_cost_per_token": 0.0000044,
+        "input_cost_per_token_cache_hit": 0.00000026
+      }
     }
   ]
 }

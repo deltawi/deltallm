@@ -1,14 +1,70 @@
 {
   "provider": "anthropic",
-  "last_verified_at": "2026-04-01",
+  "last_verified_at": "2026-11-03",
   "source_type": "official_docs",
   "sources": [
     {
       "label": "Anthropic models overview",
       "url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    },
+    {
+      "label": "Anthropic pricing",
+      "url": "https://platform.claude.com/docs/en/about-claude/pricing"
     }
   ],
   "models": [
+    {
+      "id": "claude-fable-5-1",
+      "label": "Claude Fable 5.1",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00005,
+        "input_cost_per_token_cache_hit": 0.00000025,
+        "max_tokens": 1000000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "claude-opus-5-5",
+      "label": "Claude Opus 5.5",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000004,
+        "output_cost_per_token": 0.00002,
+        "input_cost_per_token_cache_hit": 0.0000002,
+        "max_tokens": 1000000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "label": "Claude Sonnet 5.5",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_hit": 0.0000001,
+        "max_tokens": 1000000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "label": "Claude Haiku 5.5",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000005,
+        "input_cost_per_token_cache_hit": 0.00000001,
+        "max_tokens": 1000000,
+        "max_output_tokens": 128000
+      }
+    },
     {
       "id": "claude-opus-4-6",
       "label": "Claude Opus 4.6",
@@ -18,7 +74,8 @@
         "input_cost_per_token": 0.000005,
         "output_cost_per_token": 0.000025,
         "max_tokens": 200000,
-        "max_output_tokens": 128000
+        "max_output_tokens": 128000,
+        "input_cost_per_token_cache_hit": 0.0000005
       }
     },
     {
@@ -30,7 +87,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "max_tokens": 200000,
-        "max_output_tokens": 64000
+        "max_output_tokens": 64000,
+        "input_cost_per_token_cache_hit": 0.0000003
       }
     },
     {
@@ -43,7 +101,8 @@
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000005,
         "max_tokens": 200000,
-        "max_output_tokens": 64000
+        "max_output_tokens": 64000,
+        "input_cost_per_token_cache_hit": 0.0000001
       }
     }
   ]

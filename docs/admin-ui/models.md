@@ -307,6 +307,20 @@ Auth and credential headers (Authorization, Cookie, API keys) are rejected when 
 
 ![Headers & Network card](images/models-headers-network.png)
 
+## Built-in Price Catalog
+
+DeltaLLM ships a catalog of list prices and limits per provider (`src/providers/catalogs/`). The model form uses it to pre-fill new deployments. Each file records its sources and the date it was last checked.
+
+How list prices are mapped:
+
+- Prices are the provider's standard (pay-as-you-go) rate for text tokens.
+- When a provider charges more for long prompts (for example Gemini above 200k tokens, Claude Haiku 5.5 above 100k), the catalog uses the base tier. Long prompts then count below the provider's real charge; raise the prices on the deployment if most of your traffic is long.
+- DeepSeek uses its peak rate. Off-peak requests cost half upstream.
+- Batch prices are never pre-filled. DeltaLLM runs Batch jobs through the provider's regular API, so a provider's batch discount does not apply to them. Set batch prices yourself if you want to bill Batch jobs differently.
+- Cached-input prices are the provider's cache-read rate. Anthropic cache writes are billed at the input price.
+
+Providers with prices today: OpenAI, Anthropic, Gemini (main chat models), Groq, DeepSeek, Z.ai, ElevenLabs and Mistral Large. For other providers, refresh the provider model list to pick up the limits the provider reports, then enter prices yourself.
+
 ## Operational Notes
 
 - DeltaLLM validates provider and mode compatibility when you create or update a deployment

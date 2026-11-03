@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "last_verified_at": "2026-04-01",
+  "last_verified_at": "2026-11-03",
   "source_type": "official_docs",
   "sources": [
     {
@@ -10,18 +10,32 @@
     {
       "label": "Gemini embeddings",
       "url": "https://ai.google.dev/gemini-api/docs/embeddings"
+    },
+    {
+      "label": "Gemini API pricing",
+      "url": "https://aistudio.google.com/docs/pricing"
     }
   ],
   "models": [
     {
       "id": "gemini-3.1-pro-preview",
       "status": "preview",
-      "supported_modes": ["chat"]
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000012,
+        "input_cost_per_token_cache_hit": 0.0000002
+      }
     },
     {
       "id": "gemini-3-flash-preview",
       "status": "preview",
-      "supported_modes": ["chat"]
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.000003,
+        "input_cost_per_token_cache_hit": 0.00000005
+      }
     },
     {
       "id": "gemini-3.1-flash-lite-preview",
@@ -31,12 +45,22 @@
     {
       "id": "gemini-2.5-pro",
       "status": "active",
-      "supported_modes": ["chat"]
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000125,
+        "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_hit": 0.000000125
+      }
     },
     {
       "id": "gemini-2.5-flash",
       "status": "active",
-      "supported_modes": ["chat"]
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000025,
+        "input_cost_per_token_cache_hit": 0.00000003
+      }
     },
     {
       "id": "gemini-2.5-flash-preview-09-2025",
@@ -46,7 +70,12 @@
     {
       "id": "gemini-2.5-flash-lite",
       "status": "active",
-      "supported_modes": ["chat"]
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000004,
+        "input_cost_per_token_cache_hit": 0.00000001
+      }
     },
     {
       "id": "gemini-2.5-flash-lite-preview-09-2025",
@@ -114,7 +143,8 @@
       "supported_modes": ["embedding"],
       "metadata": {
         "max_tokens": 2048,
-        "output_vector_size": 3072
+        "output_vector_size": 3072,
+        "input_cost_per_token": 0.00000015
       }
     }
   ]
