@@ -11,6 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.concurrency import CapacityGateFull, CapacityGateTimedOut
 from src.ingress import (
+    DRAINING_CODE,
     IngressBodyLimit,
     IngressBufferFull,
     IngressClass,
@@ -82,7 +83,7 @@ class IngressMiddleware:
             getattr(application, "state", None), "process_lifecycle", None
         )
         if lifecycle is not None and lifecycle.draining and allocation != IngressClass.HEALTH:
-            await _reject(scope, receive, send, 503, "gateway_draining")
+            await _reject(scope, receive, send, 503, DRAINING_CODE)
             return
         if runtime is None or not runtime.limits.enabled:
             await self.app(scope, receive, send)
@@ -110,7 +111,7 @@ class IngressMiddleware:
         try:
             # A request queued before the signal has not yet been admitted.
             if lifecycle is not None and lifecycle.draining and allocation != IngressClass.HEALTH:
-                await _reject(scope, receive, send, 503, "gateway_draining")
+                await _reject(scope, receive, send, 503, DRAINING_CODE)
                 return
             await self._admitted(
                 scope, receive, send, runtime, body, health=allocation == IngressClass.HEALTH
@@ -183,8 +184,11 @@ async def _reject(scope: Scope, receive: Receive, send: Send, status: int, code:
     # For a valid retryable HTTP/1.1 request, the server parser discards that body
     # under its existing idle deadline. Invalid framing and HTTP/1.0 still close.
     if scope.get("http_version", "1.1").startswith("1.") and (
-        status != 503 or scope.get("http_version", "1.1") != "1.1"
+        status != 503 or scope.get("http_version", "1.1") != "1.1" or code == DRAINING_CODE
     ):
+        # A draining pod closes the connection so a keep-alive client, such as
+        # an API pod calling the accounting request role, reconnects to a pod
+        # that is still serving instead of being refused for the whole drain.
         headers["Connection"] = "close"
     response = JSONResponse(
         {

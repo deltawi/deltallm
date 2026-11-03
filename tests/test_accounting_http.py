@@ -434,3 +434,102 @@ async def test_plain_http_needs_explicit_network_policy_permission():
         assert calls == []
     finally:
         await client.close()
+
+
+DRAINING_REPLY = {
+    "error": {
+        "message": "Gateway request admission failed",
+        "type": "gateway_error",
+        "code": "gateway_draining",
+    }
+}
+
+
+@pytest.mark.parametrize("endpoint", ["/finalize/local/batch", "/reserve/compact/batch"])
+async def test_draining_refusal_is_sent_again_to_a_serving_pod(endpoint):
+    from src.metrics.accounting import accounting_drain_retries
+
+    calls = []
+
+    async def handler(request):
+        calls.append(request.content)
+        if len(calls) == 1:
+            return httpx.Response(503, json=DRAINING_REPLY, headers={"Connection": "close"})
+        return httpx.Response(200, content=b"[]")
+
+    before = accounting_drain_retries._value.get()
+    client = transport(handler)
+    try:
+        assert (
+            await client.request(endpoint, b"[1]", expires_at=asyncio.get_running_loop().time() + 1)
+            == b"[]"
+        )
+        assert calls == [b"[1]", b"[1]"]
+        assert accounting_drain_retries._value.get() == before + 1
+    finally:
+        await client.close()
+
+
+async def test_repeated_draining_refusals_stay_bounded_and_unavailable():
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(503, json=DRAINING_REPLY)
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable) as raised:
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert raised.value.reason == AcceptanceFailure.CONNECTION.value
+        assert len(calls) == 3
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"error": {"code": "gateway_ingress_full"}},
+        {"detail": "Accounting unavailable"},
+        "not json",
+    ],
+)
+async def test_other_unavailable_replies_are_never_sent_again(reply):
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        if isinstance(reply, str):
+            return httpx.Response(503, content=reply.encode())
+        return httpx.Response(503, json=reply)
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert len(calls) == 1
+    finally:
+        await client.close()
+
+
+async def test_draining_refusal_is_not_sent_again_past_the_deadline():
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(503, json=DRAINING_REPLY)
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 0.03
+            )
+        assert len(calls) == 1
+    finally:
+        await client.close()

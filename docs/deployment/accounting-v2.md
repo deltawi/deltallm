@@ -46,6 +46,11 @@ the durable event stream.
   allowance as a provisional debit. It is never silently released.
 - Process crashes are recovered by converting expired dispatched reservations to
   provisional debits without resending requests.
+- A draining accounting request pod refuses new calls with `gateway_draining` and
+  closes the connection. The API pod sends that call again, up to two more times
+  inside the same deadline, so a rollout does not turn a successful provider call
+  into a provisional debit. No other failure is sent again. The
+  `deltallm_accounting_transport_drain_retries_total` counter shows these sends.
 - A failover deployment may run only if the first reservation covers its worst-case
   customer charge. Earlier attempts stay provisional until evidence resolves them.
 

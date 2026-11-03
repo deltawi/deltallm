@@ -62,6 +62,11 @@ accounting_failures = Counter(
     ["queue", "phase", "reason"],
     registry=get_prometheus_registry(),
 )
+accounting_drain_retries = Counter(
+    "deltallm_accounting_transport_drain_retries_total",
+    "Accounting calls sent again because a draining pod refused them before running them",
+    registry=get_prometheus_registry(),
+)
 accounting_reservation_decisions = Counter(
     "deltallm_accounting_reservation_decisions_total",
     "Durable accounting reservation decisions",
