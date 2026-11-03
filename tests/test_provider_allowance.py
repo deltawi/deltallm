@@ -122,6 +122,42 @@ def test_unenforceable_audio_rates_cannot_dispatch(call_type, rate):
         )
 
 
+def test_transcription_second_price_uses_the_file_duration_ceiling():
+    price = pricing(
+        {
+            "input_cost_per_second": "0.001",
+            "output_cost_per_second": "0.0005",
+            "cost_per_request": "0.1",
+        },
+        tokens=False,
+    )
+    result = allowance(
+        ProviderRequestBounds(audio_seconds=60), call_type="audio_transcription", price=price
+    )
+    assert result == Decimal("0.57")
+
+
+def test_transcription_second_price_without_a_duration_ceiling_cannot_dispatch():
+    with pytest.raises(SpendPersistenceUnavailable):
+        allowance(
+            ProviderRequestBounds(),
+            call_type="audio_transcription",
+            price=pricing({"input_cost_per_second": "0.001"}, tokens=False),
+        )
+
+
+def test_transcription_request_price_needs_no_duration_ceiling():
+    assert allowance(
+        ProviderRequestBounds(), call_type="audio_transcription", price=pricing(tokens=False)
+    ) == Decimal("0.3")
+
+
+@pytest.mark.parametrize("seconds", [0, -1, 2**31, 1.5, True])
+def test_duration_ceiling_must_be_a_positive_bounded_integer(seconds):
+    with pytest.raises(ValueError):
+        ProviderRequestBounds(audio_seconds=seconds)
+
+
 def test_cost_ceiling_does_not_use_the_ambient_decimal_precision():
     with localcontext() as context:
         context.prec = 3
