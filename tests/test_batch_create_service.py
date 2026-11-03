@@ -672,3 +672,69 @@ async def test_create_session_service_precheck_rejects_before_staging_new_reques
         )
 
     assert exc.value.status_code == 429
+
+
+def _input_file_record(*, expires_at: datetime | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        file_id="file-1",
+        created_by_api_key="key-a",
+        created_by_team_id=None,
+        created_by_organization_id=None,
+        bytes=32,
+        storage_backend="local",
+        storage_key="input/file-1.jsonl",
+        expires_at=expires_at,
+    )
+
+
+def _service_with_input_file(file_record: SimpleNamespace) -> BatchCreateSessionService:
+    async def _get_file(file_id: str):  # noqa: ANN201
+        assert file_id == "file-1"
+        return file_record
+
+    return BatchCreateSessionService(
+        repository=SimpleNamespace(get_file=_get_file),  # type: ignore[arg-type]
+        create_session_repository=SimpleNamespace(),  # type: ignore[arg-type]
+        stager=_NeverCalledStager(),  # type: ignore[arg-type]
+        promoter=SimpleNamespace(),  # type: ignore[arg-type]
+        storage_registry={"local": SimpleNamespace()},
+        max_file_bytes=1024,
+        max_items_per_batch=100,
+        max_line_bytes=1024,
+        storage_chunk_size=128,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expires_at",
+    [
+        datetime(2020, 1, 1, tzinfo=UTC),
+        datetime(2020, 1, 1),  # naive values from the database are UTC
+    ],
+)
+async def test_create_session_service_rejects_expired_input_file(expires_at: datetime) -> None:
+    service = _service_with_input_file(_input_file_record(expires_at=expires_at))
+
+    with pytest.raises(HTTPException) as exc:
+        await service._load_authorized_input_file(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            input_file_id="file-1",
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Input file has expired"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_at", [None, datetime(2999, 1, 1, tzinfo=UTC)])
+async def test_create_session_service_accepts_unexpired_input_file(expires_at: datetime | None) -> None:
+    file_record = _input_file_record(expires_at=expires_at)
+    service = _service_with_input_file(file_record)
+
+    loaded = await service._load_authorized_input_file(
+        auth=UserAPIKeyAuth(api_key="key-a"),
+        input_file_id="file-1",
+    )
+
+    assert loaded is file_record

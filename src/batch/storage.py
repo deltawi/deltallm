@@ -173,13 +173,20 @@ class LocalBatchArtifactStorage(BatchArtifactStorage):
         self.base_dir = Path(base_dir).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
+    def _path_for(self, storage_key: str) -> Path:
+        # Resolve symlinks and ".." so no key can reach outside the artifact folder.
+        target = (self.base_dir / storage_key).resolve()
+        if not target.is_relative_to(self.base_dir):
+            raise ValueError("Batch artifact storage key is outside the storage directory")
+        return target
+
     def _build_target(self, *, purpose: str, filename: str) -> tuple[str, Path]:
         storage_key = _build_sharded_storage_key(
             purpose=purpose,
             filename=filename,
             now=datetime.now(tz=UTC),
         )
-        return storage_key, self.base_dir / storage_key
+        return storage_key, self._path_for(storage_key)
 
     async def write_chunks(
         self,
@@ -220,7 +227,7 @@ class LocalBatchArtifactStorage(BatchArtifactStorage):
         return storage_key, total_bytes, checksum.hexdigest()
 
     async def iter_bytes(self, storage_key: str, chunk_size: int = 65_536) -> AsyncIterator[bytes]:
-        target = self.base_dir / storage_key
+        target = self._path_for(storage_key)
         handle = target.open("rb")
         try:
             while True:
@@ -294,7 +301,7 @@ class LocalBatchArtifactStorage(BatchArtifactStorage):
             return matches[:remaining]
 
         def _scan() -> list[BatchArtifactListEntry]:
-            root = self.base_dir / normalized_prefix if normalized_prefix else self.base_dir
+            root = self._path_for(normalized_prefix) if normalized_prefix else self.base_dir
             if not root.exists():
                 return []
             entries: list[BatchArtifactListEntry] = []
@@ -333,7 +340,7 @@ class LocalBatchArtifactStorage(BatchArtifactStorage):
         return await asyncio.to_thread(_scan)
 
     async def delete(self, storage_key: str) -> None:
-        target = self.base_dir / storage_key
+        target = self._path_for(storage_key)
         if target.exists():
             await asyncio.to_thread(target.unlink)
 

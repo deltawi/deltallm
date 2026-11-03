@@ -8,6 +8,11 @@ from src.batch.models import BatchFileRecord
 from src.batch.repositories.mappers import file_from_row
 
 
+def _is_foreign_key_violation(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "foreign key" in message or "foreign_key_violation" in message or "23503" in message
+
+
 class BatchFileRepository:
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
@@ -100,6 +105,45 @@ class BatchFileRepository:
             max(1, min(limit, 1000)),
         )
         return [file_from_row(row) for row in rows]
+
+    async def delete_expired_unreferenced_file(self, file_id: str, *, now: datetime) -> bool:
+        """Delete an expired file row only if nothing references it, in one statement.
+
+        A batch or create session that starts using the file at the same moment
+        either commits first (the foreign key then rejects this delete) or finds
+        the row gone, so no accepted reference can lose its artifact.
+        """
+        if self.prisma is None:
+            return False
+        try:
+            rows = await self.prisma.query_raw(
+                """
+                DELETE FROM deltallm_batch_file f
+                WHERE f.file_id = $1
+                  AND f.expires_at IS NOT NULL
+                  AND f.expires_at < $2::timestamp
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM deltallm_batch_job j
+                        WHERE j.input_file_id = f.file_id
+                           OR j.output_file_id = f.file_id
+                           OR j.error_file_id = f.file_id
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM deltallm_batch_create_session s
+                        WHERE s.input_file_id = f.file_id
+                  )
+                RETURNING f.file_id
+                """,
+                file_id,
+                now,
+            )
+        except Exception as exc:
+            if _is_foreign_key_violation(exc):
+                return False
+            raise
+        return bool(rows)
 
     async def delete_file(self, file_id: str) -> None:
         if self.prisma is None:

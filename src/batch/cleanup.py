@@ -192,6 +192,17 @@ class BatchRetentionCleanupWorker:
             limit=self.config.scan_limit,
         )
         for file_record in expired_files:
+            # Remove the row first, atomically checked for references. Deleting the
+            # object first could lose the content of a file that a new batch has just
+            # started using; a leftover object after a failed delete is harmless.
+            try:
+                deleted = await self.repository.delete_expired_unreferenced_file(file_record.file_id, now=now)
+            except Exception as exc:
+                logger.warning("batch file record delete failed file_id=%s error=%s", file_record.file_id, exc)
+                continue
+            if not deleted:
+                continue
+            deleted_files += 1
             try:
                 await self._storage_for_backend(file_record.storage_backend).delete(file_record.storage_key)
             except Exception as exc:
@@ -199,10 +210,13 @@ class BatchRetentionCleanupWorker:
                     operation="delete",
                     backend=str(file_record.storage_backend or getattr(self.storage, "backend_name", "unknown")),
                 )
-                logger.warning("batch artifact delete failed file_id=%s error=%s", file_record.file_id, exc)
-                continue
-            await self.repository.delete_file(file_record.file_id)
-            deleted_files += 1
+                logger.warning(
+                    "batch artifact delete failed after its record was removed; object left in storage "
+                    "file_id=%s storage_key=%s error=%s",
+                    file_record.file_id,
+                    file_record.storage_key,
+                    exc,
+                )
 
         deleted_webhook_count = sum(deleted_webhooks.values())
         if deleted_jobs or deleted_files or deleted_webhook_count:
