@@ -122,6 +122,7 @@ Suggestions can carry known prices and limits that pre-fill the form:
 | Source | What it adds |
 |---|---|
 | Built-in catalog | Curated prices and limits. These win when both sources have a value. |
+| Anthropic model list | Max input and max output tokens |
 | Gemini model list | Max input and max output tokens |
 | Groq model list | Context window and max output tokens |
 | Mistral model list | Context window |

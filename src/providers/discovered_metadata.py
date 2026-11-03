@@ -115,6 +115,14 @@ def gemini_metadata(item: Mapping[str, Any]) -> dict[str, float | int]:
     return metadata
 
 
+def anthropic_metadata(item: Mapping[str, Any]) -> dict[str, float | int]:
+    """Anthropic ``max_input_tokens`` is the input window; ``max_tokens`` caps output."""
+    metadata: dict[str, float | int] = {}
+    _set_limit(metadata, "max_input_tokens", item.get("max_input_tokens"))
+    _set_limit(metadata, "max_output_tokens", item.get("max_tokens"))
+    return metadata
+
+
 def mistral_metadata(max_context_length: Any) -> dict[str, float | int]:
     metadata: dict[str, float | int] = {}
     _set_limit(metadata, "max_tokens", max_context_length)

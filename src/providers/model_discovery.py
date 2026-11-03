@@ -8,6 +8,7 @@ from src.config import ModelMode
 from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES, ChatProviderProfile
 from src.providers.chat_discovery import fetch_chat_models
 from src.providers.discovered_metadata import (
+    anthropic_metadata,
     gemini_metadata,
     merge_known_metadata,
     openai_style_metadata,
@@ -116,6 +117,7 @@ def _extract_anthropic_models(payload: Any, *, provider: str) -> list[dict[str, 
                 model_id=model_id,
                 label=label,
                 provider=provider,
+                discovered_metadata=anthropic_metadata(item),
             )
         )
     return models
@@ -245,7 +247,8 @@ async def _discover_live_models(
             return []
         payload = await _load_json(
             http_client,
-            url=f"{str(api_base or '').rstrip('/')}/models",
+            # The default page is 20 models; ask for the full list.
+            url=f"{str(api_base or '').rstrip('/')}/models?limit=1000",
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": str(api_version or "2023-06-01").strip() or "2023-06-01",

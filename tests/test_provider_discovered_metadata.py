@@ -195,3 +195,43 @@ async def test_discovery_reads_together_bare_list(client, test_app):
     )
     assert models["meta/llama"]["known_metadata"]["max_tokens"] == 131072
     assert models["meta/llama"]["known_metadata"]["input_cost_per_token"] == pytest.approx(0.88e-6)
+
+
+def test_anthropic_input_window_and_output_cap():
+    from src.providers.discovered_metadata import anthropic_metadata
+
+    assert anthropic_metadata({"max_input_tokens": 1000000, "max_tokens": 128000}) == {
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+    }
+    assert anthropic_metadata({"max_input_tokens": 0, "max_tokens": None}) == {}
+
+
+@pytest.mark.asyncio
+async def test_discovery_requests_full_anthropic_list_and_reads_limits(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    seen: list[str] = []
+
+    async def get(url: str, headers: dict[str, str] | None = None, timeout=None):  # noqa: ANN001, ANN202
+        del headers, timeout
+        seen.append(url)
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": "claude-new", "max_input_tokens": 1000000, "max_tokens": 128000}]
+            },
+        )
+
+    test_app.state.http_client.get = get
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"provider": "anthropic", "mode": "chat", "api_key": "provider-key"},
+    )
+    assert response.status_code == 200
+    assert seen == ["https://api.anthropic.com/v1/models?limit=1000"]
+    models = {item["id"]: item for item in response.json()["data"]}
+    assert models["claude-new"]["known_metadata"] == {
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+    }
