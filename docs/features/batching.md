@@ -699,6 +699,7 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_poll_interval_seconds` | `1.0` | How often the worker checks for new work when idle |
 | `embeddings_batch_worker_concurrency` | `4` | Maximum items one worker process runs at once, across all the slices it runs |
 | `embeddings_batch_worker_max_slices_in_flight` | `2` | Work slices one worker process runs at once. The next slice only uses slots the previous slice's last items leave idle. `1` claims one slice at a time |
+| `embeddings_batch_runtime_summary_interval_seconds` | `15.0` | How often each worker process refreshes the job, item and queue gauges (1 to 300). The refresh runs beside the claim loop |
 | `embeddings_batch_item_claim_limit` | `20` | Maximum items claimed per worker iteration |
 | `embeddings_batch_item_buffer_multiplier` | `2` | Multiplier on concurrency for item prefetch. Effective claim limit is `max(item_claim_limit, concurrency * buffer_multiplier)` |
 | `embeddings_batch_accounting_write_timeout_seconds` | `2.0` | Accounting v2 only. Time budget for one billing checkpoint write, including the wait for a free write slot and one retry |
@@ -989,6 +990,8 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_worker_saturation_ratio` | Gauge | Worker active/capacity ratio |
 
 The job and item gauges read only active jobs and their open items, so their cost follows active work, not the retained history of finished batches.
+
+Each process that runs the batch worker refreshes the job, item, queue and age gauges every `embeddings_batch_runtime_summary_interval_seconds` (default 15 s), in its own loop beside the claim loop. A worker never waits for this refresh before its next claim. The stale lease sweeper, the scheduler backfill and garbage collection also refresh them after each of their own passes, and admin repair actions refresh them right away. So a gauge can be up to one interval behind the database.
 
 ### Scheduler health
 

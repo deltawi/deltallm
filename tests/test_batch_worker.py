@@ -6424,55 +6424,6 @@ def test_lease_loss_metric_helper_records_each_prepared_item():
     assert all(float(entry["latency_seconds"]) >= 0 for entry in observed)
 
 
-@pytest.mark.asyncio
-async def test_batch_worker_refresh_runtime_metrics_logs_debug_on_failure(
-    caplog: pytest.LogCaptureFixture,
-):
-    class _Repo:
-        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
-            del now
-            raise RuntimeError("metrics unavailable")
-
-    worker = BatchExecutorWorker(
-        app=SimpleNamespace(state=SimpleNamespace()),
-        repository=_Repo(),  # type: ignore[arg-type]
-        storage=_FakeStorage(),  # type: ignore[arg-type]
-        config=BatchWorkerConfig(worker_id="w1"),
-    )
-
-    with caplog.at_level(logging.DEBUG):
-        await worker._refresh_batch_runtime_metrics()
-
-    assert "batch worker runtime metrics refresh failed" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_batch_worker_refresh_runtime_metrics_logs_debug_on_publish_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-):
-    class _Repo:
-        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
-            del now
-            return {"queued": 1, "in_progress": 0, "finalizing": 0}
-
-    worker = BatchExecutorWorker(
-        app=SimpleNamespace(state=SimpleNamespace()),
-        repository=_Repo(),  # type: ignore[arg-type]
-        storage=_FakeStorage(),  # type: ignore[arg-type]
-        config=BatchWorkerConfig(worker_id="w1"),
-    )
-    monkeypatch.setattr(
-        "src.batch.worker.publish_batch_runtime_summary",
-        lambda summary: (_ for _ in ()).throw(RuntimeError("publish unavailable")),  # noqa: ARG005
-    )
-
-    with caplog.at_level(logging.DEBUG):
-        await worker._refresh_batch_runtime_metrics()
-
-    assert "batch worker runtime metrics refresh failed" in caplog.text
-
-
 def _work_slice_job(
     *,
     status: BatchJobStatus = BatchJobStatus.IN_PROGRESS,

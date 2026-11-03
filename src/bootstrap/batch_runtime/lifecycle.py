@@ -152,6 +152,12 @@ async def shutdown_batch_runtime(runtime: BatchRuntime) -> None:
             5.0,
         ),
         (
+            runtime.runtime_summary_worker,
+            runtime.runtime_summary_task,
+            "batch runtime summary worker",
+            5.0,
+        ),
+        (
             runtime.webhook_outbox_worker,
             runtime.webhook_outbox_task,
             "batch webhook outbox worker",

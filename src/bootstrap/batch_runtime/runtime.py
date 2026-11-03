@@ -16,6 +16,7 @@ from src.batch.create.cleanup import BatchCreateSessionCleanupWorker
 from src.batch.create.promoter import BatchCreateSessionPromoter
 from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker
+from src.batch.runtime_summary import BatchRuntimeSummaryWorker
 from src.batch.scheduling import (
     BatchModelCapacityResolver,
     BatchSizeAgingConfig,
@@ -39,6 +40,8 @@ class BatchRuntime:
     worker_task: Task[None] | None = None
     completion_outbox_worker: BatchCompletionOutboxWorker | None = None
     completion_outbox_task: Task[None] | None = None
+    runtime_summary_worker: BatchRuntimeSummaryWorker | None = None
+    runtime_summary_task: Task[None] | None = None
     webhook_outbox_worker: BatchWebhookOutboxWorker | None = None
     webhook_outbox_task: Task[None] | None = None
     webhook_observability_worker: BatchWebhookObservabilityWorker | None = None

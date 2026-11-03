@@ -29,6 +29,7 @@ class _PoolRepository:
         self.finalizing: set[str] = set()
         self.finalizable: deque[str] = deque()
         self.job_leases_released: list[str] = []
+        self.summaries = 0
 
     async def claim_next_finalization(self, **kwargs):
         del kwargs
@@ -88,6 +89,7 @@ class _PoolRepository:
 
     async def summarize_runtime_statuses(self, *, now):
         del now
+        self.summaries += 1
         return {}
 
 
@@ -184,6 +186,8 @@ async def test_next_slice_fills_the_previous_slice_tail():
         items.release("a:1", "a:2", "a:3", "b:1")
         await _stop(worker, task)
     assert sorted(repository.refreshed) == ["a", "b"]
+    # The runtime gauges refresh on their own interval, not after each slice.
+    assert repository.summaries == 0
     assert worker._execution_slots.open_slices == 0
     assert worker._execution_slots.active == 0
 
@@ -347,3 +351,4 @@ async def test_finalization_runs_beside_the_slices():
         await _stop(worker, task)
     assert finalized == ["a"]
     assert repository.job_leases_released == ["a"]
+    assert repository.summaries == 0
