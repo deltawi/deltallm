@@ -109,21 +109,34 @@ class AccountingProviderExecutionMixin:
             return None
         return executions
 
+    @staticmethod
+    def _group_has_stored_proof(prepared_items: Sequence[PreparedBatchItem]) -> bool:
+        return any(prepared.item.accounting_checkpoint is not None for prepared in prepared_items)
+
     async def _hold_unsaved_native_group(
         self,
-        executions: Sequence[BatchAccountingExecution],
+        unsaved: Sequence[BatchAccountingExecution] | None,
+        prepared_items: Sequence[PreparedBatchItem],
         *,
         retry_delay_seconds: int,
     ) -> bool:
+        """True when the group may be requeued whole.
+
+        A group whose new proofs were not saved never reached the provider: it
+        is requeued once its funded operations are held open. If the hold is
+        refused, only a group with no stored proof is requeued, as before.
+        """
         owner = self.native_billing
-        if owner is None:
-            return False
-        return await hold_unsaved_for_retry(
+        if unsaved is None:
+            return True
+        if owner is not None and await hold_unsaved_for_retry(
             owner,
-            executions,
+            unsaved,
             retry_delay_seconds=retry_delay_seconds,
             claim_margin_seconds=int(self.config.item_lease_seconds),
-        )
+        ):
+            return True
+        return not self._group_has_stored_proof(prepared_items)
 
     @staticmethod
     def _native_completion_saved(prepared_items: Sequence[PreparedBatchItem]) -> None:

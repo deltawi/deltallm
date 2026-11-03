@@ -332,12 +332,8 @@ class EmbeddingWorkerExecutionMixin:
         exc: Exception,
         decision: BatchRetryDecision,
     ) -> bool:
-        # A group whose new proofs were not saved never reached the provider,
-        # so it can be requeued with its funded operations held open.
         unsaved = self._unsaved_native_group(prepared_items)
-        if unsaved is None and any(
-            prepared.item.accounting_checkpoint is not None for prepared in prepared_items
-        ):
+        if unsaved is None and self._group_has_stored_proof(prepared_items):
             await self._close_native_batch_items(prepared_items)
             return False
         if not decision.retryable:
@@ -408,12 +404,8 @@ class EmbeddingWorkerExecutionMixin:
             result=result,
         )
         safe_error_message = persisted_batch_error_message(exc, decision)
-        if (
-            unsaved is not None
-            and not await self._hold_unsaved_native_group(
-                unsaved, retry_delay_seconds=retry_delay
-            )
-            and any(prepared.item.accounting_checkpoint is not None for prepared in prepared_items)
+        if not await self._hold_unsaved_native_group(
+            unsaved, prepared_items, retry_delay_seconds=retry_delay
         ):
             # Not held: the same path as a group with stored proofs.
             await self._close_native_batch_items(prepared_items)
