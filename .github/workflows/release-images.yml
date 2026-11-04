@@ -333,7 +333,7 @@ jobs:
 
       - name: Install Railway CLI
         if: steps.railway-template-config.outputs.enabled == 'true'
-        run: npm install -g @railway/cli@5.70.0
+        run: npm install -g @railway/cli@5.71.0
 
       - name: Publish Railway template metadata
         if: steps.railway-template-config.outputs.enabled == 'true'
@@ -357,4 +357,28 @@ jobs:
             args+=(--demo-project "${RAILWAY_TEMPLATE_DEMO_PROJECT}")
           fi
 
-          railway "${args[@]}"
+          # Railway's own error messages can echo internal URLs with query
+          # secrets (for example its page revalidation hook). The repository
+          # is public, so redact query-string credentials before they reach
+          # the log.
+          redact() {
+            sed -E 's/((secret|token|key|password)=)[^&[:space:]"]+/\1***/Ig'
+          }
+
+          # A Railway-side failure must not mark the release as failed: the
+          # images, signatures and Helm chart are already published by now.
+          # Surface it as a warning and a step summary instead; republish by
+          # re-running this job or by hand once Railway accepts the call.
+          if railway "${args[@]}" > railway-publish.log 2>&1; then
+            redact < railway-publish.log
+          else
+            status=$?
+            redact < railway-publish.log
+            first_line="$(redact < railway-publish.log | grep -v '^>' | head -n 1 || true)"
+            echo "::warning title=Railway template not republished::railway templates publish exited ${status}: ${first_line:-no output}"
+            {
+              echo "### Railway template not republished"
+              echo
+              echo "\`railway templates publish\` exited with status ${status}. The release images and chart are published; republish the template once Railway accepts it."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
