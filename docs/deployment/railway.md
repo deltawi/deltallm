@@ -190,3 +190,18 @@ Keep these changes separate from this evaluation template.
 The Railway Dockerfile is generated from the root image contract without BuildKit
 cache mounts. Set a 90-second termination grace where the platform supports it.
 See [Process lifecycle](process-lifecycle.md) for supported migration modes.
+
+## Template Publishing On Release
+
+The `railway-template` job in the Release Artifacts workflow republishes the template's description and overview (`deploy/railway/template.md`) after the images and Helm chart are published.
+
+| Setting | Kind | Value |
+|---------|------|-------|
+| `RAILWAY_API_TOKEN` | Repository secret | An account token from Railway Account Settings > Tokens, created with **No Workspace** |
+| `RAILWAY_TEMPLATE_ID` | Repository variable | The template ID |
+| `RAILWAY_TEMPLATE_WORKSPACE` | Repository variable | The workspace that owns the template (optional) |
+| `RAILWAY_TEMPLATE_DEMO_PROJECT` | Repository variable | A demo project ID (optional) |
+
+The job is skipped when the token or template ID is missing.
+A failed publish does not fail the release: the job logs a warning and a step summary, and redacts query-string secrets from Railway's output because release logs are public.
+Republish by re-running the job, or run the same `railway templates publish` command locally.
