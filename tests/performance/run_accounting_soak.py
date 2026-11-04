@@ -35,6 +35,7 @@ from tests.performance.native_batch_load import (
     budget_scopes,
     client,
     duplicate_operations,
+    failed_item_evidence,
     item_stats,
     job_plan,
     submit_job,
@@ -167,6 +168,7 @@ async def batch_phase(
     scrape = await scrape_roles(cluster, ROLES)
     async with local_database() as db:
         stats = await item_stats(db, batch_ids)
+        failed_items = await failed_item_evidence(db, batch_ids)
     outcome = batch_outcome(
         final.values(),
         expected_items=args.batch_items,
@@ -203,6 +205,7 @@ async def batch_phase(
         "outcome": outcome,
         "verified_output_rows": verified,
         "items": stats,
+        "failed_items": failed_items,
         "accounting_capacity_refusals": capacity,
         "batch_retries_by_category": retries,
         "jobs": [

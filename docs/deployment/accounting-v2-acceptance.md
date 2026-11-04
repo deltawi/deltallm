@@ -140,6 +140,10 @@ how loaded it was.
 
 After a run, `roles/<role>-previous.log` holds the last run of every container
 that restarted, so a probe kill shows what the pod was doing.
+The soak report also lists each failed batch item (`failed_items`): its error,
+attempts, checkpoint outcome and the operation's accounting state, without
+request or response bodies. Pod logs keep only their last lines, so a single
+failed item in a long run would otherwise leave no trace.
 
 ## Bounded state
 

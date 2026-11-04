@@ -203,6 +203,30 @@ async def item_stats(db: Prisma, batch_ids: list[str]) -> list[dict]:
         )
 
 
+async def failed_item_evidence(db: Prisma, batch_ids: list[str]) -> list[dict]:
+    """Why each failed item failed: error, attempts and accounting state, never bodies.
+
+    Pod logs are cut to their last lines, so a single failed item in a long
+    run leaves no trace there. The checkpoint's terminal outcome and the
+    operation's accounting state show whether billing proof was lost.
+    """
+    async with asyncio.timeout(30):
+        return await db.query_raw(
+            "SELECT i.item_id,i.batch_id,i.attempts,i.claim_epoch,left(i.last_error,200) AS last_error,"
+            "i.error_body->'error'->>'code' AS error_code,"
+            "i.accounting_checkpoint->'terminal'->>'outcome' AS terminal_outcome,"
+            "(i.accounting_checkpoint->>'released_attempts') AS released_attempts,"
+            "jsonb_array_length(COALESCE(i.accounting_checkpoint->'operation'->'attempts','[]'::jsonb))"
+            " AS checkpoint_attempts,"
+            "o.accounting_state,o.answer_state,o.provisional_debit_exact::text AS provisional,"
+            "i.started_at,i.completed_at "
+            "FROM deltallm_batch_item i LEFT JOIN deltallm_billing_operations o "
+            "ON o.operation_id::text=i.accounting_checkpoint->>'operation_id' "
+            "WHERE i.batch_id=ANY($1::text[]) AND i.status='failed' ORDER BY i.completed_at LIMIT 20",
+            batch_ids,
+        )
+
+
 async def duplicate_operations(db: Prisma) -> int:
     async with asyncio.timeout(30):
         rows = await db.query_raw(
