@@ -305,6 +305,16 @@ If the checkpoint written before the provider call cannot be saved even after it
 
 The same limits as above apply. A busy database (for example during a rollout) usually frees up within seconds, so a hold that cannot be saved is written again after 0.5, 1 and 2 seconds. A hold the database answers but refuses, such as for an item this worker no longer owns, is not written again. The one exception is a first claim whose checkpoint was in fact saved but whose reply was lost: the database then refuses the hold because a checkpoint is already stored, so the hold is written once more in place of that checkpoint. If the hold still cannot be saved, the worker falls back to closing the operation, and the item fails as `accounting_closed`. The item's error says `batch_accounting_checkpoint_unavailable` while it waits for its retry.
 
+#### Models without a price on accounting v2
+
+A batch item on a model with no token price is charged $0, the same as a live call to that model:
+
+- Funding reserves only the model's request price, which is $0 when none is set.
+- When the item completes, its usage is recorded at $0. The spend row's `unpriced_reason` says why, usually `no_configured_pricing`, and the provider cost is left empty (unknown), not $0.
+- If only the customer price is set (for example by a tier) and the deployment itself has no price, the customer is charged as usual and only the provider cost is left empty.
+
+A model with only part of a price (such as an input price and no output price for chat) or an invalid price is still refused before the provider call. An item whose price was found when it was funded but not when it completes still fails with `batch_accounting_checkpoint_unavailable`; it is never recorded at $0.
+
 #### When the gateway's database is busy
 
 A batch item can also fail because DeltaLLM's own database could not take the work, not because the provider failed. These failures (`database_unavailable`, `spend_persistence_unavailable`, `billing_operation_unavailable` and `auth_fallback_unavailable`) have their own retry category, `gateway_busy`, and show as "Gateway busy" instead of "Provider unavailable".
@@ -1172,7 +1182,7 @@ Gateway authentication and output-usage recovery hints stay unchanged.
 - Budget exhaustion, model access denial, guardrail rejection, deleted keys, and expired keys are terminal and are not retried
 - Rate-limit and max-parallel contention are retried until the item reaches `embeddings_batch_max_attempts`
 - Check that the model deployment is healthy and reachable
-- `batch_accounting_checkpoint_unavailable` (accounting v2): the billing checkpoint could not be saved in time. Check `deltallm_batch_accounting_checkpoint_write_seconds{outcome="unavailable"}` and database load, and keep `embeddings_batch_worker_concurrency` at or below `db_pool_size`
+- `batch_accounting_checkpoint_unavailable` (accounting v2): the billing checkpoint could not be saved in time. Check `deltallm_batch_accounting_checkpoint_write_seconds{outcome="unavailable"}` and database load, and keep `embeddings_batch_worker_concurrency` at or below `db_pool_size`. If every item on one model fails this way, check that the model's price is complete (see [Models without a price on accounting v2](#models-without-a-price-on-accounting-v2))
 
 ### Terminal webhook is not delivered
 

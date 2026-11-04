@@ -50,6 +50,10 @@ one. Fallback groups resolved later (model-router groups) and context or content
 fallbacks are not in the plan; a failover there that needs a larger allowance still
 fails closed. The unused part of the allowance is returned at finalization.
 
+A model with no token price reserves only its request price, which is $0 when none
+is set. Its usage is then recorded at $0 with an `unpriced_reason`, and its provider
+cost is left unknown. Live calls and batch items behave the same way.
+
 Media calls size their allowance from the final request too. Speech uses its
 character count. Transcription with a per-request price reserves that price.
 Transcription with a per-second price reserves a duration ceiling taken from the

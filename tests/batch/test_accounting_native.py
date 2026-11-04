@@ -19,6 +19,8 @@ from src.billing.accounting.accounting_protocol import (
 )
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.accounting_snapshots import finalization_bytes
+from src.billing.spend.spend_preparation import prepare_spend_event
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
 from src.router.router import Deployment
@@ -216,6 +218,118 @@ async def test_completed_batch_prices_are_frozen_before_provider_and_exact(nativ
         worker_id="delivery",
         attempt_count=record.attempt_count,
     )
+
+
+def unpriced(deployment, *, embedding=False):
+    # As a new self-hosted deployment is saved: a mode and no price or context window.
+    deployment.model_info.clear()
+    deployment.model_info.update(
+        {"mode": "embedding" if embedding else "chat", "default_params": {}}
+    )
+
+
+def receipt_usage(*, embedding=False):
+    return {
+        "prompt_tokens": 5,
+        "completion_tokens": 0 if embedding else 2,
+        "prompt_tokens_cached": 0,
+    }
+
+
+@pytest.mark.parametrize("embedding", [False, True])
+async def test_unpriced_model_is_recorded_at_zero_like_a_live_call(native_batch, embedding):
+    owner, checkpoints, service = native_batch
+    executions, payload, auth, deployment = subjects(owner, embedding=embedding)
+    unpriced(deployment, embedding=embedding)
+    await fund(owner, executions, payload, auth, deployment)
+    execution = executions[0]
+    assert execution.checkpoint.operation.reservation.allowance == 0
+    completed_at = datetime.now(UTC)
+    outbox = execution.completion_payload(
+        {"completed_at": completed_at.isoformat()}, receipt_usage(embedding=embedding)
+    )
+    terminal = execution.checkpoint.terminal
+    assert terminal.outcome is AccountingOutcome.COMPLETED and terminal.exact_charge == 0
+    spend = terminal.spend_payload
+    assert "provider_cost_exact" not in spend
+    assert "provider_cost_exact" not in spend["metadata"]
+    assert spend["metadata"]["billing_status"] == "unpriced"
+    assert spend["metadata"]["billing"]["unpriced_reason"] == "no_configured_pricing"
+    assert spend["metadata"]["provider_billing"]["unpriced_reason"] == "no_configured_pricing"
+    # The spend row reads like a live call to an unpriced model.
+    row = prepare_spend_event(
+        event_id="unpriced",
+        event_type="spend",
+        payload={**spend, "start_time": completed_at, "end_time": completed_at},
+    ).row
+    assert Decimal(row["spend_exact"]) == 0 and row["provider_cost_exact"] is None
+    assert row["unpriced_reason"] == "no_configured_pricing"
+    await owner.close_group(executions)
+    assert checkpoints.calls[-1][0].checkpoint.terminal == terminal
+    record = replace(
+        _build_record(payload_overrides=outbox),
+        completion_id=outbox["billing_event_id"],
+        batch_id=execution.claim.batch_id,
+        item_id=execution.claim.item_id,
+    )
+    repository = type(
+        "DeliveryStore", (), {"mark_completion_outbox_sent": AsyncMock(return_value=True)}
+    )()
+    assert await NativeBatchCompletionDelivery(service, repository).deliver(
+        record, worker_id="delivery"
+    )
+
+
+async def test_unpriced_provider_view_keeps_the_customer_charge(native_batch):
+    owner, _, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    await fund(owner, executions, payload, auth, deployment)
+    execution = executions[0]
+    # Only the customer is priced, for example by a tier on an unpriced deployment.
+    execution.pricing = replace(
+        execution.pricing, provider_model_info={}, provider_token_pricing=None
+    )
+    execution.completion_payload({"completed_at": datetime.now(UTC).isoformat()}, receipt_usage())
+    spend = execution.checkpoint.terminal.spend_payload
+    assert execution.checkpoint.terminal.exact_charge == Decimal("0.009")
+    assert "billing" not in spend["metadata"]
+    assert "provider_cost_exact" not in spend
+    assert spend["metadata"]["provider_billing"]["unpriced_reason"] == "no_configured_pricing"
+
+
+@pytest.mark.parametrize(
+    "field,model_info",
+    [
+        # Funded with a token price that the completion quote no longer finds.
+        ("customer_model_info", {"mode": "chat"}),
+        # A broken provider price is never recorded as an unknown cost.
+        ("provider_model_info", {"input_cost_per_token": "-1", "output_cost_per_token": "1"}),
+    ],
+)
+async def test_missing_or_broken_price_on_a_priced_model_still_refuses(
+    native_batch, field, model_info
+):
+    owner, _, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    await fund(owner, executions, payload, auth, deployment)
+    execution = executions[0]
+    execution.pricing = replace(execution.pricing, **{field: model_info})
+    with pytest.raises(BatchAccountingUnavailable):
+        execution.completion_payload(
+            {"completed_at": datetime.now(UTC).isoformat()}, receipt_usage()
+        )
+    assert execution.checkpoint.terminal is None
+
+
+async def test_partly_priced_model_is_refused_before_the_provider_call(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    unpriced(deployment)
+    # An input price with no output price cannot fund a chat call.
+    deployment.model_info.update({"input_cost_per_token": "0.01", "max_input_tokens": 100})
+    with pytest.raises(SpendPersistenceUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    assert not executions[0].dispatched and checkpoints.calls == []
 
 
 @pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
