@@ -128,9 +128,20 @@ Suggestions can carry known prices and limits that pre-fill the form:
 | Mistral model list | Context window |
 | OpenRouter model list | Context window, max output tokens, input, output and cached-input prices |
 | Together model list | Context window, input and output prices |
-| vLLM, Fireworks and other OpenAI-compatible lists | Context window when the list reports it |
+| vLLM server | Context window (`max_model_len`), the request types the server serves, and the weights path. See below. |
+| Fireworks and other OpenAI-compatible lists | Context window when the list reports it |
 
 Values that are missing, negative or out of range are ignored.
+
+### vLLM Servers
+
+For a vLLM server, **Refresh provider models** reads the server itself:
+
+- **Context window** comes from `max_model_len` in `/v1/models`. A LoRA adapter uses its base model's context window.
+- **Request types** come from the server's `/openapi.json`. Recent vLLM versions only add the routes the loaded model supports, so DeltaLLM can tell chat, embeddings, rerank and transcription servers apart. If you pick a mode the server does not serve, the form lists no models and says which modes the server does serve.
+- **Weights path**: when the server uses `--served-model-name`, the suggestion shows the real model path next to the served name, for example `qwen (Qwen/Qwen3-8B)`. Use the served name as the upstream model.
+
+vLLM has no separate output limit or prices, so those fields stay empty. If the server runs with `--disable-fastapi-docs`, DeltaLLM cannot read the request types and shows every model for every mode.
 
 ## Recommended First Deployment
 

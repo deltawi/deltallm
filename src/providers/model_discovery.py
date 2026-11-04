@@ -20,6 +20,7 @@ from src.providers.model_catalog import (
     catalog_models_for_provider,
 )
 from src.providers.resolution import PROVIDER_PRESETS, is_openai_compatible_provider
+from src.providers import vllm_discovery
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import build_upstream_request_timeout
 
@@ -201,6 +202,33 @@ def _extract_elevenlabs_models(payload: Any, *, provider: str) -> list[dict[str,
     return models
 
 
+def _extract_vllm_models(
+    payload: Any, *, provider: str, modes: list[ModelMode] | None
+) -> list[dict[str, Any]]:
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    vllm_discovery.inherit_parent_context(items)
+
+    models: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "").strip()
+        if not model_id:
+            continue
+        models.append(
+            _provider_model_option(
+                model_id=model_id,
+                label=vllm_discovery.model_label(item, model_id),
+                provider=provider,
+                supported_modes=modes,
+                discovered_metadata=openai_style_metadata(item, provider="vllm"),
+            )
+        )
+    return models
+
+
 async def _load_json(
     http_client: httpx.AsyncClient,
     *,
@@ -294,18 +322,57 @@ async def _discover_live_models(
     if not api_key or not api_base:
         return []
 
+    headers = build_openai_compatible_auth_headers(
+        provider=provider,
+        api_key=str(api_key),
+        auth_header_name=auth_header_name,
+        auth_header_format=auth_header_format,
+    )
     payload = await _load_json(
         http_client,
         url=f"{str(api_base).rstrip('/')}/models",
-        headers=build_openai_compatible_auth_headers(
-            provider=provider,
-            api_key=str(api_key),
-            auth_header_name=auth_header_name,
-            auth_header_format=auth_header_format,
-        ),
+        headers=headers,
         general_settings=general_settings,
     )
+    if provider == "vllm":
+        modes = await _vllm_served_modes(
+            http_client, api_base=str(api_base), headers=headers, general_settings=general_settings
+        )
+        return _extract_vllm_models(payload, provider=response_provider, modes=modes)
     return _extract_openai_style_models(payload, provider=response_provider)
+
+
+def _vllm_mode_warning(live_options: list[dict[str, Any]], mode: ModelMode) -> str | None:
+    served = {m for option in live_options for m in option.get("supported_modes") or []}
+    if not served or mode in served:
+        return None
+    labels = ", ".join(vllm_discovery.MODE_LABELS.get(m, m) for m in sorted(served))
+    return (
+        f"This vLLM server does not serve {vllm_discovery.MODE_LABELS.get(mode, mode)} "
+        f"requests. It serves: {labels}."
+    )
+
+
+async def _vllm_served_modes(
+    http_client: httpx.AsyncClient,
+    *,
+    api_base: str,
+    headers: dict[str, str],
+    general_settings: Any | None,
+) -> list[ModelMode] | None:
+    """Best effort: an unreadable OpenAPI document leaves the modes unknown."""
+    url = vllm_discovery.openapi_url(api_base)
+    try:
+        response = await http_client.get(
+            url,
+            headers=headers,
+            timeout=build_upstream_request_timeout(general_settings, 5.0),
+        )
+        if response.status_code >= 400 or len(response.content) > vllm_discovery.MAX_OPENAPI_BYTES:
+            return None
+        return vllm_discovery.served_modes(response.json())
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 def _merge_model_options(
@@ -478,6 +545,11 @@ async def discover_provider_models(
     except (httpx.HTTPError, ValueError) as exc:
         live_options = []
         warnings.append(str(exc))
+
+    if normalized_provider == "vllm" and mode is not None:
+        warning = _vllm_mode_warning(live_options, mode)
+        if warning:
+            warnings.append(warning)
 
     return {
         "data": _merge_model_options(catalog_options, live_options, mode=mode),
