@@ -1,0 +1,33 @@
+replicaCount: 1
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+postgresql:
+  enabled: true
+  primary:
+    extendedConfiguration: |
+      max_connections = 100
+  auth:
+    username: deltallm
+    password: deltallm
+    database: deltallm
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+
+dependencyCapacity:
+  postgresqlMaxConnections: 100
+  # One steady + one surge + one retiring process: 3 * 28 + 16 = 100.
+  postgresqlReservedConnections: 16
+
+config:
+  general_settings:
+    provider_discovery_allow_http: false
+    provider_discovery_allowed_ports: [443]
+    provider_discovery_allowed_private_cidrs: []
