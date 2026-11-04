@@ -144,6 +144,7 @@ These `deltallm_params` fields are available for the OpenAI-compatible providers
 - `deepinfra`
 - `perplexity`
 - `vllm`
+- `sglang`
 - `lmstudio`
 - `ollama`
 
@@ -484,6 +485,7 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | AWS Bedrock | `bedrock/` | `bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0` |
 | ElevenLabs | `elevenlabs/` | `elevenlabs/eleven_multilingual_v2` |
 | vLLM | `vllm/` | `vllm/meta-llama/Llama-3.1-8B-Instruct` |
+| SGLang | `sglang/` | `sglang/meta-llama/Llama-3.1-8B-Instruct` |
 | LM Studio | `lmstudio/` | `lmstudio/qwen2.5-7b-instruct` |
 | Ollama | `ollama/` | `ollama/llama3.1` |
 
@@ -504,6 +506,7 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | AWS Bedrock | Y | N | N | N | N | N |
 | ElevenLabs | N | N | N | Y | Y | N |
 | vLLM | Y | Y | Y | Y | Y | Y |
+| SGLang | Y | Y | N | N | N | N |
 | LM Studio | Y | Y | N | N | N | N |
 | Ollama | Y | Y | N | N | N | N |
 

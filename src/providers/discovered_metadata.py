@@ -83,7 +83,7 @@ def openai_style_metadata(item: Mapping[str, Any], *, provider: str) -> dict[str
       ``pricing.prompt`` / ``completion`` / ``input_cache_read`` (USD per token).
     - Groq: ``context_window``, ``max_completion_tokens``.
     - Together: ``context_length``, ``pricing.input`` / ``output`` (USD per million tokens).
-    - vLLM: ``max_model_len``.
+    - vLLM and SGLang: ``max_model_len``.
     - Fireworks and others: ``context_length`` when present.
     """
     metadata: dict[str, float | int] = {}

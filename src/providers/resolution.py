@@ -17,6 +17,7 @@ OPENAI_COMPATIBLE_PROVIDERS = {
     "deepinfra",
     "perplexity",
     "vllm",
+    "sglang",
     "lmstudio",
     "ollama",
     "azure",
@@ -33,7 +34,7 @@ OPENAI_FAMILY_PROVIDERS = {
 # Providers where requesting the final OpenAI stream usage chunk is supported.
 STREAM_USAGE_REQUEST_PROVIDERS = (
     OPENAI_FAMILY_PROVIDERS
-    | {"vllm"}
+    | {"vllm", "sglang"}
     | {provider for provider, profile in CHAT_PROVIDER_PROFILES.items() if profile.stream_usage}
 )
 
@@ -46,6 +47,7 @@ PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
     "gemini": ("gemini/",),
     "bedrock": ("bedrock/",),
     "elevenlabs": ("elevenlabs/",),
+    "sglang": ("sglang/",),
 }
 
 PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
@@ -87,6 +89,7 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
         "audio_transcription",
         "rerank",
     },
+    "sglang": {"chat", "embedding"},
     "lmstudio": {"chat", "embedding"},
     "ollama": {"chat", "embedding"},
 }
@@ -149,9 +152,15 @@ PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
         "compat": "native",
     },
     "vllm": {"provider": "vllm", "api_base": None, "compat": "openai"},
+    "sglang": {"provider": "sglang", "api_base": None, "compat": "openai"},
     "lmstudio": {"provider": "lmstudio", "api_base": None, "compat": "openai"},
     "ollama": {"provider": "ollama", "api_base": None, "compat": "openai"},
 }
+
+
+# Self-hosted providers added after the platform OpenAI fallback existed. They must
+# never receive the gateway's OpenAI key or base URL.
+PROVIDERS_WITHOUT_PLATFORM_DEFAULTS = frozenset({"sglang"})
 
 
 def provider_from_model(model: str | None) -> str:
@@ -180,7 +189,10 @@ def resolve_provider_connection_defaults(
 ) -> dict[str, object]:
     """Apply connection defaults once while constructing the runtime snapshot."""
     resolved = dict(params)
-    profile = CHAT_PROVIDER_PROFILES.get(resolve_provider(resolved))
+    provider = resolve_provider(resolved)
+    if provider in PROVIDERS_WITHOUT_PLATFORM_DEFAULTS:
+        return resolved
+    profile = CHAT_PROVIDER_PROFILES.get(provider)
     if profile is not None:
         if not resolved.get("api_base"):
             resolved["api_base"] = profile.api_base

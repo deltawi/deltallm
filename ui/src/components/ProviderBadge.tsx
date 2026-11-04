@@ -22,6 +22,7 @@ const PROVIDER_TONES: Record<string, string> = {
   openrouter: 'bg-violet-50 text-violet-700 border-violet-100',
   perplexity: 'bg-rose-50 text-rose-700 border-rose-100',
   qwen: 'bg-violet-50 text-violet-700 border-violet-100',
+  sglang: 'bg-yellow-50 text-yellow-700 border-yellow-100',
   tencent: 'bg-sky-50 text-sky-700 border-sky-100',
   together: 'bg-indigo-50 text-indigo-700 border-indigo-100',
   unknown: 'bg-gray-100 text-gray-700 border-gray-200',

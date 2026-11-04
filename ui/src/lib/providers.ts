@@ -18,6 +18,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   bedrock: 'AWS Bedrock',
   elevenlabs: 'ElevenLabs',
   vllm: 'vLLM',
+  sglang: 'SGLang',
   lmstudio: 'LM Studio',
   ollama: 'Ollama',
   unknown: 'Unknown',
@@ -32,6 +33,7 @@ const CUSTOM_UPSTREAM_AUTH_PROVIDERS = new Set([
   'deepinfra',
   'perplexity',
   'vllm',
+  'sglang',
   'lmstudio',
   'ollama',
 ]);

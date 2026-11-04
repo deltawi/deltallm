@@ -123,6 +123,7 @@ Model create and update payloads accept custom upstream auth-header overrides in
 - `deepinfra`
 - `perplexity`
 - `vllm`
+- `sglang`
 - `lmstudio`
 - `ollama`
 

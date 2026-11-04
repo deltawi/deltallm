@@ -150,7 +150,7 @@ Where they go depends on the deployment's provider:
 
 | Provider | Parameters DeltaLLM does not declare |
 | --- | --- |
-| OpenAI, Azure OpenAI, and other OpenAI-compatible servers (vLLM, Ollama, Groq, OpenRouter, ...) | Sent to the provider unchanged. The provider rejects ones it does not know. |
+| OpenAI, Azure OpenAI, and other OpenAI-compatible servers (vLLM, SGLang, Ollama, Groq, OpenRouter, ...) | Sent to the provider unchanged. The provider rejects ones it does not know. |
 | DeepSeek, Mistral, Qwen, Z.ai, MiniMax, Tencent | Left out. Their declared parameters are checked as before. |
 | Anthropic, Gemini, Bedrock | Left out. These requests are translated from the declared fields. |
 
