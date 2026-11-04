@@ -87,6 +87,12 @@ log names the failing write. Search for these lines:
 
 They hold no keys or payloads.
 
+A usage receipt is written after the provider answered, so one slow receipt statement is written
+again, up to three tries of 250 ms each, before the request fails. The repeat is safe: the receipt
+accepts an exact copy of itself, even after a timed-out try committed late. Each repeat counts in
+`deltallm_spend_ingestion_failures_total{stage="operation_receipt_retry"}`; a steady rate there means
+the database is often slow on that write.
+
 ## Suspected credential or data compromise
 
 1. Restrict affected routes/accounts and preserve logs, audit records, and deployment state.

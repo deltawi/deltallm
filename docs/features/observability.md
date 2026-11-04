@@ -111,6 +111,10 @@ Core metrics include:
 | `deltallm_accounting_batch_size` | Histogram | Accounting operations committed per PostgreSQL call |
 | `deltallm_accounting_batch_seconds` | Histogram | Reservation and finalization acknowledgement latency by success or error |
 | `deltallm_accounting_reservation_decisions_total` | Counter | Dispatch, replay, budget exhaustion, and capacity exhaustion decisions |
+| `deltallm_accounting_local_receipts` | Gauge | Local issue proofs this API or batch process holds until their operation has a durable terminal |
+| `deltallm_accounting_local_receipt_bytes` | Gauge | Conservative byte charge of those proofs |
+| `deltallm_accounting_local_receipt_fill_ratio` | Gauge | Share of the local proof store in use, by entries or bytes; new local reservations fail at 1 |
+| `deltallm_accounting_local_receipt_releases_total` | Counter | Proofs released because another process finalized the operation (`finalized`) or its grant expired (`expired`) |
 | `deltallm_accounting_projection_actions_total` | Counter | Recovered reservations, rolled windows, projected events, and iteration failures |
 | `deltallm_accounting_projection_event_lag_seconds` | Histogram | Event age when the compatibility projection completes |
 | `deltallm_accounting_projection_backlog` | Gauge | Durable accounting events beyond their projection checkpoints |

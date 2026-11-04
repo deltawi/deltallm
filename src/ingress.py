@@ -10,6 +10,9 @@ from src.concurrency import BoundedCapacityGate
 from src.config_startup import startup_field_values
 from src.metrics.admission import ingress_active, ingress_bytes
 
+# Ingress admission refused the request before any handler ran it.
+DRAINING_CODE = "gateway_draining"
+
 
 class IngressClass(StrEnum):
     INFERENCE = "inference"

@@ -357,3 +357,97 @@ async def test_rpc_wire_funding_uses_receiver_clock_and_accounts_for_server_elap
     assert restored.dispatch_deadline == 1000002
     assert restored.allowance == Decimal(str(item.reservation.allowance))
     assert "observed_monotonic" not in reply.model_dump_json()
+
+
+class LookupClient(QueryClient):
+    """Return journal rows for the operations in ``terminal``; changed rows on request."""
+
+    def __init__(self, terminal_ids, *, change=None):
+        super().__init__()
+        self.terminal_ids = set(terminal_ids)
+        self.change = change
+
+    async def query_raw(self, query, *parameters):
+        if "FROM deltallm_accounting_terminal_journal j" not in query or "replayed" in query:
+            return await super().query_raw(query, *parameters)
+        self.calls.append((query, parameters))
+        if self.error is not None:
+            raise self.error
+        rows = [
+            {"operation_id": value["operation_id"], "journal_sequence": 9, "outcome": "completed"}
+            for value in json.loads(parameters[0])
+            if value["operation_id"] in self.terminal_ids
+        ]
+        return rows if self.change is None else self.change(rows)
+
+
+@pytest.mark.parametrize("draining", [False, True])
+async def test_terminal_lookup_returns_only_durable_rows_in_one_read(draining):
+    from src.billing.accounting.permits.accounting_local_receipts import RetainedLocalReceipt
+
+    proofs = [RetainedLocalReceipt.freeze(terminal().receipt) for _ in range(3)]
+    client = LookupClient({str(proofs[1].operation_id)})
+    app, service, _, _ = await rpc_state(client)
+    persistence, transport = remote(app)
+    try:
+        if draining:
+            service.stop_admission()
+        results = await persistence.lookup_terminals(proofs, expires_at=deadline())
+        assert results[0] is None and results[2] is None
+        assert results[1].operation_id == proofs[1].operation_id
+        assert results[1].journal_sequence == 9 and results[1].replayed
+        assert results[1].protocol_generation == 7
+        assert len(client.calls) == 1
+        query, parameters = client.calls[0]
+        assert "j.reservation_sha256=decode" in query and parameters[1] == 7
+        assert [value["operation_id"] for value in json.loads(parameters[0])] == [
+            str(proof.operation_id) for proof in proofs
+        ]
+        assert await persistence.lookup_terminals([], expires_at=deadline()) == ()
+        assert len(client.calls) == 1
+    finally:
+        await service.close(timeout_seconds=1)
+        await transport.close()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda rows: rows + rows,
+        lambda rows: [{**rows[0], "operation_id": str(uuid4())}],
+        lambda rows: [{**rows[0], "journal_sequence": "9"}],
+        lambda rows: [{**rows[0], "outcome": "maybe"}],
+    ],
+)
+async def test_changed_terminal_lookup_row_releases_nothing(change):
+    from src.billing.accounting.permits.accounting_local_receipts import RetainedLocalReceipt
+
+    proof = RetainedLocalReceipt.freeze(terminal().receipt)
+    app, service, client, _ = await rpc_state(
+        LookupClient({str(proof.operation_id)}, change=change)
+    )
+    persistence, transport = remote(app)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable):
+            await persistence.lookup_terminals([proof], expires_at=deadline())
+        assert len(client.calls) == 1
+    finally:
+        await service.close(timeout_seconds=1)
+        await transport.close()
+
+
+async def test_terminal_lookup_contract_rejects_repeats_and_partial_replies():
+    from src.billing.accounting.permits.accounting_local_receipts import RetainedLocalReceipt
+    from src.billing.accounting.transport.accounting_rpc_contracts import (
+        LocalTerminalLookupReply,
+        LocalTerminalLookupRequest,
+    )
+
+    identity = RetainedLocalReceipt.freeze(terminal().receipt).terminal_identity()
+    payload = rpc_request_bytes(
+        generation=7, budget_ms=100, values=rpc_batch_bytes((identity, identity))
+    )
+    with pytest.raises(ValueError, match="repeats"):
+        LocalTerminalLookupRequest.model_validate_json(payload)
+    with pytest.raises(ValueError, match="incomplete"):
+        LocalTerminalLookupReply(operation_id=identity.operation_id, journal_sequence=1)

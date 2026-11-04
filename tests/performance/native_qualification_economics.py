@@ -76,6 +76,28 @@ async def wait_native_drain(db: Prisma, *, timeout: float = 180) -> dict[str, ob
         await asyncio.sleep(2)
 
 
+async def drain_or_unsafe(db: Prisma, *, timeout: float = 180) -> dict[str, object]:
+    """Like ``wait_native_drain``, but report unsafe budget state instead of raising."""
+    try:
+        return await wait_native_drain(db, timeout=timeout)
+    except RuntimeError as error:
+        return {
+            "passed": False,
+            "error": str(error),
+            "seconds": None,
+            "state": await accounting_snapshot(db),
+        }
+
+
+BUDGET_WINDOWS_QUERY = (
+    "SELECT scope_type,committed_exact::text AS committed,"
+    "reserved_exact::text AS reserved,provisional_exact::text AS provisional "
+    "FROM deltallm_accounting_budget_windows "
+    "WHERE protocol_name='primary' AND generation=1 ORDER BY scope_type LIMIT 65"
+)
+BUDGET_SCOPE_TYPES = frozenset({"api_key", "user", "team", "organization"})
+
+
 async def reconcile_native(
     db: Prisma,
     *,
@@ -88,12 +110,7 @@ async def reconcile_native(
         raise ValueError("Precheck count must be zero or one")
     after = await accounting_snapshot(db)
     async with asyncio.timeout(5):
-        rows = await db.query_raw(
-            "SELECT scope_type,committed_exact::text AS committed,"
-            "reserved_exact::text AS reserved,provisional_exact::text AS provisional "
-            "FROM deltallm_accounting_budget_windows "
-            "WHERE protocol_name='primary' AND generation=1 ORDER BY scope_type LIMIT 65"
-        )
+        rows = await db.query_raw(BUDGET_WINDOWS_QUERY)
     fact_charge = Decimal(str(after["fact_charge"]))
     expected_count = successes + precheck_count
     expected_delta = Decimal(expected_count) * Decimal("0.000007")
@@ -114,7 +131,7 @@ async def reconcile_native(
     ]
     scope_matches = (
         bool(scopes)
-        and {row["scope_type"] for row in scopes} == {"api_key", "user", "team", "organization"}
+        and {row["scope_type"] for row in scopes} == BUDGET_SCOPE_TYPES
         and len(scopes) <= 64
         and all(
             row["matches_facts"]

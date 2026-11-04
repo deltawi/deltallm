@@ -1,0 +1,622 @@
+"""Capacity and lifecycle acceptance on accounting v2 (values-accounting-native.yaml).
+
+The legacy capacity and lifecycle jobs prove their behavior on the spend
+outbox path. This run proves the same promises on the native local_journal
+path production runs, on one disposable kind node:
+
+1. Fixed replicas: 2 and then 3 API pods serve strict traffic through a
+   bounded edge, every pod takes traffic, and usage facts match exactly.
+2. Rollout: a Helm rollout of every role while API traffic and an accepted
+   batch are in flight. The batch completes, nothing is charged twice.
+3. Pod loss: SIGKILL an API pod, an accounting request pod and the batch pod
+   during load. The batch completes, accounting drains without a restart, and
+   no work is charged twice. A killed pod cannot prove whether the provider
+   answered its in-flight work, so that work, and the unreturned rest of the
+   killed pods' own grants, may stay provisional. That money is bounded and
+   matched exactly; batch items it covers fail instead of running twice.
+
+After each step every bounded in-memory store and queue must return to its
+pre-load level, accounting must drain, and budgets must hold no open money.
+Batch volume stays below one pod's receipt store; the nightly soak owns volume.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from collections import Counter
+from contextlib import ExitStack
+import json
+import os
+from pathlib import Path
+from time import monotonic
+
+import httpx
+
+from src.batch.public_errors import BatchPublicErrorCode
+from tests.performance.capacity_fixture import capacity_release, install_edge
+from scripts.measure_gateway_load import RequestResult, run_constant_arrival, summarize
+from tests.performance.capacity_load import PAYLOAD, arrival, rejection_code
+from tests.performance.gateway_concurrency_dependencies import local_database
+from tests.performance.gateway_concurrency_fixture import MODEL
+from tests.performance.lifecycle_cluster import LOAD_KEY, MASTER_KEY, SALT_KEY, LifecycleCluster
+from tests.performance.native_batch_load import (
+    CHAT_ENDPOINT,
+    budget_scopes,
+    client,
+    submit_job,
+    duplicate_operations,
+    item_stats,
+    verify_outputs,
+    wait_jobs,
+)
+from tests.performance.native_fixture import (
+    collect_role_logs,
+    BATCH_CONCURRENCY,
+    BATCH_ITEM_LEASE_SECONDS,
+    follow_role_logs,
+    native_values,
+    role_pods,
+    scrape_roles,
+    seed_native_fixture,
+)
+from tests.performance.native_qualification_economics import (
+    accounting_snapshot,
+    drain_or_unsafe,
+    wait_native_drain,
+)
+from tests.performance.run_accounting_diagnostic import activate_accounting
+from tests.performance.run_capacity_acceptance import prime_database, wait_edge
+from tests.performance.run_native_qualification import (
+    collect_native_logs,
+    install_native_dependencies,
+)
+from tests.performance.soak_checks import (
+    capacity_failures,
+    counter_delta,
+    counter_total,
+    gauges_returned_to_idle,
+    killed_work_held,
+    ledger_matches,
+)
+
+ROLES = ("api", "batch_worker", "accounting_request", "accounting_worker")
+# The mock answers this prompt after 10 s, so a job stays in flight across a
+# rollout or pod loss. 300 items at concurrency 20 is about 150 s of work.
+SLOW_PROMPT = "Lifecycle batch fixture."
+BATCH_ITEMS = 300
+SETTLE_SECONDS = 300
+# Reservations and grants a stopped pod held expire about 15 minutes after they
+# were issued; recovery then settles them. Waiting past that shows whether a
+# late drain is a slow recovery or a permanent leak.
+EXPIRY_RECOVERY_SECONDS = 1080
+
+
+def write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
+
+
+async def settle(
+    cluster: LifecycleCluster,
+    step: str,
+    *,
+    baseline: dict,
+    before: dict,
+    charged: int,
+    allowed_extra: int = 0,
+    timeout: float = SETTLE_SECONDS,
+    recovery_timeout: float = EXPIRY_RECOVERY_SECONDS,
+    killed: dict | None = None,
+) -> dict[str, object]:
+    """Wait for gauges and accounting to settle, then check the ledger.
+
+    ``killed`` names the SIGKILLed pods with the held-money snapshot taken
+    before the kills; their interrupted work may stay provisional, bounded by
+    ``killed_work_held``. Every other step must leave nothing provisional.
+    """
+    started = monotonic()
+    while True:
+        idle = gauges_returned_to_idle(baseline, await scrape_roles(cluster, ROLES))
+        # Gauges are in-memory and recover on their own; only accounting may
+        # need to wait for expiry, so the idle wait stays at the target.
+        if idle["passed"] or monotonic() - started >= min(timeout, SETTLE_SECONDS):
+            break
+        await asyncio.sleep(5)
+    async with local_database() as db:
+        wait_drain = drain_or_unsafe if killed is None else drain_held_or_unsafe
+        drain = await wait_drain(db, timeout=timeout)
+        stuck: dict[str, list] = {}
+        if not drain["passed"]:
+            # Keep what was stuck at the target, then see whether expiry recovers it.
+            stuck = await unsettled_rows(db)
+            recovery = await wait_drain(db, timeout=max(0.0, recovery_timeout - timeout))
+            drain = {
+                **recovery,
+                "passed": False,
+                "target_seconds": timeout,
+                "seconds": timeout + (recovery["seconds"] or 0),
+                "recovered_after_target": recovery["passed"],
+            }
+        after = await accounting_snapshot(db)
+        held = None
+        if killed is not None:
+            held = killed_work_held(
+                killed["money"],
+                await held_money(db, killed["pods"]),
+                scopes_before=killed["scopes"],
+                max_in_flight=killed["max_in_flight"],
+                failed_items=killed["failed_items"],
+            )
+        ledger = ledger_matches(
+            before,
+            after,
+            charged=charged,
+            duplicates=await duplicate_operations(db),
+            scopes=await budget_scopes(db),
+            allowed_extra=allowed_extra,
+            held_provisional=None if held is None else held["held_provisional"],
+        )
+    drain.pop("samples", None)
+    result = {
+        "passed": idle["passed"]
+        and drain["passed"]
+        and ledger["passed"]
+        and (held is None or held["passed"]),
+        "idle": idle,
+        "accounting_drain": drain,
+        "ledger": ledger,
+    }
+    if held is not None:
+        result["killed_work"] = held
+    if not result["passed"]:
+        (cluster.output / f"{step}-unsettled-state.json").write_text(
+            json.dumps({**result, "stuck": stuck}, indent=2, default=str)
+        )
+    # Later steps still run; exercise() fails the job after the last step.
+    return result
+
+
+UNSETTLED_QUERIES = {
+    "operations": "SELECT to_jsonb(o) AS row FROM deltallm_billing_operations o "
+    "WHERE accounting_generation=1 AND accounting_state IN ('reserved','provisional') LIMIT 10",
+    "grants": "SELECT to_jsonb(g) AS row FROM deltallm_accounting_grants g "
+    "WHERE generation=1 AND state<>'closed' LIMIT 10",
+    # The terminal event names why an operation stayed provisional.
+    "events": "SELECT jsonb_build_object('operation_id',e.operation_id,'event_type',e.event_type,"
+    "'outcome',e.outcome,'occurred_at',e.occurred_at,'payload',e.payload_json,"
+    "'audit',e.audit_envelope_json) AS row FROM deltallm_accounting_events e "
+    "JOIN deltallm_billing_operations o USING (operation_id) "
+    "WHERE o.accounting_generation=1 AND o.accounting_state IN ('reserved','provisional') "
+    "ORDER BY e.sequence LIMIT 30",
+}
+
+
+# Money a SIGKILL may leave provisional: operations with no proof of their
+# outcome and the unreturned rest of the killed pods' own grants. A grant's
+# owner id starts with the pod's hostname.
+HELD_MONEY_SQL = """
+SELECT
+ (SELECT count(*)::bigint FROM deltallm_billing_operations
+  WHERE accounting_generation=1 AND accounting_state='reserved') AS reserved_operations,
+ (SELECT count(*)::bigint FROM deltallm_billing_operations
+  WHERE accounting_generation=1 AND accounting_state='provisional') AS provisional_operations,
+ (SELECT COALESCE(sum(provisional_debit_exact),0)::text FROM deltallm_billing_operations
+  WHERE accounting_generation=1 AND accounting_state='provisional') AS operation_provisional,
+ (SELECT COALESCE(sum(unknown_provisional_exact),0)::text FROM deltallm_accounting_grants
+  WHERE generation=1 AND split_part(grantee_id,':',1)=ANY($1::text[])) AS killed_grant_provisional,
+ (SELECT COALESCE(sum(unknown_provisional_exact),0)::text FROM deltallm_accounting_grants
+  WHERE generation=1 AND NOT split_part(grantee_id,':',1)=ANY($1::text[]))
+  AS surviving_grant_provisional
+"""
+
+
+async def held_money(db, pods: list[str]) -> dict[str, str]:
+    async with asyncio.timeout(5):
+        rows = await db.query_raw(HELD_MONEY_SQL, pods)
+    return {name: str(value) for name, value in rows[0].items()}
+
+
+async def drain_held_or_unsafe(db, *, timeout: float) -> dict[str, object]:
+    """Drain where provisional operations may stay; reservations may not."""
+    started = monotonic()
+    while True:
+        state = await accounting_snapshot(db)
+        reserved = int((await held_money(db, []))["reserved_operations"])
+        if state["unsafe_windows"]:
+            return {
+                "passed": False,
+                "error": "unsafe budget state",
+                "seconds": None,
+                "state": state,
+            }
+        settled = reserved == 0 and all(
+            state[field] == 0
+            for field in (
+                "open_grants",
+                "terminal_pending",
+                "report_pending_partitions",
+                "spend_pending",
+                "audit_pending",
+            )
+        )
+        elapsed = monotonic() - started
+        if settled or elapsed >= timeout:
+            return {"passed": settled, "seconds": elapsed, "state": state}
+        await asyncio.sleep(2)
+
+
+async def unsettled_rows(db) -> dict[str, list]:
+    """Operations and grants that kept accounting from draining, for the evidence."""
+    rows: dict[str, list] = {}
+    for name, query in UNSETTLED_QUERIES.items():
+        try:
+            rows[name] = [row["row"] for row in await db.query_raw(query)]
+        except Exception as error:  # Diagnostics must not hide the drain failure.
+            rows[name] = [f"query failed: {type(error).__name__}"]
+    return rows
+
+
+async def start_slow_batch(url: str, prefix: str, retries: list[dict]) -> str:
+    rows = [
+        {
+            "custom_id": f"{prefix}-{index}",
+            "method": "POST",
+            "url": CHAT_ENDPOINT,
+            "body": {
+                "model": MODEL,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": SLOW_PROMPT}],
+                "metadata": {"cache": False},
+            },
+        }
+        for index in range(BATCH_ITEMS)
+    ]
+    async with client(url) as http:
+        # The same busy retry as the soak: a pod left busy by the previous step
+        # may answer 503 with x-should-retry.
+        batch_id = await submit_job(
+            http, CHAT_ENDPOINT, prefix, BATCH_ITEMS, retries=retries, rows=rows
+        )
+    async with local_database() as db:
+        deadline = monotonic() + 60
+        while monotonic() < deadline:
+            rows = await db.query_raw(
+                "SELECT count(*)::int AS active FROM deltallm_batch_item "
+                "WHERE batch_id=$1 AND status='in_progress'",
+                batch_id,
+            )
+            if rows[0]["active"]:
+                return batch_id
+            await asyncio.sleep(0.5)
+    raise TimeoutError("batch worker did not claim the accepted job")
+
+
+async def finish_batch(url: str, batch_id: str, *, timeout: float) -> dict:
+    async with client(url) as http:
+        final, elapsed, timed_out = await wait_jobs(http, [batch_id], timeout=timeout)
+        document = final.get(batch_id) or {
+            "status": "unreadable",
+            "request_counts": {"completed": 0, "failed": 0},
+        }
+        async with local_database() as db:
+            stats = await item_stats(db, [batch_id])
+        counts = document["request_counts"]
+        # Every outcome is reported, not raised, so later steps still run.
+        failures = ["timed_out"] if timed_out else []
+        if document["status"] != "completed":
+            failures.append("job_not_completed")
+        if counts["failed"]:
+            failures.append("items_failed")
+        if counts["completed"] + counts["failed"] != BATCH_ITEMS:
+            failures.append("item_count_mismatch")
+        if document.get("output_file_id"):
+            try:
+                if await verify_outputs(http, document) != counts["completed"]:
+                    failures.append("output_rows_mismatch")
+            except AssertionError:
+                failures.append("output_rows_invalid")
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "batch_id": batch_id,
+        "seconds": elapsed,
+        "completed": counts["completed"],
+        "failed": counts["failed"],
+        "items": stats,
+    }
+
+
+def held_items_only(batch: dict) -> None:
+    """After a SIGKILL, accept failed items only when their billing proof was lost.
+
+    Such an item may have reached the provider, so it fails instead of running
+    twice; ``killed_work_held`` then checks that each one still holds its money.
+    """
+    lost = BatchPublicErrorCode.ACCOUNTING_CHECKPOINT_UNAVAILABLE.message
+    errors = {error for row in batch["items"] for error in row["failed_errors"]}
+    if "items_failed" in batch["failures"] and errors <= {lost}:
+        batch["failures"].remove("items_failed")
+        batch["held_items"] = batch["failed"]
+        batch["passed"] = not batch["failures"]
+
+
+async def counted_arrival(url: str, *, rate: float, duration: float) -> dict:
+    """Chat traffic that records every outcome; a killed pod may fail any request."""
+    async with httpx.AsyncClient(
+        timeout=10,
+        trust_env=False,
+        limits=httpx.Limits(max_connections=64, max_keepalive_connections=0),
+    ) as http:
+
+        async def request(_index: int, request_id: str) -> RequestResult:
+            try:
+                response = await http.post(
+                    url + "/v1/chat/completions",
+                    headers={"Authorization": "Bearer " + LOAD_KEY, "x-request-id": request_id},
+                    json=PAYLOAD,
+                )
+            except httpx.HTTPError as error:
+                return RequestResult(status_code=None, error=type(error).__name__)
+            if response.status_code != 200:
+                rejection_codes[rejection_code(response)] += 1
+            return RequestResult(
+                status_code=response.status_code, bytes_received=len(response.content)
+            )
+
+        rejection_codes: Counter[str] = Counter()
+        result = await run_constant_arrival(
+            rate=rate, duration_seconds=duration, max_in_flight=64, request=request
+        )
+    return {
+        **summarize(result, target_rate=rate),
+        "rejection_codes": dict(sorted(rejection_codes.items())),
+    }
+
+
+def body_bytes(scrape: dict) -> dict[str, float]:
+    return {
+        pod: value
+        for pod, value in counter_total(scrape, "deltallm_http_request_body_bytes_total").items()
+        if scrape[pod]["role"] == "api"
+    }
+
+
+async def fixed_replicas(cluster: LifecycleCluster, values: Path, url: str) -> list[dict]:
+    results = []
+    for replicas in (2, 3):
+        await asyncio.to_thread(
+            capacity_release, cluster, values, "--set", f"replicaCount={replicas}"
+        )
+        async with asyncio.timeout(180):
+            while len(await asyncio.to_thread(role_pods, cluster, "api")) != replicas:
+                await asyncio.sleep(2)
+        await wait_edge(url)
+        # Let the edge's DNS resolver and health checks see every new pod.
+        await asyncio.sleep(5)
+        baseline = await scrape_roles(cluster, ROLES)
+        async with local_database() as db:
+            before = await accounting_snapshot(db)
+        summary = await arrival(url, cluster.output / f"fixed-{replicas}")
+        after = await scrape_roles(cluster, ROLES)
+        grew = counter_delta(body_bytes(baseline), body_bytes(after))
+        assert set(grew) == set(body_bytes(after)), f"Traffic did not reach every API pod: {grew}"
+        capacity = capacity_failures(baseline, after)
+        assert capacity["passed"], capacity
+        settled = await settle(
+            cluster,
+            f"fixed-{replicas}",
+            baseline=baseline,
+            before=before,
+            charged=summary["success_count"],
+            # No pod stops here, so nothing waits on expiry; keep the job in budget.
+            recovery_timeout=SETTLE_SECONDS,
+        )
+        results.append(
+            {"replicas": replicas, "arrival": summary, "pods_with_traffic": len(grew), **settled}
+        )
+        cluster.event("native_fixed_replicas_completed", replicas=replicas)
+    return results
+
+
+async def rollout(cluster: LifecycleCluster, values: Path, url: str) -> dict:
+    baseline = await scrape_roles(cluster, ROLES)
+    async with local_database() as db:
+        before = await accounting_snapshot(db)
+    create_retries: list[dict] = []
+    batch_id = await start_slow_batch(url, "native-rollout", create_retries)
+    cluster.event("native_rollout_started_with_batch", batch_id=batch_id)
+    rolled = asyncio.create_task(
+        asyncio.to_thread(
+            capacity_release,
+            cluster,
+            values,
+            "--set",
+            "replicaCount=2,podAnnotations.native-acceptance=rollout-1,"
+            "batchWorker.podAnnotations.native-acceptance=rollout-1,"
+            "accountingRequest.podAnnotations.native-acceptance=rollout-1,"
+            "accountingWorker.podAnnotations.native-acceptance=rollout-1",
+        )
+    )
+    traffic = await arrival(
+        url,
+        cluster.output / "rollout-traffic",
+        rate=5,
+        duration=60,
+        allow_controlled_rejections=True,
+    )
+    await rolled
+    await asyncio.to_thread(
+        cluster.kubectl,
+        "rollout",
+        "status",
+        "deployment",
+        "-l",
+        "app.kubernetes.io/instance=gateway",
+        "--timeout=300s",
+    )
+    await wait_edge(url)
+    batch = await finish_batch(url, batch_id, timeout=BATCH_ITEM_LEASE_SECONDS + 360)
+    settled = await settle(
+        cluster,
+        "rollout",
+        baseline=baseline,
+        before=before,
+        charged=traffic["success_count"] + batch["completed"],
+    )
+    cluster.event("native_rollout_completed", batch_seconds=round(batch["seconds"], 1))
+    settled["passed"] = settled["passed"] and batch["passed"]
+    return {"traffic": traffic, "batch": batch, "create_retries": create_retries, **settled}
+
+
+async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
+    baseline = await scrape_roles(cluster, ROLES)
+    targets = {
+        role: (await asyncio.to_thread(role_pods, cluster, role))[0]
+        for role in ("api", "accounting_request", "batch_worker")
+    }
+    async with local_database() as db:
+        before = await accounting_snapshot(db)
+        money = await held_money(db, list(targets.values()))
+        scopes = await budget_scopes(db)
+    create_retries: list[dict] = []
+    batch_id = await start_slow_batch(url, "native-pod-loss", create_retries)
+
+    async def kill_one_of_each() -> list[dict]:
+        killed = []
+        # Let the batch settle into steady work before the first loss.
+        await asyncio.sleep(10)
+        for role, pod in targets.items():
+            container = await asyncio.to_thread(cluster.kill_container, pod)
+            killed.append({"role": role, "pod": pod, "container": container})
+            cluster.event("native_pod_killed", role=role, pod=pod)
+            await asyncio.sleep(15)
+        return killed
+
+    killer = asyncio.create_task(kill_one_of_each())
+    traffic = await counted_arrival(url, rate=5, duration=60)
+    write_json(cluster.output / "pod-loss-traffic.json", traffic)
+    killed = await killer
+
+    def roles_ready() -> bool:
+        return all(
+            len(role_pods(cluster, role)) == count
+            for role, count in (("api", 2), ("accounting_request", 2), ("batch_worker", 1))
+        )
+
+    async with asyncio.timeout(300):
+        while not await asyncio.to_thread(roles_ready):
+            await asyncio.sleep(2)
+    await wait_edge(url)
+    batch = await finish_batch(url, batch_id, timeout=BATCH_ITEM_LEASE_SECONDS + 600)
+    held_items_only(batch)
+    rejected = traffic["target_count"] - traffic["success_count"]
+    settled = await settle(
+        cluster,
+        "pod-loss",
+        baseline=baseline,
+        before=before,
+        charged=traffic["success_count"] + batch["completed"],
+        # A killed API pod may have charged answers its client never received.
+        allowed_extra=rejected,
+        # SIGKILL leaves the killed pods' reservations to expiry recovery.
+        timeout=EXPIRY_RECOVERY_SECONDS,
+        killed={
+            "pods": list(targets.values()),
+            "money": money,
+            "scopes": scopes,
+            # Killing the accounting request pod and then the batch pod can
+            # each interrupt one batch pod's worth of items; each failed API
+            # request was interrupted at most once.
+            "max_in_flight": 2 * BATCH_CONCURRENCY + rejected,
+            "failed_items": batch["failed"],
+        },
+    )
+    cluster.event("native_pod_loss_recovered", batch_seconds=round(batch["seconds"], 1))
+    settled["passed"] = settled["passed"] and batch["passed"]
+    return {
+        "killed": killed,
+        "traffic": traffic,
+        "batch": batch,
+        "create_retries": create_retries,
+        **settled,
+    }
+
+
+async def exercise(cluster: LifecycleCluster, values: Path, report: dict) -> None:
+    with ExitStack() as forwards:
+        postgres = forwards.enter_context(cluster.forward("service/postgres", 5432))
+        redis = forwards.enter_context(cluster.forward("service/redis", 6379))
+        database_url = (
+            f"postgresql://postgres:fixture-only@127.0.0.1:{postgres}/deltallm_concurrency"
+        )
+        os.environ.update(
+            DATABASE_URL=database_url,
+            REDIS_URL=f"redis://127.0.0.1:{redis}/0",
+            DELTALLM_LOAD_API_KEY=LOAD_KEY,
+            DELTALLM_MASTER_KEY=MASTER_KEY,
+            DELTALLM_SALT_KEY=SALT_KEY,
+        )
+        await activate_accounting(database_url)
+        await asyncio.to_thread(capacity_release, cluster, values)
+        await asyncio.to_thread(install_edge, cluster)
+        edge = forwards.enter_context(cluster.forward("service/capacity-edge", 8080))
+        url = f"http://127.0.0.1:{edge}"
+        await wait_edge(url)
+        async with local_database() as db:
+            initial = await wait_native_drain(db)
+        assert initial["passed"], "Accounting startup did not reach an empty baseline"
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as http:
+            assert (await http.get(url + "/metrics")).status_code == 404
+        report["fixed_replicas"] = await fixed_replicas(cluster, values, url)
+        write_json(cluster.output / "native-acceptance.json", report)
+        with follow_role_logs(cluster, "rollout"):
+            report["rollout"] = await rollout(cluster, values, url)
+        write_json(cluster.output / "native-acceptance.json", report)
+        with follow_role_logs(cluster, "pod-loss"):
+            report["pod_loss"] = await pod_loss(cluster, url)
+        steps = {
+            **{f"fixed-{row['replicas']}": row for row in report["fixed_replicas"]},
+            "rollout": report["rollout"],
+            "pod-loss": report["pod_loss"],
+        }
+        report["failed_steps"] = [name for name, step in steps.items() if not step["passed"]]
+        report["passed"] = not report["failed_steps"]
+        write_json(cluster.output / "native-acceptance.json", report)
+        if report["failed_steps"]:
+            raise AssertionError(
+                "Native state did not settle after: "
+                + ", ".join(
+                    f"{name} {json.dumps(steps[name], default=str)[:1500]}"
+                    for name in report["failed_steps"]
+                )
+            )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--image", required=True)
+    parser.add_argument("--kind", default="kind")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if args.output.exists():
+        parser.error("Use a fresh evidence directory")
+    cluster = LifecycleCluster(args.output, kind=args.kind, purpose="native-acceptance", nodes=1)
+    report: dict[str, object] = {"passed": False}
+    with cluster.owned(args.image):
+        install_native_dependencies(cluster, args.image)
+        values = native_values(cluster, args.image, api_replicas=2, batch_replicas=1)
+        prime_database(cluster, values, seeder=seed_native_fixture)
+        try:
+            asyncio.run(exercise(cluster, values, report))
+        finally:
+            write_json(cluster.output / "native-acceptance.json", report)
+            collect_native_logs(cluster)
+            collect_role_logs(cluster)
+    cluster.event("native_acceptance_completed")
+
+
+if __name__ == "__main__":
+    main()

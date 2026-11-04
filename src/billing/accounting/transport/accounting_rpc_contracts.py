@@ -15,7 +15,12 @@ from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitReturn,
 )
 from src.billing.accounting.transport.accounting_local_wire import WireLocalGrant, WireLocalTerminal
-from src.billing.accounting.accounting_protocol import PreissuedPermitAllocation, ReserveDecision
+from src.billing.accounting.accounting_protocol import (
+    AccountingOutcome,
+    PreissuedPermitAllocation,
+    ReserveDecision,
+)
+from src.billing.accounting.journal.accounting_terminal_receipts import TerminalIdentity
 from src.billing.charges.selector_charge import FrozenBillingContract
 
 
@@ -114,8 +119,31 @@ class LocalTerminalRequest(RpcRequest):
         return self
 
 
+class LocalTerminalLookupRequest(RpcRequest):
+    values: tuple[TerminalIdentity, ...] = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def validate_batch(self) -> LocalTerminalLookupRequest:
+        if len({value.operation_id for value in self.values}) != len(self.values):
+            raise ValueError("terminal lookup repeats an operation")
+        return self
+
+
+class LocalTerminalLookupReply(FrozenBillingContract):
+    operation_id: UUID
+    journal_sequence: int | None = Field(default=None, ge=1, le=2**63 - 1)
+    outcome: AccountingOutcome | None = None
+
+    @model_validator(mode="after")
+    def validate_reply(self) -> LocalTerminalLookupReply:
+        if (self.journal_sequence is None) != (self.outcome is None):
+            raise ValueError("terminal lookup reply is incomplete")
+        return self
+
+
 FUNDING_REPLIES = TypeAdapter(list[LocalFundingReply])
 RETURN_REPLIES = TypeAdapter(list[LocalReturnReply])
+LOOKUP_REPLIES = TypeAdapter(list[LocalTerminalLookupReply])
 
 
 def funding_reply(

@@ -27,7 +27,7 @@ from tests.performance.cluster_load_generator import (
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.gateway_concurrency_diagnostics import KubernetesResourceRecorder
 from tests.performance.lifecycle_cluster import LifecycleCluster, LOAD_KEY, MASTER_KEY, SALT_KEY
-from tests.performance.lifecycle_fixtures import CHART, PROVIDER_KEEPALIVE_SECONDS
+from tests.performance.lifecycle_fixtures import PROVIDER_KEEPALIVE_SECONDS
 from tests.performance.native_qualification_economics import (
     accounting_snapshot,
     reconcile_native,
@@ -54,6 +54,7 @@ from tests.performance.native_qualification_failures import (
     record_stage_result,
 )
 from tests.performance.native_client_requests import verify_native_clients
+from tests.performance.native_fixture import apply_native_overlay
 from tests.performance.native_recovery import verify_native_recovery
 from tests.performance.qualification_image_archive import platform_manifest_digest
 
@@ -104,15 +105,6 @@ def phase_rates(phase: str, rates: tuple[int, ...]) -> tuple[int, ...]:
     return (500,) if phase == "preflight" else rates
 
 
-def merge_values(base: dict, overlay: dict) -> dict:
-    for key, value in overlay.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            merge_values(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
 def stage_seconds(phase: str, rate: int, seconds: int, *, diagnostic: bool) -> int:
     # The strict high-rate stability limit needs the full observation window.
     # Keep short selected diagnostics short; they never qualify a release.
@@ -121,8 +113,7 @@ def stage_seconds(phase: str, rate: int, seconds: int, *, diagnostic: bool) -> i
 
 def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
     path = capacity_values(cluster, image)
-    values = yaml.safe_load(path.read_text())
-    merge_values(values, yaml.safe_load((CHART / "values-accounting-native.yaml").read_text()))
+    values = apply_native_overlay(cluster, yaml.safe_load(path.read_text()))
     values.update(
         replicaCount=4,
         resources={
@@ -169,28 +160,6 @@ def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
         redis_bulk_max_waiters=0,
         # Close idle sockets before the fixed provider's five-second limit.
         upstream_http_keepalive_expiry_seconds=PROVIDER_KEEPALIVE_SECONDS - 1,
-    )
-    values["networkPolicy"].update(
-        ingress=[{"from": [{"podSelector": {}}], "ports": [{"port": 4000, "protocol": "TCP"}]}],
-        egress=[
-            {
-                "to": [{"podSelector": {"matchLabels": {"fixture": name}}}],
-                "ports": [{"port": port, "protocol": "TCP"}],
-            }
-            for name, port in (("postgres", 5432), ("redis", 6379), ("provider", 8000))
-        ],
-    )
-    cluster.apply(
-        [
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {"name": "deltallm-accounting-rpc"},
-                "stringData": {
-                    "accounting-rpc-signing-secret": "issue320-kind-only-signing-key-000000000000"
-                },
-            }
-        ]
     )
     path.write_text(yaml.safe_dump(values))
     (cluster.output / "fixture-values.yaml").write_text(path.read_text())

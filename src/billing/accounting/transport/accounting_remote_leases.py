@@ -13,6 +13,7 @@ from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitGrant,
     LocalPermitReturn,
 )
+from src.billing.accounting.permits.accounting_local_receipts import RetainedLocalReceipt
 from src.billing.accounting.journal.accounting_local_terminal import validated_terminal_acks
 from src.billing.accounting.journal.accounting_terminal_snapshots import (
     LocalTerminalValue,
@@ -26,10 +27,12 @@ from src.billing.accounting.accounting_protocol import PreissuedPermitAllocation
 from src.billing.accounting.transport.accounting_rpc_contracts import (
     AccountingRpcHealth,
     FUNDING_REPLIES,
+    LOOKUP_REPLIES,
     RETURN_REPLIES,
     WireLocalReturn,
     LocalFundingRequest,
     LocalReturnRequest,
+    LocalTerminalLookupRequest,
     rpc_batch_bytes,
     rpc_request_bytes,
 )
@@ -163,6 +166,46 @@ class RemoteLocalLeasePersistence:
         except ValueError:
             raise invalid_result() from None
         return validated_terminal_acks(values, replies, receipt_type=JournalReceipt)
+
+    async def lookup_terminals(
+        self, values: Sequence[RetainedLocalReceipt], *, expires_at: float
+    ) -> tuple[JournalReceipt | None, ...]:
+        """Find durable terminals another process wrote for these local issues."""
+        if not values:
+            return ()
+        if any(value.generation != self._generation for value in values):
+            raise ValueError("terminal lookup uses another generation")
+        identities = tuple(value.terminal_identity() for value in values)
+        payload = self._payload(
+            values=rpc_batch_bytes(identities), expires_at=expires_at, owner=False
+        )
+        LocalTerminalLookupRequest.model_validate_json(payload)
+        body = await self._transport.request(
+            "/terminals/local/batch", payload, expires_at=expires_at
+        )
+        try:
+            replies = LOOKUP_REPLIES.validate_json(body)
+            if len(replies) != len(identities):
+                raise invalid_result()
+            result: list[JournalReceipt | None] = []
+            for identity, reply in zip(identities, replies, strict=True):
+                if reply.operation_id != identity.operation_id:
+                    raise invalid_result()
+                if reply.journal_sequence is None or reply.outcome is None:
+                    result.append(None)
+                    continue
+                result.append(
+                    JournalReceipt(
+                        protocol_generation=self._generation,
+                        operation_id=identity.operation_id,
+                        journal_sequence=reply.journal_sequence,
+                        outcome=reply.outcome,
+                        replayed=True,
+                    )
+                )
+            return tuple(result)
+        except ValueError:
+            raise invalid_result() from None
 
     def _payload(self, *, values: bytes, expires_at: float, owner: bool) -> bytes:
         remaining = expires_at - asyncio.get_running_loop().time()

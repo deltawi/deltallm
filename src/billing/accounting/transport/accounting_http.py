@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import time
@@ -20,17 +21,30 @@ from src.billing.accounting.transport.accounting_auth import (
 )
 from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure
+from src.ingress import DRAINING_CODE
+from src.metrics.accounting import accounting_drain_retries, accounting_resolution_fallbacks
 from src.outbound.http import suppress_httpcore_debug_traces
 from src.outbound.network_policy import (
     OutboundNetworkPolicy,
     OutboundPolicyError,
     OutboundResolutionError,
+    ResolvedOutboundTarget,
 )
 
 logger = logging.getLogger(__name__)
 
 # The managed server closes idle HTTP connections after five seconds.
 ACCOUNTING_HTTP_KEEPALIVE_EXPIRY_SECONDS = 4.0
+# A rollout drains accounting request pods one at a time; two more sends
+# inside the caller's deadline reach a serving pod.
+ACCOUNTING_DRAIN_RETRY_ATTEMPTS = 3
+ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS = 0.05
+DRAINING_REPLY_MAX_BYTES = 4096
+# The accounting service name is a stable in-cluster address. A checked answer
+# is reused for this long, and an older one is kept for when a lookup fails.
+ACCOUNTING_RESOLUTION_TTL_SECONDS = 30.0
+ACCOUNTING_RESOLUTION_ATTEMPTS = 3
+
 
 AccountingEndpoint = Literal[
     "/health",
@@ -38,6 +52,7 @@ AccountingEndpoint = Literal[
     "/finalize/local/batch",
     "/allocate/local/batch",
     "/return/local/batch",
+    "/terminals/local/batch",
 ]
 _ENDPOINTS = {
     "/health",
@@ -45,6 +60,7 @@ _ENDPOINTS = {
     "/finalize/local/batch",
     "/allocate/local/batch",
     "/return/local/batch",
+    "/terminals/local/batch",
 }
 
 
@@ -76,6 +92,7 @@ class AccountingHttpTransport:
         self._secret = signing_secret
         self._closed = False
         self._network_policy = network_policy or OutboundNetworkPolicy()
+        self._target: tuple[float, ResolvedOutboundTarget] | None = None
         self._client = httpx.AsyncClient(
             base_url=str(url),
             transport=transport,
@@ -119,7 +136,7 @@ class AccountingHttpTransport:
         }
         try:
             with suppress_httpcore_debug_traces():
-                return await self._request_target(path, body, headers, remaining, expires_at)
+                return await self._request_with_drain_retry(path, body, headers, expires_at)
         except asyncio.CancelledError:
             raise
         except (httpx.TimeoutException, TimeoutError):
@@ -142,23 +159,85 @@ class AccountingHttpTransport:
             )
             raise AccountingProtocolUnavailable(AcceptanceFailure.CONNECTION) from None
 
+    async def _request_with_drain_retry(
+        self, path: str, body: bytes, headers: dict[str, str], expires_at: float
+    ) -> bytes:
+        """Send again only when the call cannot have reached a handler.
+
+        A draining reply is written by ingress admission before the request
+        reaches any handler, and a refused connection never carried the body,
+        so in both cases the call did nothing and a second send cannot repeat
+        work. The draining reply closes its connection, so the next send opens a
+        connection to a pod that is still serving. Every other failure, including
+        a timeout or a reset after the body was sent, stays a single attempt.
+        """
+        for attempt in range(1, ACCOUNTING_DRAIN_RETRY_ATTEMPTS + 1):
+            remaining = expires_at - asyncio.get_running_loop().time()
+            try:
+                return await self._request_target(path, body, headers, remaining, expires_at)
+            except (_DrainingReject, httpx.ConnectError) as refused:
+                pause = ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS * attempt
+                if (
+                    attempt == ACCOUNTING_DRAIN_RETRY_ATTEMPTS
+                    or expires_at - asyncio.get_running_loop().time() <= pause
+                ):
+                    if isinstance(refused, _DrainingReject):
+                        raise refused.error from None
+                    raise
+                accounting_drain_retries.inc()
+                await asyncio.sleep(pause)
+        raise AssertionError("unreachable")
+
+    async def _resolve(self) -> ResolvedOutboundTarget:
+        """Check the service address, reusing a recent answer for every endpoint.
+
+        A lookup happens before any byte is sent, so a failed one is safe to
+        repeat. When this process has already checked an address, that address
+        is used instead; otherwise the lookup is tried again inside the caller's
+        deadline. A busy cluster DNS must not turn into a lost finalization.
+        """
+        loop = asyncio.get_running_loop()
+        cached = self._target
+        if cached is not None and loop.time() - cached[0] < ACCOUNTING_RESOLUTION_TTL_SECONDS:
+            return cached[1]
+        for attempt in range(1, ACCOUNTING_RESOLUTION_ATTEMPTS + 1):
+            try:
+                target = await self._network_policy.resolve(str(self._client.base_url))
+            except OutboundResolutionError:
+                if cached is not None:
+                    accounting_resolution_fallbacks.inc()
+                    return cached[1]
+                if attempt == ACCOUNTING_RESOLUTION_ATTEMPTS:
+                    raise
+                await asyncio.sleep(ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS * attempt)
+                continue
+            self._target = (loop.time(), target)
+            return target
+        raise AssertionError("unreachable")
+
     async def _request_target(
         self, path: str, body: bytes, headers: dict[str, str], remaining: float, expires_at: float
     ) -> bytes:
         async with asyncio.timeout_at(expires_at):
-            target = await self._network_policy.resolve(str(self._client.base_url.join(path)))
+            target = await self._resolve()
             headers["Host"] = target.host_header
             extensions = (
                 {} if target.sni_hostname is None else {"sni_hostname": target.sni_hostname}
             )
             async with self._client.stream(
                 "GET" if path == ACCOUNTING_INTERNAL_PREFIX + "/health" else "POST",
-                target.connection_url,
+                target.connection_url.rstrip("/") + path,
                 content=body,
                 headers=headers,
                 timeout=httpx.Timeout(remaining),
                 extensions=extensions,
             ) as response:
+                if response.status_code == 503 and await _is_draining_reject(response):
+                    raise _DrainingReject(
+                        httpx.HTTPStatusError(
+                            "draining", request=response.request, response=response
+                        )
+                    )
                 response.raise_for_status()
                 result = await _bounded_response(response)
                 if asyncio.get_running_loop().time() >= expires_at:
@@ -166,21 +245,36 @@ class AccountingHttpTransport:
                 return result
 
 
-async def _bounded_response(response: httpx.Response) -> bytes:
+class _DrainingReject(Exception):
+    def __init__(self, error: httpx.HTTPStatusError) -> None:
+        super().__init__("accounting pod is draining")
+        self.error = error
+
+
+async def _is_draining_reject(response: httpx.Response) -> bool:
+    """True only for the ingress admission reply of a draining pod."""
+    try:
+        reply = json.loads(await _bounded_response(response, limit=DRAINING_REPLY_MAX_BYTES))
+    except (AccountingProtocolUnavailable, ValueError):
+        return False
+    error = reply.get("error") if isinstance(reply, dict) else None
+    return isinstance(error, dict) and error.get("code") == DRAINING_CODE
+
+
+async def _bounded_response(
+    response: httpx.Response, *, limit: int = ACCOUNTING_MAX_RESPONSE_BYTES
+) -> bytes:
     if response.headers.get("content-encoding", "identity") != "identity":
         raise AccountingProtocolUnavailable(AcceptanceFailure.INVALID_INPUT)
     length = response.headers.get("content-length")
     if length is not None and (
-        len(length) > 10
-        or not length.isascii()
-        or not length.isdecimal()
-        or int(length) > ACCOUNTING_MAX_RESPONSE_BYTES
+        len(length) > 10 or not length.isascii() or not length.isdecimal() or int(length) > limit
     ):
         raise AccountingProtocolUnavailable(AcceptanceFailure.INVALID_INPUT)
     parts, size = [], 0
     async for part in response.aiter_bytes(chunk_size=65536):
         size += len(part)
-        if size > ACCOUNTING_MAX_RESPONSE_BYTES:
+        if size > limit:
             raise AccountingProtocolUnavailable(AcceptanceFailure.INVALID_INPUT)
         parts.append(part)
     return b"".join(parts)

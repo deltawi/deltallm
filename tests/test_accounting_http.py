@@ -131,7 +131,8 @@ async def test_transport_failure_log_keeps_only_fixed_safe_fields(
                 expires_at=asyncio.get_running_loop().time() + 1,
             )
         assert raised.value.reason == reason.value
-        assert len(calls) == 1
+        # A refused connection never carried the body, so it is sent again.
+        assert len(calls) == (3 if isinstance(error, httpx.ConnectError) else 1)
         assert caplog.messages == [
             f"Accounting transport failed; endpoint=/finalize/local/batch kind={kind} status={status}"
         ]
@@ -362,7 +363,10 @@ async def test_private_destination_needs_an_explicit_allowlist_and_pins_the_chec
     assert len(calls) == 1
 
 
-async def test_dns_rebinding_to_metadata_is_rejected_before_the_second_request():
+async def test_dns_rebinding_to_metadata_is_rejected_before_the_second_request(monkeypatch):
+    monkeypatch.setattr(
+        "src.billing.accounting.transport.accounting_http.ACCOUNTING_RESOLUTION_TTL_SECONDS", 0.0
+    )
     resolutions, calls = [], []
 
     async def resolve(hostname, port):
@@ -432,5 +436,265 @@ async def test_plain_http_needs_explicit_network_policy_permission():
                 "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
             )
         assert calls == []
+    finally:
+        await client.close()
+
+
+DRAINING_REPLY = {
+    "error": {
+        "message": "Gateway request admission failed",
+        "type": "gateway_error",
+        "code": "gateway_draining",
+    }
+}
+
+
+@pytest.mark.parametrize("endpoint", ["/finalize/local/batch", "/reserve/compact/batch"])
+async def test_draining_refusal_is_sent_again_to_a_serving_pod(endpoint):
+    from src.metrics.accounting import accounting_drain_retries
+
+    calls = []
+
+    async def handler(request):
+        calls.append(request.content)
+        if len(calls) == 1:
+            return httpx.Response(503, json=DRAINING_REPLY, headers={"Connection": "close"})
+        return httpx.Response(200, content=b"[]")
+
+    before = accounting_drain_retries._value.get()
+    client = transport(handler)
+    try:
+        assert (
+            await client.request(endpoint, b"[1]", expires_at=asyncio.get_running_loop().time() + 1)
+            == b"[]"
+        )
+        assert calls == [b"[1]", b"[1]"]
+        assert accounting_drain_retries._value.get() == before + 1
+    finally:
+        await client.close()
+
+
+async def test_repeated_draining_refusals_stay_bounded_and_unavailable():
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(503, json=DRAINING_REPLY)
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable) as raised:
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert raised.value.reason == AcceptanceFailure.CONNECTION.value
+        assert len(calls) == 3
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"error": {"code": "gateway_ingress_full"}},
+        {"detail": "Accounting unavailable"},
+        "not json",
+    ],
+)
+async def test_other_unavailable_replies_are_never_sent_again(reply):
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        if isinstance(reply, str):
+            return httpx.Response(503, content=reply.encode())
+        return httpx.Response(503, json=reply)
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert len(calls) == 1
+    finally:
+        await client.close()
+
+
+async def test_draining_refusal_is_not_sent_again_past_the_deadline():
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(503, json=DRAINING_REPLY)
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 0.03
+            )
+        assert len(calls) == 1
+    finally:
+        await client.close()
+
+
+def counted_transport(handler, resolve):
+    return AccountingHttpTransport(
+        service_url="http://accounting.test",
+        signing_secret="test-secret",
+        transport=httpx.MockTransport(handler),
+        network_policy=OutboundNetworkPolicy(
+            allow_http=True, allowed_ports=(80,), resolver=resolve
+        ),
+    )
+
+
+async def test_a_recent_checked_address_is_reused_without_a_lookup():
+    resolutions, hosts = [], []
+
+    async def resolve(hostname, port):
+        resolutions.append(hostname)
+        return ("8.8.8.8",)
+
+    async def handler(request):
+        hosts.append(request.url.host)
+        return httpx.Response(200, content=b"[]")
+
+    client = counted_transport(handler, resolve)
+    try:
+        for _ in range(3):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert resolutions == ["accounting.test"]
+        assert hosts == ["8.8.8.8"] * 3
+    finally:
+        await client.close()
+
+
+async def test_a_failed_lookup_uses_the_last_checked_address(monkeypatch):
+    from src.metrics.accounting import accounting_resolution_fallbacks
+
+    monkeypatch.setattr(
+        "src.billing.accounting.transport.accounting_http.ACCOUNTING_RESOLUTION_TTL_SECONDS", 0.0
+    )
+    resolutions, hosts = [], []
+
+    async def resolve(hostname, port):
+        resolutions.append(hostname)
+        if len(resolutions) > 1:
+            raise OutboundResolutionError()
+        return ("8.8.8.8",)
+
+    async def handler(request):
+        hosts.append(request.url.host)
+        return httpx.Response(200, content=b"[]")
+
+    before = accounting_resolution_fallbacks._value.get()
+    client = counted_transport(handler, resolve)
+    try:
+        for _ in range(2):
+            assert (
+                await client.request(
+                    "/finalize/local/batch",
+                    b"[]",
+                    expires_at=asyncio.get_running_loop().time() + 1,
+                )
+                == b"[]"
+            )
+        assert len(resolutions) == 2 and hosts == ["8.8.8.8", "8.8.8.8"]
+        assert accounting_resolution_fallbacks._value.get() == before + 1
+    finally:
+        await client.close()
+
+
+async def test_a_failed_lookup_without_a_checked_address_sends_nothing():
+    calls = []
+
+    async def resolve(hostname, port):
+        raise OutboundResolutionError()
+
+    client = counted_transport(lambda request: calls.append(request), resolve)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable) as raised:
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert raised.value.reason == AcceptanceFailure.CONNECTION.value and calls == []
+    finally:
+        await client.close()
+
+
+async def test_a_refused_connection_is_sent_again_inside_the_deadline():
+    calls = []
+
+    async def handler(request):
+        calls.append(request.content)
+        if len(calls) == 1:
+            raise httpx.ConnectError("refused")
+        return httpx.Response(200, content=b"[]")
+
+    client = transport(handler)
+    try:
+        assert (
+            await client.request(
+                "/finalize/local/batch", b"[1]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+            == b"[]"
+        )
+        assert calls == [b"[1]", b"[1]"]
+    finally:
+        await client.close()
+
+
+async def test_a_read_failure_after_sending_is_never_sent_again():
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        raise httpx.ReadError("reset")
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert len(calls) == 1
+    finally:
+        await client.close()
+
+
+async def test_a_first_lookup_is_tried_again_inside_the_deadline():
+    resolutions, paths = [], []
+
+    async def resolve(hostname, port):
+        resolutions.append(hostname)
+        if len(resolutions) < 3:
+            raise OutboundResolutionError()
+        return ("8.8.8.8",)
+
+    async def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, content=b"[]")
+
+    client = counted_transport(handler, resolve)
+    try:
+        assert (
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+            == b"[]"
+        )
+        # One checked address serves every endpoint.
+        await client.request(
+            "/allocate/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+        )
+        assert len(resolutions) == 3
+        assert paths == [
+            "/internal/accounting/v1/finalize/local/batch",
+            "/internal/accounting/v1/allocate/local/batch",
+        ]
     finally:
         await client.close()

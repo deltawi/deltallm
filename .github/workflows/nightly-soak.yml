@@ -1,0 +1,126 @@
+name: Nightly accounting v2 soak
+
+# Production configuration (accounting v2) under batch and API load on kind,
+# every night on main. See docs/deployment/accounting-v2-acceptance.md.
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      batch-items:
+        description: Batch items across 12 jobs (0 skips the batch phase)
+        default: '20000'
+      api-rate:
+        description: Chat requests per second on 2 API pods
+        default: '300'
+      api-seconds:
+        description: API soak length in seconds (0 skips the API phase)
+        default: '1800'
+  pull_request:
+    paths:
+      - tests/performance/run_accounting_soak.py
+      - tests/performance/soak_checks.py
+      - tests/performance/native_batch_load.py
+      - tests/performance/native_fixture.py
+      - .github/workflows/nightly-soak.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  # Scheduled, manual and pull request runs each keep their own group, so a
+  # manual run never cancels the nightly one.
+  group: nightly-soak-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  accounting-v2-acceptance:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/native-acceptance.yml
+
+  soak:
+    # A larger runner label can be set in the SOAK_RUNNER repository variable.
+    runs-on: ${{ vars.SOAK_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        with:
+          version: '0.9.28'
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.0
+      - name: Install frozen environment and generate client
+        run: |
+          uv sync --frozen --extra dev
+          uv run prisma generate --schema=./prisma/schema.prisma
+      - name: Build candidate image
+        run: docker build --build-arg INSTALL_PRESIDIO=false -t deltallm-soak:candidate .
+      - name: Install pinned kind
+        run: |
+          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64 -o /tmp/kind-linux-amd64
+          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256sum
+          (cd /tmp && sha256sum -c kind.sha256sum)
+          chmod +x /tmp/kind-linux-amd64
+      - name: Choose the soak profile
+        id: profile
+        env:
+          EVENT: ${{ github.event_name }}
+          BATCH_ITEMS: ${{ inputs.batch-items }}
+          API_RATE: ${{ inputs.api-rate }}
+          API_SECONDS: ${{ inputs.api-seconds }}
+          LARGER_RUNNER: ${{ vars.SOAK_RUNNER }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = pull_request ]; then
+            # Short run that proves the soak itself on a pull request. 4,000 items
+            # put about 1,300 on each batch pod, past one 8 MB receipt store.
+            # At 100 RPS the hosted runner's CPU sat at 96% (p95) and an API pod
+            # missed its liveness probe; 50 RPS still keeps every role busy.
+            rate=100
+            if [ -z "$LARGER_RUNNER" ]; then rate=50; fi
+            args="--batch-items 4000 --batch-timeout 900 --api-rate $rate --api-seconds 120"
+          elif [ "$EVENT" = workflow_dispatch ]; then
+            for value in "$BATCH_ITEMS" "$API_RATE" "$API_SECONDS"; do
+              [[ "$value" =~ ^[0-9]+$ ]] || { echo "Inputs must be whole numbers"; exit 1; }
+            done
+            args="--batch-items $BATCH_ITEMS --api-rate $API_RATE --api-seconds $API_SECONDS"
+          else
+            args=""
+          fi
+          if [ -z "$LARGER_RUNNER" ]; then
+            # On the 4-vCPU hosted runner every pod, Postgres and the load
+            # generator share one kind node, and chat p95 measured 0.2 to 0.3 s
+            # at 100 RPS. The 50 ms gateway target needs SOAK_RUNNER; here the
+            # latency gate only catches a large regression.
+            # Batch throughput measured 36 to 54 items/s there between runs.
+            args="$args --max-p95-seconds 0.5 --max-embedding-p95-seconds 0.75"
+            args="$args --min-batch-items-per-second 30"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+      - name: Soak batch and API load on accounting v2
+        env:
+          SOAK_ARGS: ${{ steps.profile.outputs.args }}
+        run: |
+          # shellcheck disable=SC2086
+          uv run python -m tests.performance.run_accounting_soak \
+            --image deltallm-soak:candidate \
+            --kind /tmp/kind-linux-amd64 \
+            --output /tmp/soak-evidence/kubernetes $SOAK_ARGS
+      - name: Publish the soak summary
+        if: always()
+        run: |
+          if [ -f /tmp/soak-evidence/kubernetes/summary.md ]; then
+            cat /tmp/soak-evidence/kubernetes/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain bounded soak evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: accounting-v2-soak
+          path: /tmp/soak-evidence
+          if-no-files-found: ignore
+          retention-days: 30

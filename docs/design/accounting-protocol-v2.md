@@ -594,10 +594,25 @@ bytes and entry counts have fixed limits. The conservative byte charge covers th
 serialized request and scalar/map overhead; it is not a process RSS estimate.
 
 Capacity exhaustion rejects new retention without evicting an existing proof.
-Expiry does not prove terminal settlement and does not remove a receipt. Only a
-matching operation and generation terminal acknowledgement can remove its exact
-issued proof. A recovery slice contains at most 256 entries and only rotates them.
-The store starts no worker and performs no dependency call.
+Expiry does not prove terminal settlement. A proof leaves the store in one of
+three ways, and each removes only the exact retained issue:
+
+- this process receives a matching operation and generation terminal
+  acknowledgement;
+- the terminal journal already holds a row for the same operation, generation,
+  grant, grantee, fence, permit ordinal, and reservation hash. Another process
+  wrote it, for example a batch worker that delivered a completion this process
+  dispatched;
+- the grant has expired in the database, plus a grace period. After that expiry
+  the journal refuses a first terminal for the operation, so the proof can no
+  longer be used, and expired-grant recovery owns any permit no process reported.
+
+A release slice contains at most 256 entries, least recently checked first.
+Checked entries rotate to the end, so a running operation is checked again only
+after the recheck interval. The store starts no worker and performs no dependency
+call. A separate release worker in each API and batch process asks the request
+role for journal rows with one read per slice. Its health never gates admission:
+a failed lookup only delays a release.
 
 A recovered funding proof can have an expired dispatch horizon and a live recovery
 horizon. Its stored short deadline is unchanged. Its derived monotonic dispatch

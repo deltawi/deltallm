@@ -129,3 +129,12 @@ async def test_rejection_discards_upload_without_new_work_and_idle_socket_expire
             await serving
         sock.close()
         await rt.requests.release()
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.1"])
+async def test_draining_rejection_closes_the_connection(version):
+    receive, send = AsyncMock(), AsyncMock()
+    await _reject(scope(runtime(), http_version=version), receive, send, 503, "gateway_draining")
+    headers = dict(send.await_args_list[0].args[0]["headers"])
+    assert headers.get(b"connection") == b"close"
+    assert headers.get(b"retry-after") == b"1"
