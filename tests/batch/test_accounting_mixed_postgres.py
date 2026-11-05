@@ -321,3 +321,102 @@ async def test_native_batch_and_mixed_features_share_one_scope_and_replay_author
                     await projection.close(expires_at=deadline())
                 finally:
                     await transport.close()
+
+
+async def test_unpriced_batch_items_report_zero_spend_like_live_calls(
+    accounting_db,
+    selector_billing_db,
+    batch_db,
+):
+    clients, generation = accounting_db
+    db, charge = selector_billing_db
+    key = charge.attribution.api_key
+    # A key budget gives the key a budget window to check.
+    await db.execute_raw("UPDATE deltallm_verificationtoken SET max_budget=.05 WHERE token=$1", key)
+    projection, request, api, transport, _, projected = await graph(clients, generation)
+    try:
+        await projection.start(expires_at=deadline())
+        await request.start(expires_at=deadline())
+        await api.start(expires_at=deadline())
+        service = api.local.service
+        repository, owner, executions, payload, auth, deployment = await batch_subjects(
+            batch_db, service, charge
+        )
+        # A new self-hosted deployment: a mode, and no price or context window.
+        deployment.model_info.clear()
+        deployment.model_info.update({"mode": "chat", "default_params": {}})
+        await owner.prepare_group(
+            executions, payloads=[payload] * 2, auths=[auth] * 2, deployment=deployment
+        )
+        rows = []
+        for execution in executions:
+            assert execution.checkpoint.operation.reservation.allowance == 0
+            usage = {"prompt_tokens": 5, "completion_tokens": 2}
+            outbox = execution.completion_payload(
+                {
+                    "batch_id": execution.claim.batch_id,
+                    "item_id": execution.claim.item_id,
+                    "completed_at": datetime.now(UTC).isoformat(),
+                },
+                usage,
+            )
+            rows.append(
+                {
+                    "item_id": execution.claim.item_id,
+                    "claim_epoch": execution.claim.claim_epoch,
+                    "response_body": {"usage": usage},
+                    "usage": usage,
+                    "provider_cost": 0.0,
+                    "billed_cost": 0.0,
+                    "outbox_payload": outbox,
+                }
+            )
+        assert (
+            await repository.complete_items_with_outbox_bulk(items=rows, worker_id="batch")
+            == "completed"
+        )
+        records = await repository.claim_completion_outbox_due(
+            worker_id="delivery", lease_seconds=30
+        )
+        assert len(records) == 2
+        for record in records:
+            assert await NativeBatchCompletionDelivery(service, repository).deliver(
+                record, worker_id="delivery"
+            )
+        await api.close(expires_at=deadline())
+        await wait_for_native_projection(clients[0], projected.progress, generation, timeout=3)
+        facts = await db.query_raw(
+            "SELECT spend_exact::text AS spend, provider_cost_exact::text AS provider, "
+            "unpriced_reason FROM deltallm_accounting_usage_facts_v2 "
+            "WHERE protocol_generation=$1 AND api_key=$2",
+            generation,
+            key,
+        )
+        assert len(facts) == 2
+        for row in facts:
+            assert Decimal(row["spend"]) == 0
+            assert row["provider"] is None
+            assert row["unpriced_reason"] == "no_configured_pricing"
+        windows = await db.query_raw(
+            "SELECT committed_exact::text AS committed,reserved_exact::text AS reserved,"
+            "provisional_exact::text AS provisional FROM deltallm_accounting_budget_windows "
+            "WHERE generation=$1 AND scope_type='api_key' AND scope_id=$2",
+            generation,
+            key,
+        )
+        assert len(windows) == 1
+        for row in windows:
+            assert Decimal(row["committed"]) == 0
+            assert Decimal(row["reserved"]) == 0
+            assert Decimal(row["provisional"]) == 0
+    finally:
+        try:
+            await api.close(expires_at=deadline())
+        finally:
+            try:
+                await request.close(expires_at=deadline())
+            finally:
+                try:
+                    await projection.close(expires_at=deadline())
+                finally:
+                    await transport.close()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid5
 
 from src.batch.accounting_checkpoint import BatchAccountingCheckpoint, BatchAccountingUnavailable
@@ -14,7 +15,12 @@ from src.billing.accounting.accounting_finalization import accounting_audit_enve
 from src.billing.accounting.accounting_protocol import AccountingOutcome
 from src.billing.accounting.journal.accounting_terminal_preparation import prepare_accounting_charge
 from src.billing.money import money_string
+from src.billing.pricing.token_quote_policy import ExactTokenQuote
 from src.billing.pricing.tier_pricing import PricingResolution, resolve_exact_token_quote_pricing
+
+# A quote with no price for these reasons is a model nobody priced, not a broken
+# price. Live calls record such usage at $0 with the reason; batch does the same.
+_UNPRICED_REASONS = frozenset({"no_configured_pricing", "missing_usage_for_billing_mode"})
 
 
 @dataclass(slots=True)
@@ -59,27 +65,18 @@ class BatchAccountingExecution:
         usage: Mapping[str, object],
     ) -> BatchAccountingCheckpoint:
         counts = _receipt_counts(usage)
-        customer = resolve_exact_token_quote_pricing(
-            pricing,
-            model=pricing.callable_model,
-            **counts,
-            mode="batch",
-        ).pricing
-        provider = resolve_exact_token_quote_pricing(
-            pricing,
-            model=pricing.callable_model,
-            **counts,
-            mode="sync",
-            pricing_view="provider",
-        ).pricing
-        if customer is None or provider is None:
+        prices = _CompletionPrices.resolve(pricing, counts)
+        if prices.charge > checkpoint.operation.reservation.allowance:
             raise BatchAccountingUnavailable()
-        charge = customer.cost(**counts)
-        if charge > checkpoint.operation.reservation.allowance:
-            raise BatchAccountingUnavailable()
-        provider_cost = provider.cost(**counts)
         owner = checkpoint.operation.reservation.attribution
-        accepted = {
+        metadata: dict[str, object] = {
+            "provider": checkpoint.operation.attempts[-1].provider,
+            "batch_id": self.claim.batch_id,
+            "batch_item_id": self.claim.item_id,
+            "pricing_tier": "batch",
+            "pricing": checkpoint.operation.attempts[-1].pricing_snapshot,
+        }
+        accepted: dict[str, object] = {
             "request_id": str(checkpoint.operation_id),
             "api_key": owner.api_key,
             "user_id": owner.user_id,
@@ -91,20 +88,13 @@ class BatchAccountingExecution:
             "model": owner.model,
             "call_type": owner.call_type,
             "usage": counts,
-            "cost_exact": money_string(charge),
-            "provider_cost_exact": money_string(provider_cost),
+            "cost_exact": money_string(prices.charge),
             "cache_hit": False,
-            "metadata": {
-                "provider": checkpoint.operation.attempts[-1].provider,
-                "provider_cost_exact": money_string(provider_cost),
-                "batch_id": self.claim.batch_id,
-                "batch_item_id": self.claim.item_id,
-                "pricing_tier": "batch",
-                "pricing": checkpoint.operation.attempts[-1].pricing_snapshot,
-            },
+            "metadata": metadata,
             "start_time": payload["completed_at"],
             "end_time": payload["completed_at"],
         }
+        prices.record(accepted, metadata)
         event_id = uuid5(checkpoint.operation_id, "provider-finalization:v2")
         terminal = prepare_accounting_charge(
             checkpoint.operation,
@@ -123,6 +113,61 @@ class BatchAccountingExecution:
             operation=checkpoint.operation,
             terminal=terminal,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _CompletionPrices:
+    charge: Decimal
+    # None is unknown, as on live calls: an unpriced provider view is not a $0 cost.
+    provider_cost: Decimal | None
+    customer: ExactTokenQuote
+    provider: ExactTokenQuote
+
+    @classmethod
+    def resolve(cls, pricing: PricingResolution, counts: Mapping[str, int]) -> _CompletionPrices:
+        customer = resolve_exact_token_quote_pricing(
+            pricing, model=pricing.callable_model, **counts, mode="batch"
+        )
+        provider = resolve_exact_token_quote_pricing(
+            pricing, model=pricing.callable_model, **counts, mode="sync", pricing_view="provider"
+        )
+        if customer.pricing is None and not _funded_unpriced(pricing, customer):
+            raise BatchAccountingUnavailable()
+        if provider.pricing is None and provider.unpriced_reason not in _UNPRICED_REASONS:
+            raise BatchAccountingUnavailable()
+        return cls(
+            charge=Decimal(0) if customer.pricing is None else customer.pricing.cost(**counts),
+            provider_cost=None if provider.pricing is None else provider.pricing.cost(**counts),
+            customer=customer,
+            provider=provider,
+        )
+
+    def record(self, accepted: dict[str, object], metadata: dict[str, object]) -> None:
+        if self.provider_cost is None:
+            metadata["provider_billing"] = _unpriced_billing(self.provider)
+        else:
+            accepted["provider_cost_exact"] = money_string(self.provider_cost)
+            metadata["provider_cost_exact"] = money_string(self.provider_cost)
+        if self.customer.pricing is None:
+            # The spend row's unpriced_reason column reads this block.
+            metadata["billing"] = _unpriced_billing(self.customer)
+            metadata["billing_status"] = "unpriced"
+
+
+def _funded_unpriced(pricing: PricingResolution, quote: ExactTokenQuote) -> bool:
+    """Whether funding also saw no token price, so it reserved only the request price."""
+    return (
+        quote.unpriced_reason in _UNPRICED_REASONS
+        and pricing.customer_token_pricing is None
+        and pricing.catalog_token_pricing is None
+    )
+
+
+def _unpriced_billing(quote: ExactTokenQuote) -> dict[str, object]:
+    billing: dict[str, object] = {"cost": 0.0, "unpriced_reason": quote.unpriced_reason}
+    if quote.missing_pricing_fields:
+        billing["missing_pricing_fields"] = list(quote.missing_pricing_fields)
+    return billing
 
 
 def _receipt_counts(usage: Mapping[str, object]) -> dict[str, int]:
