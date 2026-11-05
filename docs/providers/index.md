@@ -14,7 +14,7 @@ Applications then call the deployment name or route group through DeltaLLM.
 | Mistral AI | Use the [Mistral AI integration](mistral.md) for chat and embeddings |
 | vLLM, LM Studio, or Ollama | Supply the reachable API base for the self-hosted server |
 | SGLang | Use the [SGLang integration](sglang.md) for a self-hosted SGLang server |
-| Another OpenAI-compatible service | Configure its provider/model prefix and explicit API base, then verify the required endpoint and parameters |
+| Another OpenAI-compatible service | Use the [OpenAI-compatible provider](openai-compatible.md) with the service's API base |
 
 The generated [capability and model catalog](capabilities.md) is derived from the runtime
 provider registry. It is the source of truth for the provider modes DeltaLLM currently routes.

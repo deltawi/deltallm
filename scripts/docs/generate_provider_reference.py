@@ -46,6 +46,7 @@ PROVIDER_LABELS = {
     "lmstudio": "LM Studio",
     "ollama": "Ollama",
     "openai": "OpenAI",
+    "openai_compatible": "OpenAI-compatible",
     "openrouter": "OpenRouter",
     "perplexity": "Perplexity",
     "sglang": "SGLang",

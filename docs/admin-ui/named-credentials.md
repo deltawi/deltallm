@@ -75,6 +75,7 @@ For these OpenAI-compatible providers, named credentials can override the defaul
 - `sglang`
 - `lmstudio`
 - `ollama`
+- `openai_compatible`
 
 Use:
 

@@ -80,6 +80,7 @@ def provider_from_model_expr(model_expr: str) -> str:
             WHEN {lowered_model} LIKE 'sglang/%' THEN 'sglang'
             WHEN {lowered_model} LIKE 'lmstudio/%' THEN 'lmstudio'
             WHEN {lowered_model} LIKE 'ollama/%' THEN 'ollama'
+            WHEN {lowered_model} LIKE 'openai_compatible/%' THEN 'openai_compatible'
             WHEN {lowered_model} LIKE 'openai/%' THEN 'openai'
             ELSE NULL
         END

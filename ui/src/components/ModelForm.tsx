@@ -107,13 +107,15 @@ const PROVIDER_MODEL_PLACEHOLDERS: Partial<Record<string, Partial<Record<ModelMo
   },
 };
 
-// Self-hosted servers have no built-in API base; show the usual local address instead.
+// Providers with no built-in API base: show a typical address instead.
 const PROVIDER_API_BASE_PLACEHOLDERS: Partial<Record<string, string>> = {
   sglang: 'http://sglang:30000/v1',
+  openai_compatible: 'https://your-server.example/v1',
 };
 
 const PROVIDER_API_KEY_HINTS: Partial<Record<string, string>> = {
   sglang: 'Use the --api-key value of the SGLang server. If it runs without one, enter any value.',
+  openai_compatible: 'The key your server expects. If it needs none, enter any value.',
 };
 
 function normalizedProviderKey(provider: string | null | undefined): string {

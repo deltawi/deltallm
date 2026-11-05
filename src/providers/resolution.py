@@ -20,6 +20,7 @@ OPENAI_COMPATIBLE_PROVIDERS = {
     "sglang",
     "lmstudio",
     "ollama",
+    "openai_compatible",
     "azure",
     "azure_openai",
 }
@@ -34,7 +35,7 @@ OPENAI_FAMILY_PROVIDERS = {
 # Providers where requesting the final OpenAI stream usage chunk is supported.
 STREAM_USAGE_REQUEST_PROVIDERS = (
     OPENAI_FAMILY_PROVIDERS
-    | {"vllm", "sglang"}
+    | {"vllm", "sglang", "openai_compatible"}
     | {provider for provider, profile in CHAT_PROVIDER_PROFILES.items() if profile.stream_usage}
 )
 
@@ -48,6 +49,7 @@ PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
     "bedrock": ("bedrock/",),
     "elevenlabs": ("elevenlabs/",),
     "sglang": ("sglang/",),
+    "openai_compatible": ("openai_compatible/",),
 }
 
 PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
@@ -92,6 +94,15 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "sglang": {"chat", "embedding"},
     "lmstudio": {"chat", "embedding"},
     "ollama": {"chat", "embedding"},
+    # Any server that speaks the OpenAI API. The routes it really serves are its own.
+    "openai_compatible": {
+        "chat",
+        "embedding",
+        "image_generation",
+        "audio_speech",
+        "audio_transcription",
+        "rerank",
+    },
 }
 
 PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
@@ -155,12 +166,13 @@ PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
     "sglang": {"provider": "sglang", "api_base": None, "compat": "openai"},
     "lmstudio": {"provider": "lmstudio", "api_base": None, "compat": "openai"},
     "ollama": {"provider": "ollama", "api_base": None, "compat": "openai"},
+    "openai_compatible": {"provider": "openai_compatible", "api_base": None, "compat": "openai"},
 }
 
-
-# Self-hosted providers added after the platform OpenAI fallback existed. They must
-# never receive the gateway's OpenAI key or base URL.
-PROVIDERS_WITHOUT_PLATFORM_DEFAULTS = frozenset({"sglang"})
+# Providers added after the platform OpenAI fallback existed. They must never receive
+# the gateway's OpenAI key or base URL: a self-hosted or generic endpoint may belong
+# to anyone.
+PROVIDERS_WITHOUT_PLATFORM_DEFAULTS = frozenset({"sglang", "openai_compatible"})
 
 
 def provider_from_model(model: str | None) -> str:

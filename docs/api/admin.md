@@ -126,6 +126,7 @@ Model create and update payloads accept custom upstream auth-header overrides in
 - `sglang`
 - `lmstudio`
 - `ollama`
+- `openai_compatible`
 
 Relevant fields:
 

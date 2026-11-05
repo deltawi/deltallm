@@ -305,6 +305,7 @@ For these OpenAI-compatible providers, the model form supports inline upstream a
 - `sglang`
 - `lmstudio`
 - `ollama`
+- `openai_compatible`
 
 In the model form:
 
