@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import replace
 import json
 from time import perf_counter
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +13,9 @@ from src.batch.repositories.accounting_repository import (
 )
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
 from tests.batch.accounting_fixtures import checkpoint_for, uncertain
+from src.batch.accounting_execution import BatchAccountingExecution
 from src.batch.accounting_native import terminal_checkpoint
+from src.batch.accounting_retry_hold import hold_unsaved_for_retry
 from tests.batch.test_selector_checkpoint_postgres import (
     batch_db as _batch_db,
     claimed_selector as _claimed_selector,
@@ -383,3 +386,73 @@ async def test_close_settles_a_release_whose_reply_was_lost(batch_db, claimed_se
     await store.write_many([BatchAccountingWrite(claim, pending, terminal)], expires_at=deadline())
     (saved,) = await repository.load_claim_items([claim.item_id])
     assert saved.accounting_checkpoint == terminal.model_dump(mode="json")
+
+
+async def test_held_first_claim_retry_has_no_unresolved_attempt(batch_db, claimed_selector):
+    repository, claim, _ = claimed_selector
+    store, pending = BatchAccountingRepository(batch_db), checkpoint_for(claim)
+    (item,) = await repository.load_claim_items([claim.item_id])
+    # The pre-call proof was refused, so the provider was never called.
+    execution = BatchAccountingExecution(
+        claim=claim, item=item, checkpoint=pending, proof_unsaved=True
+    )
+    owner = SimpleNamespace(checkpoints=store, max_provider_attempts=3, checkpoint_write_seconds=2)
+    assert await hold_unsaved_for_retry(
+        owner, [execution], retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    (saved,) = await repository.load_claim_items([claim.item_id])
+    held = execution.checkpoint
+    assert saved.accounting_checkpoint == held.model_dump(mode="json")
+    assert held.retry_ready and held.operation.settled_attempts == 1
+
+    await batch_db.execute_raw(
+        "UPDATE deltallm_batch_item SET lease_expires_at=NOW() WHERE item_id=$1",
+        claim.item_id,
+    )
+    (item,) = await repository.claim_items(batch_id=claim.batch_id, worker_id="new-worker")
+    current = replace(claim, worker_id="new-worker", claim_epoch=item.claim_epoch)
+    retry = held.model_copy(
+        update={
+            "claim_epoch": current.claim_epoch,
+            "released_attempts": 0,
+            "operation": held.operation.model_copy(
+                update={"attempts": held.operation.attempts * 2}
+            ),
+        }
+    )
+    await store.write_many([BatchAccountingWrite(current, held, retry)], expires_at=deadline())
+    # Only the retry reached the provider: its charge settles exactly.
+    assert retry.operation.unresolved_attempts() == 0
+    terminal = uncertain(retry)
+    await store.write_many([BatchAccountingWrite(current, retry, terminal)], expires_at=deadline())
+    (record,) = await repository.list_completion_outbox_by_item_ids([claim.item_id])
+    assert record.payload_json["native_accounting"] == terminal.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("saved", ["proof", "hold"])
+async def test_hold_replaces_what_a_lost_reply_left_stored(batch_db, claimed_selector, saved):
+    repository, claim, _ = claimed_selector
+    store, pending = BatchAccountingRepository(batch_db), checkpoint_for(claim)
+    # The first claim's proof was saved, but its reply was lost: the worker
+    # counts it as unsaved and the provider was never called.
+    await store.write_many([BatchAccountingWrite(claim, None, pending)], expires_at=deadline())
+    held = pending.model_copy(
+        update={
+            "operation": pending.operation.model_copy(update={"settled_attempts": 1}),
+            "released_attempts": 1,
+        }
+    )
+    if saved == "hold":
+        # A hold was saved too, and its reply was lost as well.
+        await store.write_many([BatchAccountingWrite(claim, pending, held)], expires_at=deadline())
+    (item,) = await repository.load_claim_items([claim.item_id])
+    execution = BatchAccountingExecution(
+        claim=claim, item=item, checkpoint=pending, proof_unsaved=True
+    )
+    owner = SimpleNamespace(checkpoints=store, max_provider_attempts=3, checkpoint_write_seconds=2)
+    assert await hold_unsaved_for_retry(
+        owner, [execution], retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert execution.checkpoint == held
+    (saved_item,) = await repository.load_claim_items([claim.item_id])
+    assert saved_item.accounting_checkpoint == held.model_dump(mode="json")

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from src.batch.accounting_checkpoint import (
     CHECKPOINT_BATCH_MAX_BYTES,
     CHECKPOINT_BATCH_MAX_ITEMS,
+    BatchAccountingRejected,
     BatchAccountingUnavailable,
     BatchAccountingWrite,
 )
@@ -208,7 +209,7 @@ class BatchAccountingRepository:
             observe_batch_accounting_checkpoint_write(
                 outcome="rejected", latency_seconds=perf_counter() - started
             )
-            raise BatchAccountingUnavailable()
+            raise BatchAccountingRejected()
         observe_batch_accounting_checkpoint_write(
             outcome="saved", latency_seconds=perf_counter() - started
         )

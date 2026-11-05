@@ -299,11 +299,11 @@ Otherwise the item fails with `terminal_reason` `accounting_closed` (or `attempt
 
 If the checkpoint written before the provider call cannot be saved even after its retries (usually a busy database), the provider is not called. Instead of closing the operation, which would end the item as `accounting_closed`, the worker holds it open for a retry:
 
-- On an item's first claim, the operation is stored with its attempt released, so the next claim adds one attempt under the same funding. That unsent attempt counts toward `accounting_max_provider_attempts`.
+- On an item's first claim, the operation is stored with its attempt released, so the next claim adds one attempt under the same funding. That unsent attempt counts toward `accounting_max_provider_attempts`, but it is stored as settled with no usage, so a successful retry is charged exactly and does not list it as an unresolved attempt.
 - On a later claim, the new attempt is simply dropped. The stored checkpoint is already released, so nothing is written and the attempt limit is not used up.
 - A chat or embedding micro-batch whose checkpoints were not saved is requeued as a whole, with every operation held in one write.
 
-The same limits as above apply. If the hold itself cannot be saved either, the worker falls back to closing the operation, and the item fails as `accounting_closed`. The item's error says `batch_accounting_checkpoint_unavailable` while it waits for its retry.
+The same limits as above apply. A busy database (for example during a rollout) usually frees up within seconds, so a hold that cannot be saved is written again after 0.5, 1 and 2 seconds. A hold the database answers but refuses, such as for an item this worker no longer owns, is not written again. The one exception is a first claim whose checkpoint was in fact saved but whose reply was lost: the database then refuses the hold because a checkpoint is already stored, so the hold is written once more in place of that checkpoint. If the hold still cannot be saved, the worker falls back to closing the operation, and the item fails as `accounting_closed`. The item's error says `batch_accounting_checkpoint_unavailable` while it waits for its retry.
 
 #### When the gateway's database is busy
 
