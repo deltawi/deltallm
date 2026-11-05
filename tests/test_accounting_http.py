@@ -1,6 +1,7 @@
 """Signed calls have one deadline, fixed endpoints, and finite payload bytes."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import httpcore
@@ -14,7 +15,11 @@ from src.billing.accounting.transport.accounting_auth import (
     accounting_signature,
     verify_accounting_signature,
 )
-from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
+from src.billing.accounting.transport import accounting_http
+from src.billing.accounting.transport.accounting_http import (
+    ACCOUNTING_DRAIN_RETRY_ATTEMPTS,
+    AccountingHttpTransport,
+)
 from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.outbound.network_policy import OutboundNetworkPolicy
@@ -114,8 +119,9 @@ async def test_idle_accounting_connections_expire_before_the_managed_server(endp
     ],
 )
 async def test_transport_failure_log_keeps_only_fixed_safe_fields(
-    error, kind, status, reason, caplog
+    error, kind, status, reason, caplog, monkeypatch
 ):
+    monkeypatch.setattr(accounting_http, "ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS", 0.001)
     calls = []
 
     async def handler(request):
@@ -132,7 +138,9 @@ async def test_transport_failure_log_keeps_only_fixed_safe_fields(
             )
         assert raised.value.reason == reason.value
         # A refused connection never carried the body, so it is sent again.
-        assert len(calls) == (3 if isinstance(error, httpx.ConnectError) else 1)
+        assert len(calls) == (
+            ACCOUNTING_DRAIN_RETRY_ATTEMPTS if isinstance(error, httpx.ConnectError) else 1
+        )
         assert caplog.messages == [
             f"Accounting transport failed; endpoint=/finalize/local/batch kind={kind} status={status}"
         ]
@@ -474,7 +482,8 @@ async def test_draining_refusal_is_sent_again_to_a_serving_pod(endpoint):
         await client.close()
 
 
-async def test_repeated_draining_refusals_stay_bounded_and_unavailable():
+async def test_repeated_draining_refusals_stay_bounded_and_unavailable(monkeypatch):
+    monkeypatch.setattr(accounting_http, "ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS", 0.001)
     calls = []
 
     async def handler(request):
@@ -488,7 +497,101 @@ async def test_repeated_draining_refusals_stay_bounded_and_unavailable():
                 "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
             )
         assert raised.value.reason == AcceptanceFailure.CONNECTION.value
-        assert len(calls) == 3
+        assert len(calls) == ACCOUNTING_DRAIN_RETRY_ATTEMPTS
+    finally:
+        await client.close()
+
+
+async def test_draining_retries_stop_inside_the_caller_deadline(monkeypatch):
+    # Pauses of 0.2 then 0.4 s: the second pause would outlast a 0.5 s deadline.
+    monkeypatch.setattr(accounting_http, "ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS", 0.2)
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(503, json=DRAINING_REPLY)
+
+    client = transport(handler)
+    try:
+        with pytest.raises(AccountingProtocolUnavailable) as raised:
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 0.5
+            )
+        assert raised.value.reason == AcceptanceFailure.CONNECTION.value
+        assert len(calls) == 2
+    finally:
+        await client.close()
+
+
+async def test_retry_after_a_draining_reply_skips_other_kept_connections_to_that_pod():
+    """A rollout: four kept connections lead to the old pod, which starts draining.
+
+    Each of them would refuse the call, so the retry opens a new connection,
+    which the service routes to the new pod.
+    """
+    draining_body = json.dumps(DRAINING_REPLY).encode()
+    ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]"
+    refused = (
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+        b"Connection: close\r\nContent-Length: %d\r\n\r\n%s" % (len(draining_body), draining_body)
+    )
+    opened = asyncio.Event()
+    pods: list[str] = []
+    streams = []
+    draining = False
+
+    class Stream(httpcore.AsyncMockStream):
+        def __init__(self, pod):
+            super().__init__([])
+            self.pod = pod
+            self.closed = False
+
+        async def write(self, buffer, timeout=None):
+            return None
+
+        async def read(self, max_bytes, timeout=None):
+            # Hold the first replies until every connection is open, so the
+            # pool keeps several connections to the same pod.
+            await opened.wait()
+            return refused if self.pod == "old" and draining else ok
+
+        async def aclose(self):
+            self.closed = True
+
+    class Backend(httpcore.AsyncMockBackend):
+        async def connect_tcp(self, *args, **kwargs):
+            pods.append("new" if draining else "old")
+            if len(pods) == 4:
+                opened.set()
+            stream = Stream(pods[-1])
+            streams.append(stream)
+            return stream
+
+    async def resolve(hostname, port):
+        return ("8.8.8.8",)
+
+    client = AccountingHttpTransport(
+        service_url="http://accounting.test",
+        signing_secret="test-secret",
+        network_policy=OutboundNetworkPolicy(
+            allow_http=True, allowed_ports=(80,), resolver=resolve
+        ),
+    )
+    for http_client in (client._client, getattr(client, "_fresh_client", client._client)):
+        http_client._transport._pool._network_backend = Backend([])
+    deadline = asyncio.get_running_loop().time() + 2
+    try:
+        warm = await asyncio.gather(
+            *(client.request("/finalize/local/batch", b"[]", expires_at=deadline) for _ in range(4))
+        )
+        assert warm == [b"[]"] * 4 and pods == ["old"] * 4
+        draining = True
+        assert await client.request("/finalize/local/batch", b"[1]", expires_at=deadline) == b"[]"
+        # One kept connection refused the call; the retry opened a new one.
+        assert pods == ["old"] * 4 + ["new"]
+        assert sum(stream.closed for stream in streams[:4]) == 1
+        # The retry connection is not kept for later calls.
+        assert streams[4].closed and not client._fresh_client._transport._pool.connections
     finally:
         await client.close()
 
