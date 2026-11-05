@@ -302,6 +302,7 @@ For these OpenAI-compatible providers, the model form supports inline upstream a
 - `deepinfra`
 - `perplexity`
 - `vllm`
+- `sglang`
 - `lmstudio`
 - `ollama`
 

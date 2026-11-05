@@ -72,6 +72,7 @@ For these OpenAI-compatible providers, named credentials can override the defaul
 - `deepinfra`
 - `perplexity`
 - `vllm`
+- `sglang`
 - `lmstudio`
 - `ollama`
 

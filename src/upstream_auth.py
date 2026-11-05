@@ -17,6 +17,7 @@ CUSTOM_OPENAI_COMPATIBLE_AUTH_PROVIDERS = {
     "deepinfra",
     "perplexity",
     "vllm",
+    "sglang",
     "lmstudio",
     "ollama",
 }

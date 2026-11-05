@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AuthSsoConfig, ModelDeploymentDetail, Principal } from '../src/lib/api';
-import { normalizeProvider, providerDisplayName } from '../src/lib/providers';
+import { normalizeProvider, providerDisplayName, supportsCustomUpstreamAuthProvider } from '../src/lib/providers';
 import {
   EMPTY_CHAT_CAPABILITIES,
   EMPTY_FORM,
@@ -44,6 +44,12 @@ test('Mistral uses the named provider label and model prefix', () => {
   assert.equal(providerDisplayName('azure_openai'), 'Azure OpenAI');
   assert.equal(providerDisplayName(null), 'Unknown');
   assert.equal(normalizeProvider(null, 'mistral/mistral-small-latest'), 'mistral');
+});
+
+test('SGLang uses its label and supports custom upstream auth headers', () => {
+  assert.equal(providerDisplayName('sglang'), 'SGLang');
+  assert.equal(normalizeProvider(null, 'sglang/meta-llama/Llama-3.1-8B-Instruct'), 'sglang');
+  assert.equal(supportsCustomUpstreamAuthProvider('sglang'), true);
 });
 
 test('model identity keeps the friendly name separate from the callable API id', () => {

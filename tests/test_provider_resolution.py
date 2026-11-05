@@ -9,6 +9,7 @@ from src.providers.resolution import (
     provider_from_model,
     provider_supports_mode,
     resolve_provider,
+    resolve_provider_connection_defaults,
     resolve_provider_required_chat_output_tokens,
     resolve_upstream_model,
 )
@@ -98,6 +99,47 @@ def test_stream_usage_request_capability_includes_vllm_but_not_openrouter() -> N
     assert provider_supports_stream_usage_request("openai") is True
     assert provider_supports_stream_usage_request("vllm") is True
     assert provider_supports_stream_usage_request("openrouter") is False
+
+
+def test_sglang_is_openai_compatible_chat_and_embedding_provider() -> None:
+    assert is_openai_compatible_provider("sglang") is True
+    assert provider_supports_mode("sglang", "chat") is True
+    assert provider_supports_mode("sglang", "embedding") is True
+    assert provider_supports_mode("sglang", "rerank") is False
+    assert provider_supports_mode("sglang", "image_generation") is False
+    assert provider_supports_stream_usage_request("sglang") is True
+
+
+def test_resolve_upstream_model_strips_sglang_prefix_only() -> None:
+    params = {"provider": "sglang", "model": "sglang/meta-llama/Llama-3.1-8B-Instruct"}
+    assert resolve_upstream_model(params) == "meta-llama/Llama-3.1-8B-Instruct"
+    params = {"provider": "sglang", "model": "meta-llama/Llama-3.1-8B-Instruct"}
+    assert resolve_upstream_model(params) == "meta-llama/Llama-3.1-8B-Instruct"
+
+
+def test_sglang_never_inherits_platform_openai_credentials() -> None:
+    resolved = resolve_provider_connection_defaults(
+        {"provider": "sglang", "model": "meta-llama/Llama-3.1-8B-Instruct"},
+        default_api_key="sk-platform-openai",
+        default_api_base="https://api.openai.com/v1",
+    )
+    assert "api_key" not in resolved
+    assert "api_base" not in resolved
+
+    resolved = resolve_provider_connection_defaults(
+        {"model": "sglang/meta-llama/Llama-3.1-8B-Instruct"},
+        default_api_key="sk-platform-openai",
+        default_api_base="https://api.openai.com/v1",
+    )
+    assert "api_key" not in resolved
+
+    kept = resolve_provider_connection_defaults(
+        {"provider": "sglang", "api_key": "sglang-key", "api_base": "http://sglang:30000/v1"},
+        default_api_key="sk-platform-openai",
+        default_api_base="https://api.openai.com/v1",
+    )
+    assert kept["api_key"] == "sglang-key"
+    assert kept["api_base"] == "http://sglang:30000/v1"
 
 
 def test_model_validation_rejects_unsupported_provider_mode_combo() -> None:

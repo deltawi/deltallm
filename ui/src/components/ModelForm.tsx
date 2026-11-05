@@ -101,6 +101,19 @@ const PROVIDER_MODEL_PLACEHOLDERS: Partial<Record<string, Partial<Record<ModelMo
     audio_speech: 'eleven_multilingual_v2',
     audio_transcription: 'scribe_v2',
   },
+  sglang: {
+    chat: 'meta-llama/Llama-3.1-8B-Instruct',
+    embedding: 'Qwen/Qwen3-Embedding-0.6B',
+  },
+};
+
+// Self-hosted servers have no built-in API base; show the usual local address instead.
+const PROVIDER_API_BASE_PLACEHOLDERS: Partial<Record<string, string>> = {
+  sglang: 'http://sglang:30000/v1',
+};
+
+const PROVIDER_API_KEY_HINTS: Partial<Record<string, string>> = {
+  sglang: 'Use the --api-key value of the SGLang server. If it runs without one, enter any value.',
 };
 
 function normalizedProviderKey(provider: string | null | undefined): string {
@@ -1115,6 +1128,9 @@ export default function ModelForm({
                   <div>
                     <FieldLabel label="API Key" />
                     <input type="password" value={form.api_key} onChange={(e) => updateProviderCredentialField('api_key', e.target.value)} placeholder="sk-..." className={inputClass} />
+                    {PROVIDER_API_KEY_HINTS[normalizedProviderKey(form.provider)] && !form.inline_credentials_present ? (
+                      <p className="mt-1 text-xs text-gray-400">{PROVIDER_API_KEY_HINTS[normalizedProviderKey(form.provider)]}</p>
+                    ) : null}
                     <div className="mt-1 flex items-center gap-3 text-xs">
                       {form.inline_credentials_present && !form.clear_inline_api_key ? (
                         <span className="text-gray-500">Stored inline key present. Leave blank to keep it.</span>
@@ -1133,7 +1149,7 @@ export default function ModelForm({
                   </div>
                   <div>
                     <FieldLabel label="API Base URL" required />
-                    <input value={form.api_base} onChange={(e) => updateProviderCredentialField('api_base', e.target.value, 'api_base')} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
+                    <input value={form.api_base} onChange={(e) => updateProviderCredentialField('api_base', e.target.value, 'api_base')} placeholder={selectedProviderPreset?.api_base || PROVIDER_API_BASE_PLACEHOLDERS[normalizedProviderKey(form.provider)] || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
                     {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
                     <p className="mt-1 text-xs text-gray-400">
                       {selectedProviderPreset?.api_base

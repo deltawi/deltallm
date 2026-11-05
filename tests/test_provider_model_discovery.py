@@ -223,6 +223,52 @@ async def test_provider_model_discovery_supports_named_credentials_with_custom_a
 
 
 @pytest.mark.asyncio
+async def test_provider_model_discovery_reads_sglang_context_window(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
+        assert url == "http://sglang:30000/v1/models"
+        assert headers == {"Authorization": "Bearer sglang-key"}
+        del timeout
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "id": "meta-llama/Llama-3.1-8B-Instruct",
+                        "object": "model",
+                        "owned_by": "sglang",
+                        "root": "meta-llama/Llama-3.1-8B-Instruct",
+                        "max_model_len": 131072,
+                    }
+                ],
+            },
+        )
+
+    test_app.state.http_client.get = get
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "provider": "sglang",
+            "mode": "chat",
+            "api_key": "sglang-key",
+            "api_base": "http://sglang:30000/v1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
+    models = {item["id"]: item for item in payload["data"]}
+    model = models["meta-llama/Llama-3.1-8B-Instruct"]
+    assert model["provider"] == "sglang"
+    assert model["known_metadata"]["max_tokens"] == 131072
+
+
+@pytest.mark.asyncio
 async def test_provider_model_discovery_supports_inline_custom_auth_headers(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 

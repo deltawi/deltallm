@@ -48,6 +48,7 @@ PROVIDER_LABELS = {
     "openai": "OpenAI",
     "openrouter": "OpenRouter",
     "perplexity": "Perplexity",
+    "sglang": "SGLang",
     "together": "Together AI",
     "vllm": "vLLM",
 }

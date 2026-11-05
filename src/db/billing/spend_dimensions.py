@@ -77,6 +77,7 @@ def provider_from_model_expr(model_expr: str) -> str:
             WHEN {lowered_model} LIKE 'gemini/%' THEN 'gemini'
             WHEN {lowered_model} LIKE 'bedrock/%' THEN 'bedrock'
             WHEN {lowered_model} LIKE 'vllm/%' THEN 'vllm'
+            WHEN {lowered_model} LIKE 'sglang/%' THEN 'sglang'
             WHEN {lowered_model} LIKE 'lmstudio/%' THEN 'lmstudio'
             WHEN {lowered_model} LIKE 'ollama/%' THEN 'ollama'
             WHEN {lowered_model} LIKE 'openai/%' THEN 'openai'
