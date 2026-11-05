@@ -2,7 +2,7 @@ import { useId, useRef, useState } from 'react';
 import RealtimeModelFields from './models/RealtimeModelFields';
 import ChatCapabilitiesFields from './models/ChatCapabilitiesFields';
 import Card from './Card';
-import { ChevronDown, ExternalLink } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ExternalLink, Info, XCircle } from 'lucide-react';
 import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
 import ProviderBadge from './ProviderBadge';
 import Button from './Button';
@@ -11,6 +11,8 @@ import {
   models,
   namedCredentials,
   type ManagedAssetAccessInput,
+  type ModelConnectionTestResult,
+  type ModelConnectionTestStatus,
   type NamedCredential,
   type ProviderModelDiscoveryPayload,
   type ProviderModelOption,
@@ -45,9 +47,31 @@ import {
   type RequestShapingForm,
 } from './models/requestShaping';
 import { applyKnownMetadata, type AutofilledValues } from './models/metadataAutofill';
+import { buildConnectionTestPayload, connectionTestBlocker, connectionTestKey } from './models/connectionTest';
 
 let collapsibleIdCounter = 0;
 const MODEL_BATCH_CONFIG_DOCS_URL = 'https://deltallm.readthedocs.io/en/latest/admin-ui/models/#chat-batch-execution';
+
+const CONNECTION_TEST_STYLES: Record<ModelConnectionTestStatus, { box: string; icon: typeof Info; title: string }> = {
+  passed: { box: 'border-green-200 bg-green-50 text-green-800', icon: CheckCircle2, title: 'Connection works' },
+  warning: { box: 'border-amber-200 bg-amber-50 text-amber-800', icon: AlertTriangle, title: 'Connected, check the model' },
+  failed: { box: 'border-red-200 bg-red-50 text-red-800', icon: XCircle, title: 'Connection failed' },
+  unavailable: { box: 'border-gray-200 bg-gray-50 text-gray-700', icon: Info, title: 'Not tested' },
+};
+
+function ConnectionTestNotice({ result }: { result: ModelConnectionTestResult }) {
+  const style = CONNECTION_TEST_STYLES[result.status] || CONNECTION_TEST_STYLES.unavailable;
+  const Icon = style.icon;
+  return (
+    <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${style.box}`}>
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      <div>
+        <div className="font-medium">{style.title}</div>
+        <p className="mt-0.5 text-xs">{result.message}</p>
+      </div>
+    </div>
+  );
+}
 
 function CountBadge({ count }: { count: number }) {
   if (count === 0) return null;
@@ -190,6 +214,8 @@ function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayload): s
 }
 
 interface ModelFormProps {
+  /** The saved deployment being edited, so a connection test can reuse its stored secrets. */
+  deploymentId?: string;
   initialValues?: ModelFormValues;
   initialShaping?: RequestShapingForm;
   initialModelInfo?: Record<string, unknown>;
@@ -297,6 +323,7 @@ function validateCapacityFraction(value: string): string | null {
 }
 
 export default function ModelForm({
+  deploymentId,
   initialValues,
   initialShaping,
   initialModelInfo,
@@ -332,6 +359,12 @@ export default function ModelForm({
   const [credentialCreateOpen, setCredentialCreateOpen] = useState(false);
   const [autofilledValues, setAutofilledValues] = useState<AutofilledValues>({});
   const [recentlyCreatedCredential, setRecentlyCreatedCredential] = useState<NamedCredential | null>(null);
+  const [connectionTest, setConnectionTest] = useState<{
+    key: string;
+    loading: boolean;
+    result: ModelConnectionTestResult | null;
+    error: string | null;
+  } | null>(null);
   const accessGroupInputRef = useRef<AccessGroupTokenInputHandle | null>(null);
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<{
     requestKey: string | null;
@@ -429,6 +462,25 @@ export default function ModelForm({
   const defaultParamHint = defaultParameterHint(form.provider, mode);
   const paramCount = activeParamCount(shaping);
   const networkCount = activeNetworkCount(shaping, { chat: mode === 'chat' });
+  const connectionTestContext = { deploymentId, allowInlineCredentials, supportsCustomAuth };
+  const connectionTestPayload = buildConnectionTestPayload(form, shaping, connectionTestContext);
+  const currentConnectionTestKey = connectionTestKey(connectionTestPayload);
+  const connectionTestBlockedBy = connectionTestBlocker(form, connectionTestContext);
+  const visibleConnectionTest = connectionTest?.key === currentConnectionTestKey ? connectionTest : null;
+
+  const runConnectionTest = async () => {
+    if (connectionTestBlockedBy) return;
+    const key = currentConnectionTestKey;
+    setConnectionTest({ key, loading: true, result: null, error: null });
+    try {
+      const result = await models.testConnection(connectionTestPayload);
+      setConnectionTest((current) => (current?.key === key ? { key, loading: false, result, error: null } : current));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Connection test failed.';
+      setConnectionTest((current) => (current?.key === key ? { key, loading: false, result: null, error: message } : current));
+    }
+  };
+
   const updateShaping = (next: RequestShapingForm) => {
     setShaping(next);
     if (validationError) setValidationError(null);
@@ -1556,7 +1608,26 @@ export default function ModelForm({
 
       {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
 
-      <div className="flex justify-end gap-3">
+      {visibleConnectionTest?.result ? <ConnectionTestNotice result={visibleConnectionTest.result} /> : null}
+      {visibleConnectionTest?.error ? (
+        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {visibleConnectionTest.error}
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        <div className="mr-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => { void runConnectionTest(); }}
+            disabled={Boolean(connectionTestBlockedBy) || saving}
+            loading={Boolean(visibleConnectionTest?.loading)}
+            title={connectionTestBlockedBy || 'Check the provider settings without saving. No billable call is made.'}
+          >
+            {visibleConnectionTest?.loading ? 'Testing...' : 'Test connection'}
+          </Button>
+          {connectionTestBlockedBy ? <span className="text-xs text-gray-400">{connectionTestBlockedBy}</span> : null}
+        </div>
         <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
         <Button onClick={handleSubmit} loading={saving}>{saving ? 'Saving...' : submitLabel}</Button>
       </div>
