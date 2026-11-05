@@ -200,9 +200,11 @@ async def test_provider_model_discovery_supports_named_credentials_with_custom_a
     )
 
     async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
-        assert url == "https://vllm.example/v1/models"
         assert headers == {"X-API-Key": "provider-key"}
         del timeout
+        if url == "https://vllm.example/openapi.json":
+            return httpx.Response(404)
+        assert url == "https://vllm.example/v1/models"
         return httpx.Response(
             200, json={"data": [{"id": "meta-llama/Llama-3.1-8B-Instruct", "name": "Llama"}]}
         )
@@ -364,3 +366,126 @@ async def test_provider_model_discovery_returns_current_gemini_embedding_catalog
     models = {item["id"]: item for item in payload["data"]}
     assert "gemini-embedding-001" in models
     assert models["gemini-embedding-001"]["known_metadata"]["output_vector_size"] == 3072
+
+
+def _vllm_credential(test_app) -> None:  # noqa: ANN001
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
+        [
+            NamedCredentialRecord(
+                credential_id="cred-vllm",
+                name="vLLM",
+                provider="vllm",
+                connection_config={"api_key": "local", "api_base": "https://vllm.example/v1"},
+            )
+        ]
+    )
+
+
+_VLLM_MODELS = {
+    "object": "list",
+    "data": [
+        {
+            "id": "qwen",
+            "object": "model",
+            "owned_by": "vllm",
+            "root": "Qwen/Qwen3-8B",
+            "parent": None,
+            "max_model_len": 32768,
+        },
+        {
+            "id": "qwen-sql",
+            "object": "model",
+            "owned_by": "vllm",
+            "root": "/adapters/sql",
+            "parent": "qwen",
+            "max_model_len": None,
+        },
+    ],
+}
+
+
+def _vllm_get(openapi: httpx.Response):  # noqa: ANN202
+    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
+        del headers, timeout
+        if url == "https://vllm.example/openapi.json":
+            return openapi
+        assert url == "https://vllm.example/v1/models"
+        return httpx.Response(200, json=_VLLM_MODELS)
+
+    return get
+
+
+@pytest.mark.asyncio
+async def test_vllm_discovery_reads_context_window_modes_and_lora_parent(client, test_app):
+    _vllm_credential(test_app)
+    test_app.state.http_client.get = _vllm_get(
+        httpx.Response(
+            200,
+            json={"paths": {"/v1/chat/completions": {}, "/v1/models": {}, "/health": {}}},
+        )
+    )
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"provider": "vllm", "mode": "chat", "named_credential_id": "cred-vllm"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
+    models = {item["id"]: item for item in payload["data"]}
+    assert models["qwen"]["label"] == "qwen (Qwen/Qwen3-8B)"
+    assert models["qwen"]["supported_modes"] == ["chat"]
+    assert models["qwen"]["known_metadata"] == {"max_tokens": 32768}
+    # The LoRA adapter shares its base model's context window.
+    assert models["qwen-sql"]["known_metadata"] == {"max_tokens": 32768}
+
+
+@pytest.mark.asyncio
+async def test_vllm_discovery_warns_when_server_does_not_serve_the_mode(client, test_app):
+    _vllm_credential(test_app)
+    test_app.state.http_client.get = _vllm_get(
+        httpx.Response(200, json={"paths": {"/v1/chat/completions": {}}})
+    )
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"provider": "vllm", "mode": "embedding", "named_credential_id": "cred-vllm"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] == []
+    assert payload["warnings"] == [
+        "This vLLM server does not serve embeddings requests. It serves: chat."
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "openapi",
+    [
+        httpx.Response(404),
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json={"paths": {"/health": {}}}),
+    ],
+)
+async def test_vllm_discovery_keeps_models_when_modes_are_unknown(client, test_app, openapi):
+    _vllm_credential(test_app)
+    test_app.state.http_client.get = _vllm_get(openapi)
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"provider": "vllm", "mode": "embedding", "named_credential_id": "cred-vllm"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
+    models = {item["id"]: item for item in payload["data"]}
+    assert set(models) == {"qwen", "qwen-sql"}
+    assert models["qwen"]["supported_modes"] == []
