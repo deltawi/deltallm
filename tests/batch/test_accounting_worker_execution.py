@@ -10,6 +10,7 @@ from src.batch.accounting_native import decode_checkpoint
 from src.billing.accounting.accounting_protocol import AccountingOutcome
 from src.router.router import Deployment
 from src.models.responses import UserAPIKeyAuth
+from tests.batch.test_accounting_native import hold_pauses as _hold_pauses
 from tests.batch.test_accounting_native import native_batch as _native_batch
 from tests.test_batch_worker import (
     _AllowAllCallableTargetGrantService,
@@ -21,6 +22,7 @@ from tests.test_batch_worker import (
 from tests.test_batch_worker_microbatch import _build_item, _build_job, _build_worker
 
 native_batch = _native_batch
+hold_pauses = _hold_pauses
 
 
 def chat_result():
@@ -399,6 +401,9 @@ async def test_busy_proof_write_retries_the_item_on_the_same_operation(
         proof = decode_checkpoint(payload["native_accounting"])
         assert proof.terminal.outcome is AccountingOutcome.COMPLETED
         assert len(proof.operation.attempts) == 2
+        # Only the retry reached the provider, so the charge settles exactly
+        # instead of keeping the rest of the allowance provisional.
+        assert proof.terminal.unresolved_attempts == 0
 
 
 async def test_held_chat_group_fails_items_retryable_when_requeue_is_refused(

@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.batch.accounting_checkpoint import BatchAccountingUnavailable
+from src.batch.accounting_checkpoint import BatchAccountingRejected, BatchAccountingUnavailable
 from src.batch.accounting_delivery import NativeBatchCompletionDelivery
 from src.batch.accounting_native import NativeBatchBilling, decode_checkpoint
+from src.batch import accounting_retry_hold
 from src.batch.accounting_retry_hold import hold_unsaved_for_retry
 from src.batch.selector_identity import batch_selector_operation_id
 from src.billing.accounting.accounting_protocol import (
@@ -35,12 +36,19 @@ class Checkpoints:
         # Pre-call proof writes refused before anything is saved (busy pool).
         self.busy_dispatch_writes = 0
         self.busy_writes = 0
+        self.rejected_writes = 0
+        self.refused = 0
 
     async def write_many(self, writes, *, expires_at):
         assert expires_at > asyncio.get_running_loop().time()
         if self.busy_writes:
             self.busy_writes -= 1
+            self.refused += 1
             raise BatchAccountingUnavailable()
+        if self.rejected_writes:
+            self.rejected_writes -= 1
+            self.refused += 1
+            raise BatchAccountingRejected()
         if self.busy_dispatch_writes and all(
             write.checkpoint.terminal is None and not write.checkpoint.released_attempts
             for write in writes
@@ -71,6 +79,18 @@ class Checkpoints:
         if self.lose_dispatch_reply and all(write.checkpoint.terminal is None for write in writes):
             self.lose_dispatch_reply = False
             raise TimeoutError()
+
+
+@pytest.fixture(autouse=True)
+def hold_pauses(monkeypatch):
+    """Record the hold's pauses instead of sleeping through them."""
+    pauses = []
+
+    async def pause(seconds):
+        pauses.append(seconds)
+
+    monkeypatch.setattr(accounting_retry_hold, "_pause", pause)
+    return pauses
 
 
 @pytest.fixture(params=["assigned", "local"])
@@ -467,6 +487,8 @@ async def test_unsaved_proof_is_held_open_and_the_next_claim_adds_an_attempt(nat
     stored = checkpoints.rows[execution.claim.item_id]
     assert stored.retry_ready and stored.terminal is None
     assert len(stored.operation.attempts) == 1
+    # The kept attempt never reached the provider: it is not an unresolved one.
+    assert stored.operation.settled_attempts == 1
     assert execution.item.accounting_checkpoint == stored.model_dump(mode="json")
 
     item = replace(execution.item, claim_epoch=2, locked_by="w2")
@@ -479,6 +501,8 @@ async def test_unsaved_proof_is_held_open_and_the_next_claim_adds_an_attempt(nat
     current.completion_payload({"completed_at": datetime.now(UTC).isoformat()}, usage)
     assert current.checkpoint.terminal.outcome is AccountingOutcome.COMPLETED
     assert current.checkpoint.terminal.exact_charge == Decimal("0.009")
+    # Nothing is left provisional: only the retry reached the provider.
+    assert current.checkpoint.terminal.unresolved_attempts == 0
 
 
 async def test_unsaved_group_proofs_are_held_in_one_write(native_batch):
@@ -529,6 +553,8 @@ async def test_unsaved_failover_attempt_releases_the_dispatched_one(native_batch
     )
     stored = checkpoints.rows[executions[0].claim.item_id]
     assert stored.retry_ready and len(stored.operation.attempts) == 1
+    # The kept attempt was dispatched, so a retry's charge still lists it.
+    assert stored.operation.settled_attempts == 0
 
 
 async def test_hold_is_refused_for_a_saved_proof(native_batch):
@@ -550,7 +576,7 @@ async def test_hold_is_refused_near_expiry_or_when_its_write_fails(native_batch)
     assert not await hold_unsaved_for_retry(
         owner, executions, retry_delay_seconds=300, claim_margin_seconds=14 * 60
     )
-    checkpoints.busy_writes = 1
+    checkpoints.busy_writes = len(accounting_retry_hold.HOLD_RETRY_PAUSES_SECONDS) + 1
     assert not await hold_unsaved_for_retry(
         owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
     )
@@ -559,6 +585,36 @@ async def test_hold_is_refused_near_expiry_or_when_its_write_fails(native_batch)
     await owner.close_group(executions)
     stored = checkpoints.rows[executions[0].claim.item_id]
     assert stored.terminal.outcome is AccountingOutcome.NOT_DISPATCHED
+
+
+async def test_hold_waits_out_a_busy_database(native_batch, hold_pauses):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    pauses = accounting_retry_hold.HOLD_RETRY_PAUSES_SECONDS
+    checkpoints.busy_writes = len(pauses)
+    assert await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert hold_pauses == list(pauses)
+    assert checkpoints.rows[executions[0].claim.item_id].retry_ready
+
+
+async def test_hold_refused_by_the_database_is_not_written_again(native_batch, hold_pauses):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    checkpoints.rejected_writes = 1
+    assert not await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    # One refused write and no pause: the hold gave up at once.
+    assert checkpoints.refused == 1 and not hold_pauses
+    assert executions[0].claim.item_id not in checkpoints.rows
 
 
 async def test_hold_is_refused_at_the_attempt_limit(native_batch):

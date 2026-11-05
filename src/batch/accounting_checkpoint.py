@@ -32,6 +32,10 @@ class BatchAccountingUnavailable(BatchPublicError):
         super().__init__(BatchPublicErrorCode.ACCOUNTING_CHECKPOINT_UNAVAILABLE)
 
 
+class BatchAccountingRejected(BatchAccountingUnavailable):
+    """The database answered but did not save the proof, so a repeat cannot help."""
+
+
 class BatchAccountingCheckpoint(FrozenBillingContract):
     version: Literal[1] = 1
     operation_id: UUID
