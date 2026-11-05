@@ -180,6 +180,7 @@ nav:
           - Compatible chat providers: providers/compatible-chat.md
           - Mistral AI: providers/mistral.md
           - SGLang: providers/sglang.md
+          - OpenAI-compatible: providers/openai-compatible.md
       - Feature details:
           - Routing and failover: features/routing.md
           - Batch processing: features/batching.md

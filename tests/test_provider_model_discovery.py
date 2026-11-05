@@ -535,3 +535,39 @@ async def test_vllm_discovery_keeps_models_when_modes_are_unknown(client, test_a
     models = {item["id"]: item for item in payload["data"]}
     assert set(models) == {"qwen", "qwen-sql"}
     assert models["qwen"]["supported_modes"] == []
+
+
+@pytest.mark.asyncio
+async def test_provider_model_discovery_lists_generic_openai_compatible_models(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
+        assert url == "https://compat.example/v1/models"
+        assert headers == {"X-API-Key": "compat-key"}
+        del timeout
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4", "object": "model", "context_length": 256000}]},
+        )
+
+    test_app.state.http_client.get = get
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "provider": "openai_compatible",
+            "mode": "chat",
+            "api_key": "compat-key",
+            "api_base": "https://compat.example/v1",
+            "auth_header_name": "X-API-Key",
+            "auth_header_format": "{api_key}",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
+    models = {item["id"]: item for item in payload["data"]}
+    assert models["grok-4"]["provider"] == "openai_compatible"
+    assert models["grok-4"]["known_metadata"]["max_tokens"] == 256000

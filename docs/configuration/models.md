@@ -147,6 +147,7 @@ These `deltallm_params` fields are available for the OpenAI-compatible providers
 - `sglang`
 - `lmstudio`
 - `ollama`
+- `openai_compatible`
 
 Use:
 
@@ -488,6 +489,7 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | SGLang | `sglang/` | `sglang/meta-llama/Llama-3.1-8B-Instruct` |
 | LM Studio | `lmstudio/` | `lmstudio/qwen2.5-7b-instruct` |
 | Ollama | `ollama/` | `ollama/llama3.1` |
+| OpenAI-compatible | `openai_compatible/` | `openai_compatible/my-model` |
 
 ## Capability Matrix
 
@@ -509,6 +511,7 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | SGLang | Y | Y | N | N | N | N |
 | LM Studio | Y | Y | N | N | N | N |
 | Ollama | Y | Y | N | N | N | N |
+| OpenAI-compatible | Y | Y | Y | Y | Y | Y |
 
 !!! note
     vLLM rerank deployments use the OpenAI-compatible `/rerank` endpoint. Providers not marked as rerank-capable are excluded before routing attempts.

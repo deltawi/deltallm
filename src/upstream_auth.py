@@ -20,6 +20,7 @@ CUSTOM_OPENAI_COMPATIBLE_AUTH_PROVIDERS = {
     "sglang",
     "lmstudio",
     "ollama",
+    "openai_compatible",
 }
 
 _HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")

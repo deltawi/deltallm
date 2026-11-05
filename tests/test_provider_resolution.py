@@ -142,6 +142,51 @@ def test_sglang_never_inherits_platform_openai_credentials() -> None:
     assert kept["api_base"] == "http://sglang:30000/v1"
 
 
+def test_generic_openai_compatible_provider_serves_openai_routes() -> None:
+    assert is_openai_compatible_provider("openai_compatible") is True
+    for mode in (
+        "chat",
+        "embedding",
+        "image_generation",
+        "audio_speech",
+        "audio_transcription",
+        "rerank",
+    ):
+        assert provider_supports_mode("openai_compatible", mode) is True
+    assert provider_supports_mode("openai_compatible", "realtime") is False
+    assert provider_supports_stream_usage_request("openai_compatible") is True
+
+
+def test_resolve_upstream_model_strips_only_the_generic_prefix() -> None:
+    params = {"provider": "openai_compatible", "model": "openai_compatible/grok-4"}
+    assert resolve_upstream_model(params) == "grok-4"
+    params = {"provider": "openai_compatible", "model": "meta-llama/Llama-3.3-70B-Instruct"}
+    assert resolve_upstream_model(params) == "meta-llama/Llama-3.3-70B-Instruct"
+    assert resolve_provider({"model": "openai_compatible/grok-4"}) == "openai_compatible"
+
+
+def test_generic_openai_compatible_never_inherits_platform_openai_credentials() -> None:
+    for params in (
+        {"provider": "openai_compatible", "model": "grok-4"},
+        {"model": "openai_compatible/grok-4"},
+    ):
+        resolved = resolve_provider_connection_defaults(
+            params,
+            default_api_key="sk-platform-openai",
+            default_api_base="https://api.openai.com/v1",
+        )
+        assert "api_key" not in resolved
+        assert "api_base" not in resolved
+
+    kept = resolve_provider_connection_defaults(
+        {"provider": "openai_compatible", "api_key": "k", "api_base": "https://api.x.ai/v1"},
+        default_api_key="sk-platform-openai",
+        default_api_base="https://api.openai.com/v1",
+    )
+    assert kept["api_key"] == "k"
+    assert kept["api_base"] == "https://api.x.ai/v1"
+
+
 def test_model_validation_rejects_unsupported_provider_mode_combo() -> None:
     with pytest.raises(ValueError, match="does not support mode"):
         ModelHotReloadManager._validate_model_config(

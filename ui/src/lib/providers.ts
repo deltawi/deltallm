@@ -21,6 +21,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   sglang: 'SGLang',
   lmstudio: 'LM Studio',
   ollama: 'Ollama',
+  openai_compatible: 'OpenAI-compatible',
   unknown: 'Unknown',
 };
 
@@ -36,6 +37,7 @@ const CUSTOM_UPSTREAM_AUTH_PROVIDERS = new Set([
   'sglang',
   'lmstudio',
   'ollama',
+  'openai_compatible',
 ]);
 
 export const DEFAULT_CUSTOM_AUTH_HEADER_NAME = 'Authorization';
