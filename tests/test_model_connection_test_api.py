@@ -31,8 +31,10 @@ def _models_server(
     calls: list[httpx.Request], *, status_code: int = 200, ids: tuple[str, ...] = ("llama-3",)
 ):
     def handler(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/models"):
+            # vLLM discovery also reads /openapi.json; a server without it is fine.
+            return httpx.Response(404)
         calls.append(request)
-        assert request.url.path.endswith("/models")
         if status_code != 200:
             return httpx.Response(status_code, json={"error": {"message": "nope"}})
         return httpx.Response(200, json={"data": [{"id": model_id} for model_id in ids]})
@@ -82,6 +84,26 @@ async def test_connection_test_warns_when_the_model_is_not_listed(client, test_a
     assert body["status"] == "warning"
     assert body["model_check"] == "not_found"
     assert "llama-3-typo is not in its model list" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_connection_test_finds_a_model_the_catalog_also_knows(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.control_http_client = _models_server([], ids=("gpt-6-astra",))
+
+    response = await client.post(
+        URL,
+        headers=ADMIN,
+        json=_inline(
+            provider="openai",
+            model="gpt-6-astra",
+            api_key="openai-key",
+            api_base="https://api.openai.com/v1",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_check"] == "found"
 
 
 @pytest.mark.asyncio

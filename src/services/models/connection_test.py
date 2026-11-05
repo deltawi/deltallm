@@ -115,7 +115,8 @@ async def _listed_model_ids(
     live = {
         str(item.get("id") or "").strip().lower()
         for item in discovered.get("data") or []
-        if item.get("source") == "provider_api"
+        # "catalog+provider_api" is a live model the catalog also knows.
+        if "provider_api" in str(item.get("source") or "")
     }
     live.discard("")
     if discovered.get("warnings") or not live:
