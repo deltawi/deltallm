@@ -35,9 +35,12 @@ logger = logging.getLogger(__name__)
 
 # The managed server closes idle HTTP connections after five seconds.
 ACCOUNTING_HTTP_KEEPALIVE_EXPIRY_SECONDS = 4.0
-# A rollout drains accounting request pods one at a time; two more sends
-# inside the caller's deadline reach a serving pod.
-ACCOUNTING_DRAIN_RETRY_ATTEMPTS = 3
+# A rollout drains accounting request pods one at a time. A draining pod
+# refuses every call until it stops, and the service sends a new connection to
+# it only until its endpoint is withdrawn, so the call is sent again on a new
+# connection, pausing 50, 100, 200, 400 and 800 ms, while the caller's deadline
+# allows.
+ACCOUNTING_DRAIN_RETRY_ATTEMPTS = 6
 ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS = 0.05
 DRAINING_REPLY_MAX_BYTES = 4096
 # The accounting service name is a stable in-cluster address. A checked answer
@@ -104,10 +107,22 @@ class AccountingHttpTransport:
                 keepalive_expiry=ACCOUNTING_HTTP_KEEPALIVE_EXPIRY_SECONDS,
             ),
         )
+        # A call sent again never reuses a kept connection: the others kept to
+        # a draining pod would refuse it too. Each send opens its own connection.
+        self._fresh_client = httpx.AsyncClient(
+            base_url=str(url),
+            transport=transport,
+            trust_env=False,
+            follow_redirects=False,
+            limits=httpx.Limits(max_connections=max_connections, max_keepalive_connections=0),
+        )
 
     async def close(self) -> None:
         self._closed = True
-        await self._client.aclose()
+        try:
+            await self._client.aclose()
+        finally:
+            await self._fresh_client.aclose()
 
     async def request(
         self, endpoint: AccountingEndpoint, body: bytes, *, expires_at: float
@@ -167,16 +182,22 @@ class AccountingHttpTransport:
         A draining reply is written by ingress admission before the request
         reaches any handler, and a refused connection never carried the body,
         so in both cases the call did nothing and a second send cannot repeat
-        work. The draining reply closes its connection, so the next send opens a
-        connection to a pod that is still serving. Every other failure, including
-        a timeout or a reset after the body was sent, stays a single attempt.
+        work. The first send may use a kept connection. Every later send opens
+        a new one, because other kept connections can lead to the same draining
+        pod, while a new one reaches a pod the service still routes to. Every
+        other failure, including a timeout or a reset after the body was sent,
+        stays a single attempt.
         """
+        client = self._client
         for attempt in range(1, ACCOUNTING_DRAIN_RETRY_ATTEMPTS + 1):
             remaining = expires_at - asyncio.get_running_loop().time()
             try:
-                return await self._request_target(path, body, headers, remaining, expires_at)
+                return await self._request_target(
+                    client, path, body, headers, remaining, expires_at
+                )
             except (_DrainingReject, httpx.ConnectError) as refused:
-                pause = ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS * attempt
+                client = self._fresh_client
+                pause = ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS * 2 ** (attempt - 1)
                 if (
                     attempt == ACCOUNTING_DRAIN_RETRY_ATTEMPTS
                     or expires_at - asyncio.get_running_loop().time() <= pause
@@ -216,7 +237,13 @@ class AccountingHttpTransport:
         raise AssertionError("unreachable")
 
     async def _request_target(
-        self, path: str, body: bytes, headers: dict[str, str], remaining: float, expires_at: float
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        body: bytes,
+        headers: dict[str, str],
+        remaining: float,
+        expires_at: float,
     ) -> bytes:
         async with asyncio.timeout_at(expires_at):
             target = await self._resolve()
@@ -224,7 +251,7 @@ class AccountingHttpTransport:
             extensions = (
                 {} if target.sni_hostname is None else {"sni_hostname": target.sni_hostname}
             )
-            async with self._client.stream(
+            async with client.stream(
                 "GET" if path == ACCOUNTING_INTERNAL_PREFIX + "/health" else "POST",
                 target.connection_url.rstrip("/") + path,
                 content=body,

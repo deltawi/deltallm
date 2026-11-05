@@ -47,11 +47,14 @@ the durable event stream.
 - Process crashes are recovered by converting expired dispatched reservations to
   provisional debits without resending requests.
 - A draining accounting request pod refuses new calls with `gateway_draining` and
-  closes the connection. The API pod sends that call again, up to two more times
-  inside the same deadline, so a rollout does not turn a successful provider call
-  into a provisional debit. A refused connection is sent again the same way,
-  because it never carried the request. No other failure is sent again. The
-  `deltallm_accounting_transport_drain_retries_total` counter shows these sends.
+  closes the connection. The API pod sends that call again, up to five more times
+  inside the same deadline (pausing 50, 100, 200, 400 and 800 ms), so a rollout
+  does not turn a successful provider call into a provisional debit. Each repeat
+  opens a new connection instead of reusing a kept one, because other kept
+  connections can still lead to the draining pod. A refused connection is sent
+  again the same way, because it never carried the request. No other failure is
+  sent again. The `deltallm_accounting_transport_drain_retries_total` counter
+  shows these sends.
 - API and batch pods reuse a checked accounting service address for 30 seconds,
   and keep using the last checked address when a cluster DNS lookup fails. A
   first lookup that fails is tried up to three times inside the call's deadline.
