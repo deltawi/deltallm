@@ -39,13 +39,16 @@ async def hold_unsaved_for_retry(
     provider failure. A first claim keeps its unsent attempt, settled with no
     usage. A proof that is already released needs no write. All other proofs
     are saved together, or none is.
+
+    A first claim's proof can be saved although its reply was lost. When the
+    database refuses the hold for that reason, the hold replaces that proof.
     """
     if not executions:
         return False
     hold_until = datetime.now(UTC) + timedelta(
         seconds=max(0, retry_delay_seconds) + max(0, claim_margin_seconds)
     )
-    writes = []
+    writes, unconfirmed = [], []
     held = []
     for execution in executions:
         stored, checkpoint = execution.stored_checkpoint, execution.checkpoint
@@ -72,8 +75,14 @@ async def hold_unsaved_for_retry(
             continue
         released = _released(base, unsent=stored is None)
         writes.append(BatchAccountingWrite(execution.claim, stored, released))
+        # The proof may have been saved although its reply was lost; then the
+        # hold expects that proof instead. The database also accepts this
+        # write as an exact repeat of a hold whose own reply was lost.
+        unconfirmed.append(BatchAccountingWrite(execution.claim, base, released))
         held.append(released)
-    if writes and not await _write_hold(owner, writes):
+    # The proofs were sent in one write, so they were all saved or none was.
+    choices = [writes] if unconfirmed == writes else [writes, unconfirmed]
+    if writes and not await _write_hold(owner, choices):
         return False
     for execution, checkpoint in zip(executions, held, strict=True):
         execution.checkpoint = execution.stored_checkpoint = checkpoint
@@ -96,7 +105,17 @@ def _released(base: BatchAccountingCheckpoint, *, unsent: bool) -> BatchAccounti
     )
 
 
-async def _write_hold(owner: NativeBatchBilling, writes: Sequence[BatchAccountingWrite]) -> bool:
+async def _write_hold(
+    owner: NativeBatchBilling, choices: Sequence[Sequence[BatchAccountingWrite]]
+) -> bool:
+    """Write the first of ``choices`` whose expected proofs are stored.
+
+    A refused write is not repeated: the database answered, so only the next
+    choice is tried, and once none is left (for example the claim was lost)
+    the hold fails. A busy database is waited out instead.
+    """
+    remaining = iter(choices)
+    writes = next(remaining)
     pauses = iter(HOLD_RETRY_PAUSES_SECONDS)
     while True:
         try:
@@ -105,9 +124,9 @@ async def _write_hold(owner: NativeBatchBilling, writes: Sequence[BatchAccountin
             )
             return True
         except BatchAccountingRejected:
-            # The database answered and refused (for example the claim was
-            # lost): writing the same hold again cannot change that.
-            return False
+            writes = next(remaining, None)
+            if writes is None:
+                return False
         except (BatchAccountingUnavailable, TimeoutError):
             pause = next(pauses, None)
             if pause is None:

@@ -118,8 +118,11 @@ class BatchAccountingWrite:
                 raise BatchAccountingUnavailable()
             return
         old_operation, new_operation = expected.operation, checkpoint.operation
-        if old_operation.model_dump(exclude={"attempts"}) != new_operation.model_dump(
-            exclude={"attempts"}
+        if old_operation.model_dump(
+            exclude={"attempts", "settled_attempts"}
+        ) != new_operation.model_dump(exclude={"attempts", "settled_attempts"}) or (
+            new_operation.settled_attempts != old_operation.settled_attempts
+            and not _settles_unsent_first_attempt(claim, expected, checkpoint)
         ):
             raise BatchAccountingUnavailable()
         appended = len(new_operation.attempts) - len(old_operation.attempts)
@@ -137,6 +140,28 @@ class BatchAccountingWrite:
             )
         ):
             raise BatchAccountingUnavailable()
+
+
+def _settles_unsent_first_attempt(
+    claim: BatchSelectorClaim,
+    expected: BatchAccountingCheckpoint,
+    checkpoint: BatchAccountingCheckpoint,
+) -> bool:
+    """A claim holds its own unconfirmed first proof open for a retry.
+
+    The proof's write was saved although its reply was lost, so the provider
+    was never called: its only attempt is released and settled with no usage.
+    """
+    old, new = expected.operation, checkpoint.operation
+    return (
+        expected.claim_epoch == claim.claim_epoch
+        and not expected.released_attempts
+        and len(old.attempts) == 1
+        and new.attempts == old.attempts
+        and old.settled_attempts == 0
+        and new.settled_attempts == 1
+        and checkpoint.released_attempts == 1
+    )
 
 
 class BatchAccountingCheckpoints(Protocol):

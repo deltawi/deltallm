@@ -427,3 +427,32 @@ async def test_held_first_claim_retry_has_no_unresolved_attempt(batch_db, claime
     await store.write_many([BatchAccountingWrite(current, retry, terminal)], expires_at=deadline())
     (record,) = await repository.list_completion_outbox_by_item_ids([claim.item_id])
     assert record.payload_json["native_accounting"] == terminal.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("saved", ["proof", "hold"])
+async def test_hold_replaces_what_a_lost_reply_left_stored(batch_db, claimed_selector, saved):
+    repository, claim, _ = claimed_selector
+    store, pending = BatchAccountingRepository(batch_db), checkpoint_for(claim)
+    # The first claim's proof was saved, but its reply was lost: the worker
+    # counts it as unsaved and the provider was never called.
+    await store.write_many([BatchAccountingWrite(claim, None, pending)], expires_at=deadline())
+    held = pending.model_copy(
+        update={
+            "operation": pending.operation.model_copy(update={"settled_attempts": 1}),
+            "released_attempts": 1,
+        }
+    )
+    if saved == "hold":
+        # A hold was saved too, and its reply was lost as well.
+        await store.write_many([BatchAccountingWrite(claim, pending, held)], expires_at=deadline())
+    (item,) = await repository.load_claim_items([claim.item_id])
+    execution = BatchAccountingExecution(
+        claim=claim, item=item, checkpoint=pending, proof_unsaved=True
+    )
+    owner = SimpleNamespace(checkpoints=store, max_provider_attempts=3, checkpoint_write_seconds=2)
+    assert await hold_unsaved_for_retry(
+        owner, [execution], retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    assert execution.checkpoint == held
+    (saved_item,) = await repository.load_claim_items([claim.item_id])
+    assert saved_item.accounting_checkpoint == held.model_dump(mode="json")

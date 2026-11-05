@@ -38,6 +38,9 @@ class Checkpoints:
         self.busy_writes = 0
         self.rejected_writes = 0
         self.refused = 0
+        # Answer a write whose expected proof is not stored as the database
+        # does, instead of failing the test.
+        self.reject_mismatch = False
 
     async def write_many(self, writes, *, expires_at):
         assert expires_at > asyncio.get_running_loop().time()
@@ -58,7 +61,7 @@ class Checkpoints:
         for write in writes:
             write.validate()
             current = self.rows.get(write.claim.item_id)
-            assert (
+            accepted = (
                 current == write.expected
                 or (write.expected is not None and current == write.checkpoint)
                 or (
@@ -68,6 +71,10 @@ class Checkpoints:
                     in (write.checkpoint, write.checkpoint.model_copy(update={"terminal": None}))
                 )
             )
+            if not accepted and self.reject_mismatch:
+                self.refused += 1
+                raise BatchAccountingRejected()
+            assert accepted
         for write in writes:
             self.rows[write.claim.item_id] = write.checkpoint
         self.calls.append(tuple(writes))
@@ -602,18 +609,60 @@ async def test_hold_waits_out_a_busy_database(native_batch, hold_pauses):
     assert checkpoints.rows[executions[0].claim.item_id].retry_ready
 
 
+async def test_hold_replaces_a_proof_saved_although_its_reply_was_lost(native_batch):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    checkpoints.lose_dispatch_reply = True
+    checkpoints.reject_mismatch = True
+    with pytest.raises(TimeoutError):
+        await fund(owner, executions, payload, auth, deployment)
+    execution = executions[0]
+    assert execution.proof_unsaved and not execution.dispatched
+    assert checkpoints.rows[execution.claim.item_id] == execution.checkpoint
+    assert await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    # Refused against an empty row, then written against the saved proof.
+    assert checkpoints.refused == 1
+    stored = checkpoints.rows[execution.claim.item_id]
+    assert stored.retry_ready and stored.operation.settled_attempts == 1
+    await owner.close_group(executions)
+    assert checkpoints.rows[execution.claim.item_id] == stored
+
+
+async def test_hold_saved_although_its_reply_was_lost_is_kept(native_batch, hold_pauses):
+    owner, checkpoints, _ = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    checkpoints.busy_dispatch_writes = 1
+    with pytest.raises(BatchAccountingUnavailable):
+        await fund(owner, executions, payload, auth, deployment)
+    checkpoints.lose_dispatch_reply = True
+    checkpoints.reject_mismatch = True
+    assert await hold_unsaved_for_retry(
+        owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
+    )
+    # The saved hold refuses the write against an empty row, and accepts the
+    # same hold again in place of the proof.
+    assert hold_pauses == [accounting_retry_hold.HOLD_RETRY_PAUSES_SECONDS[0]]
+    assert checkpoints.refused == 1
+    stored = checkpoints.rows[executions[0].claim.item_id]
+    assert stored == executions[0].checkpoint and stored.retry_ready
+
+
 async def test_hold_refused_by_the_database_is_not_written_again(native_batch, hold_pauses):
     owner, checkpoints, _ = native_batch
     executions, payload, auth, deployment = subjects(owner)
     checkpoints.busy_dispatch_writes = 1
     with pytest.raises(BatchAccountingUnavailable):
         await fund(owner, executions, payload, auth, deployment)
-    checkpoints.rejected_writes = 1
+    # The claim was lost: every write is refused, whatever it expects.
+    checkpoints.rejected_writes = 2
     assert not await hold_unsaved_for_retry(
         owner, executions, retry_delay_seconds=5, claim_margin_seconds=60
     )
-    # One refused write and no pause: the hold gave up at once.
-    assert checkpoints.refused == 1 and not hold_pauses
+    # Tried once against an empty row and once against the proof, with no
+    # pause: the database answered both times.
+    assert checkpoints.refused == 2 and not hold_pauses
     assert executions[0].claim.item_id not in checkpoints.rows
 
 
