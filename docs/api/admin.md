@@ -109,6 +109,7 @@ Unknown groups have a null available member count.
 | `DELETE` | `/ui/api/models/{deployment_id}` | Delete a deployment |
 | `GET` | `/ui/api/provider-presets` | List provider presets for the UI |
 | `POST` | `/ui/api/provider-models/discover` | Discover provider model suggestions for the UI |
+| `POST` | `/ui/api/provider-models/test-connection` | Check model connection settings before saving, without a billable call |
 | `GET` | `/ui/api/models/outbound-proxies` | List the names of the configured outbound proxies (never the URLs) |
 
 Model create and update payloads accept the request shaping fields `override_params`, `drop_params`, `forward_headers`, `extra_headers`, `session_header` and `outbound_proxy` inside `deltallm_params`. An invalid rule or an unknown proxy name returns `400`. See [Request shaping](../configuration/request-shaping.md).
@@ -175,6 +176,20 @@ Example inline model create payload:
 ```
 
 `POST /ui/api/provider-models/discover` accepts the same connection fields, including `auth_header_name` and `auth_header_format`, so the UI can probe OpenAI-compatible gateways before saving a deployment.
+
+`POST /ui/api/provider-models/test-connection` takes the discovery fields plus `model`, `outbound_proxy` and an optional `deployment_id`. With `deployment_id`, blank connection fields fall back to that saved deployment, after the same write check as editing it. A chosen `named_credential_id` replaces the saved connection. Non-admins must use a named credential or `deployment_id`, never inline settings. The response is:
+
+```json
+{
+  "status": "warning",
+  "message": "Connected to the provider, but llama-3-typo is not in its model list. Check the provider model name.",
+  "model_check": "not_found",
+  "status_code": 200,
+  "checked_at": 1793865600
+}
+```
+
+`status` is `passed`, `warning`, `failed` or `unavailable`. `model_check` is `found`, `not_found` or `not_checked`. A failed connection still returns `200`; `400` means the request itself is invalid, for example an unknown `outbound_proxy`.
 
 ### Organization Tiers
 

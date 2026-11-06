@@ -98,7 +98,7 @@ Each tab loads when you first open it.
 ## Quick Success Workflow
 
 1. Open **Gateway > Models**
-2. Add one deployment for a model you already have provider access to
+2. Add one deployment for a model you already have provider access to, and click **Test connection** before you save it
 3. Confirm the deployment becomes healthy
 4. Verify the model appears in `GET /v1/models`
 5. Send a test proxy request
@@ -142,6 +142,22 @@ For a vLLM server, **Refresh provider models** reads the server itself:
 - **Weights path**: when the server uses `--served-model-name`, the suggestion shows the real model path next to the served name, for example `qwen (Qwen/Qwen3-8B)`. Use the served name as the upstream model.
 
 vLLM has no separate output limit or prices, so those fields stay empty. If the server runs with `--disable-fastapi-docs`, DeltaLLM cannot read the request types and shows every model for every mode.
+
+## Test Connection
+
+**Test connection**, at the bottom of the add and edit forms, checks the provider settings in the form before you save them. It makes no billable call:
+
+1. It calls the same free endpoint as the health check, usually the provider's model list, with the key, API base, auth headers and outbound proxy from the form.
+2. When the provider publishes a model list, it looks for the **Provider Model** you entered there.
+
+| Result | Meaning |
+|---|---|
+| Connection works | The provider accepted the settings. The provider model is in its list, or the provider has no list to check. |
+| Connected, check the model | The provider accepted the settings, but the provider model is not in its list. Check the spelling. |
+| Connection failed | The provider rejected the settings or could not be reached. A `401` or `403` points at the key, a `404` at the API base. |
+| Not tested | DeltaLLM has no free check for this provider (Bedrock, Z.ai), or the gateway is busy. |
+
+Azure OpenAI lists base models, not your deployment names, so only the connection is checked. When you edit a model, fields you leave blank, such as a stored key or an owner-managed credential, use the saved values. Users who are not platform admins can test only with a named credential, and their URLs follow the same [creator credential rules](named-credentials.md#rules-for-creator-credentials) as discovery. Any change to the form hides the last result.
 
 ## Recommended First Deployment
 

@@ -115,6 +115,7 @@ export default function ModelEdit() {
         </div>
       ) : null}
       <ModelForm
+        deploymentId={deploymentId}
         initialValues={initialValues}
         initialShaping={initialShaping}
         initialModelInfo={model.model_info}

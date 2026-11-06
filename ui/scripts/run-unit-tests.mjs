@@ -27,6 +27,7 @@ const testSources = [
   'tests/externalConsoleLifecycle.test.tsx',
   'tests/modelFormShared.test.ts',
   'tests/modelMetadataAutofill.test.ts',
+  'tests/modelConnectionTest.test.ts',
   'tests/modelNamedCredentialCreate.test.tsx',
   'tests/modelsApi.test.ts',
   'tests/modelCost.test.ts',

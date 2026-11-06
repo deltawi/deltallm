@@ -50,6 +50,22 @@ export interface ProviderModelDiscoveryPayload {
   auth_header_format?: string | null;
 }
 
+export interface ModelConnectionTestPayload extends ProviderModelDiscoveryPayload {
+  model?: string | null;
+  outbound_proxy?: string | null;
+  deployment_id?: string | null;
+}
+
+export type ModelConnectionTestStatus = 'passed' | 'warning' | 'failed' | 'unavailable';
+
+export interface ModelConnectionTestResult {
+  status: ModelConnectionTestStatus;
+  message: string;
+  model_check: 'found' | 'not_found' | 'not_checked';
+  status_code: number | null;
+  checked_at: number;
+}
+
 export interface ProviderModelDiscoveryResponse {
   data: ProviderModelOption[];
   warnings: string[];
@@ -228,6 +244,11 @@ export const models = {
     apiFetch<{ data: string[] }>('/ui/api/models/outbound-proxies', { signal }),
   providerPresets: (signal?: AbortSignal) =>
     apiFetch<{ data: ProviderPreset[] }>('/ui/api/provider-presets', { signal }),
+  testConnection: (payload: ModelConnectionTestPayload) =>
+    apiFetch<ModelConnectionTestResult>('/ui/api/provider-models/test-connection', {
+      method: 'POST',
+      json: payload,
+    }),
   discoverProviderModels: (payload: ProviderModelDiscoveryPayload, signal?: AbortSignal) =>
     apiFetch<ProviderModelDiscoveryResponse>('/ui/api/provider-models/discover', {
       method: 'POST',

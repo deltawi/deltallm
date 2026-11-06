@@ -46,9 +46,11 @@ from src.upstream_auth import (
 from src.providers.healthcheck import probe_provider_health
 from src.providers.request_shaping import RequestShapingError, parse_request_shaping
 from src.providers.model_discovery import discover_provider_models
+from src.services.models.connection_test import CONNECTION_FIELDS, check_model_connection
 from src.providers.resolution import (
     provider_presets,
     resolve_provider,
+    resolve_provider_connection_defaults,
     validate_provider_mode_compatibility,
 )
 from src.router import HealthCheckInProgressError, build_deployment_registry
@@ -1409,6 +1411,154 @@ async def _discover_models(
             getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
         ),
     )
+
+
+class ModelConnectionTestRequest(ProviderModelDiscoveryRequest):
+    model: str | None = None
+    outbound_proxy: str | None = None
+    # Editing a saved model: settings the form leaves blank come from that model.
+    deployment_id: str | None = None
+
+
+async def _saved_connection_params(
+    request: Request,
+    principal: AssetPrincipal,
+    payload: ModelConnectionTestRequest,
+) -> tuple[dict[str, Any], NamedCredentialRecord | None, bool]:
+    """Connection settings of the model being edited, after the editor's write check.
+
+    The last value says whether that model is a creator model, which never falls back
+    to the gateway's own OpenAI settings.
+    """
+
+    deployment_id = str(payload.deployment_id or "").strip()
+    if not deployment_id:
+        return {}, None, False
+    model_policy = await _model_policy_for_deployment(request.app, deployment_id)
+    creator_model = False
+    if model_policy is not None:
+        _require_model_capability(model_policy[1], principal)
+        creator_model = model_policy[1].asset.governance_source is GovernanceSource.CREATOR
+    elif not principal.is_platform_admin:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    deployment = _find_runtime_deployment(request.app, deployment_id)
+    if deployment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    saved = dict(deployment.deltallm_params or {})
+    if canonicalize_named_credential_provider(
+        resolve_provider(saved)
+    ) != canonicalize_named_credential_provider(payload.provider):
+        # A provider change starts from a clean connection.
+        return {}, None, creator_model
+    credential_id = str(getattr(deployment, "named_credential_id", None) or "").strip()
+    repository = _named_credential_repository(request.app)
+    saved_credential = (
+        await repository.get_by_id(credential_id)
+        if credential_id and repository is not None
+        else None
+    )
+    connection = {field: saved[field] for field in CONNECTION_FIELDS if saved.get(field)}
+    return connection, saved_credential, creator_model
+
+
+@router.post(
+    "/ui/api/provider-models/test-connection",
+    dependencies=[Depends(require_authenticated)],
+    responses={
+        401: {"description": "Authentication required"},
+        403: {"description": "Platform administrator permission and completed MFA required"},
+    },
+)
+async def run_model_connection_test(
+    request: Request, payload: ModelConnectionTestRequest
+) -> dict[str, Any]:
+    """Check provider settings from the model form without saving or billing anything."""
+
+    principal = asset_principal_for_request(request)
+    inline_values = {
+        "api_key": payload.api_key,
+        "api_base": payload.api_base,
+        "api_version": payload.api_version,
+        "auth_header_name": payload.auth_header_name,
+        "auth_header_format": payload.auth_header_format,
+    }
+    if not principal.is_platform_admin:
+        if any(value not in (None, "") for value in inline_values.values()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Connection tests cannot use inline connection settings",
+            )
+        if payload.named_credential_id is None and payload.deployment_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Connection tests require an accessible named credential",
+            )
+    if payload.outbound_proxy and payload.outbound_proxy not in _configured_upstream_proxy_names(
+        request
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"outbound_proxy '{payload.outbound_proxy}' is not configured",
+        )
+
+    params, credential, creator_model = await _saved_connection_params(request, principal, payload)
+    raw_named_credential = await _load_named_credential_or_400(
+        request.app,
+        payload.named_credential_id,
+        provider=str(payload.provider or "").strip().lower() or None,
+        principal=principal,
+    )
+    if raw_named_credential is not None:
+        # A chosen credential replaces the saved connection instead of mixing with it.
+        params = {}
+        credential = raw_named_credential
+        dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+        named_credential = resolve_named_credential_record(
+            raw_named_credential,
+            secret_resolver=getattr(dynamic_config, "secret_resolver", None),
+        )
+        params = merge_named_credential_params(params, named_credential)
+    params.update({key: value for key, value in inline_values.items() if value not in (None, "")})
+    params["provider"] = payload.provider
+    params["model"] = str(payload.model or "").strip()
+    if payload.outbound_proxy:
+        params["outbound_proxy"] = payload.outbound_proxy
+    if principal.is_platform_admin and not creator_model:
+        # Platform models fall back to the gateway's OpenAI settings at runtime too.
+        settings = request.app.state.settings
+        params = resolve_provider_connection_defaults(
+            params,
+            default_api_key=getattr(settings, "openai_api_key", None),
+            default_api_base=getattr(settings, "openai_base_url", None),
+        )
+
+    # Only an admin-created credential's URL is trusted when someone else runs the test.
+    user_owned = not principal.is_platform_admin and not is_platform_named_credential(credential)
+    guard = getattr(request.app.state, "user_egress_guard", None)
+    target_url = str(params.get("api_base") or "").strip()
+    if user_owned and guard is not None and target_url:
+        try:
+            await guard.check_url(target_url)
+        except UserEgressDenied as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=user_egress_denied_message(exc.reason),
+            ) from None
+    with restricted_egress(user_owned):
+        result = await check_model_connection(
+            request.app.state.control_http_client,
+            params,
+            default_openai_base_url=getattr(
+                request.app.state.settings, "openai_base_url", "https://api.openai.com/v1"
+            ),
+            general_settings=getattr(
+                request.app.state,
+                "upstream_http_settings",
+                getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
+            ),
+            discovery_runtime=getattr(request.app.state, "provider_discovery_runtime", None),
+        )
+    return result.to_payload()
 
 
 @router.get("/ui/api/models/outbound-proxies", dependencies=[Depends(require_authenticated)])
