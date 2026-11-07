@@ -11,13 +11,16 @@ from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.lifecycle_cluster import LOAD_KEY, LifecycleCluster
 
 ITEMS = 20
-ITEM_LEASE_SECONDS = 360
+# The fixture's item lease. Production defaults to 360 s; the rollout check
+# waits for the cancelled items' lease to expire, so a shorter lease (as in the
+# accounting v2 acceptance) keeps the same proof about 4 minutes faster.
+ITEM_LEASE_SECONDS = 120
 
 
 async def batch_recovery_budget(cluster: LifecycleCluster, batch_id: str) -> float:
     # A cancelled item remains owned until its durable lease expires. Observe
     # the actual remaining lease after the old pod exits, then allow bounded
-    # execution/finalization time; never shorten a production lease for the test.
+    # execution/finalization time; the wait never cuts a lease short.
     async with local_database() as db:
         rows = await db.query_raw(
             "SELECT item_id,status,attempts,claim_epoch,"

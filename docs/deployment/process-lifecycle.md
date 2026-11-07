@@ -60,6 +60,8 @@ Recovery is not necessarily immediate when a pod exits: an interrupted batch
 item retains its existing fenced lease until expiry. The default item lease is
 360 seconds; the surviving worker then needs its sweep/poll and execution time.
 Monitor pending claims and completion accounting separately from pod readiness.
+The lifecycle acceptance sets a 120-second item lease so its rollout check
+waits less; it still waits for the real lease to expire.
 
 A stream that exceeds the response allocation is interrupted without a terminal
 success marker. A 600-second request timeout does not promise survival through a
