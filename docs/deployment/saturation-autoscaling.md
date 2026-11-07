@@ -161,8 +161,8 @@ the downstream limits before raising the maximum.
 
 ## Disposable 2/3/4-pod check and rollout
 
-The acceptance runner owns a two-node kind cluster and kubeconfig, builds a committed
-PR8 comparison image, uses real PostgreSQL/Redis, a fixed one-token provider,
+The acceptance runner owns a two-node kind cluster and kubeconfig, uses the candidate
+image with real PostgreSQL/Redis, a fixed one-token provider,
 Prometheus, the adapter, metrics-server and a bounded HAProxy edge. It compares
 identical fixed offered load across 2/3/4 pods, then tests a 2–4 HPA, missing
 metrics, recovery and pod loss. The experiment uses 1 process, CPU request/limit
@@ -182,23 +182,17 @@ and dependency pods on a standard public GitHub runner. The nodes share the
 runner's physical CPU; this functional experiment does not measure production
 throughput or per-node isolation.
 
-The candidate image migrates the database before the current client seeds it.
-The runner then starts the unchanged comparison image against the additive schema.
-A migration or seed failure stops the check before the comparison API starts.
+The candidate image migrates the database before the current client seeds it,
+then the runner installs the candidate API. A migration or seed failure stops the
+check before the API starts. The runner used to start a committed September (PR8)
+image first; it only recorded that image's traffic, so it was removed.
 
 ```bash
 uv sync --frozen --extra dev
 uv run prisma generate --schema=./prisma/schema.prisma
-git fetch --no-tags origin b878285e7fd98880371e4056826ddd80309ffe35
 docker build --build-arg INSTALL_PRESIDIO=false -t deltallm-capacity:candidate .
-uv run python scripts/build_lifecycle_baseline.py \
-  --ref b878285e7fd98880371e4056826ddd80309ffe35 \
-  --image deltallm-capacity:baseline \
-  --manifest /tmp/capacity-baseline.json
 uv run python -m tests.performance.run_capacity_acceptance \
   --image deltallm-capacity:candidate \
-  --baseline-image deltallm-capacity:baseline \
-  --baseline-manifest /tmp/capacity-baseline.json \
   --kind /path/to/pinned/kind-v0.31.0 \
   --output /tmp/capacity-evidence
 ```

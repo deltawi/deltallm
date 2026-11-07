@@ -1,4 +1,9 @@
-"""Compare committed baseline and candidate through the canonical arrival runner."""
+"""Run the candidate image in one container through the canonical arrival runner.
+
+The run also checks that work accepted while the ledger is held is recovered and
+that the container exits cleanly. It used to compare against the committed PR7
+image as well; that side only proved an old image still served traffic.
+"""
 
 from __future__ import annotations
 
@@ -179,99 +184,85 @@ async def compare(args: argparse.Namespace, environment: ComparisonEnvironment) 
     profile.write_text(yaml.safe_dump(config))
     os.environ["DELTALLM_CONFIG_PATH"] = str(profile)
     reports = {}
-    for label, image in (("before", args.baseline_image), ("after", args.image)):
-        command = (
-            ("python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "4000")
-            if label == "before"
-            else ()
-        )
-        name = environment.container(
-            label,
-            image,
-            "--publish",
-            "127.0.0.1::4000",
-            "--read-only",
-            "--tmpfs",
-            "/tmp:rw,size=128m",
-            "--memory",
-            "2g",
-            "--cpus",
-            "2",
-            "--mount",
-            f"type=bind,source={profile},target=/app/config/config.yaml,readonly",
-            command=command,
-        )
-        port = environment.port(name, 4000)
-        url = f"http://127.0.0.1:{port}"
-        await ready(url, timeout=90)
-        manifest = await local_manifest(1)
-        metadata = json.loads(args.baseline_manifest.read_text()) if label == "before" else {}
-        image_info = json.loads(environment.run("docker", "image", "inspect", image))[0]
-        overrides = {
-            key: value for key, value in metadata.items() if key in type(manifest).model_fields
+    label, image = "candidate", args.image
+    name = environment.container(
+        label,
+        image,
+        "--publish",
+        "127.0.0.1::4000",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,size=128m",
+        "--memory",
+        "2g",
+        "--cpus",
+        "2",
+        "--mount",
+        f"type=bind,source={profile},target=/app/config/config.yaml,readonly",
+    )
+    port = environment.port(name, 4000)
+    url = f"http://127.0.0.1:{port}"
+    await ready(url, timeout=90)
+    manifest = await local_manifest(1)
+    image_info = json.loads(environment.run("docker", "image", "inspect", image))[0]
+    manifest = manifest.model_copy(
+        update={
+            "image_digest": image_info["Id"],
+            "cpu_limit_cores": 2.0,
+            "memory_limit_mib": 2048,
+            "postgres_cpu_limit_cores": 2.0,
+            "postgres_memory_limit_mib": 1024,
+            "redis_cpu_limit_cores": 2.0,
+            "redis_memory_limit_mib": 1024,
         }
-        manifest = manifest.model_copy(
-            update=overrides
-            | {
-                "image_digest": image_info["Id"],
-                "cpu_limit_cores": 2.0,
-                "memory_limit_mib": 2048,
-                "postgres_cpu_limit_cores": 2.0,
-                "postgres_memory_limit_mib": 1024,
-                "redis_cpu_limit_cores": 2.0,
-                "redis_memory_limit_mib": 1024,
-            }
+    )
+    manifest_path = args.output / (label + "-manifest.json")
+    manifest_path.write_text(manifest.model_dump_json(indent=2) + "\n")
+    report = await measure(
+        argparse.Namespace(
+            url=url + "/v1/chat/completions",
+            metrics_url=[url + "/metrics"],
+            rate=args.rate,
+            duration=args.duration,
+            label=label,
+            output_dir=args.output / label,
+            server_manifest=manifest_path,
         )
-        manifest_path = args.output / (label + "-manifest.json")
-        manifest_path.write_text(manifest.model_dump_json(indent=2) + "\n")
-        report = await measure(
-            argparse.Namespace(
-                url=url + "/v1/chat/completions",
-                metrics_url=[url + "/metrics"],
-                rate=args.rate,
-                duration=args.duration,
-                label=label,
-                output_dir=args.output / label,
-                server_manifest=manifest_path,
-            )
-        )
-        assert report["success_count"] == args.rate * args.duration, report["error_counts"]
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-            started = monotonic()
-            async with client.stream(
-                "POST",
-                url + "/v1/chat/completions",
-                headers={"Authorization": "Bearer " + LOAD_KEY},
-                json={
-                    "model": "concurrency-fixture",
-                    "max_tokens": 1,
-                    "stream": True,
-                    "messages": [{"role": "user", "content": "Reply with OK."}],
-                    "metadata": {"cache": False},
-                },
-            ) as response:
-                assert response.status_code == 200
-                assert await anext(response.aiter_bytes())
-                report["stream_ttft_seconds"] = monotonic() - started
-        reports[label] = report
-        if label == "after":
-            async with held_ledger():
-                accepted = await accept(url)
-                await claim(accepted)
-                await assert_backlog(accepted)
-            report["accepted_work_recovery"] = await recovered(accepted)
-        environment.run("docker", "stop", "--time", "90", name, timeout=100)
-        state = json.loads(environment.run("docker", "inspect", name))[0]["State"]
-        report["exit_code"] = state["ExitCode"]
-        assert state["ExitCode"] == 0, state
+    )
+    assert report["success_count"] == args.rate * args.duration, report["error_counts"]
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        started = monotonic()
+        async with client.stream(
+            "POST",
+            url + "/v1/chat/completions",
+            headers={"Authorization": "Bearer " + LOAD_KEY},
+            json={
+                "model": "concurrency-fixture",
+                "max_tokens": 1,
+                "stream": True,
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "metadata": {"cache": False},
+            },
+        ) as response:
+            assert response.status_code == 200
+            assert await anext(response.aiter_bytes())
+            report["stream_ttft_seconds"] = monotonic() - started
+    reports[label] = report
+    async with held_ledger():
+        accepted = await accept(url)
+        await claim(accepted)
+        await assert_backlog(accepted)
+    report["accepted_work_recovery"] = await recovered(accepted)
+    environment.run("docker", "stop", "--time", "90", name, timeout=100)
+    state = json.loads(environment.run("docker", "inspect", name))[0]["State"]
+    report["exit_code"] = state["ExitCode"]
+    assert state["ExitCode"] == 0, state
     (args.output / "comparison.json").write_text(json.dumps(reports, indent=2) + "\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--baseline-image", required=True)
-    parser.add_argument("--baseline-manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rate", type=int, default=10)
     parser.add_argument("--duration", type=int, default=10)
