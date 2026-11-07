@@ -237,6 +237,8 @@ jobs:
 
   migration-paths:
     name: PostgreSQL migration paths
+    needs: cluster-changes
+    if: needs.cluster-changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -391,10 +393,56 @@ jobs:
           uv run pytest -q -m helm -rs
           --durations=25 --durations-min=0.5
 
+  # Pull requests that change only the UI or documentation skip the kind cluster
+  # jobs, and pull requests that do not touch the schema or its tooling skip the
+  # migration paths. Pushes to main and every other change run everything.
+  cluster-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runtime: ${{ steps.diff.outputs.runtime }}
+      migrations: ${{ steps.diff.outputs.migrations }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Choose the cluster and migration checks for this change
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ] || [ -z "$BASE" ] \
+            || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "runtime=true" >> "$GITHUB_OUTPUT"
+            echo "migrations=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE...HEAD")"
+          printf 'Changed files:\n%s\n' "$changed"
+          # Anything outside the UI, the docs and repository text runs the clusters.
+          ui_or_docs='^(ui/|docs/|mkdocs\.yml$|[^/]+\.md$|\.github/(dependabot\.yml|pull_request_template\.md|workflows/docs\.yml)$)'
+          if printf '%s\n' "$changed" | grep -qvE "$ui_or_docs"; then
+            echo "runtime=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "runtime=false" >> "$GITHUB_OUTPUT"
+          fi
+          schema='^(prisma/|src/(migration_process\.py|migration_recovery/|prisma_bootstrap\.py|organization_deletion_migrations\.py|db/runtime/migration_status\.py)|scripts/(verify_migration_paths\.py|migration_fixtures/)|pyproject\.toml$|uv\.lock$|Dockerfile$|\.github/workflows/ci\.yml$)'
+          if printf '%s\n' "$changed" | grep -qE "$schema"; then
+            echo "migrations=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "migrations=false" >> "$GITHUB_OUTPUT"
+          fi
+
   lifecycle-acceptance:
+    needs: cluster-changes
+    if: needs.cluster-changes.outputs.runtime == 'true'
     uses: ./.github/workflows/lifecycle-acceptance.yml
 
   capacity-acceptance:
+    needs: cluster-changes
+    if: needs.cluster-changes.outputs.runtime == 'true'
     uses: ./.github/workflows/capacity-acceptance.yml
 
   accounting-v2-changes:
@@ -432,7 +480,7 @@ jobs:
   test:
     name: test
     if: ${{ always() }}
-    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm, lifecycle-acceptance, capacity-acceptance]
+    needs: [python-tests, postgres-tests, redis-tests, cluster-changes, migration-paths, helm, lifecycle-acceptance, capacity-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -441,17 +489,31 @@ jobs:
           APP_AND_HERMETIC: ${{ needs.python-tests.result }}
           POSTGRES: ${{ needs.postgres-tests.result }}
           REDIS: ${{ needs.redis-tests.result }}
+          CHANGES: ${{ needs.cluster-changes.result }}
           MIGRATIONS: ${{ needs.migration-paths.result }}
           HELM: ${{ needs.helm.result }}
           LIFECYCLE: ${{ needs.lifecycle-acceptance.result }}
           CAPACITY: ${{ needs.capacity-acceptance.result }}
+          RUN_RUNTIME: ${{ needs.cluster-changes.outputs.runtime }}
+          RUN_MIGRATIONS: ${{ needs.cluster-changes.outputs.migrations }}
         run: |
-          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM" "$LIFECYCLE" "$CAPACITY"; do
+          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$CHANGES" "$HELM"; do
             if [ "$result" != success ]; then
               echo "Required test job finished with status: $result"
               exit 1
             fi
           done
+          # A filtered job may be skipped only when the change filter chose to skip it.
+          check_filtered() {
+            if [ "$2" = success ] || { [ "$3" = false ] && [ "$2" = skipped ]; }; then
+              return 0
+            fi
+            echo "Required test job $1 finished with status: $2 (filter: $3)"
+            exit 1
+          }
+          check_filtered migration-paths "$MIGRATIONS" "$RUN_MIGRATIONS"
+          check_filtered lifecycle-acceptance "$LIFECYCLE" "$RUN_RUNTIME"
+          check_filtered capacity-acceptance "$CAPACITY" "$RUN_RUNTIME"
 
   lint:
     runs-on: ubuntu-latest
