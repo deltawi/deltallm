@@ -93,6 +93,13 @@ jobs:
               [[ "$value" =~ ^[0-9]+$ ]] || { echo "Inputs must be whole numbers"; exit 1; }
             done
             args="--batch-items $BATCH_ITEMS --api-rate $API_RATE --api-seconds $API_SECONDS"
+          elif [ -z "$LARGER_RUNNER" ]; then
+            # Scheduled run on the 4-vCPU hosted runner. At 300 RPS the generator
+            # dropped 55,000 of 180,000 requests, the gateway shed or timed out
+            # most of the rest and both API pods restarted (nightly 2026-11-07),
+            # so the run measured the runner. Keep the full 20,000-item batch and
+            # the 30-minute API phase at the rate the pull request run proved.
+            args="--api-rate 50"
           else
             args=""
           fi

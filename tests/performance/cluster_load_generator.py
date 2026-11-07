@@ -237,8 +237,8 @@ async def run_cluster_generator(
         "pod",
         "-l",
         f"job-name={job_name}",
-        "--timeout=60s",
-        timeout=75,
+        "--timeout=180s",
+        timeout=195,
         check=False,
     )
     if ready.returncode:
@@ -393,7 +393,10 @@ async def run_cluster_generator(
             "delete",
             "job",
             job_name,
+            # Wait for the pod too: a terminating generator still holds its CPU
+            # request, and the next window's generator could not be scheduled.
+            "--cascade=foreground",
             "--wait=true",
-            "--timeout=60s",
+            "--timeout=90s",
             check=False,
         )
