@@ -142,7 +142,7 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> None:
     cluster.event("capacity_pod_loss_recovered", evidence=evidence)
 
 
-async def exercise(cluster: LifecycleCluster, values: Path, image: str, baseline: str) -> None:
+async def exercise(cluster: LifecycleCluster, values: Path) -> None:
     with ExitStack() as forwards:
         pg = forwards.enter_context(cluster.forward("service/postgres", 5432))
         redis = forwards.enter_context(cluster.forward("service/redis", 6379))
@@ -157,20 +157,11 @@ async def exercise(cluster: LifecycleCluster, values: Path, image: str, baseline
         url = f"http://127.0.0.1:{edge}"
         await wait_edge(url)
         await check_edge_bounds(cluster, url)
-        await sample(cluster, "baseline-before", observe_processes=False)
-        baseline_summary = await arrival(
-            url,
-            cluster.output / "baseline",
-            allow_controlled_rejections=True,
-        )
-        await sample(cluster, "baseline-after", observe_processes=False)
-        cluster.event("baseline_completed", image=baseline, summary=baseline_summary)
-        candidate_values = capacity_values(cluster, image)
         completed = False
         try:
             for replicas in (2, 3, 4):
-                await fixed_pods(cluster, candidate_values, url, replicas)
-            await exercise_scaling(cluster, candidate_values, url)
+                await fixed_pods(cluster, values, url, replicas)
+            await exercise_scaling(cluster, values, url)
             await pod_loss(cluster, url)
             completed = True
         except AssertionError:
@@ -257,7 +248,7 @@ def image_config_digest(image: str) -> str:
     return "sha256:" + name
 
 
-def source_manifest(image: str, baseline_manifest: Path) -> dict:
+def source_manifest(image: str) -> dict:
     digest = hashlib.sha256()
     for path in sorted(Path("src").rglob("*.py")) + [Path("uv.lock")]:
         digest.update(str(path).encode() + b"\0" + path.read_bytes())
@@ -268,7 +259,6 @@ def source_manifest(image: str, baseline_manifest: Path) -> dict:
         ).strip(),
         "candidate_source_sha256": digest.hexdigest(),
         "candidate_image_id": image_id,
-        "baseline": json.loads(baseline_manifest.read_text()),
         "purpose": "PR9 functional capacity/autoscaling; PR10 qualification pending",
     }
 
@@ -276,32 +266,21 @@ def source_manifest(image: str, baseline_manifest: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--baseline-image", required=True)
-    parser.add_argument("--baseline-manifest", type=Path, required=True)
     parser.add_argument("--kind", default="kind")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     cluster = LifecycleCluster(args.output, kind=args.kind, purpose="pr9-capacity", nodes=2)
     (cluster.output / "manifest.json").write_text(
-        json.dumps(source_manifest(args.image, args.baseline_manifest), indent=2) + "\n"
+        json.dumps(source_manifest(args.image), indent=2) + "\n"
     )
     with cluster.owned(args.image):
-        cluster.run(
-            args.kind,
-            "load",
-            "docker-image",
-            args.baseline_image,
-            "--name",
-            cluster.name,
-            timeout=600,
-        )
         install_capacity_dependencies(cluster, args.image)
         install_monitoring(cluster)
-        prime_database(cluster, capacity_values(cluster, args.image))
-        values = capacity_values(cluster, args.baseline_image)
+        values = capacity_values(cluster, args.image)
+        prime_database(cluster, values)
         capacity_release(cluster, values)
         install_edge(cluster)
-        asyncio.run(exercise(cluster, values, args.image, args.baseline_image))
+        asyncio.run(exercise(cluster, values))
         cluster.event("capacity_acceptance_completed")
 
 

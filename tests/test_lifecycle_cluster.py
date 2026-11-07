@@ -20,11 +20,10 @@ from tests.performance import run_capacity_acceptance
 
 
 @pytest.mark.parametrize("migration_fails", [False, True])
-def test_capacity_runner_migrates_candidate_before_installing_unchanged_baseline(
+def test_capacity_runner_migrates_before_installing_the_candidate(
     tmp_path, monkeypatch, migration_fails
 ):
     candidate = "deltallm-capacity:candidate"
-    baseline = "deltallm-capacity:baseline"
     cluster = LifecycleCluster(tmp_path / "evidence", purpose="pr9-capacity", nodes=2)
     phases = []
 
@@ -62,10 +61,6 @@ def test_capacity_runner_migrates_candidate_before_installing_unchanged_baseline
             "capacity",
             "--image",
             candidate,
-            "--baseline-image",
-            baseline,
-            "--baseline-manifest",
-            str(tmp_path / "baseline.json"),
             "--output",
             str(cluster.output),
         ],
@@ -80,10 +75,10 @@ def test_capacity_runner_migrates_candidate_before_installing_unchanged_baseline
             assert not cluster.events
         else:
             run_capacity_acceptance.main()
-            assert phases == [("migrate", "candidate"), ("release", "baseline")]
+            assert phases == [("migrate", "candidate"), ("release", "candidate")]
             edge.assert_called_once_with(cluster)
             exercise.assert_awaited_once_with(
-                cluster, Path(cluster.directory.name) / "capacity-values.yaml", candidate, baseline
+                cluster, Path(cluster.directory.name) / "capacity-values.yaml"
             )
             assert cluster.events[-1]["event"] == "capacity_acceptance_completed"
     finally:
