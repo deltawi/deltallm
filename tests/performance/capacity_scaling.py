@@ -174,9 +174,10 @@ async def missing_metrics(cluster: LifecycleCluster, scaled_at: float) -> None:
         detection_seconds=monotonic() - started,
         conditions=conditions,
     )
-    # Hold the adapter outage beyond the 300 s HPA scale-down window. A short
-    # outage inside the window would be hidden by stabilization, not tested.
-    while monotonic() - scaled_at < 330:
+    # Hold the adapter outage beyond the HPA scale-down window. A short outage
+    # inside the window would be hidden by stabilization, not tested.
+    window = hpa["spec"]["behavior"]["scaleDown"]["stabilizationWindowSeconds"]
+    while monotonic() - scaled_at < window + 30:
         assert len(await asyncio.to_thread(api_pods, cluster)) == 4
         await asyncio.sleep(10)
     hpa = json.loads(
@@ -192,6 +193,7 @@ async def missing_metrics(cluster: LifecycleCluster, scaled_at: float) -> None:
     cluster.event(
         "adapter_outage_blocked_downscale_after_window",
         outage_seconds=monotonic() - scaled_at,
+        window_seconds=window,
     )
     await asyncio.to_thread(cluster.kubectl, "scale", "deployment/capacity-adapter", "--replicas=1")
     await asyncio.to_thread(

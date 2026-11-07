@@ -17,7 +17,10 @@ autoscaling:
   admittedInflight:
     enabled: true
     targetAverageValue: 10
-  scaleDownStabilizationSeconds: 300
+  # The acceptance run holds a metrics outage past this window to prove pods
+  # are not removed; 90 s is the lowest value that still covers the 90 s
+  # termination grace. Production values keep 300 s.
+  scaleDownStabilizationSeconds: 90
 podDisruptionBudget:
   minAvailable: 1
 config:
