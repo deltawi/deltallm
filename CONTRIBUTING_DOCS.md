@@ -144,8 +144,8 @@ The public Kubernetes guide should use a released chart unless it is explicitly 
 development.
 
 Before merging a migration-sensitive change, run `scripts/verify_migration_paths.py` against
-disposable databases. The verifier checks a fresh install and supported upgrade paths, then removes
-the disposable databases. Use `MIGRATION_TEST_BASE_REF` only when deliberately testing a specific
+disposable databases. The verifier checks a fresh install and supported upgrade paths, each on its
+own database and in parallel, then removes the disposable databases. Use `MIGRATION_TEST_BASE_REF` only when deliberately testing a specific
 supported release floor.
 
 Railway template publishing is maintained by the release workflow. It updates the existing reviewed

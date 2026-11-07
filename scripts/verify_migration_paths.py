@@ -19,6 +19,8 @@ import sys
 import tarfile
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
@@ -1286,111 +1288,138 @@ $model_identity_recovery_verify$;
     )
 
 
+def _verify_current_accounting(prisma: str, database_url: str) -> None:
+    _verify_accounting_window_keysets(prisma, database_url)
+    _verify_accounting_recovery(prisma, database_url)
+    _verify_accounting_health(prisma, database_url)
+    _verify_accounting_presence(prisma, database_url)
+    _verify_accounting_native_reporting(prisma, database_url)
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/realtime_billing_verify.sql").read_text(),
+    )
+
+
+def _fresh_path(prisma: str, database_url: str) -> None:
+    _migrate(prisma, schema=CURRENT_SCHEMA, database_url=database_url)
+    _verify_fresh_database(prisma, database_url)
+    _verify_operation_reservations(prisma, database_url)
+    _verify_accounting_protocol(prisma, database_url)
+    _verify_pr5_budgets(prisma, database_url)
+    _pr6_fixture(prisma, database_url, CURRENT_SCHEMA, "verify")
+    _verify_current_accounting(prisma, database_url)
+    _verify_image_history(database_url)
+
+
+def _upgrade_path(prisma: str, database_url: str, base_ref: str, temp_root: Path) -> None:
+    base_schema = _extract_prisma_at_ref(base_ref, temp_root / "base")
+    _migrate(prisma, schema=base_schema, database_url=database_url)
+    _seed_upgrade_fixture(prisma, database_url, base_schema)
+    _seed_pr5_budgets(prisma, database_url, base_schema)
+    _pr6_fixture(prisma, database_url, base_schema, "seed")
+    _db_execute(
+        prisma,
+        schema=base_schema,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_seed.sql").read_text(),
+    )
+    base_validation = (
+        base_schema.parent / "migrations" / SELECTOR_VALIDATION_MIGRATION / "migration.sql"
+    )
+    # Deploy cannot undo validation already applied by a newer upgrade base.
+    if not base_validation.is_file():
+        staged_root = temp_root / "selector-install"
+        shutil.copytree(
+            CURRENT_SCHEMA.parent,
+            staged_root,
+            ignore=shutil.ignore_patterns(SELECTOR_VALIDATION_MIGRATION),
+        )
+        _migrate(prisma, schema=staged_root / "schema.prisma", database_url=database_url)
+        _db_execute(
+            prisma,
+            schema=CURRENT_SCHEMA,
+            database_url=database_url,
+            sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_installed.sql").read_text(),
+        )
+    _migrate(prisma, schema=CURRENT_SCHEMA, database_url=database_url)
+    _verify_upgrade_database(prisma, database_url)
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_verify.sql").read_text(),
+    )
+    _verify_operation_reservations(prisma, database_url)
+    _verify_accounting_protocol(prisma, database_url)
+    _verify_pr5_budgets(prisma, database_url)
+    _verify_current_accounting(prisma, database_url)
+    _pr6_fixture(prisma, database_url, CURRENT_SCHEMA, "verify")
+    _verify_image_history(database_url)
+
+
+def _shared_path(prisma: str, database_url: str, temp_root: Path) -> None:
+    shared_schema = _extract_prisma_at_ref(
+        SHARED_ROUTE_POLICY_MIGRATION_REF,
+        temp_root / "shared",
+    )
+    _migrate(prisma, schema=shared_schema, database_url=database_url)
+    _seed_shared_migration_fixture(prisma, database_url, shared_schema)
+    _seed_pr5_budgets(prisma, database_url, shared_schema)
+    _pr6_fixture(prisma, database_url, shared_schema, "seed")
+    _migrate(prisma, schema=CURRENT_SCHEMA, database_url=database_url)
+    _verify_shared_migration_database(prisma, database_url)
+    _verify_operation_reservations(prisma, database_url)
+    _verify_accounting_protocol(prisma, database_url)
+    _verify_pr5_budgets(prisma, database_url)
+    _verify_current_accounting(prisma, database_url)
+    _pr6_fixture(prisma, database_url, CURRENT_SCHEMA, "verify")
+    _verify_image_history(database_url)
+
+
+def _model_identity_path(prisma: str, database_url: str, temp_root: Path) -> None:
+    _verify_model_identity_recovery_path(prisma, database_url=database_url, temp_root=temp_root)
+    _verify_image_history(database_url)
+
+
 def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> None:
     suffix = uuid.uuid4().hex[:12]
-    fresh_name = f"deltallm_migration_verify_{suffix}_fresh"
-    upgrade_name = f"deltallm_migration_verify_{suffix}_upgrade"
-    shared_name = f"deltallm_migration_verify_{suffix}_shared"
-    model_identity_recovery_name = f"deltallm_migration_verify_{suffix}_identity_recovery"
+    names = {
+        path: f"deltallm_migration_verify_{suffix}_{path}"
+        for path in ("fresh", "upgrade", "shared", "identity_recovery")
+    }
     created: list[str] = []
 
     print(f"Verifying fresh install and upgrade from {base_ref}...")
     try:
-        for name in (fresh_name, upgrade_name, shared_name, model_identity_recovery_name):
+        for name in names.values():
             _create_database(prisma, admin_url, name)
             created.append(name)
-
-        fresh_url = database_url_for(admin_url, fresh_name)
-        upgrade_url = database_url_for(admin_url, upgrade_name)
-        shared_url = database_url_for(admin_url, shared_name)
-        model_identity_recovery_url = database_url_for(admin_url, model_identity_recovery_name)
-        _migrate(prisma, schema=CURRENT_SCHEMA, database_url=fresh_url)
-        _verify_fresh_database(prisma, fresh_url)
-        _verify_operation_reservations(prisma, fresh_url)
-        _verify_accounting_protocol(prisma, fresh_url)
-        _verify_pr5_budgets(prisma, fresh_url)
-        _pr6_fixture(prisma, fresh_url, CURRENT_SCHEMA, "verify")
-
+        urls = {path: database_url_for(admin_url, name) for path, name in names.items()}
         with tempfile.TemporaryDirectory(prefix="deltallm-migration-base-") as temp:
             temp_root = Path(temp)
-            base_schema = _extract_prisma_at_ref(base_ref, temp_root / "base")
-            _migrate(prisma, schema=base_schema, database_url=upgrade_url)
-            _seed_upgrade_fixture(prisma, upgrade_url, base_schema)
-            _seed_pr5_budgets(prisma, upgrade_url, base_schema)
-            _pr6_fixture(prisma, upgrade_url, base_schema, "seed")
-            _db_execute(
-                prisma,
-                schema=base_schema,
-                database_url=upgrade_url,
-                sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_seed.sql").read_text(),
-            )
-            base_validation = (
-                base_schema.parent / "migrations" / SELECTOR_VALIDATION_MIGRATION / "migration.sql"
-            )
-            # Deploy cannot undo validation already applied by a newer upgrade base.
-            if not base_validation.is_file():
-                staged_root = temp_root / "selector-install"
-                shutil.copytree(
-                    CURRENT_SCHEMA.parent,
-                    staged_root,
-                    ignore=shutil.ignore_patterns(SELECTOR_VALIDATION_MIGRATION),
-                )
-                _migrate(prisma, schema=staged_root / "schema.prisma", database_url=upgrade_url)
-                _db_execute(
-                    prisma,
-                    schema=CURRENT_SCHEMA,
-                    database_url=upgrade_url,
-                    sql=(
-                        REPO_ROOT / "scripts/migration_fixtures/batch_selector_installed.sql"
-                    ).read_text(),
-                )
-            _migrate(prisma, schema=CURRENT_SCHEMA, database_url=upgrade_url)
-            shared_schema = _extract_prisma_at_ref(
-                SHARED_ROUTE_POLICY_MIGRATION_REF,
-                temp_root / "shared",
-            )
-            _migrate(prisma, schema=shared_schema, database_url=shared_url)
-            _seed_shared_migration_fixture(prisma, shared_url, shared_schema)
-            _seed_pr5_budgets(prisma, shared_url, shared_schema)
-            _pr6_fixture(prisma, shared_url, shared_schema, "seed")
-            _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
-            _verify_model_identity_recovery_path(
-                prisma,
-                database_url=model_identity_recovery_url,
-                temp_root=temp_root,
-            )
-        _verify_upgrade_database(prisma, upgrade_url)
-        _db_execute(
-            prisma,
-            schema=CURRENT_SCHEMA,
-            database_url=upgrade_url,
-            sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_verify.sql").read_text(),
-        )
-        _verify_shared_migration_database(prisma, shared_url)
-        _verify_operation_reservations(prisma, upgrade_url)
-        _verify_operation_reservations(prisma, shared_url)
-        _verify_accounting_protocol(prisma, upgrade_url)
-        _verify_accounting_protocol(prisma, shared_url)
-        _verify_pr5_budgets(prisma, upgrade_url)
-        _verify_pr5_budgets(prisma, shared_url)
-        for database_url in (fresh_url, upgrade_url, shared_url):
-            _verify_accounting_window_keysets(prisma, database_url)
-            _verify_accounting_recovery(prisma, database_url)
-            _verify_accounting_health(prisma, database_url)
-            _verify_accounting_presence(prisma, database_url)
-            _verify_accounting_native_reporting(prisma, database_url)
-            _db_execute(
-                prisma,
-                schema=CURRENT_SCHEMA,
-                database_url=database_url,
-                sql=(
-                    REPO_ROOT / "scripts/migration_fixtures/realtime_billing_verify.sql"
-                ).read_text(),
-            )
-        _pr6_fixture(prisma, upgrade_url, CURRENT_SCHEMA, "verify")
-        _pr6_fixture(prisma, shared_url, CURRENT_SCHEMA, "verify")
-        for database_url in (fresh_url, upgrade_url, shared_url, model_identity_recovery_url):
-            _verify_image_history(database_url)
+            # Each path owns its database and temporary schema directory, so the
+            # four paths run side by side; the slowest one sets the job time.
+            paths = {
+                "fresh": partial(_fresh_path, prisma, urls["fresh"]),
+                "upgrade": partial(_upgrade_path, prisma, urls["upgrade"], base_ref, temp_root),
+                "shared": partial(_shared_path, prisma, urls["shared"], temp_root),
+                "identity_recovery": partial(
+                    _model_identity_path, prisma, urls["identity_recovery"], temp_root
+                ),
+            }
+            with ThreadPoolExecutor(max_workers=len(paths)) as pool:
+                futures = {pool.submit(run): path for path, run in paths.items()}
+                failures = []
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as exc:  # noqa: BLE001 - report every failed path
+                        print(f"Migration path {futures[future]!r} failed: {exc}", file=sys.stderr)
+                        failures.append(exc)
+                if failures:
+                    raise failures[0]
     finally:
         primary_error = sys.exc_info()[1]
         cleanup_errors: list[subprocess.CalledProcessError] = []
