@@ -145,18 +145,24 @@ def test_documented_selector_command_has_one_implementation():
 
 
 def test_documented_selector_command_keeps_the_same_help():
-    outputs = []
-    for module in (
-        "src.services.selector_evaluation_cli",
-        "src.services.routing.selector_evaluation_cli",
-    ):
-        result = subprocess.run(
-            [sys.executable, "-m", module, "--help"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert result.returncode == 0, result.stderr
-        outputs.append(result.stdout)
-    assert outputs[0] == outputs[1]
+    # Run both module paths as `python -m ... --help` in one interpreter.
+    code = (
+        "import contextlib, io, runpy, sys\n"
+        "outputs = []\n"
+        "for module in ('src.services.selector_evaluation_cli',"
+        " 'src.services.routing.selector_evaluation_cli'):\n"
+        "    sys.argv = [module, '--help']\n"
+        "    stdout = io.StringIO()\n"
+        "    with contextlib.redirect_stdout(stdout):\n"
+        "        try:\n"
+        "            runpy.run_module(module, run_name='__main__', alter_sys=True)\n"
+        "        except SystemExit as exit:\n"
+        "            assert exit.code in (0, None), exit.code\n"
+        "    outputs.append(stdout.getvalue())\n"
+        "assert outputs[0], 'no help text'\n"
+        "assert outputs[0] == outputs[1], outputs\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
