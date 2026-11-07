@@ -189,6 +189,12 @@ still run the full lane.
 When a Python test lane fails in CI, the failing test IDs are also posted as
 job annotations, so they stay visible even when a long service log follows them.
 
+Every workflow that calls `uv run` sets `UV_FROZEN=1`. Without it, `uv run` checks
+that `uv.lock` is current, which downloads each direct-URL wheel in the lock,
+including the 400 MB presidio language model from github.com. CI lanes never
+install that extra, so the download only added time and failed jobs whenever
+GitHub answered 504. Run `uv lock` locally after changing dependencies.
+
 Tests that check a deadline should give the code enough time to reach the step
 under test on a busy runner (about a second), and tests that wait for background
 work should poll for it rather than sleep for a fixed few milliseconds.

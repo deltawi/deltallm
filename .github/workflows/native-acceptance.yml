@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# `uv run` without a frozen lock re-checks uv.lock, which downloads the 400 MB
+# en_core_web_lg wheel from github.com even though no CI lane installs it.
+env:
+  UV_FROZEN: "1"
+
 jobs:
   native-cluster:
     runs-on: ubuntu-latest
