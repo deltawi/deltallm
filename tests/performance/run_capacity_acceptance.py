@@ -159,7 +159,9 @@ async def exercise(cluster: LifecycleCluster, values: Path) -> None:
         await check_edge_bounds(cluster, url)
         completed = False
         try:
-            for replicas in (2, 3, 4):
+            # Two and four pods show per-pod capacity and that it scales; the
+            # HPA step below still runs at three and four pods.
+            for replicas in (2, 4):
                 await fixed_pods(cluster, values, url, replicas)
             await exercise_scaling(cluster, values, url)
             await pod_loss(cluster, url)
