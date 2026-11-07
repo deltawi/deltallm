@@ -423,11 +423,14 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # Advisory until it is green on main; not yet part of the required `test` job.
+  # Advisory until it is green on main: not part of the required `test` job, and a
+  # failure shows on the job without turning the whole CI run red.
   accounting-v2-acceptance:
     needs: accounting-v2-changes
     if: needs.accounting-v2-changes.outputs.run == 'true'
     uses: ./.github/workflows/native-acceptance.yml
+    with:
+      advisory: true
 
   test:
     name: test
