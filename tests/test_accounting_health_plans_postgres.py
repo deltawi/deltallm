@@ -92,6 +92,13 @@ async def test_actual_terminal_health_plan_does_not_scan_receipt_or_generation_h
             "deltallm_accounting_terminal_journal",
         }
     finally:
+        # The journal's capacity foreign key has no index, so deleting the 10,000
+        # owned capacity rows would scan the 10,000-row history once per row
+        # (about 16 s). The history belongs to this test's generation, which the
+        # fixture deletes anyway, so remove it first.
+        await db.execute_raw(
+            "DELETE FROM deltallm_accounting_terminal_journal WHERE generation=$1", generation
+        )
         for relation in (
             "deltallm_accounting_terminal_capacity",
             "deltallm_accounting_partitions",
