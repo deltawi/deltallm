@@ -79,7 +79,11 @@ money provisional also saves the operations, grants and terminal events
 that hold it, and each traffic summary lists its rejection codes.
 
 The job is advisory for now. It runs and reports on each matching pull
-request, but the required `test` check does not depend on it yet.
+request, but the required `test` check does not depend on it yet. On pull
+requests and pushes to main it runs with `continue-on-error`: a failure shows
+as a red `accounting-v2-acceptance / native-cluster` job, but the CI run itself
+stays green, so a red run on main always means a required check failed. Open the
+job when it runs. The nightly run is not advisory and fails the workflow.
 
 ## Nightly soak
 

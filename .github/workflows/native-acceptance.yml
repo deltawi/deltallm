@@ -5,6 +5,11 @@ name: Accounting v2 acceptance
 # docs/deployment/accounting-v2-acceptance.md.
 on:
   workflow_call:
+    inputs:
+      advisory:
+        description: Report a failure on the job without failing the calling run
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,6 +17,9 @@ permissions:
 jobs:
   native-cluster:
     runs-on: ubuntu-latest
+    # Pull requests and main pushes call this as advisory: the job still shows its
+    # red result, but it does not fail the CI run. The nightly run fails normally.
+    continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
