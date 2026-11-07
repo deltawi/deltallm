@@ -20,7 +20,7 @@ With mean admitted duration `D`, Little's Law gives approximate mean occupancy
 `L ≈ admitted RPS × D` for stable traffic. Five hundred live requests lasting
 10 seconds imply about 50 RPS; lasting 0.4 seconds imply about 1,250 RPS.
 Preflight limits, routing mix, provider duration, and error rates can make actual
-throughput much lower. The 2/3/4-pod experiment below is functional evidence;
+throughput much lower. The 2/4-pod experiment below is functional evidence;
 no supported pod-to-concurrency or N−1 number has been qualified before PR10.
 
 ## Capacity declaration and preflight
@@ -159,12 +159,12 @@ remaining dependency headroom. A slow provider or SQL bottleneck can saturate
 all pods; adding replicas then increases demand on the bottleneck. Investigate
 the downstream limits before raising the maximum.
 
-## Disposable 2/3/4-pod check and rollout
+## Disposable 2/4-pod check and rollout
 
 The acceptance runner owns a two-node kind cluster and kubeconfig, uses the candidate
 image with real PostgreSQL/Redis, a fixed one-token provider,
 Prometheus, the adapter, metrics-server and a bounded HAProxy edge. It compares
-identical fixed offered load across 2/3/4 pods, then tests a 2–4 HPA, missing
+identical fixed offered load on 2 and 4 pods, then tests a 2–4 HPA, missing
 metrics, recovery and pod loss. The metrics outage is held past the HPA
 scale-down window; the experiment sets that window to 90 s (the termination
 grace) so the check finishes sooner. Production values keep 300 s. The experiment uses 1 process, CPU request/limit
