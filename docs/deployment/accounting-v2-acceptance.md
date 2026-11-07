@@ -132,13 +132,24 @@ phase fails only because the generator fell behind
 (`load_generator_fell_behind`), set the `SOAK_RUNNER` repository variable to
 a larger runner label. The workflow uses that label when it is set.
 
+Each 10-minute API window starts a new in-cluster generator pod that requests one
+CPU. The runner deletes the previous generator and waits until its pod is gone
+before it starts the next one, and gives a new generator 180 s to become ready.
+A terminating generator used to hold its CPU request, so the next window's pod
+could not be scheduled in time ("in-cluster load generator did not become ready").
+
 Without `SOAK_RUNNER`, the latency gates are 0.5 s for chat and 0.75 s for
 embeddings instead of 50 ms and 0.25 s. On the 4-vCPU runner chat p95 measured
 0.2 to 0.3 s at 100 RPS with no errors, so the strict targets there measure
 the runner. The batch throughput floor is 30 items/s instead of 50, since it
 measured 36 to 54 items/s between runs there. The pull request run sends 50
 chat RPS instead of 100: at 100 RPS the runner's CPU was 96 % busy (p95) and
-an API pod missed its liveness probe. Every other check stays the same. Each
+an API pod missed its liveness probe. The scheduled nightly run without
+`SOAK_RUNNER` also sends 50 chat RPS, for the full 30 minutes and after the full
+20,000-item batch: at 300 RPS the generator dropped about 30 % of its requests,
+most of the rest were shed or timed out, and both API pods restarted, so the API
+phase failed every night on the runner rather than on the gateway. A manual run
+keeps the rates you enter. Every other check stays the same. Each
 API window reports `host_cpu`, the busy share of the runner's CPUs, to show
 how loaded it was.
 
