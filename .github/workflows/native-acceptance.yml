@@ -10,6 +10,12 @@ on:
         description: Report a failure on the job without failing the calling run
         type: boolean
         default: false
+      pod_loss:
+        description: >-
+          Run the SIGKILL pod-loss step, which waits about 15 minutes for the
+          killed pods' reservations to expire
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -51,11 +57,13 @@ jobs:
           (cd /tmp && sha256sum -c kind.sha256sum)
           chmod +x /tmp/kind-linux-amd64
       - name: Exercise fixed replicas, rollout and pod loss on accounting v2
+        # Pull requests skip pod loss; pushes to main and the nightly run it.
         run: >-
           uv run python -m tests.performance.run_native_acceptance
           --image deltallm-native:candidate
           --kind /tmp/kind-linux-amd64
           --output /tmp/native-evidence/kubernetes
+          ${{ !inputs.pod_loss && '--skip-pod-loss' || '' }}
       - name: Retain bounded accounting v2 evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

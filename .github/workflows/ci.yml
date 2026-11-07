@@ -484,6 +484,9 @@ jobs:
     uses: ./.github/workflows/native-acceptance.yml
     with:
       advisory: true
+      # Pod loss waits about 15 minutes for reservation expiry; pull requests
+      # skip it, pushes to main and the nightly soak run it.
+      pod_loss: ${{ github.event_name != 'pull_request' }}
 
   test:
     name: test

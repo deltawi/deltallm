@@ -85,6 +85,10 @@ as a red `accounting-v2-acceptance / native-cluster` job, but the CI run itself
 stays green, so a red run on main always means a required check failed. Open the
 job when it runs. The nightly run is not advisory and fails the workflow.
 
+Pull requests skip step 3. After the kill, the run waits about 15 minutes for
+the killed pods' reservations to expire, which would double the job. Pushes to
+main and the nightly run all three steps.
+
 ## Nightly soak
 
 One kind node with 2 API pods, 3 batch pods, 2 accounting request pods and

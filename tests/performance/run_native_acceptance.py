@@ -543,7 +543,9 @@ async def pod_loss(cluster: LifecycleCluster, url: str) -> dict:
     }
 
 
-async def exercise(cluster: LifecycleCluster, values: Path, report: dict) -> None:
+async def exercise(
+    cluster: LifecycleCluster, values: Path, report: dict, *, pod_loss_step: bool = True
+) -> None:
     with ExitStack() as forwards:
         postgres = forwards.enter_context(cluster.forward("service/postgres", 5432))
         redis = forwards.enter_context(cluster.forward("service/redis", 6379))
@@ -573,13 +575,16 @@ async def exercise(cluster: LifecycleCluster, values: Path, report: dict) -> Non
         with follow_role_logs(cluster, "rollout"):
             report["rollout"] = await rollout(cluster, values, url)
         write_json(cluster.output / "native-acceptance.json", report)
-        with follow_role_logs(cluster, "pod-loss"):
-            report["pod_loss"] = await pod_loss(cluster, url)
         steps = {
             **{f"fixed-{row['replicas']}": row for row in report["fixed_replicas"]},
             "rollout": report["rollout"],
-            "pod-loss": report["pod_loss"],
         }
+        if pod_loss_step:
+            with follow_role_logs(cluster, "pod-loss"):
+                report["pod_loss"] = await pod_loss(cluster, url)
+            steps["pod-loss"] = report["pod_loss"]
+        else:
+            cluster.event("native_pod_loss_skipped")
         report["failed_steps"] = [name for name, step in steps.items() if not step["passed"]]
         report["passed"] = not report["failed_steps"]
         write_json(cluster.output / "native-acceptance.json", report)
@@ -600,6 +605,11 @@ def main() -> None:
     parser.add_argument("--image", required=True)
     parser.add_argument("--kind", default="kind")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--skip-pod-loss",
+        action="store_true",
+        help="Skip SIGKILL pod loss, which waits about 15 minutes for reservation expiry",
+    )
     args = parser.parse_args()
     if args.output.exists():
         parser.error("Use a fresh evidence directory")
@@ -610,7 +620,7 @@ def main() -> None:
         values = native_values(cluster, args.image, api_replicas=2, batch_replicas=1)
         prime_database(cluster, values, seeder=seed_native_fixture)
         try:
-            asyncio.run(exercise(cluster, values, report))
+            asyncio.run(exercise(cluster, values, report, pod_loss_step=not args.skip_pod_loss))
         finally:
             write_json(cluster.output / "native-acceptance.json", report)
             collect_native_logs(cluster)
