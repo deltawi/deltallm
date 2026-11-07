@@ -186,7 +186,7 @@ async def test_duplicate_grant_ordinal_fails_before_sql():
     "field,value",
     [
         ("grantee_id", "another-owner"),
-        ("fence_token", str(uuid4())),
+        ("fence_token", "00000000-0000-4000-8000-000000000006"),
         ("operation_limit", 5),
         ("allowance_exact", "9"),
         ("accounting_partition", 64),
@@ -253,10 +253,10 @@ async def test_claim_ack_loss_recovers_only_the_exact_owned_claim():
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("owner_token", str(uuid4())),
+        ("owner_token", "00000000-0000-4000-8000-000000000007"),
         ("accounting_grant_id", "other"),
         ("accounting_permit_ordinal", 1),
-        ("accounting_grant_fence_token", str(uuid4())),
+        ("accounting_grant_fence_token", "00000000-0000-4000-8000-000000000008"),
         ("accounting_partition", 1),
         ("snapshot", {}),
         ("request_fingerprint", "0" * 64),
