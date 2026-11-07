@@ -5,6 +5,10 @@ from collections.abc import Generator
 
 import pytest
 
+# Lanes whose tests share no database, Redis or cluster state. Each runs on
+# two xdist workers in CI.
+PARALLEL_CI_LANES = frozenset({"app", "hermetic", "helm"})
+
 
 def use_ci_app_workers(
     *,
@@ -19,7 +23,7 @@ def use_ci_app_workers(
 ) -> bool:
     return (
         github_actions == "true"
-        and mark_expression.strip() == "app"
+        and mark_expression.strip() in PARALLEL_CI_LANES
         and worker_id is None
         and not collect_only
         and not use_debugger

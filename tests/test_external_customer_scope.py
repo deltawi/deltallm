@@ -104,7 +104,7 @@ def test_every_scope_builder_obeys_customer_ceiling(permission):
     assert not scope.is_platform_admin and permission not in scope.effective_permissions
 
 
-@pytest.mark.parametrize("permission", list(CUSTOMER_PERMISSION_CEILING))
+@pytest.mark.parametrize("permission", sorted(CUSTOMER_PERMISSION_CEILING))
 def test_customer_permission_cannot_cross_registered_workspace(permission):
     context = customer()
     assert has_scoped_permission(context, permission, "bound-org", "bound-team")
