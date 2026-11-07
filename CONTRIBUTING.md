@@ -156,6 +156,15 @@ real Prisma, Redis, or Helm usage is missing its matching explicit marker. This
 keeps lane selection exhaustive and prevents infrastructure tests from silently
 running in a fake-only job.
 
+Pull requests that change only the UI (`ui/`), the docs (`docs/`, `mkdocs.yml`,
+top-level Markdown) or the docs workflow skip the kind cluster jobs
+(`lifecycle-acceptance` and `capacity-acceptance`). The UI build, every Python lane
+and Helm still run. The PostgreSQL migration paths run only when the change touches
+`prisma/`, the migration tooling in `src/` or `scripts/`, `pyproject.toml`,
+`uv.lock`, the `Dockerfile` or `ci.yml`. The `cluster-changes` job decides; the
+required `test` check accepts a skipped job only when that job chose to skip it.
+Pushes to main always run every job.
+
 In GitHub Actions, the exact `-m app` selection uses two pytest-xdist worker
 processes. Each test still creates its own application and fake stores. The
 `test_app` fixture builds the full route table once per process and gives each
