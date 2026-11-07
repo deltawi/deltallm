@@ -125,6 +125,25 @@ def test_experiment_uses_one_profile_and_varies_only_fixed_replicas(replicas):
     assert result.roles["api"].peak_processes == replicas * 3 + 1
 
 
+def test_experiment_hpa_window_is_short_but_covers_termination_grace():
+    def window(*overlays: str) -> tuple[int, int]:
+        args = []
+        for overlay in overlays:
+            args += ["-f", str(HELM_CHART_DIR / overlay)]
+        docs = _render(*args, "--set", "autoscaling.enabled=true")
+        hpa = next(doc for doc in docs if doc["kind"] == "HorizontalPodAutoscaler")
+        deployment = next(doc for doc in docs if doc["kind"] == "Deployment")
+        return (
+            hpa["spec"]["behavior"]["scaleDown"]["stabilizationWindowSeconds"],
+            deployment["spec"]["template"]["spec"]["terminationGracePeriodSeconds"],
+        )
+
+    # The acceptance run waits out this window, so the experiment keeps it short;
+    # production keeps its own value.
+    assert window("values-production.yaml") == (300, 90)
+    assert window("values-production.yaml", "values-capacity-experiment.yaml") == (90, 90)
+
+
 def test_runtime_bootstrap_checks_the_actual_rendered_contract(tmp_path, monkeypatch):
     for name in (
         "HTTP_PROXY",

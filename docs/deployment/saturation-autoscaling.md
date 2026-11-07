@@ -165,7 +165,9 @@ The acceptance runner owns a two-node kind cluster and kubeconfig, uses the cand
 image with real PostgreSQL/Redis, a fixed one-token provider,
 Prometheus, the adapter, metrics-server and a bounded HAProxy edge. It compares
 identical fixed offered load across 2/3/4 pods, then tests a 2–4 HPA, missing
-metrics, recovery and pod loss. The experiment uses 1 process, CPU request/limit
+metrics, recovery and pod loss. The metrics outage is held past the HPA
+scale-down window; the experiment sets that window to 90 s (the termination
+grace) so the check finishes sooner. Production values keep 300 s. The experiment uses 1 process, CPU request/limit
 1/2 cores, memory request/limit 2/4 GiB, DB pools 20/8/5/5 and shared preflight
 100/50. Its **10-lifetime** HPA target produces a functional scaling signal
 from 30–50 held streams without requiring hundreds of local test connections.
