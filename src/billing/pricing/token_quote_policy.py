@@ -241,13 +241,7 @@ class _TokenQuotePolicy:
         prompt_tokens_cached: int,
         cache_hit: bool,
     ) -> ExactTokenQuote:
-        cache_fields = cache_hit and any(
-            self.configured(key) is not None
-            for key in (
-                "input_cost_per_token_cache_hit",
-                "output_cost_per_token_cache_hit",
-            )
-        )
+        cache_fields = cache_hit and self.has_cache_prices()
         has_usage = prompt_tokens > 0 or completion_tokens > 0
         if self.invalid:
             return self.quote(None, unpriced_reason="invalid_configured_pricing")
@@ -296,6 +290,36 @@ class _TokenQuotePolicy:
             )
         )
 
+    def has_cache_prices(self) -> bool:
+        return any(
+            self.configured(key) is not None
+            for key in (
+                "input_cost_per_token_cache_hit",
+                "output_cost_per_token_cache_hit",
+            )
+        )
+
+    def sync_ceiling_rates(self) -> ExactTokenRates:
+        """Bound each dimension independently, including partially priced usage."""
+        request_only = self.request_price is not None and not self.sync
+        if request_only and not self.has_cache_prices():
+            return ExactTokenRates(cost_per_request=self.request_rate)
+        return ExactTokenRates(
+            input_cost_per_token=(
+                _ZERO if request_only else self.regular("input_cost_per_token").rate or _ZERO
+            ),
+            output_cost_per_token=(
+                _ZERO if request_only else self.regular("output_cost_per_token").rate or _ZERO
+            ),
+            input_cost_per_token_cache_hit=self.cached(
+                "input_cost_per_token_cache_hit", "input_cost_per_token"
+            ).rate,
+            output_cost_per_token_cache_hit=self.cached(
+                "output_cost_per_token_cache_hit", "output_cost_per_token"
+            ).rate,
+            cost_per_request=self.request_rate,
+        )
+
     def quote(
         self,
         pricing: ExactTokenRates | None,
@@ -328,3 +352,8 @@ def resolve_exact_token_quote(
         prompt_tokens_cached=max(0, int(prompt_tokens_cached)),
         cache_hit=cache_hit,
     )
+
+
+def sync_ceiling_rates(context: TokenQuoteContext) -> ExactTokenRates:
+    """Reuse the quote's rate selection for admission."""
+    return _TokenQuotePolicy(context).sync_ceiling_rates()

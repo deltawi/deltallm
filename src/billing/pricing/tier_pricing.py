@@ -8,8 +8,10 @@ from src.billing.pricing.cost import BillingResult, ModelPricing, completion_cos
 from src.billing.pricing.pricing import pricing_from_model_info
 from src.billing.pricing.token_quote_policy import (
     ExactTokenQuote,
+    ExactTokenRates,
     TokenQuoteContext,
     resolve_exact_token_quote,
+    sync_ceiling_rates,
 )
 from src.providers.resolution import resolve_upstream_model
 
@@ -164,6 +166,30 @@ def resolve_exact_token_quote_pricing(
     pricing_view: PricingView = "customer",
 ) -> ExactTokenQuote:
     """Select one exact quote from the frozen price inputs."""
+    return resolve_exact_token_quote(
+        _token_quote_context(resolution, model=model, mode=mode, pricing_view=pricing_view),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        prompt_tokens_cached=prompt_tokens_cached,
+        cache_hit=cache_hit,
+    )
+
+
+def sync_token_ceiling_rates(resolution: PricingResolution) -> ExactTokenRates:
+    return sync_ceiling_rates(
+        _token_quote_context(
+            resolution, model=resolution.callable_model, mode="sync", pricing_view="customer"
+        )
+    )
+
+
+def _token_quote_context(
+    resolution: PricingResolution,
+    *,
+    model: str,
+    mode: PricingMode | None,
+    pricing_view: PricingView,
+) -> TokenQuoteContext:
     catalog = (
         resolution.catalog_token_pricing
         if resolution.catalog_pricing_frozen
@@ -175,7 +201,7 @@ def resolve_exact_token_quote_pricing(
         and resolution.provider_model != model
     ):
         catalog = get_model_pricing(model)
-    context = TokenQuoteContext(
+    return TokenQuoteContext(
         info=(
             resolution.customer_model_info
             if pricing_view == "customer"
@@ -187,13 +213,6 @@ def resolve_exact_token_quote_pricing(
         provider_fields=resolution.provider_pricing_fields,
         tier_fields=resolution.tier_pricing_fields,
         tier_applied=resolution.tier_pricing_applied,
-    )
-    return resolve_exact_token_quote(
-        context,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        prompt_tokens_cached=prompt_tokens_cached,
-        cache_hit=cache_hit,
     )
 
 
