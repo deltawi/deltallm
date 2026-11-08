@@ -169,7 +169,8 @@ class LifecycleCluster:
         return self.run("helm", "--kubeconfig", self.kubeconfig, "-n", NAMESPACE, *args, **options)
 
     def apply(self, documents: list[dict[str, object]]) -> None:
-        path = Path(self.directory.name) / "resources.yaml"
+        # A unique file per call: setup steps may apply from parallel threads.
+        path = Path(self.directory.name) / f"resources-{uuid4().hex}.yaml"
         path.write_text(yaml.safe_dump_all(documents))
         self.kubectl("apply", "-f", str(path))
 

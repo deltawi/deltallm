@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import hashlib
 import json
@@ -293,10 +294,15 @@ def main() -> None:
     )
     with cluster.owned(args.image):
         install_capacity_dependencies(cluster, args.image)
-        install_monitoring(cluster)
-        values = capacity_values(cluster, args.image)
-        prime_database(cluster, values)
-        capacity_release(cluster, values, "--set", f"replicaCount={max(FIXED_REPLICAS)}")
+        # Prometheus and the adapter are needed only from the first preflight
+        # on, so they install while the database is primed and the release
+        # rolls out.
+        with ThreadPoolExecutor(max_workers=1) as background:
+            monitoring = background.submit(install_monitoring, cluster)
+            values = capacity_values(cluster, args.image)
+            prime_database(cluster, values)
+            capacity_release(cluster, values, "--set", f"replicaCount={max(FIXED_REPLICAS)}")
+            monitoring.result()
         install_edge(cluster)
         asyncio.run(exercise(cluster, values))
         cluster.event("capacity_acceptance_completed")
