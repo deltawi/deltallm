@@ -60,7 +60,8 @@
 {{- $db = int $g.accounting_hot_path_db_pool_size -}}
 {{- $pools = dict "postgresql" $db "redisCritical" 0 "redisCache" 0 "upstreamHttp" 0 "controlHttp" 0 "auxiliaryHttp" 0 "accountingHttp" 0 -}}
 {{- else if $native -}}
-{{- $_ := set $pools "accountingHttp" $g.accounting_rpc_max_connections -}}
+{{- /* Count the pooled client and the fresh connections for rollout retries. */ -}}
+{{- $_ := set $pools "accountingHttp" (mul 2 $g.accounting_rpc_max_connections) -}}
 {{- end -}}
 {{- $report := dict "maxReplicas" $role.replicas "processesPerPod" $role.processes "steadyProcesses" (mul $role.replicas $role.processes) "peakProcesses" $processes "pools" $pools -}}
 {{- $_ := set $roleReports $role.name $report -}}
