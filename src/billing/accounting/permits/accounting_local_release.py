@@ -15,6 +15,7 @@ import math
 from typing import Protocol
 
 from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
+from src.billing.accounting.permits.accounting_local_leases import GRANT_RECOVERY_GRACE_SECONDS
 from src.billing.accounting.permits.accounting_local_receipts import (
     LocalReceiptStore,
     RetainedLocalReceipt,
@@ -52,7 +53,7 @@ class LocalReceiptReleaseWorker:
         *,
         poll_seconds: float = 1.0,
         recheck_seconds: float = 10.0,
-        expiry_grace_seconds: float = 60.0,
+        expiry_grace_seconds: float = GRANT_RECOVERY_GRACE_SECONDS,
         call_budget_seconds: float = 1.0,
         batch_size: int = 256,
         clock: Callable[[], float] | None = None,

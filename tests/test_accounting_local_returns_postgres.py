@@ -2,9 +2,12 @@
 
 from decimal import Decimal
 
+import asyncio
+
 import pytest
 
 from src.billing.accounting.permits.accounting_local_leases import (
+    GRANT_RECOVERY_GRACE_SECONDS,
     LocalPermitFinalization,
     LocalPermitReceipt,
 )
@@ -68,3 +71,34 @@ async def test_supervised_close_returns_suffix_but_keeps_issued_terminal_owner(
     assert await _outstanding(db, generation) == retained.entries == retained.retained_bytes == 0
     assert (await repository.finalize_batch([terminal], expires_at=deadline()))[0].replayed
     assert await _window(db, window) == (Decimal("0.6"), Decimal(0), Decimal(0))
+
+
+async def test_recovered_cursor_does_not_block_a_live_return(accounting_db):
+    clients, generation = accounting_db
+    db = clients[0]
+    window, old, expired = await funded(db, generation)
+    _, new, live = await funded(db, generation)
+    await db.execute_raw(
+        "UPDATE deltallm_accounting_grants SET state='draining',"
+        "dispatch_expires_at=NOW()-INTERVAL '2 minutes',expires_at=NOW()-INTERVAL '1 minute' "
+        "WHERE grant_id=$1",
+        expired.grant_id,
+    )
+    assert await _settle_grants(db, generation) == 1
+    expired = expired.model_copy(
+        update={
+            "observed_monotonic": asyncio.get_running_loop().time()
+            - (expired.expires_at - expired.observed_at).total_seconds()
+            - GRANT_RECOVERY_GRACE_SECONDS
+            - 1
+        }
+    )
+    cursors, retained, _ = state(generation)
+    assert cursors.add(PermitSubject.from_reservation(old), expired)
+    assert cursors.add(PermitSubject.from_reservation(new), live)
+    cursors.retire_slice()
+    repository = owner(db)
+    issuer = LocalPermitIssuer(repository, cursors, retained)
+    assert await LocalReturnWorker(repository, cursors, issuer).run_once(expires_at=deadline()) == 2
+    assert cursors.entries == cursors.retained_bytes == 0
+    assert await _window(db, window) == (Decimal(0), Decimal(0), Decimal(4))

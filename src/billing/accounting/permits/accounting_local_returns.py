@@ -136,13 +136,16 @@ class LocalReturnWorker:
                     now=asyncio.get_running_loop().time(),
                     minimum_validity_seconds=self._minimum_validity,
                 )
-            values = self._cursors.return_candidates()
+            candidates = self._cursors.return_candidates()
+            values = self._cursors.pending_returns(
+                candidates, now=asyncio.get_running_loop().time()
+            )
             if not values:
-                return 0
+                return len(candidates)
             async with asyncio.timeout_at(expires_at):
                 counts = await self._persistence.return_batch(values, expires_at=expires_at)
             self._cursors.acknowledge_returns(values, counts)
-            return len(values)
+            return len(candidates)
         finally:
             gate.release()
 

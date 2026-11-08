@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 import math
 
 from src.billing.accounting.permits.accounting_local_leases import (
+    GRANT_RECOVERY_GRACE_SECONDS,
     LocalPermitGrant,
     LocalPermitReceipt,
     LocalPermitReturn,
@@ -257,6 +258,21 @@ class LocalCursorStore:
             return False
         self.acknowledge_returns((returned,), (count,))
         return True
+
+    def pending_returns(
+        self, candidates: Sequence[LocalPermitReturn], *, now: float
+    ) -> tuple[LocalPermitReturn, ...]:
+        """Forget expired return-only cursors after recovery takes ownership."""
+        pending = []
+        for candidate in candidates:
+            grant = candidate.grant
+            if grant.recovery_deadline + GRANT_RECOVERY_GRACE_SECONDS > now:
+                pending.append(candidate)
+                continue
+            cursor = self._retiring.pop(grant.grant_id)
+            self._grant_ids.remove(grant.grant_id)
+            self._bytes -= cursor.retained_bytes
+        return tuple(pending)
 
     def acknowledge_returns(
         self, returns: Sequence[LocalPermitReturn], counts: Sequence[int]
