@@ -24,6 +24,7 @@ from src.metrics import (
 )
 from src.providers.resolution import resolve_provider
 from src.router.health_policy import exception_status_code
+from src.chat.stream_accounting import write_stream_terminal
 from src.telemetry.request_failures import (
     enqueue_request_log_write,
     record_optional_accounting_v2_diagnostic,
@@ -160,7 +161,7 @@ async def emit_stream_success(
         team=auth.team_id,
         spend=request_cost,
     )
-    await enqueue_request_log_write(
+    await write_stream_terminal(
         request,
         request.app.state.spend_tracking_service.log_spend(
             **billing_write_context(request),
@@ -283,7 +284,7 @@ async def emit_stream_failure(
         default_api_base=api_base,
         default_deployment_model=params.get("model"),
     )
-    await enqueue_request_log_write(
+    await write_stream_terminal(
         request,
         request.app.state.spend_tracking_service.log_request_failure(
             **billing_write_context(request),

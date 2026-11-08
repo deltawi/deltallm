@@ -121,7 +121,7 @@ def _request_log_failure_reason(exc: Exception) -> str:
 
 
 async def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
-    if _request_log_already_emitted(request):
+    if request_log_already_emitted(request):
         return
     route = _route_definition(request)
     auth = getattr(request.state, "user_api_key", None)
@@ -185,7 +185,7 @@ async def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
 async def maybe_log_request_validation_failure(
     request: Request, exc: RequestValidationError, *, status_code: int = 422
 ) -> None:
-    if _request_log_already_emitted(request):
+    if request_log_already_emitted(request):
         return
     route = _route_definition(request)
     spend_tracking_service = getattr(request.app.state, "spend_tracking_service", None)
@@ -236,7 +236,7 @@ async def maybe_log_request_validation_failure(
         )
 
 
-def _request_log_already_emitted(request: Request) -> bool:
+def request_log_already_emitted(request: Request) -> bool:
     return bool(getattr(request.state, _REQUEST_LOG_EMITTED_ATTR, False))
 
 

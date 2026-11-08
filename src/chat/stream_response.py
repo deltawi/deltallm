@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -103,11 +104,13 @@ class DeadlineStreamingResponse(StreamingResponse):
         *,
         deadline: RequestDeadline,
         close: Callable[[BaseException | None], Awaitable[None]],
+        on_interrupt: Callable[[str], Awaitable[None]] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(content, **kwargs)
         self._deadline = deadline
         self._close = close
+        self._on_interrupt = on_interrupt
 
     async def stream_response(self, send: Callable[..., Awaitable[None]]) -> None:
         failure: BaseException | None = None
@@ -120,6 +123,25 @@ class DeadlineStreamingResponse(StreamingResponse):
             try:
                 await close_stream_resources(lambda: self._close(failure))
             finally:
-                body_close = getattr(self.body_iterator, "aclose", None)
-                if body_close is not None:
-                    await close_stream_resources(body_close)
+                try:
+                    if failure is not None:
+                        await self._record_interruption(failure)
+                finally:
+                    body_close = getattr(self.body_iterator, "aclose", None)
+                    if body_close is not None:
+                        await close_stream_resources(body_close)
+
+    async def _record_interruption(self, failure: BaseException) -> None:
+        record = self._on_interrupt
+        if record is None:
+            return
+        if (
+            self._deadline.remaining() <= 0
+            or getattr(failure, "code", None) == "request_deadline_exceeded"
+        ):
+            reason = "stream_deadline_exceeded"
+        elif isinstance(failure, (asyncio.CancelledError, OSError)):
+            reason = "stream_interrupted"
+        else:
+            return
+        await close_stream_resources(lambda: record(reason))
