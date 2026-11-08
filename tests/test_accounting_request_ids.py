@@ -124,3 +124,45 @@ def test_terminal_preparation_keeps_times_that_the_caller_sent():
     )
     assert datetime.fromisoformat(str(terminal.spend_payload["start_time"])) == started
     assert datetime.fromisoformat(str(terminal.spend_payload["end_time"])) == ended
+
+
+@pytest.mark.parametrize(
+    "payload,reason",
+    [
+        ({"cost_exact": "1.250000000000000001"}, "provider_charge_outside_allowance"),
+        ({"usage": {"total_tokens": 2**31}}, "provider_usage_unqualified"),
+        (
+            {"usage": {"prompt_tokens": 2**31 - 1, "input_audio_tokens": 1, "total_tokens": 5}},
+            "provider_usage_unqualified",
+        ),
+        (
+            {"metadata": {"billing": {"usage_snapshot": {"image_count": 2**31}}}},
+            "provider_usage_unqualified",
+        ),
+    ],
+)
+async def test_unqualified_receipt_keeps_one_explicit_uncertain_terminal(payload, reason):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from src.billing.accounting.accounting_finalization import AccountingSpendFinalizer
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+    from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+
+    operation = _operation()
+    finalize = AsyncMock()
+    service = SimpleNamespace(generation=7, finalize_operation=finalize)
+    finalizer = AccountingSpendFinalizer(service)
+    with pytest.raises(SpendPersistenceUnavailable):
+        await finalizer.log_spend(
+            operation,
+            event_id=str(operation.reservation.operation_id),
+            payload={"cost_exact": "0.75"} | payload,
+        )
+
+    finalize.assert_awaited_once()
+    _, terminal = finalize.await_args.args
+    assert terminal.outcome is AccountingOutcome.UNCERTAIN
+    assert terminal.uncertainty_reason == reason
+    assert terminal.exact_charge is None
+    assert terminal.spend_payload is None

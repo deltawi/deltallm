@@ -280,3 +280,29 @@ async def test_expiry_transition_does_not_update_more_than_the_worker_limit(acco
         assert states.get("closed", 0) == expected
         assert states.get("active", 0) == 3 - expected
         assert states.get("draining", 0) == 0
+
+
+@pytest.mark.parametrize("invalid", ["charge", "usage", "token_sum"])
+async def test_invalid_completed_receipt_cannot_enter_the_journal(accounting_db, invalid):
+    clients, generation = accounting_db
+    db = clients[0]
+    _, item, grant = await funded(db, generation)
+    value = terminal(item, grant)
+    updates = {
+        "charge": {"exact_charge": item.allowance + Decimal("0.01")},
+        "usage": {"spend_payload": {"usage": {"total_tokens": 2**31}}},
+        "token_sum": {
+            "spend_payload": {"usage": {"prompt_tokens": 2**31 - 1, "input_audio_tokens": 1}}
+        },
+    }
+    invalid_value = value.model_copy(
+        update={"finalization": value.finalization.model_copy(update=updates[invalid])}
+    )
+    repo = AccountingJournalRepository(db, statement_budget_seconds=2)
+    with pytest.raises(AccountingProtocolUnavailable):
+        await repo.append_batch([invalid_value], expires_at=deadline())
+    assert (await counts(db, generation))["journal"] == 0
+
+    receipt = (await repo.append_batch([value], expires_at=deadline()))[0]
+    replay = (await repo.append_batch([value], expires_at=deadline()))[0]
+    assert replay.replayed and replay.journal_sequence == receipt.journal_sequence

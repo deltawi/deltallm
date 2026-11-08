@@ -9,6 +9,7 @@ from uuid import UUID, uuid5
 from src.billing.accounting.accounting_protocol import AccountingOperationHandle
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.journal.accounting_terminal_preparation import (
+    UnqualifiedAccountingReceipt,
     prepare_accounting_charge,
     prepare_accounting_uncertain,
 )
@@ -84,20 +85,28 @@ class AccountingSpendFinalizer:
     ) -> None:
         service = self._require_accounting(operation, event_id=event_id)
         final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
-        finalization = prepare_accounting_charge(
-            operation,
-            payload=payload,
-            occurred_at=datetime.now(UTC),
-            audit_envelope=accounting_audit_envelope(
+        try:
+            finalization = prepare_accounting_charge(
                 operation,
-                event_id=final_event_id,
-                status="success",
-                metadata={
-                    "attempt_count": len(operation.attempts),
-                    "cache_hit": payload.get("cache_hit") is True,
-                },
-            ),
-        )
+                payload=payload,
+                occurred_at=datetime.now(UTC),
+                audit_envelope=accounting_audit_envelope(
+                    operation,
+                    event_id=final_event_id,
+                    status="success",
+                    metadata={
+                        "attempt_count": len(operation.attempts),
+                        "cache_hit": payload.get("cache_hit") is True,
+                    },
+                ),
+            )
+        except UnqualifiedAccountingReceipt as exc:
+            await self.log_failure(
+                operation,
+                event_id=event_id,
+                payload={"error_type": str(exc)},
+            )
+            raise SpendPersistenceUnavailable() from None
         await service.finalize_operation(operation, finalization)
 
     async def log_failure(
