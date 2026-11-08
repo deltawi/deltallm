@@ -18,6 +18,9 @@ from src.billing.accounting.accounting_snapshots import reservation_snapshot
 from src.billing.charges.selector_charge import FrozenBillingContract
 
 
+GRANT_RECOVERY_GRACE_SECONDS = 60
+
+
 class LocalPermitGrant(PreissuedPermitGrant):
     """A funding proof can remain returnable after its dispatch horizon expires."""
 
