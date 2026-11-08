@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.requests import Request
 
-from src.billing.accounting.accounting_protocol import AccountingOperationHandle
 from src.chat.telemetry import emit_precommit_failure
 from src.models.errors import BudgetExceededError, ServiceUnavailableError
+from tests.test_accounting_request_ids import _operation as accounting_operation
 
 pytestmark = pytest.mark.hermetic
 
@@ -148,7 +148,7 @@ async def test_accounting_pre_dispatch_policy_denial_keeps_required_audit(
 async def test_accounting_dispatched_failure_uses_terminal_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    operation = AccountingOperationHandle.model_construct()
+    operation = accounting_operation()
     request, failure_log = _request(accounting_v2=True, operation=operation)
 
     audit, diagnostic = await _emit(

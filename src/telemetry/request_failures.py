@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Coroutine
 from dataclasses import dataclass
 import logging
 from typing import Any
@@ -96,8 +96,18 @@ def mark_request_log_emitted(request: Request) -> None:
     setattr(request.state, _REQUEST_LOG_EMITTED_ATTR, True)
 
 
-async def enqueue_request_log_write(request: Request, coro: Awaitable[None]) -> None:
+async def enqueue_request_log_write(
+    request: Request, coro: Coroutine[object, object, None]
+) -> None:
     """Finalization belongs to the request in both legacy and durable modes."""
+    operation = getattr(request.state, "spend_operation_handle", None)
+    if isinstance(operation, AccountingOperationHandle):
+        operation_id = operation.reservation.operation_id
+        if getattr(request.state, "_accounting_terminal_started", None) == operation_id:
+            # The first terminal can have committed even when its ACK was lost.
+            coro.close()
+            return
+        request.state._accounting_terminal_started = operation_id
     mark_request_log_emitted(request)
     try:
         await coro

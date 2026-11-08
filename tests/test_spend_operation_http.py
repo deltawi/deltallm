@@ -96,6 +96,45 @@ async def test_receipt_outage_does_not_retry_provider(client, test_app):
     operations.accept.assert_awaited_once()
 
 
+async def test_native_terminal_ack_failure_does_not_submit_a_second_outcome(client, test_app):
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+    from src.billing.accounting.accounting_service import AccountingProtocolService
+    from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+    from src.db.runtime.telemetry_acceptance import AcceptanceFailure
+    from tests.test_accounting_request_path import _AccountingRepository
+
+    class LostCompletedAck(_AccountingRepository):
+        async def finalize_batch(self, values, *, expires_at):
+            self.finalizations.extend(values)
+            raise AccountingProtocolUnavailable(AcceptanceFailure.CONNECTION)
+
+    repository = LostCompletedAck()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    test_app.state.accounting_protocol_enabled = True
+    test_app.state.accounting_protocol_service = accounting
+    test_app.state.spend_tracking_service = ReadySpend(
+        db_client=None,
+        writer=SpendTrackingService(None),
+        config=SpendIngestionConfig(enabled=True),
+        accounting=accounting,
+    )
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers=headers(test_app),
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+        )
+    finally:
+        await accounting.close()
+
+    assert response.status_code == 503, response.text
+    assert test_app.state.http_client.post_calls == 1
+    (terminal,) = repository.finalizations
+    assert terminal.outcome is AccountingOutcome.COMPLETED
+    assert terminal.exact_charge > 0
+
+
 async def test_stream_receipt_is_accepted_before_done(client, test_app):
     operations = install(test_app)
     response = await client.post(

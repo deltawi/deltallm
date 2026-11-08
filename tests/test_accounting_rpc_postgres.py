@@ -70,11 +70,18 @@ class TwoWorkers(httpx.AsyncBaseTransport):
     def __init__(self, apps):
         self.apps = tuple(httpx.ASGITransport(app) for app in apps)
         self.paths = []
+        self.drop_next_terminal_ack = False
 
     async def handle_async_request(self, request):
         self.paths.append(request.url.path)
         index = 0 if "/allocate/" in request.url.path else 1
-        return await self.apps[index].handle_async_request(request)
+        response = await self.apps[index].handle_async_request(request)
+        if self.drop_next_terminal_ack and "/finalize/" in request.url.path:
+            self.drop_next_terminal_ack = False
+            assert response.status_code == 200
+            await response.aclose()
+            raise httpx.ReadError("terminal committed before the connection reset")
+        return response
 
 
 async def request_worker(db, generation, processing):
@@ -125,7 +132,7 @@ async def local_api(apps, generation):
     return LocalAccountingRuntime(service, returns), transport, wire, cursors, receipts, persistence
 
 
-@pytest.mark.parametrize("replay", [False, True])
+@pytest.mark.parametrize("replay", ["none", "explicit", "lost_ack"])
 async def test_funding_and_terminal_on_different_workers_preserve_one_issue_and_exact_money(
     accounting_db, replay
 ):
@@ -148,10 +155,11 @@ async def test_funding_and_terminal_on_different_workers_preserve_one_issue_and_
         operation = handle(await local.service.reserve(_reservation(generation, window)))
         assert receipts.entries == 1
         record = _finalization(operation.reservation)
+        wire.drop_next_terminal_ack = replay == "lost_ack"
         ack = await local.service.finalize_operation(operation, record)
-        assert type(ack) is JournalReceipt and not ack.replayed
+        assert type(ack) is JournalReceipt and ack.replayed is (replay == "lost_ack")
         assert receipts.entries == receipts.retained_bytes == 0
-        if replay:
+        if replay == "explicit":
             from src.billing.accounting.permits.accounting_local_leases import (
                 LocalPermitFinalization,
             )
@@ -171,7 +179,9 @@ async def test_funding_and_terminal_on_different_workers_preserve_one_issue_and_
         assert await _outstanding(db, generation) == 0
         assert wire.paths.count("/internal/accounting/v1/allocate/local/batch") == 1
         assert wire.paths.count("/internal/accounting/v1/return/local/batch") == 1
-        assert wire.paths.count("/internal/accounting/v1/finalize/local/batch") == 1 + replay
+        assert wire.paths.count("/internal/accounting/v1/finalize/local/batch") == 1 + (
+            replay != "none"
+        )
         rows = await db.query_raw(
             "SELECT count(*)::integer AS count FROM deltallm_accounting_terminal_journal WHERE generation=$1",
             generation,
