@@ -402,6 +402,11 @@ target requires the Prometheus custom-metrics adapter and is mandatory when acco
 worker autoscaling is enabled in the production profile. Scale-down stabilization must
 cover the pod termination grace period so claimed work can drain.
 
+The capacity report counts two HTTP pools for each native API or batch process.
+Each pool uses `accounting_rpc_max_connections`. One pool keeps connections.
+The other opens fresh connections for rollout retries. Deploy the chart and
+image from the same release so their capacity checks use the same pool count.
+
 Grant size is a throughput/fairness trade-off. A larger target reduces hot-window
 mutation frequency but temporarily escrows more of a shared budget per API process.
 Start with an 8-item persistence batch, a 32-operation grant, and a 30-second TTL. Tune

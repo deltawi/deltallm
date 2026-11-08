@@ -68,7 +68,7 @@ class DeploymentCapacityContract:
             # not a counted application-owned pool. Do not claim runtime parity.
             auxiliary_http=0,
             accounting_http=(
-                accounting.accounting_rpc_max_connections
+                2 * accounting.accounting_rpc_max_connections
                 if accounting.accounting_execution_mode == "local_journal"
                 else 0
             ),

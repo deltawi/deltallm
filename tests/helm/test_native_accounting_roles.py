@@ -73,7 +73,7 @@ def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_pat
     )
     report_path = tmp_path / "report.json"
     report_path.write_text(report.model_dump_json(by_alias=True))
-    assert report.roles["api"].pools.accounting_http == 16
+    assert report.roles["api"].pools.accounting_http == 32
     for role, component in (
         ("accountingWorker", "accounting-worker"),
         ("accountingRequest", "accounting-request"),
