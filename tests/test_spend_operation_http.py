@@ -259,9 +259,13 @@ async def test_real_client_close_at_terminal_keeps_one_reserved_receipt(test_app
         assert len(calls) == 1 and upstream.closed.is_set()
 
 
-async def test_disconnect_before_terminal_keeps_intent_and_closes_provider(test_app):
+@pytest.mark.parametrize("native", [False, True])
+async def test_disconnect_before_terminal_keeps_intent_and_closes_provider(test_app, native):
     import asyncio
     import httpx
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+    from src.billing.accounting.accounting_service import AccountingProtocolService
+    from tests.test_accounting_request_path import _AccountingRepository
     from tests.test_stream_accounting_commit import loopback_gateway
 
     closed = asyncio.Event()
@@ -280,26 +284,50 @@ async def test_disconnect_before_terminal_keeps_intent_and_closes_provider(test_
     ) as provider:
         test_app.state.http_client.stream = provider.stream
         operations = install(test_app)
-        async with loopback_gateway(test_app) as base_url:
-            async with httpx.AsyncClient(base_url=base_url, timeout=5) as client:
-                async with client.stream(
-                    "POST",
-                    "/v1/chat/completions",
-                    headers=headers(test_app),
-                    json={
-                        "model": "gpt-4o-mini",
-                        "messages": [{"role": "user", "content": "hello"}],
-                        "stream": True,
-                    },
-                ) as response:
-                    async for line in response.aiter_lines():
-                        if "partial" in line:
-                            break
-                    else:
-                        pytest.fail("Missing partial stream frame")
-            await asyncio.wait_for(closed.wait(), 5)
-        operations.begin.assert_awaited_once()
-        operations.accept.assert_not_awaited()
+        accounting = None
+        if native:
+            repository = _AccountingRepository()
+            accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+            accounting.start()
+            test_app.state.accounting_protocol_enabled = True
+            test_app.state.accounting_protocol_service = accounting
+            test_app.state.spend_tracking_service = ReadySpend(
+                db_client=None,
+                writer=SpendTrackingService(None),
+                config=SpendIngestionConfig(enabled=True),
+                accounting=accounting,
+            )
+        try:
+            async with loopback_gateway(test_app) as base_url:
+                async with httpx.AsyncClient(base_url=base_url, timeout=5) as client:
+                    async with client.stream(
+                        "POST",
+                        "/v1/chat/completions",
+                        headers=headers(test_app),
+                        json={
+                            "model": "gpt-4o-mini",
+                            "messages": [{"role": "user", "content": "hello"}],
+                            "stream": True,
+                        },
+                    ) as response:
+                        async for line in response.aiter_lines():
+                            if "partial" in line:
+                                break
+                        else:
+                            pytest.fail("Missing partial stream frame")
+                await asyncio.wait_for(closed.wait(), 5)
+        finally:
+            if accounting is not None:
+                await accounting.close()
+        if native:
+            (reservation,) = repository.reservations
+            (terminal,) = repository.finalizations
+            assert terminal.operation_id == reservation.operation_id
+            assert terminal.outcome is AccountingOutcome.UNCERTAIN
+            assert terminal.uncertainty_reason == "stream_interrupted"
+        else:
+            operations.begin.assert_awaited_once()
+            operations.accept.assert_not_awaited()
         deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
         assert (
             await test_app.state.router_state_backend.get_active_requests(deployment.deployment_id)

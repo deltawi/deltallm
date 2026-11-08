@@ -408,3 +408,51 @@ async def test_real_http_close_at_done_keeps_answer_charge_without_waiting_for_p
         assert len(calls) == (2 if selected else 1)
         if selected:
             billing.accept_selector.assert_awaited_once()
+
+
+async def test_cancellation_joins_a_started_native_terminal_write():
+    from src.chat.stream_accounting import record_interrupted_stream, write_stream_terminal
+    from tests.test_accounting_request_ids import _operation
+    from tests.test_accounting_request_path import _request
+
+    started = asyncio.Event()
+    allow_ack = asyncio.Event()
+    acked = asyncio.Event()
+
+    async def write():
+        started.set()
+        await allow_ack.wait()
+        acked.set()
+
+    ingestion = SimpleNamespace(log_request_failure=AsyncMock())
+    request = _request(None, ingestion)
+    request.state.spend_operation_handle = _operation()
+    task = asyncio.create_task(write_stream_terminal(request, write()))
+    await asyncio.wait_for(started.wait(), 1)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    allow_ack.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 1)
+    await record_interrupted_stream(request, "stream_interrupted")
+    assert acked.is_set()
+    ingestion.log_request_failure.assert_not_called()
+
+
+async def test_response_deadline_records_interruption_before_cleanup_returns():
+    record = AsyncMock()
+
+    async def never_finishes():
+        await asyncio.Event().wait()
+        yield b""
+
+    response = DeadlineStreamingResponse(
+        never_finishes(),
+        deadline=RequestDeadline.after(0.01),
+        close=AsyncMock(),
+        on_interrupt=record,
+    )
+    with pytest.raises(Exception, match="Request deadline exceeded"):
+        await response.stream_response(AsyncMock())
+    record.assert_awaited_once_with("stream_deadline_exceeded")

@@ -24,6 +24,7 @@ from src.telemetry.spend_operation import settle_mcp_hop
 from src.chat.executor import OpenedStream
 from src.chat.mcp_execution import MCPModelRouting, refresh_hop_routing_context
 from src.chat.mcp_stream_buffer import MCPStreamHopBuffer
+from src.chat.stream_accounting import record_interrupted_stream
 from src.chat.stream_response import (
     DeadlineStreamingResponse,
     ManagedStreamLifecycle,
@@ -174,6 +175,9 @@ class MCPStreamSession:
                 self._events(hop, tool_set),
                 deadline=self.deadline,
                 close=self._close_current,
+                on_interrupt=lambda reason: record_interrupted_stream(
+                    self.telemetry.request, reason
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",

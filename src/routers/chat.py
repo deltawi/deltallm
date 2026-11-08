@@ -35,6 +35,7 @@ from src.chat.mcp_stream import MCPStreamFraming, MCPStreamSession, MCPStreamTel
 from src.chat.quality_recording import AttemptQualityRecorder
 from src.chat.response_validation import ResponseValidationScope
 from src.chat.stream_usage import StreamUsageTracker
+from src.chat.stream_accounting import record_interrupted_stream
 from src.chat.stream_response import (
     DeadlineStreamingResponse,
     ManagedStreamLifecycle,
@@ -504,6 +505,7 @@ async def handle_chat_like_request(
                     stream_sse(),
                     deadline=managed_stream.deadline,
                     close=stream_lifecycle.close,
+                    on_interrupt=lambda reason: record_interrupted_stream(request, reason),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
