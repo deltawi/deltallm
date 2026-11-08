@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import math
 import random
 from typing import Protocol
@@ -32,6 +33,7 @@ class AccountingAdmissionMonitor:
         poll_seconds: float = 1.0,
         stale_seconds: float = 5.0,
         call_seconds: float = 0.5,
+        transport_ready: Callable[[], bool] | None = None,
     ) -> None:
         for value in (poll_seconds, stale_seconds, call_seconds):
             if type(value) not in (int, float) or not math.isfinite(value):
@@ -41,6 +43,7 @@ class AccountingAdmissionMonitor:
         if not 2 * poll_seconds + call_seconds <= stale_seconds <= 10:
             raise ValueError("accounting admission monitor freshness is invalid")
         self._observation = observation
+        self._transport_ready = transport_ready
         self._poll = poll_seconds
         self._stale = stale_seconds
         self._call = call_seconds
@@ -92,7 +95,7 @@ class AccountingAdmissionMonitor:
                 timeout_seconds=max(0, expires_at - asyncio.get_running_loop().time()),
                 worker_name="accounting admission monitor",
             )
-            if self.worker_health.state is not WorkerState.READY:
+            if not self.worker_health.ready and not self._transport_can_start():
                 raise RuntimeError("accounting admission dependencies are not ready")
         except BaseException:
             await self.close(expires_at=expires_at)
@@ -142,12 +145,14 @@ class AccountingAdmissionMonitor:
         stopped = await stop_tasks_before_deadline((self._task,), deadline=expires_at)
         return stopped and not self._busy and not self._stop_failed
 
+    def _transport_can_start(self) -> bool:
+        return self._transport_ready is not None and self._transport_ready()
+
     async def _run(self) -> None:
         while not self._closed:
             ready = await self.refresh(expires_at=asyncio.get_running_loop().time() + self._call)
-            # Startup must observe readiness within its caller's deadline.
-            # A negative first poll is not a completed startup handshake.
-            if ready:
+            # The request role can serve existing receipts before funding is ready.
+            if ready or self._transport_can_start():
                 self._started.set()
             self._wake.clear()
             if self._closed:

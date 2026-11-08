@@ -490,6 +490,13 @@ The journal lookup is served by the accounting request pods at
 as API and batch pods. While an older request pod is still serving, lookups fail
 and only the expiry release runs.
 
+The request role's `/health/readiness` probe keeps the pod in the Service while
+PostgreSQL reports a live accounting generation and the terminal queue can
+accept work. Returns and finalization can continue during a projection pause.
+New funding still requires healthy projection and backlog checks. The signed
+internal health endpoint and the request role's `/health` report that funding
+status. The projection role still requires its processors to be ready.
+
 ## Provisional reconciliation
 
 After reviewing provider evidence, release an unbilled provisional amount:

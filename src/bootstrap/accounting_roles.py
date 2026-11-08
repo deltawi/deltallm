@@ -58,7 +58,7 @@ class AccountingRequestRuntime:
         self._lifecycle.register_claim_stop(self.service.stop_admission)
         await self.monitor.start(expires_at=expires_at)
         self._terminal_task = self.service.start()
-        if self.worker_health.state is not WorkerState.READY:
+        if not self.service.transport_health.ready:
             raise RuntimeError("accounting request runtime did not become ready")
 
     async def close(self, *, expires_at: float) -> None:
