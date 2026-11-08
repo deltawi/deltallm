@@ -11,6 +11,7 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
+  Star,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
@@ -27,6 +28,8 @@ import { useDesktopSidebarWidth } from '../lib/useDesktopSidebarWidth';
 import { CONNECTED_ACCOUNTS_PATH } from '../lib/mcpConnectionAttention';
 import { useMCPConnectionAttention } from '../lib/useMCPConnectionAttention';
 import BrandLogo from './BrandLogo';
+import StarRepoNudge from './StarRepoNudge';
+import { REPO_URL, useIsWhiteLabeled } from '../lib/starNudge';
 import { useToast } from './ToastProvider';
 
 function RoleBadge({ role }: { role: string }) {
@@ -152,6 +155,7 @@ function AccountMenu({
   onNavClick?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const whiteLabeled = useIsWhiteLabeled();
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
@@ -208,6 +212,13 @@ function AccountMenu({
             <span className="min-w-0 flex-1 truncate">Documentation</span>
             <ExternalLink className="w-3.5 h-3.5 shrink-0 text-gray-400" aria-hidden="true" />
           </a>
+          {!whiteLabeled && (
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)} className={menuItemClass}>
+              <Star className="w-4 h-4 shrink-0 text-amber-500" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">Star on GitHub</span>
+              <ExternalLink className="w-3.5 h-3.5 shrink-0 text-gray-400" aria-hidden="true" />
+            </a>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -262,6 +273,7 @@ function SidebarContent({
   onToggleCollapsed,
   showConnections,
   connectionAttention,
+  showStarNudge,
 }: {
   sections: NavSection[];
   footerItems: NavItem[];
@@ -277,6 +289,7 @@ function SidebarContent({
   onToggleCollapsed: () => void;
   showConnections: boolean;
   connectionAttention: number | null;
+  showStarNudge: boolean;
 }) {
   const toggleLabel = !showExpanded ? 'Expand sidebar' : collapsed ? 'Pin sidebar open' : 'Collapse sidebar';
   return (
@@ -327,6 +340,11 @@ function SidebarContent({
               <SidebarLink key={item.to} item={item} pathname={pathname} showExpanded={showExpanded} onNavClick={onNavClick} />
             ))}
           </nav>
+        )}
+        {showExpanded && showStarNudge && (
+          <div className="pt-2">
+            <StarRepoNudge />
+          </div>
         )}
         <div className={clsx(showExpanded ? 'px-2 py-2' : 'p-3')}>
           {showExpanded ? (
@@ -429,6 +447,7 @@ export default function Layout() {
           canCollapse={true}
           onToggleCollapsed={toggleCollapsed}
           showConnections={showConnections}
+          showStarNudge={isPlatformAdmin}
           connectionAttention={connectionAttention}
         />
 
@@ -484,6 +503,7 @@ export default function Layout() {
               canCollapse={false}
               onToggleCollapsed={() => {}}
               showConnections={showConnections}
+              showStarNudge={isPlatformAdmin}
               connectionAttention={connectionAttention}
             />
           </aside>
