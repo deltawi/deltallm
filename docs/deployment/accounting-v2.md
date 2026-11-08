@@ -516,6 +516,27 @@ the same `cost_exact` through `--spend-payload-file`. The function atomically mo
 confirmed amount to committed spend, releases the remainder from every scope, and
 appends an operator-audited reconciliation event. It never calls a provider.
 
+If a process stops before it records a terminal, the closed grant can hold a
+remainder in `unknown_provisional_exact`. When provider evidence confirms the
+entire remainder was unbilled, use the grant ID, generation and exact remaining
+amount from that closed grant:
+
+```bash
+uv run python scripts/reconcile_accounting_v2.py \
+  --database-url "$DATABASE_URL" \
+  --generation 1 \
+  --grant-id "$ACCOUNTING_GRANT_ID" \
+  --expected-grant-hold "$ACCOUNTING_GRANT_HOLD" \
+  --evidence-reason "provider statement confirmed no charge for the grant remainder" \
+  --provider-evidence-reviewed
+```
+
+The migration owner can execute this function. It releases the grant remainder
+from every original budget window in one transaction and records the amount,
+operator and evidence reason in `deltallm_accounting_grant_reconciliations`.
+An exact retry returns the recorded amount. Reconcile any known operation's
+provisional debit with the operation command above.
+
 ## Qualification gates
 
 Before production activation, run:
