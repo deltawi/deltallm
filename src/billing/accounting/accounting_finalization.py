@@ -104,7 +104,7 @@ class AccountingSpendFinalizer:
             await self.log_failure(
                 operation,
                 event_id=event_id,
-                payload={"error_type": str(exc)},
+                payload={"error_type": str(exc), "request_id": payload.get("request_id")},
             )
             raise SpendPersistenceUnavailable() from None
         await service.finalize_operation(operation, finalization)
