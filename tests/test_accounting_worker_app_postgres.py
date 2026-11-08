@@ -1,6 +1,7 @@
 """Minimal apps own native pools, signed routes, health, and clean shutdown."""
 
 import os
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -13,11 +14,12 @@ from src.bootstrap.accounting_remote import RemoteAccountingOwner
 from src.bootstrap.server_application import create_server_application
 from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
 from src.config import DatabaseConnectionSettings
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.db.runtime.accounting_pool import AccountingPostgresClient, AccountingPostgresManager
 from src.lifecycle_settings import LifecycleSettings
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.process_lifecycle import ProcessLifecycle
-from src.telemetry.lifecycle import WorkerState
+from src.telemetry.lifecycle import WorkerHealth, WorkerState
 from src.shutdown import ShutdownOwner, shutdown_owner
 from tests.test_accounting_local_leases_postgres import deadline
 from tests.test_accounting_local_runtime_postgres import handle
@@ -97,10 +99,26 @@ async def test_minimal_apps_use_native_pools_and_signed_local_journal_path(accou
                 await api.start(expires_at=deadline())
                 service = api.local.service
                 operation = handle(await service.reserve(_reservation(generation, window)))
-                receipt = await service.finalize_operation(
-                    operation, reporting_finalization(operation)
+                health = runtime.service._projection_health
+                runtime.service._projection_health = SimpleNamespace(
+                    worker_health=WorkerHealth(WorkerState.DEGRADED, "test_projection_pause")
                 )
-                assert receipt.operation_id == operation.reservation.operation_id
+                try:
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(request), base_url="http://test"
+                    ) as client:
+                        readiness = await client.get("/health/readiness")
+                        assert readiness.status_code == 200
+                        assert readiness.json()["checks"]["accounting"] is False
+                        assert (await client.get("/health")).status_code == 503
+                    with pytest.raises(AccountingProtocolUnavailable):
+                        await transport.request("/health", b"", expires_at=deadline())
+                    receipt = await service.finalize_operation(
+                        operation, reporting_finalization(operation)
+                    )
+                    assert receipt.operation_id == operation.reservation.operation_id
+                finally:
+                    runtime.service._projection_health = health
                 await api.close(expires_at=deadline())
                 assert runtime.worker_health.state is WorkerState.READY
     finally:
@@ -202,3 +220,28 @@ async def test_launcher_selected_roles_and_managed_api_use_the_migrated_native_p
     finally:
         await api.close()
     assert not request.state.shutdown_owner.failed and not projection.state.shutdown_owner.failed
+
+
+async def test_request_app_starts_with_live_protocol_when_projection_is_absent(accounting_db):
+    _, generation = accounting_db
+    app = create_accounting_worker_app(
+        config=AccountingProtocolSettings(
+            accounting_protocol_enabled=True, accounting_protocol_generation=generation
+        ),
+        database=DatabaseConnectionSettings(
+            url=os.environ["DATABASE_URL"], pool_size=2, pool_timeout=1
+        ),
+        lifecycle=ProcessLifecycle(LifecycleSettings()),
+        role="request",
+        owner_id="app-request-only",
+        signing_secret="app-test-secret",
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://test"
+        ) as client:
+            assert (await client.get("/health/readiness")).status_code == 200
+            assert (await client.get("/health")).status_code == 503
+        runtime = app.state.accounting_role_state.runtime
+        assert runtime.service.transport_health.ready
+        assert not runtime.service.worker_health.ready

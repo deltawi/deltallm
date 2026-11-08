@@ -104,15 +104,28 @@ class AccountingRpcService:
         )
 
     @property
-    def worker_health(self) -> WorkerHealth:
+    def _terminal_worker_health(self) -> WorkerHealth:
         if self._closed:
             return WorkerHealth(WorkerState.STOPPING, "rpc_closed")
-        if not self._admitting:
-            return WorkerHealth(WorkerState.STOPPING, "rpc_admission_stopped")
         if self.terminals.task is None:
             return WorkerHealth(WorkerState.STARTING, "terminal_unknown")
         if task_failure_detail(self.terminals.task) is not None:
             return WorkerHealth(WorkerState.FAILED, "terminal_task_failed")
+        return WorkerHealth(WorkerState.READY)
+
+    @property
+    def transport_health(self) -> WorkerHealth:
+        """Keep terminal RPC reachable when funding is paused for projection."""
+        worker = self._terminal_worker_health
+        return self._probe.protocol_health if worker.ready else worker
+
+    @property
+    def worker_health(self) -> WorkerHealth:
+        if not self._closed and not self._admitting:
+            return WorkerHealth(WorkerState.STOPPING, "rpc_admission_stopped")
+        worker = self._terminal_worker_health
+        if not worker.ready:
+            return worker
         if self._projection_health.worker_health.state is not WorkerState.READY:
             return WorkerHealth(WorkerState.DEGRADED, "projection_unready")
         if not self._probe.worker_health.ready:

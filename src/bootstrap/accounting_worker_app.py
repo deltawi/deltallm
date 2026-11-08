@@ -196,15 +196,26 @@ def _health_routes(
     app: FastAPI, lifecycle: ProcessLifecycle, state: AccountingRoleAppState
 ) -> None:
     @app.get("/health")
+    async def health() -> JSONResponse:
+        return health_response(transport=False)
+
     @app.get("/health/readiness")
     async def readiness() -> JSONResponse:
+        return health_response(transport=True)
+
+    def health_response(*, transport: bool) -> JSONResponse:
         runtime = state.runtime
         health = None if runtime is None else runtime.worker_health
-        ready = lifecycle.ready and health is not None and health.state is WorkerState.READY
+        accounting_ready = (
+            lifecycle.ready and health is not None and health.state is WorkerState.READY
+        )
+        ready = accounting_ready
+        if transport and isinstance(runtime, AccountingRequestRuntime):
+            ready = lifecycle.ready and runtime.service.transport_health.ready
         return JSONResponse(
             {
                 "status": "ok" if ready else "degraded",
-                "checks": {"process": lifecycle.ready, "accounting": ready},
+                "checks": {"process": lifecycle.ready, "accounting": accounting_ready},
             },
             status_code=200 if ready else 503,
         )

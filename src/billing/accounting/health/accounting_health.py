@@ -94,7 +94,7 @@ class AccountingBacklogProbe:
         return 0 if self._snapshot is None else MAX_RETAINED_BACKLOG_BYTES
 
     @property
-    def worker_health(self) -> WorkerHealth:
+    def protocol_health(self) -> WorkerHealth:
         if self._closed:
             return WorkerHealth(WorkerState.STOPPING, "probe_closed")
         snapshot = self._snapshot
@@ -107,6 +107,16 @@ class AccountingBacklogProbe:
             return WorkerHealth(WorkerState.DEGRADED, "backlog_stale")
         if snapshot.protocol_state not in {"active", "draining"}:
             return WorkerHealth(WorkerState.FAILED, "generation_inactive")
+        return WorkerHealth(WorkerState.READY)
+
+    @property
+    def worker_health(self) -> WorkerHealth:
+        health = self.protocol_health
+        if not health.ready:
+            return health
+        snapshot = self._snapshot
+        assert snapshot is not None
+        elapsed = self._clock() - self._observed_at
         if snapshot.failed_entries:
             return WorkerHealth(WorkerState.FAILED, "terminal_failed")
         if snapshot.capacity_saturated:

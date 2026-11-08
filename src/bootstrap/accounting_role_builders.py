@@ -64,7 +64,8 @@ def build_accounting_request_runtime(
             probe,
             AccountingPresenceRepository(client),
             generation=config.accounting_protocol_generation,
-        )
+        ),
+        transport_ready=lambda: probe.protocol_health.ready,
     )
     service = AccountingRpcService(
         client,
