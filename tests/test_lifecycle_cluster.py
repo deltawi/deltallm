@@ -38,8 +38,10 @@ def test_capacity_runner_migrates_before_installing_the_candidate(
         if migration_fails:
             raise RuntimeError("candidate migration failed")
 
-    def release(target, values):
+    def release(target, values, *extra):
         assert target is cluster
+        # One render for the largest fixed step; smaller steps only scale.
+        assert extra == ("--set", "replicaCount=4")
         phases.append(("release", yaml.safe_load(values.read_text())["image"]["tag"]))
 
     monkeypatch.setattr(run_capacity_acceptance, "LifecycleCluster", lambda *args, **kw: cluster)
