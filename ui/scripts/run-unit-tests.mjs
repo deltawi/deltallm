@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,94 +7,16 @@ import { build } from 'esbuild';
 
 const uiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDir = path.join(uiRoot, 'node_modules', '.tmp', 'ui-unit-tests');
-const testSources = [
-  'tests/authorization.test.ts',
-  'tests/navigation.test.ts',
-  'tests/branding.test.ts',
-  'tests/brandingResetApi.test.ts',
-  'tests/brandingComponents.test.ts',
-  'tests/brandingProvider.test.ts',
-  'tests/settingsTheme.test.ts',
-  'tests/ssoGroupSync.test.tsx',
-  'tests/ssoSignIn.test.ts',
-  'tests/themeSettingsController.test.tsx',
-  'tests/themeSettingsPanel.test.tsx',
-  'tests/authRedirect.test.ts',
-  'tests/authSession.test.ts',
-  'tests/sessionLifetime.test.ts',
-  'tests/sessionExpiryLifecycle.test.tsx',
-  'tests/externalConsole.test.ts',
-  'tests/externalConsoleLifecycle.test.tsx',
-  'tests/modelFormShared.test.ts',
-  'tests/modelMetadataAutofill.test.ts',
-  'tests/modelConnectionTest.test.ts',
-  'tests/modelNamedCredentialCreate.test.tsx',
-  'tests/modelsApi.test.ts',
-  'tests/modelCost.test.ts',
-  'tests/assetLists.test.tsx',
-  'tests/assetCreator.test.ts',
-  'tests/apiKeyLastUsed.test.ts',
-  'tests/apiKeyListFilters.test.ts',
-  'tests/codingAgentSetup.test.ts',
-  'tests/assetListPermissions.test.tsx',
-  'tests/modelDetailPermissions.test.tsx',
-  'tests/modelDetailTabs.test.tsx',
-  'tests/managedAssetAccessPanel.test.tsx',
-  'tests/namedCredentialsApi.test.ts',
-  'tests/namedCredentialEditing.test.tsx',
-  'tests/batchDetailResource.test.ts',
-  'tests/batchJobs.test.ts',
-  'tests/organizationPolicy.test.ts',
-  'tests/organizationDeletion.test.ts',
-  'tests/organizationDeletionPanel.test.tsx',
-  'tests/organizationLifecycle.test.ts',
-  'tests/organizationCounts.test.ts',
-  'tests/tierHelpers.test.ts',
-  'tests/format.test.ts',
-  'tests/outputTpm.test.ts',
-  'tests/modelOutputTpm.test.tsx',
-  'tests/outputTpmEditor.test.tsx',
-  'tests/outputTpmRoute.test.tsx',
-  'tests/fallbackEvents.test.ts',
-  'tests/reportingRange.test.ts',
-  'tests/reportingRangeControl.test.tsx',
-  'tests/reportingRequest.test.ts',
-  'tests/reportLoader.test.ts',
-  'tests/usageFilters.test.ts',
-  'tests/requestLogDetails.test.tsx',
-  'tests/usageExplorer.test.ts',
-  'tests/usageExport.test.ts',
-  'tests/liveDashboard.test.ts',
-  'tests/routeGroupsApi.test.ts',
-  'tests/routeGroupNavigation.test.tsx',
-  'tests/routeGroupsPolicy.test.ts',
-  'tests/routeGroupRouting.test.ts',
-  'tests/routeGroupRoutingTab.test.tsx',
-  'tests/routeGroupQuality.test.tsx',
-  'tests/routeGroupEditorControls.test.tsx',
-  'tests/routeGroupPromptTab.test.tsx',
-  'tests/routeGroupSelector.test.ts',
-  'tests/selectorReports.test.ts',
-  'tests/selectorAdmin.test.tsx',
-  'tests/apiKeyForm.test.ts',
-  'tests/focusedDesigns.test.tsx',
-  'tests/peopleForm.test.ts',
-  'tests/peopleDialogs.test.tsx',
-  'tests/playgroundHealth.test.tsx',
-  'tests/routeGroupPolicySimulationPanel.test.ts',
-  'tests/useApi.test.ts',
-  'tests/useRoutePolicySimulation.test.ts',
-  'tests/mcpApprovals.test.ts',
-  'tests/mcpPage.test.tsx',
-  'tests/mcpConnections.test.ts',
-  'tests/connectedAccountsPage.test.tsx',
-  'tests/mcpBundles.test.ts',
-  'tests/mcpBundlesPage.test.tsx',
-  'tests/promptVersions.test.ts',
-  'tests/promptTemplateDetail.test.tsx',
-  'tests/auditEvents.test.ts',
-  'tests/auditLogsPage.test.tsx',
-];
+// Every tests/*.test.ts or *.test.tsx file runs, so a new test file cannot be
+// left out by mistake.
+const testSources = (await readdir(path.join(uiRoot, 'tests')))
+  .filter((name) => /\.test\.tsx?$/.test(name))
+  .sort()
+  .map((name) => `tests/${name}`);
+
+if (testSources.length === 0) {
+  throw new Error('No UI unit tests found under tests/');
+}
 
 await rm(outputDir, { recursive: true, force: true });
 await mkdir(outputDir, { recursive: true });
