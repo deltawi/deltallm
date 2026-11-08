@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from time import perf_counter
+from uuid import UUID
 
 from src.billing.accounting.health.accounting_health import AccountingBacklogProbe
 from src.billing.accounting.journal.accounting_terminal_snapshots import (
@@ -187,7 +188,10 @@ class AccountingRpcService:
             results = await asyncio.gather(
                 *(self.terminals.submit(QueuedTerminal(value, expires_at)) for value in snapshots)
             )
-        return rpc_batch_bytes(tuple(results))
+        receipts = tuple(receipt for receipt in results if receipt is not None)
+        if len(receipts) != len(results):
+            raise ValueError("conflicting accounting terminal")
+        return rpc_batch_bytes(receipts)
 
     async def lookup_terminals(
         self, request: LocalTerminalLookupRequest, *, expires_at: float
@@ -211,23 +215,47 @@ class AccountingRpcService:
             )
         )
 
-    async def _append(self, values: Sequence[QueuedTerminal]) -> list[JournalReceipt]:
+    async def _append(self, values: Sequence[QueuedTerminal]) -> list[JournalReceipt | None]:
         started = perf_counter()
+        unique: dict[UUID, FrozenLocalTerminal] = {}
+        ordinals: set[tuple[str, int]] = set()
+        keys: list[UUID | None] = []
+        latest = 0.0
+        for value in values:
+            snapshot = value.snapshot
+            operation_id = snapshot.operation_id
+            prior = unique.get(operation_id)
+            proof = snapshot.retained_receipt
+            ordinal = (proof.grant.grant_id, proof.permit_ordinal)
+            if prior is not None:
+                matches = prior.journal_identity_json == snapshot.journal_identity_json
+            else:
+                matches = ordinal not in ordinals
+                if matches:
+                    unique[operation_id] = snapshot
+                    ordinals.add(ordinal)
+            keys.append(operation_id if matches else None)
+            if matches:
+                latest = max(latest, value.expires_at)
+
+        # Each caller has its own timeout. Work selected for a durable write
+        # can finish within the latest live caller's remaining budget.
         deadline = min(
             asyncio.get_running_loop().time() + self._ack,
-            *(value.expires_at for value in values),
+            latest,
         )
         try:
             result = await self._journal.append_batch(
-                tuple(value.snapshot for value in values),
+                tuple(unique.values()),
                 expires_at=deadline,
             )
         except BaseException as exc:
             outcome = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
-            observe_accounting_batch("rpc_terminal", len(values), perf_counter() - started, outcome)
+            observe_accounting_batch("rpc_terminal", len(unique), perf_counter() - started, outcome)
             raise
-        observe_accounting_batch("rpc_terminal", len(values), perf_counter() - started, "success")
-        return list(result)
+        observe_accounting_batch("rpc_terminal", len(unique), perf_counter() - started, "success")
+        receipts = {receipt.operation_id: receipt for receipt in result}
+        return [receipts[key] if key is not None else None for key in keys]
 
     def _leases(self, owner_id: str) -> AccountingLocalLeaseRepository:
         return AccountingLocalLeaseRepository(

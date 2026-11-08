@@ -23,6 +23,7 @@ from src.billing.accounting.health.accounting_health import (
 )
 from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
 from src.billing.accounting.transport.accounting_local_wire import WireLocalGrant
+from src.billing.accounting.journal.accounting_terminal_snapshots import FrozenLocalTerminal
 from src.billing.accounting.transport.accounting_remote_leases import RemoteLocalLeasePersistence
 from src.billing.accounting.transport.accounting_rpc_contracts import (
     LocalFundingReply,
@@ -34,7 +35,10 @@ from src.billing.accounting.transport.accounting_rpc_contracts import (
     rpc_batch_bytes,
     rpc_request_bytes,
 )
-from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
+from src.billing.accounting.transport.accounting_rpc_service import (
+    AccountingRpcService,
+    QueuedTerminal,
+)
 from src.billing.accounting.accounting_protocol import ReserveDecision
 from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.outbound.network_policy import OutboundNetworkPolicy
@@ -299,6 +303,36 @@ async def test_terminal_queue_cannot_extend_the_transport_deadline():
     finally:
         await service.close(timeout_seconds=1)
     assert service.terminals.retained_bytes == 0
+
+
+async def test_terminal_batch_coalesces_replays_and_keeps_independent_deadlines():
+    _, service, client, _ = await rpc_state()
+    value = terminal()
+    first = FrozenLocalTerminal(value, generation=7)
+    conflict = FrozenLocalTerminal(
+        value.model_copy(
+            update={"finalization": value.finalization.model_copy(update={"event_id": uuid4()})}
+        ),
+        generation=7,
+    )
+    other = FrozenLocalTerminal(terminal(), generation=7)
+    expired = asyncio.get_running_loop().time() - 1
+    fresh = deadline()
+    try:
+        original, replay, rejected, independent = await service._append(
+            [
+                QueuedTerminal(first, expired),
+                QueuedTerminal(first, fresh),
+                QueuedTerminal(conflict, fresh),
+                QueuedTerminal(other, fresh),
+            ]
+        )
+        assert original == replay and original.operation_id == first.operation_id
+        assert rejected is None and independent.operation_id == other.operation_id
+        assert len(client.calls) == 1
+        assert len(json.loads(client.calls[0][1][1])) == 2
+    finally:
+        await service.close(timeout_seconds=1)
 
 
 @pytest.mark.parametrize(
