@@ -151,7 +151,13 @@ class AccountingHttpTransport:
         }
         try:
             with suppress_httpcore_debug_traces():
-                return await self._request_with_drain_retry(path, body, headers, expires_at)
+                return await self._request_with_retry(
+                    path,
+                    body,
+                    headers,
+                    expires_at,
+                    replay_terminal=endpoint == "/finalize/local/batch",
+                )
         except asyncio.CancelledError:
             raise
         except (httpx.TimeoutException, TimeoutError):
@@ -174,19 +180,20 @@ class AccountingHttpTransport:
             )
             raise AccountingProtocolUnavailable(AcceptanceFailure.CONNECTION) from None
 
-    async def _request_with_drain_retry(
-        self, path: str, body: bytes, headers: dict[str, str], expires_at: float
+    async def _request_with_retry(
+        self,
+        path: str,
+        body: bytes,
+        headers: dict[str, str],
+        expires_at: float,
+        *,
+        replay_terminal: bool,
     ) -> bytes:
-        """Send again only when the call cannot have reached a handler.
+        """Retry pre-handler refusals, or replay the same journal document after a reset.
 
-        A draining reply is written by ingress admission before the request
-        reaches any handler, and a refused connection never carried the body,
-        so in both cases the call did nothing and a second send cannot repeat
-        work. The first send may use a kept connection. Every later send opens
-        a new one, because other kept connections can lead to the same draining
-        pod, while a new one reaches a pod the service still routes to. Every
-        other failure, including a timeout or a reset after the body was sent,
-        stays a single attempt.
+        The native journal acknowledges exact replays across request pods.
+        Funding calls can have side effects after send and use only the
+        pre-handler retry path. All retries use a fresh connection.
         """
         client = self._client
         for attempt in range(1, ACCOUNTING_DRAIN_RETRY_ATTEMPTS + 1):
@@ -195,6 +202,15 @@ class AccountingHttpTransport:
                 return await self._request_target(
                     client, path, body, headers, remaining, expires_at
                 )
+            except (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError):
+                if (
+                    not replay_terminal
+                    or attempt == ACCOUNTING_DRAIN_RETRY_ATTEMPTS
+                    or asyncio.get_running_loop().time() >= expires_at
+                ):
+                    raise
+                replay_terminal = False
+                client = self._fresh_client
             except (_DrainingReject, httpx.ConnectError) as refused:
                 client = self._fresh_client
                 pause = ACCOUNTING_DRAIN_RETRY_PAUSE_SECONDS * 2 ** (attempt - 1)

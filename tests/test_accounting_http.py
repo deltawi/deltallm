@@ -139,7 +139,11 @@ async def test_transport_failure_log_keeps_only_fixed_safe_fields(
         assert raised.value.reason == reason.value
         # A refused connection never carried the body, so it is sent again.
         assert len(calls) == (
-            ACCOUNTING_DRAIN_RETRY_ATTEMPTS if isinstance(error, httpx.ConnectError) else 1
+            ACCOUNTING_DRAIN_RETRY_ATTEMPTS
+            if isinstance(error, httpx.ConnectError)
+            else 2
+            if isinstance(error, httpx.ReadError)
+            else 1
         )
         assert caplog.messages == [
             f"Accounting transport failed; endpoint=/finalize/local/batch kind={kind} status={status}"
@@ -751,20 +755,26 @@ async def test_a_refused_connection_is_sent_again_inside_the_deadline():
         await client.close()
 
 
-async def test_a_read_failure_after_sending_is_never_sent_again():
+@pytest.mark.parametrize("endpoint", ["/finalize/local/batch", "/allocate/local/batch"])
+async def test_a_reset_after_sending_replays_only_a_native_terminal(endpoint):
     calls = []
 
     async def handler(request):
-        calls.append(request)
-        raise httpx.ReadError("reset")
+        calls.append((request.content, request.headers[ACCOUNTING_SIGNATURE_HEADER]))
+        if len(calls) == 1:
+            raise httpx.ReadError("reset")
+        return httpx.Response(200, content=b"[]")
 
     client = transport(handler)
     try:
-        with pytest.raises(AccountingProtocolUnavailable):
-            await client.request(
-                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
-            )
-        assert len(calls) == 1
+        expires_at = asyncio.get_running_loop().time() + 1
+        if endpoint == "/finalize/local/batch":
+            assert await client.request(endpoint, b"[1]", expires_at=expires_at) == b"[]"
+            assert len(calls) == 2 and calls[0] == calls[1]
+        else:
+            with pytest.raises(AccountingProtocolUnavailable):
+                await client.request(endpoint, b"[1]", expires_at=expires_at)
+            assert len(calls) == 1
     finally:
         await client.close()
 
