@@ -34,6 +34,11 @@ database call cannot repeat provider work. All identities, pricing inputs, reque
 fingerprints, attribution, spend payloads, and redacted audit envelopes are frozen in
 the durable event stream.
 
+Each native terminal RPC has its own wait deadline. For a selected database
+batch, the worker uses the latest valid caller deadline within its configured
+write budget. It combines identical terminal records in that batch and rejects
+conflicting records for the same issue independently.
+
 ## Failure semantics
 
 - No reservation ACK means no provider dispatch.
