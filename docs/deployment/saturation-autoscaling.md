@@ -164,7 +164,8 @@ the downstream limits before raising the maximum.
 The acceptance runner owns a two-node kind cluster and kubeconfig, uses the candidate
 image with real PostgreSQL/Redis, a fixed one-token provider,
 Prometheus, the adapter, metrics-server and a bounded HAProxy edge. It compares
-identical fixed offered load on 2 and 4 pods, then tests a 2–4 HPA, missing
+identical fixed offered load on 2 and 4 pods (one release rendered for 4 pods,
+scaled to 2 then 4, so the step does not restart every pod), then tests a 2–4 HPA, missing
 metrics, recovery and pod loss. Before the metrics outage the provider ends
 the held streams and every pod must report zero admitted work, so only the
 outage keeps four pods. The outage is held past the HPA scale-down window,

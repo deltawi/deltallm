@@ -30,6 +30,7 @@ from tests.performance.lifecycle_fixtures import CHART
 from tests.performance.capacity_load import arrival
 from tests.performance.capacity_monitoring import install_monitoring
 from tests.performance.capacity_samples import (
+    API_DEPLOYMENT,
     api_pods,
     preflight,
     sample,
@@ -109,8 +110,16 @@ def body_bytes(snapshot: dict) -> dict[str, float]:
     }
 
 
-async def fixed_pods(cluster: LifecycleCluster, values: Path, url: str, replicas: int) -> None:
-    await asyncio.to_thread(capacity_release, cluster, values, "--set", f"replicaCount={replicas}")
+# The release is rendered once for the largest fixed step. Each pod's pools and
+# provider share are the same in a 2- and a 4-pod render, but changing
+# replicaCount changes the capacity report checksum and rolls every pod.
+FIXED_REPLICAS = (2, 4)
+
+
+async def fixed_pods(cluster: LifecycleCluster, url: str, replicas: int) -> None:
+    await asyncio.to_thread(
+        cluster.kubectl, "scale", "deployment/" + API_DEPLOYMENT, f"--replicas={replicas}"
+    )
     await wait_pods(cluster, replicas)
     await wait_edge(url)
     report = await preflight(cluster)
@@ -168,8 +177,8 @@ async def exercise(cluster: LifecycleCluster, values: Path) -> None:
         try:
             # Two and four pods show per-pod capacity and that it scales; the
             # HPA step below still runs at three and four pods.
-            for replicas in (2, 4):
-                await fixed_pods(cluster, values, url, replicas)
+            for replicas in FIXED_REPLICAS:
+                await fixed_pods(cluster, url, replicas)
             await exercise_scaling(cluster, values, url, release_streams)
             await pod_loss(cluster, url)
             completed = True
@@ -287,7 +296,7 @@ def main() -> None:
         install_monitoring(cluster)
         values = capacity_values(cluster, args.image)
         prime_database(cluster, values)
-        capacity_release(cluster, values)
+        capacity_release(cluster, values, "--set", f"replicaCount={max(FIXED_REPLICAS)}")
         install_edge(cluster)
         asyncio.run(exercise(cluster, values))
         cluster.event("capacity_acceptance_completed")
