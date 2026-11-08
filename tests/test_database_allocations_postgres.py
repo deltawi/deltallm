@@ -138,7 +138,7 @@ async def test_real_overlapping_acceptance_transactions_wait_and_commit_with_one
         async with client.tx() as tx:
             return await tx.query_raw("SELECT 2 AS settled")
 
-    second = None
+    second = third = None
     try:
         async with client.tx() as first:
             assert await first.query_raw("SELECT 1 AS settled") == [{"settled": 1}]
@@ -146,13 +146,23 @@ async def test_real_overlapping_acceptance_transactions_wait_and_commit_with_one
             async with asyncio.timeout(1):
                 while client.allocation.gate.waiters != 1:
                     await asyncio.sleep(0)
-            with pytest.raises(DatabaseUnavailableError):
-                await client.query_raw("SELECT 3 AS overflow")
+            if allocation == "telemetry":
+                with pytest.raises(DatabaseUnavailableError):
+                    await client.query_raw("SELECT 3 AS overflow")
+            else:
+                # Receipts keep queueing past one waiter instead of shedding a burst.
+                third = asyncio.create_task(client.query_raw("SELECT 3 AS settled"))
+                async with asyncio.timeout(1):
+                    while client.allocation.gate.waiters != 2:
+                        await asyncio.sleep(0)
         assert await second == [{"settled": 2}]
+        if third is not None:
+            assert await third == [{"settled": 3}]
         assert client.allocation.gate.active == client.allocation.gate.waiters == 0
     finally:
-        if second is not None:
-            await asyncio.gather(second, return_exceptions=True)
+        await asyncio.gather(
+            *(task for task in (second, third) if task is not None), return_exceptions=True
+        )
 
 
 async def test_real_native_lock_deadline_rolls_back_and_does_not_authorize_on_exhaustion(

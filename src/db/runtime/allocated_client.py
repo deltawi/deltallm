@@ -46,6 +46,10 @@ _duration = Histogram(
 )
 
 
+# Waiting positions on the receipt (settlement) allocation, whatever its size.
+SETTLEMENT_MIN_WAITERS = 64
+
+
 class DatabaseUnavailableError(ServiceUnavailableError):
     message = "Database capacity is temporarily unavailable"
     error_type = "database_unavailable"
@@ -91,12 +95,17 @@ class DatabaseOwner:
         # Required acceptance and receipts need a finite burst buffer, as do
         # allocations given a queue wait (batch workers). Others keep immediate
         # shedding; health may borrow one waiter.
-        self._business_waiters = (
-            policy.connections
-            if policy.allocation in {"telemetry", "telemetry_settlement"}
-            or policy.queue_seconds > 0
-            else 0
-        )
+        if policy.allocation == "telemetry_settlement":
+            # Receipts follow provider work that already ran, so shedding one
+            # turns a paid answer into a 503. They arrive in bursts (requests
+            # released together by one admission lock wait) and each takes a
+            # few milliseconds, so a small pool queues them within the same
+            # acquisition deadline instead of rejecting the third at once.
+            self._business_waiters = max(policy.connections, SETTLEMENT_MIN_WAITERS)
+        elif policy.allocation == "telemetry" or policy.queue_seconds > 0:
+            self._business_waiters = policy.connections
+        else:
+            self._business_waiters = 0
         self.gate = BoundedCapacityGate(
             concurrency=policy.connections, max_waiters=self._business_waiters
         )
