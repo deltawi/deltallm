@@ -2,8 +2,6 @@
 
 from decimal import Decimal
 
-import asyncio
-
 import pytest
 
 from src.billing.accounting.permits.accounting_local_leases import (
@@ -11,6 +9,7 @@ from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitFinalization,
     LocalPermitReceipt,
 )
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
 from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
 from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
 from src.telemetry.lifecycle import WorkerState
@@ -73,7 +72,7 @@ async def test_supervised_close_returns_suffix_but_keeps_issued_terminal_owner(
     assert await _window(db, window) == (Decimal("0.6"), Decimal(0), Decimal(0))
 
 
-async def test_recovered_cursor_does_not_block_a_live_return(accounting_db):
+async def test_recovered_cursor_does_not_block_a_live_return(accounting_db, monkeypatch):
     clients, generation = accounting_db
     db = clients[0]
     window, old, expired = await funded(db, generation)
@@ -85,13 +84,20 @@ async def test_recovered_cursor_does_not_block_a_live_return(accounting_db):
         expired.grant_id,
     )
     assert await _settle_grants(db, generation) == 1
-    expired = expired.model_copy(
-        update={
-            "observed_monotonic": asyncio.get_running_loop().time()
-            - (expired.expires_at - expired.observed_at).total_seconds()
-            - GRANT_RECOVERY_GRACE_SECONDS
-            - 1
-        }
+    # Advance the clock the return worker sees instead of moving the expired
+    # grant's monotonic stamp back: a freshly booted CI runner can have less
+    # uptime than the grant lifetime, which would make that stamp negative.
+    elapsed = (
+        (expired.expires_at - expired.observed_at).total_seconds()
+        + GRANT_RECOVERY_GRACE_SECONDS
+        + 1
+    )
+    live = live.model_copy(update={"observed_monotonic": live.observed_monotonic + elapsed})
+    pending_returns = LocalCursorStore.pending_returns
+    monkeypatch.setattr(
+        LocalCursorStore,
+        "pending_returns",
+        lambda store, candidates, *, now: pending_returns(store, candidates, now=now + elapsed),
     )
     cursors, retained, _ = state(generation)
     assert cursors.add(PermitSubject.from_reservation(old), expired)
