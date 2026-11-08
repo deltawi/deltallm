@@ -570,3 +570,42 @@ async def test_mcp_hops_beyond_the_reserved_slots_fail_closed():
         assert len(repository.reservations) == 1
     finally:
         await accounting.close()
+
+
+@pytest.mark.parametrize("ambiguous_first", [False, True])
+async def test_provider_pool_proof_cannot_release_an_earlier_ambiguous_attempt(ambiguous_first):
+    import httpx
+
+    repository = _AccountingRepository()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    ingestion = SpendIngestionService(
+        db_client=None, writer=MagicMock(), config=SpendIngestionConfig(), accounting=accounting
+    )
+    request = _request(accounting, ingestion)
+    refused = httpx.PoolTimeout("pool busy")
+    setattr(refused, "_provider_pool_refused_before_send", True)
+    first = httpx.ReadTimeout("provider may have received the call") if ambiguous_first else refused
+    try:
+        for error in (first, refused):
+            with pytest.raises(type(error)):
+                await durable_provider_call(
+                    request,
+                    model="gpt-test",
+                    call_type="completion",
+                    deployment=_deployment(),
+                    bounds=ProviderRequestBounds(max_output_tokens=10),
+                    execute=AsyncMock(side_effect=error),
+                )
+        handle = operation_handle(request)
+        await ingestion.log_request_failure(
+            event_id=str(handle.reservation.operation_id),
+            operation=handle,
+            error_type="gateway_capacity_error",
+        )
+        (terminal,) = repository.finalizations
+        assert terminal.outcome is (
+            AccountingOutcome.UNCERTAIN if ambiguous_first else AccountingOutcome.NOT_DISPATCHED
+        )
+    finally:
+        await accounting.close()

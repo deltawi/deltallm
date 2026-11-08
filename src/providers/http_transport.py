@@ -17,9 +17,7 @@ logger = logging.getLogger(__name__)
 # Request extension naming the operator proxy a deployment's call must use.
 OUTBOUND_PROXY_EXTENSION = "deltallm_outbound_proxy"
 # The same choice for every call inside a block, such as one deployment's health probe.
-SCOPED_OUTBOUND_PROXY: ContextVar[str | None] = ContextVar(
-    "deltallm_outbound_proxy", default=None
-)
+SCOPED_OUTBOUND_PROXY: ContextVar[str | None] = ContextVar("deltallm_outbound_proxy", default=None)
 
 
 # Specific exceptions must precede their parents. Provider/router code continues
@@ -80,6 +78,11 @@ class _ResponseStream(httpx.AsyncByteStream):
     async def aclose(self) -> None:
         with _httpx_errors(self._request):
             await self._response.aclose()
+
+
+def provider_pool_refused_before_send(error: httpx.PoolTimeout) -> bool:
+    """Only the provider transport can identify a pool refusal before send."""
+    return getattr(error, "_provider_pool_refused_before_send", False) is True
 
 
 class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
@@ -173,8 +176,12 @@ class UpstreamHTTPTransport(httpx.AsyncBaseTransport):
             content=request.stream,
             extensions=extensions,
         )
-        with _httpx_errors(request):
-            response = await self._pool.handle_async_request(core_request)
+        try:
+            with _httpx_errors(request):
+                response = await self._pool.handle_async_request(core_request)
+        except httpx.PoolTimeout as exc:
+            setattr(exc, "_provider_pool_refused_before_send", True)
+            raise
         return httpx.Response(
             status_code=response.status,
             headers=response.headers,

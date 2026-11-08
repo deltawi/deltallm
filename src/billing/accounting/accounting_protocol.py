@@ -167,9 +167,11 @@ class AccountingOperationHandle(FrozenBillingContract):
     # Earlier attempts whose usage is part of the final charge, such as the
     # completed model hops of an MCP tool loop. They are not unresolved retries.
     settled_attempts: int = Field(default=0, ge=0, le=127)
+    # HTTP connection-pool evidence belongs to this request, not stored proofs.
+    not_dispatched_attempts: int = Field(default=0, ge=0, le=128, exclude=True)
 
     def unresolved_attempts(self) -> int:
-        return max(0, len(self.attempts) - 1 - self.settled_attempts)
+        return max(0, len(self.attempts) - 1 - self.settled_attempts - self.not_dispatched_attempts)
 
 
 class AccountingFinalization(FrozenBillingContract):

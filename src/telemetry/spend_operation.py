@@ -10,6 +10,7 @@ from typing import TypeVar
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import Request
+import httpx
 
 from src.billing.accounting.accounting_admission import (
     ACCOUNTING_RECOVERY_LIFETIME,
@@ -43,6 +44,7 @@ from src.billing.spend.spend_operations import (
 )
 from src.billing.spend.spend_ingestion import SpendIngestionService
 from src.billing.pricing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
+from src.providers.http_transport import provider_pool_refused_before_send
 from src.providers.resolution import resolve_provider
 from src.models.responses import UserAPIKeyAuth
 from src.router.failover_candidates import failover_candidates
@@ -237,7 +239,7 @@ async def _accounted_provider_call(
             attempt=attempt,
         )
         _store_pricing_snapshot(request, model, deployment, pricing)
-        return await execute()
+        return await _execute_accounted_attempt(request, execute)
     allowance = _failover_allowance(
         request,
         auth=auth,
@@ -262,7 +264,20 @@ async def _accounted_provider_call(
         accounting, reservation=reservation, attempt=attempt
     )
     _store_pricing_snapshot(request, model, deployment, pricing)
-    return await execute()
+    return await _execute_accounted_attempt(request, execute)
+
+
+async def _execute_accounted_attempt(request: Request, execute: Callable[[], Awaitable[T]]) -> T:
+    try:
+        return await execute()
+    except httpx.PoolTimeout as exc:
+        # Capture transport evidence before failover maps the exception.
+        if provider_pool_refused_before_send(exc):
+            handle = request.state.spend_operation_handle
+            request.state.spend_operation_handle = handle.model_copy(
+                update={"not_dispatched_attempts": handle.not_dispatched_attempts + 1}
+            )
+        raise
 
 
 def reserve_mcp_tool_hops(request: Request, hops: int) -> None:
