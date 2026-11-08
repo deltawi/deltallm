@@ -105,7 +105,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: deltallm_test
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -138,6 +138,17 @@ jobs:
 
       - name: Generate Prisma client
         run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Keep checkpoints out of the test run
+        # A shard writes about 1 GB of WAL, the default max_wal_size. The forced
+        # checkpoint then lands on the 250 ms billing tests and slow runner disks
+        # push their commits past the budget. Commits still fsync as in production.
+        run: >-
+          docker exec ${{ job.services.postgres.id }}
+          psql -U postgres -v ON_ERROR_STOP=1
+          -c "ALTER SYSTEM SET max_wal_size = '8GB'"
+          -c "ALTER SYSTEM SET checkpoint_timeout = '30min'"
+          -c "SELECT pg_reload_conf()"
 
       - name: Apply Prisma migrations
         env:
@@ -254,7 +265,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: deltallm_test
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5

@@ -211,9 +211,19 @@ async def test_checkpoint_lock_wait_is_bounded_and_rolls_back(batch_db, claimed_
                 claim, expected=None, checkpoint=pending, expires_at=deadline()
             )
         assert perf_counter() - started < 1
-    await BatchSelectorRepository(batch_db).write(
-        claim, expected=None, checkpoint=pending, expires_at=deadline()
-    )
+    # The cancelled write can still hold the row briefly after the blocker commits,
+    # until the engine rolls its transaction back. The row must free up soon after.
+    retry_until = perf_counter() + 2
+    while True:
+        try:
+            await BatchSelectorRepository(batch_db).write(
+                claim, expected=None, checkpoint=pending, expires_at=deadline()
+            )
+            break
+        except BatchSelectorUnavailable:
+            if perf_counter() >= retry_until:
+                raise
+            await asyncio.sleep(0.05)
 
 
 @pytest.mark.parametrize("value", ["[]", '{"version":2}', '{"version":null}', '{"version":"1"}'])
