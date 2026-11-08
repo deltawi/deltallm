@@ -9,6 +9,7 @@ from src.db.runtime.allocated_client import (
     AllocatedTransaction,
     DatabaseOwner,
     DatabaseUnavailableError,
+    SETTLEMENT_MIN_WAITERS,
 )
 from src.db.runtime.allocation_config import DatabasePolicy
 
@@ -178,18 +179,25 @@ async def test_telemetry_keeps_bounded_burst_waiters_after_a_probe(name, connect
         with pytest.raises(DatabaseUnavailableError):
             await allocation.readiness_query(AsyncMock())
         assert allocation.gate.waiters == 0
+        # Receipts keep a larger fixed burst queue; acceptance keeps one per connection.
+        waiters = (
+            max(connections, SETTLEMENT_MIN_WAITERS)
+            if name == "telemetry_settlement"
+            else connections
+        )
+        assert allocation.gate.max_waiters == waiters
         second = [
             asyncio.create_task(allocation.query(AsyncMock(return_value="second")))
-            for _ in range(connections)
+            for _ in range(waiters)
         ]
         try:
-            await wait_for_waiter(allocation, connections)
+            await wait_for_waiter(allocation, waiters)
             with pytest.raises(DatabaseUnavailableError):
                 await allocation.query(AsyncMock())
             assert len(allocation.tasks) == connections
             release.set()
             assert await asyncio.gather(*first) == ["first"] * connections
-            assert await asyncio.gather(*second) == ["second"] * connections
+            assert await asyncio.gather(*second) == ["second"] * waiters
         finally:
             release.set()
             await asyncio.gather(*first, *second, return_exceptions=True)

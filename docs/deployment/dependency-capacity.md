@@ -97,10 +97,14 @@ least 27. A batch worker logs a warning at startup when its pool is smaller. A b
 pool counts toward the PostgreSQL connection budget below, so to run more items at once
 you can also add batch worker pods instead.
 
-The telemetry acceptance and settlement allocations each reserve one bounded
-waiting position per configured connection for required writes. With ordinary
-operation intents enabled, the default telemetry total of five connections splits
-into four acceptance connections/waiters and one settlement connection/waiter.
+The telemetry acceptance allocation reserves one bounded waiting position per
+configured connection for required writes. The settlement allocation reserves 64
+waiting positions (or one per connection, if that is more): its receipts follow
+provider work that already ran, arrive in bursts when one admission lock wait
+releases several requests together, and each takes a few milliseconds, so they
+queue instead of turning a paid answer into a 503. With ordinary operation intents
+enabled, the default telemetry total of five connections splits into four acceptance
+connections/waiters and one settlement connection with 64 waiters.
 Waits consume the existing acquisition deadline, including transaction startup;
 overflow and expired waits return the same explicit unavailable result. No native
 slot is freed while a cancelled operation is still running.

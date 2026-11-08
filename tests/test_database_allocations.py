@@ -13,6 +13,7 @@ from src.db.runtime.allocated_client import (
     AllocatedTransaction,
     DatabaseOwner,
     DatabaseUnavailableError,
+    SETTLEMENT_MIN_WAITERS,
 )
 from src.db.runtime.allocation_config import DatabasePolicy, resolve_allocation_settings
 from src.database_settings import DatabaseAllocationSettings
@@ -21,8 +22,8 @@ from src.config_runtime.dynamic import DynamicConfigManager, DynamicConfigRestar
 pytestmark = pytest.mark.hermetic
 
 
-def owner(allocation="foreground", size=1):
-    return DatabaseOwner(DatabasePolicy(allocation, size, 0.01, 1, 0.05, 2))
+def owner(allocation="foreground", size=1, acquisition=0.01):
+    return DatabaseOwner(DatabasePolicy(allocation, size, acquisition, 1, 0.05, 2))
 
 
 async def test_cancelled_query_keeps_slot_until_native_operation_finishes():
@@ -131,6 +132,56 @@ async def test_capacity_wait_is_bounded_and_counts_toward_the_queue_size():
         await waiter  # Waited longer than queue + acquisition.
     finish.set()
     await holder
+    await allocation.close()
+
+
+async def test_one_connection_settlement_queues_a_receipt_burst_instead_of_shedding():
+    # Receipts released together by one admission lock wait used to find the
+    # single connection busy and its single waiting position taken, so the
+    # third failed at once and a paid answer became a 503.
+    # A generous acquisition deadline keeps a slow runner from timing out the burst.
+    allocation = owner("telemetry_settlement", acquisition=5)
+    assert allocation.gate.max_waiters == SETTLEMENT_MIN_WAITERS
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+        return "first"
+
+    holder = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+    burst = [
+        asyncio.create_task(allocation.query(AsyncMock(return_value=index))) for index in range(8)
+    ]
+    await asyncio.sleep(0)
+    assert allocation.gate.waiters == 8
+    finish.set()
+    assert await holder == "first"
+    assert await asyncio.gather(*burst) == list(range(8))
+    await allocation.close()
+
+
+async def test_settlement_waiters_are_still_bounded():
+    allocation = owner("telemetry_settlement", acquisition=5)
+    finish = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+
+    holder = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+    waiters = [
+        asyncio.create_task(allocation.query(AsyncMock())) for _ in range(SETTLEMENT_MIN_WAITERS)
+    ]
+    await asyncio.sleep(0)
+    with pytest.raises(DatabaseUnavailableError):
+        await allocation.query(AsyncMock())  # Every waiting position is taken.
+    finish.set()
+    await holder
+    await asyncio.gather(*waiters, return_exceptions=True)
     await allocation.close()
 
 
