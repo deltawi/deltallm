@@ -282,17 +282,19 @@ async def test_role_graph_has_real_startup_health_zero_call_warm_issue_and_exact
                     await transport.close()
 
 
-async def test_request_role_without_actual_projection_presence_cannot_start(accounting_db):
+async def test_request_role_can_serve_terminals_before_projection_presence(accounting_db):
     clients, generation = accounting_db
     config = AccountingProtocolSettings(
         accounting_protocol_enabled=True, accounting_protocol_generation=generation
     )
     runtime = build_accounting_request_runtime(clients[0], config, lifecycle())
     try:
-        with pytest.raises(TimeoutError, match="did not become ready before its startup deadline"):
-            await runtime.start(expires_at=deadline())
-        assert runtime.service.terminals.task is None
+        await runtime.start(expires_at=deadline())
+        assert runtime.service.terminals.task is not None
+        assert runtime.service.transport_health.ready
         assert runtime.monitor.worker_health.state is not WorkerState.READY
+        with pytest.raises(AccountingProtocolUnavailable):
+            runtime.service.health()
     finally:
         await runtime.close(expires_at=deadline())
     assert runtime.monitor.task is not None and runtime.monitor.task.done()
