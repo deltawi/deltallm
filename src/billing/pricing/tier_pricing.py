@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from src.billing.money import money_string
 from src.billing.pricing.cost import BillingResult, ModelPricing, completion_cost, get_model_pricing
 from src.billing.pricing.pricing import pricing_from_model_info
 from src.billing.pricing.token_quote_policy import (
@@ -249,7 +250,7 @@ def resolve_token_billing_result(
     if cache_hit and prompt_tokens > 0 and prompt_tokens_cached == 0:
         prompt_tokens_cached = prompt_tokens
         usage_data["prompt_tokens_cached"] = prompt_tokens_cached
-    quote = resolve_token_quote_pricing(
+    quote = resolve_exact_token_quote_pricing(
         resolution,
         model=model,
         prompt_tokens=prompt_tokens,
@@ -280,14 +281,24 @@ def resolve_token_billing_result(
             pricing_sources_used=quote.pricing_sources_used,
             missing_pricing_fields=quote.missing_pricing_fields,
         )
+    try:
+        exact_cost = quote.pricing.cost(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            prompt_tokens_cached=min(prompt_tokens, prompt_tokens_cached),
+            cache_hit=cache_hit,
+        )
+    except ValueError:
+        exact_cost = None
     return TokenBillingResolution(
         billing=BillingResult(
             cost=completion_cost(
                 model=model,
                 usage=usage_data,
                 cache_hit=cache_hit,
-                custom_pricing=quote.pricing,
+                custom_pricing=quote.pricing.legacy_pricing(),
             ),
+            exact_cost=exact_cost,
             billing_unit="request" if quote.request_only else "token",
             pricing_fields_used=quote.pricing_fields_used,
             usage_snapshot=usage_snapshot,
@@ -595,6 +606,8 @@ def _fallback_source(model_info: Mapping[str, Any]) -> PricingSource:
 def _billing_metadata(result: BillingResult | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(result, BillingResult):
         metadata: dict[str, Any] = {"cost": result.cost}
+        if result.exact_cost is not None:
+            metadata["cost_exact"] = money_string(result.exact_cost)
         if result.billing_unit is not None:
             metadata["billing_unit"] = result.billing_unit
         if result.pricing_fields_used:

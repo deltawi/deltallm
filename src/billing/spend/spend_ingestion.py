@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.shutdown import cleanup_deadline
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -411,6 +412,11 @@ class SpendIngestionService:
     async def _finalize_accounting_spend(
         self, operation: AccountingOperationHandle, *, event_id: object, payload: dict[str, Any]
     ) -> None:
+        metadata = payload.get("metadata")
+        billing = metadata.get("billing") if isinstance(metadata, Mapping) else None
+        exact = billing.get("cost_exact") if isinstance(billing, Mapping) else None
+        if exact is not None and "cost_exact" not in payload:
+            payload = {**payload, "cost_exact": exact}
         await self._accounting_finalizer.log_spend(operation, event_id=event_id, payload=payload)
 
     async def _finalize_accounting_failure(

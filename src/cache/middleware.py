@@ -468,13 +468,14 @@ class CacheMiddleware(BaseHTTPMiddleware):
         )
         record_response_cost(request, customer_billing.billing)
         request_cost = customer_billing.billing.cost
+        exact_cost = customer_billing.billing.exact_cost
         await reserve_cached_charge(
             request,
             auth=auth,
             model=model,
             call_type=call_type,
             pricing=pricing,
-            exact_charge=canonical_money(request_cost),
+            exact_charge=canonical_money(request_cost) if exact_cost is None else exact_cost,
             provider=api_provider,
             deployment_id=entry.deployment_id or "cache",
         )
