@@ -24,7 +24,12 @@ from tests.performance.gateway_concurrency_dependencies import fixture_database_
 from tests.performance.gateway_concurrency_fixture import fixture_key
 from tests.performance.gateway_concurrency_manifest import ServerManifest
 from tests.performance.gateway_concurrency_metrics import MetricSource
-from tests.performance.gateway_concurrency_mock import app, complete, CompletionRequest
+from tests.performance.gateway_concurrency_mock import (
+    app,
+    complete,
+    CompletionRequest,
+    release_streams,
+)
 from tests.performance.run_gateway_concurrency import error_code, valid_completion
 from tests.performance.summarize_historical_concurrency import summarize
 
@@ -172,6 +177,36 @@ async def test_lifecycle_provider_stream_starts_and_closes_without_terminal_succ
     assert '"content": "OK"' in first
     assert "[DONE]" not in first
     await response.body_iterator.aclose()
+
+
+async def test_released_provider_streams_finish_and_later_streams_are_held_again():
+    def held_stream():
+        return complete(
+            CompletionRequest(
+                model="fixed-one-token",
+                messages=[{"role": "user", "content": "Reply with OK."}],
+                max_tokens=1,
+                stream=True,
+            )
+        )
+
+    released = (await held_stream()).body_iterator
+    await anext(released)
+    pending = asyncio.ensure_future(anext(released))
+    await asyncio.sleep(0.05)
+    assert not pending.done()
+    await release_streams()
+    assert '"finish_reason": "stop"' in await asyncio.wait_for(pending, timeout=1)
+    await released.aclose()
+
+    later = (await held_stream()).body_iterator
+    await anext(later)
+    held = asyncio.ensure_future(anext(later))
+    await asyncio.sleep(0.05)
+    assert not held.done()
+    held.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await held
 
 
 def test_profile_uses_supported_settings_and_keeps_required_dependencies_enabled() -> None:

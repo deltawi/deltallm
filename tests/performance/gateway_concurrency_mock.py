@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 app = FastAPI()
 stream_events: list[dict[str, object]] = []
 batch_gate: asyncio.Event | None = None
+# Held streams end early only when a test releases them. Streams started after
+# a release wait on a fresh event and are held again.
+stream_release = asyncio.Event()
 
 
 @app.get("/v1/models")
@@ -27,6 +30,15 @@ async def models():
 @app.get("/fixture/stream-events")
 async def events():
     return stream_events
+
+
+@app.post("/fixture/stream-release")
+async def release_streams():
+    """End every currently held stream normally, as if the provider finished."""
+    global stream_release
+    released, stream_release = stream_release, asyncio.Event()
+    released.set()
+    return {"released": True}
 
 
 @app.post("/fixture/batch-hold")
@@ -81,6 +93,7 @@ async def complete(request: CompletionRequest):
     if request.model != "fixed-one-token" or request.max_tokens != 1:
         raise HTTPException(400, "This fixture supports only the fixed one-token workload")
     if request.stream:
+        release = stream_release
 
         async def chunks():
             chunk = {
@@ -100,7 +113,10 @@ async def complete(request: CompletionRequest):
                     == [{"role": "user", "content": "Native complete stream fixture."}]
                     else 300
                 )
-                await asyncio.sleep(delay)
+                try:
+                    await asyncio.wait_for(release.wait(), timeout=delay)
+                except asyncio.TimeoutError:
+                    pass
             finally:
                 if len(stream_events) < 128:
                     stream_events.append(

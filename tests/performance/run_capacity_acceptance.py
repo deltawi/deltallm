@@ -147,6 +147,7 @@ async def exercise(cluster: LifecycleCluster, values: Path) -> None:
         pg = forwards.enter_context(cluster.forward("service/postgres", 5432))
         redis = forwards.enter_context(cluster.forward("service/redis", 6379))
         edge = forwards.enter_context(cluster.forward("service/capacity-edge", 8080))
+        provider = forwards.enter_context(cluster.forward("service/provider", 8000))
         os.environ.update(
             DATABASE_URL=f"postgresql://postgres:fixture-only@127.0.0.1:{pg}/deltallm_concurrency",
             REDIS_URL=f"redis://127.0.0.1:{redis}/0",
@@ -155,6 +156,12 @@ async def exercise(cluster: LifecycleCluster, values: Path) -> None:
             DELTALLM_SALT_KEY=SALT_KEY,
         )
         url = f"http://127.0.0.1:{edge}"
+
+        async def release_streams() -> None:
+            async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+                response = await client.post(f"http://127.0.0.1:{provider}/fixture/stream-release")
+                response.raise_for_status()
+
         await wait_edge(url)
         await check_edge_bounds(cluster, url)
         completed = False
@@ -163,7 +170,7 @@ async def exercise(cluster: LifecycleCluster, values: Path) -> None:
             # HPA step below still runs at three and four pods.
             for replicas in (2, 4):
                 await fixed_pods(cluster, values, url, replicas)
-            await exercise_scaling(cluster, values, url)
+            await exercise_scaling(cluster, values, url, release_streams)
             await pod_loss(cluster, url)
             completed = True
         except AssertionError:

@@ -1,6 +1,7 @@
 """Functional saturation scaling, missing metrics and stabilization evidence."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -33,7 +34,22 @@ async def wait_metrics(cluster: LifecycleCluster, count: int, *, timeout: float 
             await asyncio.sleep(3)
 
 
-async def exercise_scaling(cluster: LifecycleCluster, values: Path, url: str) -> None:
+async def wait_idle(cluster: LifecycleCluster, count: int, *, timeout: float = 90) -> float:
+    """Wait until every pod reports zero admitted work; return when that was seen."""
+    async with asyncio.timeout(timeout):
+        while True:
+            result = await wait_metrics(cluster, count)
+            if all(metric_value(item["value"]) == 0 for item in result["items"]):
+                return monotonic()
+            await asyncio.sleep(3)
+
+
+async def exercise_scaling(
+    cluster: LifecycleCluster,
+    values: Path,
+    url: str,
+    release_streams: Callable[[], Awaitable[None]],
+) -> None:
     await asyncio.to_thread(capacity_release, cluster, values, "--set", "autoscaling.enabled=true")
     # Empty fixture setup: start at the declared warm minimum before offered load.
     await asyncio.to_thread(
@@ -74,10 +90,9 @@ async def exercise_scaling(cluster: LifecycleCluster, values: Path, url: str) ->
         assert cpu < 65, "Scaling signal is confounded by CPU above its HPA target"
         cluster.event("saturation_scaled_to_four", admitted=streams.active, metrics=saturation)
         await overload_probe(cluster, url)
-        scaled_at = monotonic()
     finally:
         await streams.close()
-    await missing_metrics(cluster, scaled_at)
+    await missing_metrics(cluster, release_streams)
     async with asyncio.timeout(420):
         while len(await asyncio.to_thread(api_pods, cluster)) != 2:
             await asyncio.sleep(5)
@@ -137,7 +152,9 @@ async def overload_probe(cluster: LifecycleCluster, url: str) -> None:
     )
 
 
-async def missing_metrics(cluster: LifecycleCluster, scaled_at: float) -> None:
+async def missing_metrics(
+    cluster: LifecycleCluster, release_streams: Callable[[], Awaitable[None]]
+) -> None:
     pods = await asyncio.to_thread(api_pods, cluster)
     pod = pods[0]["metadata"]["name"]
     await asyncio.to_thread(
@@ -156,6 +173,13 @@ async def missing_metrics(cluster: LifecycleCluster, scaled_at: float) -> None:
         cluster.kubectl, "annotate", "pod/" + pod, "capacity-test-drop-metrics-"
     )
     await wait_metrics(cluster, 4)
+    # Closing a client does not end its idle held stream upstream, so the
+    # provider releases them. Without this the remaining admitted work, not
+    # the metric outage, would be what keeps four pods.
+    await release_streams()
+    idle_at = await wait_idle(cluster, 4)
+    assert len(await asyncio.to_thread(api_pods, cluster)) == 4
+    cluster.event("held_streams_released")
     await asyncio.to_thread(cluster.kubectl, "scale", "deployment/capacity-adapter", "--replicas=0")
     started = monotonic()
     async with asyncio.timeout(90):
@@ -174,10 +198,11 @@ async def missing_metrics(cluster: LifecycleCluster, scaled_at: float) -> None:
         detection_seconds=monotonic() - started,
         conditions=conditions,
     )
-    # Hold the adapter outage beyond the HPA scale-down window. A short outage
-    # inside the window would be hidden by stabilization, not tested.
+    # Hold the adapter outage beyond the HPA scale-down window, counted from
+    # when the pods went idle. A short outage inside the window would be
+    # hidden by stabilization, not tested.
     window = hpa["spec"]["behavior"]["scaleDown"]["stabilizationWindowSeconds"]
-    while monotonic() - scaled_at < window + 30:
+    while monotonic() - idle_at < window + 30:
         assert len(await asyncio.to_thread(api_pods, cluster)) == 4
         await asyncio.sleep(10)
     hpa = json.loads(
@@ -192,7 +217,7 @@ async def missing_metrics(cluster: LifecycleCluster, scaled_at: float) -> None:
     )
     cluster.event(
         "adapter_outage_blocked_downscale_after_window",
-        outage_seconds=monotonic() - scaled_at,
+        idle_seconds=monotonic() - idle_at,
         window_seconds=window,
     )
     await asyncio.to_thread(cluster.kubectl, "scale", "deployment/capacity-adapter", "--replicas=1")
