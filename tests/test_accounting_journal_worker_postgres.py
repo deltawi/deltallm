@@ -486,3 +486,50 @@ async def test_exhausted_claim_still_locks_capacity_before_atomic_failure(accoun
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await connection.close(timeout=5)
+
+
+async def test_journal_worker_isolates_corrupt_receipt_without_spending_other_retries(
+    accounting_db,
+):
+    from src.billing.accounting.journal.accounting_journal_runtime import (
+        JournalProcessingWorker,
+        JournalWorkerConfig,
+    )
+
+    clients, generation = accounting_db
+    db = clients[0]
+    window, _, _, accepted = await pending(db, generation)
+    corrupt = sorted(receipt.journal_sequence for receipt in accepted)[-1]
+    await db.execute_raw(
+        "UPDATE deltallm_accounting_terminal_payloads SET finalization_payload='{}' WHERE journal_sequence=$1",
+        corrupt,
+    )
+    runtime = JournalProcessingWorker(
+        worker(db), JournalWorkerConfig(generation=generation, worker_id="isolation-test")
+    )
+
+    assert await runtime.run_once(expires_at=deadline()) == 0  # Split the original claim.
+    assert await runtime.run_once(expires_at=deadline()) == 2
+    assert await runtime.run_once(expires_at=deadline()) == 0  # Split the rejected half.
+    assert await runtime.run_once(expires_at=deadline()) == 1
+    for _ in range(5):
+        with pytest.raises(AccountingProtocolUnavailable, match="accounting protocol unavailable"):
+            await runtime.run_once(expires_at=deadline())
+    assert await runtime.run_once(expires_at=deadline()) == 0
+
+    rows = await db.query_raw(
+        "SELECT sequence,status,attempts,last_error_code FROM deltallm_accounting_terminal_journal "
+        "WHERE generation=$1 ORDER BY sequence",
+        generation,
+    )
+    assert [(row["status"], row["attempts"]) for row in rows] == [
+        ("completed", 1),
+        ("completed", 1),
+        ("completed", 1),
+        ("failed", 5),
+    ]
+    assert rows[-1]["sequence"] == corrupt
+    assert rows[-1]["last_error_code"] == "invalid_payload"
+    assert (await counts(db, generation))["charged"] == 1
+    assert await _window(db, window) == (Decimal(0), Decimal(4), Decimal(0))
+    assert await _settle_grants(db, generation) == 0

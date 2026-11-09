@@ -26,6 +26,15 @@ from src.telemetry.lifecycle import (
 
 
 MAX_RETAINED_CLAIM_BYTES = 16 * 1024
+_INVALID_DOCUMENT_REJECTIONS = frozenset(
+    {
+        "accounting_terminal_payload_hash",
+        "accounting_terminal_payload_identity",
+        "accounting_terminal_completed_shape",
+        "accounting_terminal_uncertain_shape",
+        "accounting_terminal_released_shape",
+    }
+)
 
 
 class JournalWorkerConfig(FrozenBillingContract):
@@ -74,6 +83,9 @@ class JournalProcessingWorker:
         self._persistence = persistence
         self._gate = BoundedCapacityGate(concurrency=1, max_waiters=0)
         self._claim: JournalClaim | None = None
+        # Only siblings of the current branch are retained. They share one
+        # lease token and at most the original claim's bounded sequence count.
+        self._deferred_claims: list[JournalClaim] = []
         self._task: asyncio.Task[None] | None = None
         self._started = asyncio.Event()
         self._wake = asyncio.Event()
@@ -204,19 +216,44 @@ class JournalProcessingWorker:
                 _validated_count(count, limit=len(claim.sequences), complete=True)
                 if not count:
                     observed.outcome = JournalActionOutcome.STALE
-        except (AccountingProtocolUnavailable, TimeoutError):
-            with journal_action(JournalAction.FAILURE) as observed:
-                failed = await self._persistence.fail(
-                    claim, JournalFailure.PERSISTENCE, expires_at=expires_at
-                )
-                _validated_count(failed, limit=len(claim.sequences), complete=False)
-                if not failed:
-                    observed.outcome = JournalActionOutcome.STALE
-            self._claim = None
+        except (AccountingProtocolUnavailable, TimeoutError) as exc:
+            invalid_document = (
+                isinstance(exc, AccountingProtocolUnavailable)
+                and exc.rejection in _INVALID_DOCUMENT_REJECTIONS
+            )
+            if invalid_document and len(claim.sequences) > 1:
+                self._split_claim(claim)
+                return 0
+            failure = (
+                JournalFailure.INVALID_PAYLOAD if invalid_document else JournalFailure.PERSISTENCE
+            )
+            await self._fail_claim(claim, failure, expires_at=expires_at)
+            self._advance_claim()
             raise
         _require_time(expires_at)
-        self._claim = None
+        self._advance_claim()
         return count
+
+    def _split_claim(self, claim: JournalClaim) -> None:
+        # The statement rejected atomically. Keep the original fence and split
+        # only this sequence list, so healthy rows keep their retry budget.
+        midpoint = len(claim.sequences) // 2
+        self._deferred_claims.append(
+            claim.model_copy(update={"sequences": claim.sequences[midpoint:]})
+        )
+        self._claim = claim.model_copy(update={"sequences": claim.sequences[:midpoint]})
+
+    def _advance_claim(self) -> None:
+        self._claim = self._deferred_claims.pop() if self._deferred_claims else None
+
+    async def _fail_claim(
+        self, claim: JournalClaim, failure: JournalFailure, *, expires_at: float
+    ) -> None:
+        with journal_action(JournalAction.FAILURE) as observed:
+            failed = await self._persistence.fail(claim, failure, expires_at=expires_at)
+            _validated_count(failed, limit=len(claim.sequences), complete=False)
+            if not failed:
+                observed.outcome = JournalActionOutcome.STALE
 
     async def _run(self) -> None:
         while not self._closing:
@@ -232,7 +269,7 @@ class JournalProcessingWorker:
                 self._failures = min(8, self._failures + 1)
                 count = 0
             self._started.set()
-            if count:
+            if count or (self._claim is not None and not self._failures):
                 self._idle.reset()
                 await asyncio.sleep(0)
                 continue
