@@ -46,6 +46,16 @@ from src.services.identity.platform_identity_service import PlatformIdentityServ
 T = TypeVar("T")
 
 
+CLEANUP_FAILURES = (
+    PrismaError,
+    CapacityGateFull,
+    CapacityGateTimedOut,
+    TimeoutError,
+    ExternalAuthUnavailable,
+)
+STARTUP_CLEANUP_RETRY_DELAYS = (0.1, 0.25)
+
+
 class ExternalAuthRuntime:
     """Own all external-auth work and enforce one end-to-end request deadline."""
 
@@ -102,7 +112,7 @@ class ExternalAuthRuntime:
                 [item.integration_id for item in self.settings.integrations]
             )
         await self.crypto.start()
-        await self._cleanup_once()
+        await self._startup_cleanup()
         self.cleanup_task = asyncio.create_task(self._cleanup_loop(), name="external-auth-cleanup")
         self.identities.sessions.external = self.sessions
 
@@ -223,18 +233,25 @@ class ExternalAuthRuntime:
                     external_auth_cleanup_oldest.labels(kind).set(oldest)
         self.cleanup_healthy = True
 
+    async def _startup_cleanup(self) -> None:
+        # One slow maintenance transaction (a busy database or a cold pool)
+        # should not fail the pod start. A rolled-back attempt also rolls back
+        # its lease claim, so a retry is safe.
+        for delay in STARTUP_CLEANUP_RETRY_DELAYS:
+            try:
+                await self._cleanup_once()
+                return
+            except CLEANUP_FAILURES:
+                external_auth_cleanup.labels("failure").inc()
+                await asyncio.sleep(delay)
+        await self._cleanup_once()
+
     async def _cleanup_loop(self) -> None:
         while not self.closed:
             await asyncio.sleep(self.settings.cleanup_interval_seconds)
             try:
                 await self._cleanup_once()
-            except (
-                PrismaError,
-                CapacityGateFull,
-                CapacityGateTimedOut,
-                TimeoutError,
-                ExternalAuthUnavailable,
-            ):
+            except CLEANUP_FAILURES:
                 self.cleanup_healthy = False
                 external_auth_cleanup.labels("failure").inc()
 
