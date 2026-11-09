@@ -91,6 +91,17 @@ async def _resolve_operation(
     }
 
 
+def _expected_hold(value: str) -> str:
+    try:
+        hold = canonical_money(value)
+        exact = hold == Decimal(value) and hold > 0
+    except (ArithmeticError, TypeError, ValueError):
+        exact = False
+    if not exact:
+        raise argparse.ArgumentTypeError("must be a positive exact money amount")
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url", required=True)
@@ -98,7 +109,7 @@ def main() -> None:
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--operation-id")
     target.add_argument("--grant-id")
-    parser.add_argument("--expected-grant-hold")
+    parser.add_argument("--expected-grant-hold", type=_expected_hold)
     parser.add_argument("--additional-charge", default="0")
     parser.add_argument("--spend-payload-file")
     parser.add_argument("--evidence-reason", required=True)

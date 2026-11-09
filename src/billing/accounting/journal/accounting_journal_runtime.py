@@ -109,7 +109,9 @@ class JournalProcessingWorker:
 
     @property
     def retained_claim_bytes(self) -> int:
-        return 0 if self._claim is None else MAX_RETAINED_CLAIM_BYTES
+        # Each deferred half of a split claim is its own retained handle.
+        retained = len(self._deferred_claims) + (self._claim is not None)
+        return retained * MAX_RETAINED_CLAIM_BYTES
 
     @property
     def worker_health(self) -> WorkerHealth:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+import logging
 from uuid import UUID, uuid5
 
 from src.billing.accounting.accounting_protocol import AccountingOperationHandle
@@ -15,7 +16,10 @@ from src.billing.accounting.journal.accounting_terminal_preparation import (
     prepare_accounting_uncertain,
 )
 from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+from src.metrics.accounting import increment_accounting_failure
 from src.request_identity import valid_request_id
+
+logger = logging.getLogger(__name__)
 
 
 def accounting_audit_envelope(
@@ -109,6 +113,18 @@ class AccountingSpendFinalizer:
                 ),
             )
         except UnqualifiedAccountingReceipt as exc:
+            # The provider already ran. A charge above the allowance means the
+            # reservation for this model is sized too small; make it visible.
+            increment_accounting_failure("finalization", "receipt", str(exc))
+            logger.warning(
+                "accounting receipt rejected before journal acceptance",
+                extra={
+                    "reason": str(exc),
+                    "operation_id": str(operation.reservation.operation_id),
+                    "model": operation.reservation.attribution.model,
+                    "deployment_id": operation.reservation.attribution.deployment_id,
+                },
+            )
             await self.log_failure(
                 operation,
                 event_id=event_id,

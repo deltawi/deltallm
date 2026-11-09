@@ -388,3 +388,19 @@ async def test_cancelled_action_is_not_a_failure_transition_or_success_metric():
         await runtime.run_once(expires_at=deadline())
     assert action_count("materialize", "cancelled") == before + 1
     assert not persistence.failure_calls and runtime.retained_claim is not None
+
+
+async def test_split_claim_counts_every_deferred_half_as_retained():
+    from src.db.accounting.accounting_calls import AccountingResultFailure
+
+    persistence = Persistence([claim((1, 2, 3, 4))])
+    persistence.materialize_error = AccountingProtocolUnavailable(
+        AccountingResultFailure.INVALID_RESULT, rejection="accounting_terminal_payload_hash"
+    )
+    runtime = worker(persistence, batch_size=4)
+    assert await runtime.run_once(expires_at=deadline()) == 0
+    assert runtime.retained_claim.sequences == (1, 2)
+    assert runtime.retained_claim_bytes == 2 * MAX_RETAINED_CLAIM_BYTES
+    assert await runtime.run_once(expires_at=deadline()) == 0
+    assert runtime.retained_claim.sequences == (1,)
+    assert runtime.retained_claim_bytes == 3 * MAX_RETAINED_CLAIM_BYTES
