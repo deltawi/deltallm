@@ -89,6 +89,10 @@ You should receive:
 
 Now continue to [Check or add your first model](first-model.md).
 
+!!! tip "Up and running?"
+    If DeltaLLM saved you some setup time, a
+    [star on GitHub](https://github.com/deltawi/deltallm) helps other teams find it.
+
 ## If DeltaLLM does not start
 
 View the container logs:

@@ -26,6 +26,9 @@ Self-hosted. MIT licensed.
 [SSO](docs/features/authentication.md#single-sign-on) and
 [audit logs](docs/features/audit-log.md) included.
 
+⭐ If DeltaLLM is useful to you, [star the repository](https://github.com/deltawi/deltallm)
+so other teams can find it.
+
 ## Customer Plans
 
 Define a Growth plan with two models, set their prices and limits, and assign it
@@ -147,7 +150,8 @@ curl http://localhost:4002/v1/chat/completions \
   }'
 ```
 
-Open the Admin UI at `http://localhost:4002`.
+Open the Admin UI at `http://localhost:4002`. Got your first answer back? A
+[GitHub star](https://github.com/deltawi/deltallm) helps other teams find DeltaLLM.
 
 Full Docker setup, environment variables, the multi-instance evaluation profile, and Dockerfile
 usage are covered in the [Docker guide](docs/getting-started/docker.md). Compose is not the

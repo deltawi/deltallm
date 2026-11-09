@@ -37,7 +37,9 @@ If your role cannot use any page in a section, the menu does not show that secti
 | Activity | [Audit logs](audit-logs.md) | Review important system changes |
 | Bottom | [Settings](settings.md) | Change installation-wide defaults |
 
-Select your account at the bottom of the menu to open the documentation or to sign out.
+Select your account at the bottom of the menu to open the documentation, star DeltaLLM on GitHub, or sign out.
+
+Platform admins also see a small **Enjoying DeltaLLM?** card above their account. Select **Star on GitHub** or the close button and it stays hidden in that browser. The card and the menu item never contact GitHub on their own, and they do not appear when you set your own instance name or logo under [Settings](settings.md) > Theme.
 
 ## Read a page
 
