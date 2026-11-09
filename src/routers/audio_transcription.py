@@ -656,7 +656,8 @@ def _charge_within_reservation(
     audio file that beats the ceiling is charged the full reservation instead.
     """
     ceiling = reserved_charge_ceiling(request)
-    if ceiling is None or Decimal(str(billing.cost)) <= ceiling:
+    exact = billing.exact_cost if billing.exact_cost is not None else Decimal(str(billing.cost))
+    if ceiling is None or exact <= ceiling:
         return billing
     capped = ceiling.quantize(_COST_QUANTUM, rounding=ROUND_FLOOR)
     logger.warning(
@@ -671,6 +672,7 @@ def _charge_within_reservation(
     return replace(
         billing,
         cost=float(capped),
+        exact_cost=ceiling,
         usage_snapshot={**billing.usage_snapshot, "uncapped_cost": billing.cost},
     )
 

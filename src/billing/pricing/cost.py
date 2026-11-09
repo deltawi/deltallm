@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, DecimalException, localcontext
 from typing import Any, Literal, Mapping
+
+from src.billing.money import canonical_money
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,7 @@ class BillingResult:
     missing_pricing_fields: tuple[str, ...] = ()
     usage_snapshot: dict[str, float | int] = field(default_factory=dict)
     unpriced_reason: str | None = None
+    exact_cost: Decimal | None = None
 
 
 DEFAULT_MODEL_COST_MAP: dict[str, ModelPricing] = {
@@ -223,6 +227,11 @@ def compute_billing_result(
             cost=_rounded_cost(
                 prompt_tokens * input_cost + completion_tokens * output_cost + cost_per_request
             ),
+            exact_cost=_exact_metered_cost(
+                info,
+                (prompt_tokens, "input_cost_per_token"),
+                (completion_tokens, "output_cost_per_token"),
+            ),
             billing_unit="request" if pricing_fields == ("cost_per_request",) else "token",
             pricing_fields_used=pricing_fields,
             usage_snapshot={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
@@ -263,6 +272,7 @@ def compute_billing_result(
         if not image_price_configured and request_price_configured:
             return BillingResult(
                 cost=_rounded_cost(cost_per_request),
+                exact_cost=_exact_metered_cost(info),
                 billing_unit="request",
                 pricing_fields_used=("cost_per_request",),
                 usage_snapshot=usage_snapshot,
@@ -293,6 +303,9 @@ def compute_billing_result(
                 output_images * output_cost_per_image
                 + input_images * input_cost_per_image
                 + cost_per_request
+            ),
+            exact_cost=_exact_metered_cost(
+                info, (output_images, output_price_field), (input_images, "input_cost_per_image")
             ),
             billing_unit=("request" if pricing_fields == ("cost_per_request",) else "image"),
             pricing_fields_used=pricing_fields,
@@ -370,6 +383,7 @@ def _compute_audio_speech_billing(
         )
         return BillingResult(
             cost=_rounded_cost(cost),
+            exact_cost=_exact_metered_cost(model_info, *token_usage_fields),
             billing_unit="token",
             pricing_fields_used=_usage_pricing_fields(
                 model_info,
@@ -425,6 +439,7 @@ def _compute_audio_speech_billing(
         )
         return BillingResult(
             cost=_rounded_cost(cost),
+            exact_cost=_exact_metered_cost(model_info, *character_usage_fields),
             billing_unit="character",
             pricing_fields_used=_usage_pricing_fields(
                 model_info,
@@ -450,6 +465,11 @@ def _compute_audio_speech_billing(
         )
         return BillingResult(
             cost=_rounded_cost(cost),
+            exact_cost=_exact_metered_cost(
+                model_info,
+                (duration_seconds, "input_cost_per_second"),
+                (duration_seconds, "output_cost_per_second"),
+            ),
             billing_unit="second",
             pricing_fields_used=_usage_pricing_fields(
                 model_info,
@@ -462,6 +482,7 @@ def _compute_audio_speech_billing(
     if _price_is_configured(model_info, "cost_per_request"):
         return BillingResult(
             cost=_rounded_cost(cost_per_request),
+            exact_cost=_exact_metered_cost(model_info),
             billing_unit="request",
             pricing_fields_used=("cost_per_request",),
             usage_snapshot=_compact_usage_snapshot(
@@ -545,6 +566,7 @@ def _compute_audio_transcription_billing(
         )
         return BillingResult(
             cost=_rounded_cost(cost),
+            exact_cost=_exact_metered_cost(model_info, *token_usage_fields),
             billing_unit="token",
             pricing_fields_used=_usage_pricing_fields(
                 model_info,
@@ -580,6 +602,11 @@ def _compute_audio_transcription_billing(
             usage_snapshot["billable_duration_seconds"] = duration_seconds
         return BillingResult(
             cost=_rounded_cost(cost),
+            exact_cost=_exact_metered_cost(
+                model_info,
+                (duration_seconds, "input_cost_per_second"),
+                (duration_seconds, "output_cost_per_second"),
+            ),
             billing_unit="second",
             pricing_fields_used=_usage_pricing_fields(
                 model_info,
@@ -592,6 +619,7 @@ def _compute_audio_transcription_billing(
     if _price_is_configured(model_info, "cost_per_request"):
         return BillingResult(
             cost=_rounded_cost(cost_per_request),
+            exact_cost=_exact_metered_cost(model_info),
             billing_unit="request",
             pricing_fields_used=("cost_per_request",),
             usage_snapshot=_compact_usage_snapshot(
@@ -643,6 +671,24 @@ def _missing_usage_pricing_fields(
             if usage_value > 0 and not _price_is_configured(model_info, field_name)
         )
     )
+
+
+def _exact_metered_cost(
+    model_info: Mapping[str, object], *meters: tuple[int | float, str]
+) -> Decimal | None:
+    try:
+        with localcontext() as context:
+            context.prec = 80
+            return canonical_money(
+                sum(
+                    Decimal(str(count)) * Decimal(str(model_info.get(field) or 0))
+                    for count, field in (*meters, (1, "cost_per_request"))
+                    if count
+                )
+            )
+    except (DecimalException, ValueError):
+        # Preserve the existing display result for invalid legacy price inputs.
+        return None
 
 
 def _rounded_cost(value: float) -> float:

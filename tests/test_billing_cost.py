@@ -428,3 +428,15 @@ def test_audio_transcription_preserves_explicit_zero_request_price() -> None:
     assert result.cost == 0.0
     assert result.billing_unit == "request"
     assert result.unpriced_reason is None
+
+
+def test_media_charge_keeps_the_exact_price_below_display_precision():
+    from decimal import Decimal
+
+    result = compute_billing_result(
+        mode="image_generation",
+        usage={"images": 3},
+        model_info={"output_cost_per_image": "0.000000000025"},
+    )
+    assert result.exact_cost == Decimal("0.000000000075")
+    assert result.cost == 0.0000000001

@@ -411,7 +411,12 @@ def _priced_cache_entry():
     )
 
 
-async def test_paid_cache_hit_uses_the_same_reservation_and_finalization_owner():
+@pytest.mark.parametrize(
+    "request_price,charge", [("0.1", "0.135"), ("0.100000000000000001", "0.135000000000000001")]
+)
+async def test_paid_cache_hit_uses_the_same_reservation_and_finalization_owner(
+    request_price, charge
+):
     repository = _AccountingRepository()
     accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
     accounting.start()
@@ -420,17 +425,19 @@ async def test_paid_cache_hit_uses_the_same_reservation_and_finalization_owner()
     )
     request = _request(accounting, ingestion)
     request.json = AsyncMock(side_effect=AssertionError("cache billing must not read the body"))
+    entry = _priced_cache_entry()
+    entry.pricing["cost_per_request"] = request_price
     try:
         await CacheMiddleware(AsyncMock())._record_cache_hit_accounting(
             request,
             "/v1/chat/completions",
             "gpt-test",
             "cache:test",
-            _priced_cache_entry(),
+            entry,
             started_at=_CACHE_STARTED_AT,
         )
         assert len(repository.reservations) == 1
-        assert repository.reservations[0].allowance == Decimal("0.135")
+        assert repository.reservations[0].allowance == Decimal(charge)
         assert repository.reservations[0].attribution.api_key == "key-1"
         assert (
             repository.reservations[0].audit_envelope["payload"]["event"]["action"]
@@ -438,7 +445,7 @@ async def test_paid_cache_hit_uses_the_same_reservation_and_finalization_owner()
         )
         assert len(repository.finalizations) == 1
         terminal = repository.finalizations[0]
-        assert terminal.exact_charge == Decimal("0.135")
+        assert terminal.exact_charge == Decimal(charge)
         assert terminal.spend_payload["cache_hit"] is True
         started = datetime.fromisoformat(terminal.spend_payload["start_time"])
         ended = datetime.fromisoformat(terminal.spend_payload["end_time"])
