@@ -148,7 +148,10 @@ async def test_unqualified_receipt_keeps_one_explicit_uncertain_terminal(payload
     from src.billing.accounting.accounting_finalization import AccountingSpendFinalizer
     from src.billing.accounting.accounting_protocol import AccountingOutcome
     from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+    from src.metrics.accounting import accounting_failures
 
+    rejected = accounting_failures.labels(queue="finalization", phase="receipt", reason=reason)
+    before = rejected._value.get()
     operation = _operation()
     finalize = AsyncMock()
     service = SimpleNamespace(generation=7, finalize_operation=finalize)
@@ -166,3 +169,4 @@ async def test_unqualified_receipt_keeps_one_explicit_uncertain_terminal(payload
     assert terminal.uncertainty_reason == reason
     assert terminal.exact_charge is None
     assert terminal.spend_payload is None
+    assert rejected._value.get() == before + 1

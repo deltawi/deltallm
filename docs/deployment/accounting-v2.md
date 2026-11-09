@@ -489,6 +489,7 @@ Watch these metrics on API and batch pods:
 | `deltallm_accounting_local_receipt_bytes` | Their conservative byte charge |
 | `deltallm_accounting_local_receipt_releases_total{reason="finalized\|expired"}` | Proofs released after another process finalized them, or after grant expiry |
 | `deltallm_accounting_failures_total{queue="receipt_release",phase="lookup"}` | Failed journal lookups. Releases wait for the next check; admission is not affected. |
+| `deltallm_accounting_failures_total{queue="finalization",phase="receipt"}` | Provider results refused before journal acceptance. The request returns 503 and the reservation stays provisional. `reason="provider_charge_outside_allowance"` means the charge was higher than the reservation, so that model's allowance is sized too small. Alert on any increase. |
 
 The journal lookup is served by the accounting request pods at
 `/internal/accounting/v1/terminals/local/batch`. Upgrade them in the same release
