@@ -33,9 +33,15 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        continue-on-error: true
         with:
           version: "0.9.28"
           enable-cache: true
+      - name: Install uv from PyPI if the GitHub download failed
+        run: |
+          command -v uv >/dev/null && exit 0
+          python3 -m pip install --user --break-system-packages "uv==0.9.28"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
 
       - name: Install frozen documentation dependencies
         run: uv sync --frozen --extra docs --extra dev

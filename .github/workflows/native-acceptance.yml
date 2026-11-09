@@ -38,8 +38,14 @@ jobs:
         with:
           python-version: '3.11'
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        continue-on-error: true
         with:
           version: '0.9.28'
+      - name: Install uv from PyPI if the GitHub download failed
+        run: |
+          command -v uv >/dev/null && exit 0
+          python3 -m pip install --user --break-system-packages "uv==0.9.28"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.19.0
