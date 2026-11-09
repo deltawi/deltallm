@@ -50,7 +50,19 @@ jobs:
         if: ${{ !inputs.publish-release }}
         env:
           INSTALL_PRESIDIO: ${{ matrix.presidio }}
-        run: docker build --build-arg INSTALL_PRESIDIO="$INSTALL_PRESIDIO" -t deltallm-lifecycle:candidate .
+        # The Presidio image downloads a 400 MB spaCy model that is only
+        # published on GitHub release downloads, which can return 504 for a
+        # while. Retry the build; BuildKit keeps the uv cache between tries.
+        run: |
+          for attempt in 1 2 3; do
+            if docker build --build-arg INSTALL_PRESIDIO="$INSTALL_PRESIDIO" \
+              -t deltallm-lifecycle:candidate .; then
+              exit 0
+            fi
+            echo "::warning::image build attempt $attempt failed"
+            sleep $((60 * attempt))
+          done
+          exit 1
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         if: inputs.publish-release
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
