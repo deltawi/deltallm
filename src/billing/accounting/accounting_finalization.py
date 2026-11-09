@@ -11,9 +11,11 @@ from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.journal.accounting_terminal_preparation import (
     UnqualifiedAccountingReceipt,
     prepare_accounting_charge,
+    prepare_accounting_not_dispatched,
     prepare_accounting_uncertain,
 )
 from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+from src.request_identity import valid_request_id
 
 
 def accounting_audit_envelope(
@@ -22,6 +24,8 @@ def accounting_audit_envelope(
     event_id: object,
     status: str,
     metadata: Mapping[str, object],
+    error_type: str | None = None,
+    correlation_id: object = None,
 ) -> dict[str, object]:
     attribution = operation.reservation.attribution
     audit_event_id = uuid5(UUID(str(event_id)), "accounting-audit:v1")
@@ -34,14 +38,18 @@ def accounting_audit_envelope(
         "resource_type": "model",
         "resource_id": attribution.model,
         "request_id": str(operation.reservation.operation_id),
-        "correlation_id": str(operation.reservation.operation_id),
+        "correlation_id": (
+            correlation_id
+            if valid_request_id(correlation_id)
+            else str(operation.reservation.operation_id)
+        ),
         "ip": None,
         "user_agent": None,
         "status": status,
         "latency_ms": None,
         "input_tokens": None,
         "output_tokens": None,
-        "error_type": None if status == "success" else "AccountingOutcomeUnknown",
+        "error_type": None if status == "success" else error_type or "AccountingOutcomeUnknown",
         "error_code": None,
         "metadata": metadata,
         "prev_hash": None,
@@ -117,6 +125,27 @@ class AccountingSpendFinalizer:
         payload: Mapping[str, object],
     ) -> None:
         service = self._require_accounting(operation, event_id=event_id)
+        final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
+        occurred_at = datetime.now(UTC)
+        if operation.not_dispatched_attempts == len(operation.attempts):
+            finalization = prepare_accounting_not_dispatched(
+                operation,
+                occurred_at=occurred_at,
+                audit_envelope=accounting_audit_envelope(
+                    operation,
+                    event_id=final_event_id,
+                    status="error",
+                    error_type="AccountingProviderNotDispatched",
+                    correlation_id=payload.get("request_id"),
+                    metadata={
+                        "attempt_count": len(operation.attempts),
+                        "outcome_unknown": False,
+                        "reason": "provider_pool_timeout",
+                    },
+                ),
+            )
+            await service.finalize_operation(operation, finalization)
+            return
         exc = payload.get("exc")
         reason = (
             str(
@@ -126,15 +155,15 @@ class AccountingSpendFinalizer:
             ).strip()[:256]
             or "provider_outcome_unknown"
         )
-        final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
         finalization = prepare_accounting_uncertain(
             operation,
             reason=reason,
-            occurred_at=datetime.now(UTC),
+            occurred_at=occurred_at,
             audit_envelope=accounting_audit_envelope(
                 operation,
                 event_id=final_event_id,
                 status="error",
+                correlation_id=payload.get("request_id"),
                 metadata={
                     "attempt_count": len(operation.attempts),
                     "uncertainty_reason": reason,

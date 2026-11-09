@@ -168,7 +168,10 @@ async def test_signed_native_cycle_validates_only_at_caller_and_wire_boundaries(
 
     monkeypatch.setattr(FrozenLocalTerminal, "__init__", counted)
     try:
-        result = await owner.finalize_batch(values, expires_at=deadline())
+        # 32 terminals are validated on both sides of the wire; a loaded
+        # parallel runner can spend most of one second on that alone, and the
+        # server keeps a statement window back for recovery.
+        result = await owner.finalize_batch(values, expires_at=deadline(5))
         assert len(result) == 32 and len(client.calls) == 1
         assert receipts.entries == receipts.retained_bytes == service.terminals.retained_bytes == 0
         assert boundaries == [type(values[0])] * 64

@@ -221,6 +221,9 @@ async def test_lost_initial_write_reply_can_release_only_the_same_unsent_proof(
     store, pending = BatchAccountingRepository(batch_db), checkpoint_for(claim)
     await store.write_many([BatchAccountingWrite(claim, None, pending)], expires_at=deadline())
     terminal = terminal_checkpoint(pending, claim_epoch=claim.claim_epoch, dispatched=False)
+    audit = terminal.terminal.audit_envelope["payload"]["event"]
+    assert audit["error_type"] == "AccountingProviderNotDispatched"
+    assert audit["metadata"]["outcome_unknown"] is False
     await store.write_many([BatchAccountingWrite(claim, None, terminal)], expires_at=deadline())
     await store.write_many([BatchAccountingWrite(claim, None, terminal)], expires_at=deadline())
     (row,) = await batch_db.query_raw(

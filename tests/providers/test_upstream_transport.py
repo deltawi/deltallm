@@ -8,7 +8,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from src.providers.http_transport import UpstreamHTTPTransport
+from src.providers.http_transport import UpstreamHTTPTransport, provider_pool_refused_before_send
 from src.upstream_http import build_upstream_http_client
 
 
@@ -125,6 +125,7 @@ async def test_stream_close_releases_pool_and_pool_timeout_keeps_request():
                 await client.get(
                     "http://provider.example/queued", timeout=httpx.Timeout(1, pool=0.01)
                 )
+            assert provider_pool_refused_before_send(caught.value)
             assert caught.value.request.url.path == "/queued"
             assert len(backend.streams) == 1
             assert len(transport._pool._requests) == 1

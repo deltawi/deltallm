@@ -36,8 +36,14 @@ jobs:
         with:
           python-version: '3.11'
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        continue-on-error: true
         with:
           version: '0.9.28'
+      - name: Install uv from PyPI if the GitHub download failed
+        run: |
+          command -v uv >/dev/null && exit 0
+          python3 -m pip install --user --break-system-packages "uv==0.9.28"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.19.0
@@ -50,7 +56,19 @@ jobs:
         if: ${{ !inputs.publish-release }}
         env:
           INSTALL_PRESIDIO: ${{ matrix.presidio }}
-        run: docker build --build-arg INSTALL_PRESIDIO="$INSTALL_PRESIDIO" -t deltallm-lifecycle:candidate .
+        # The Presidio image downloads a 400 MB spaCy model that is only
+        # published on GitHub release downloads, which can return 504 for a
+        # while. Retry the build; BuildKit keeps the uv cache between tries.
+        run: |
+          for attempt in 1 2 3; do
+            if docker build --build-arg INSTALL_PRESIDIO="$INSTALL_PRESIDIO" \
+              -t deltallm-lifecycle:candidate .; then
+              exit 0
+            fi
+            echo "::warning::image build attempt $attempt failed"
+            sleep $((60 * attempt))
+          done
+          exit 1
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         if: inputs.publish-release
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -97,11 +115,7 @@ jobs:
             --output /tmp/lifecycle-evidence/image "${extra[@]}"
       - name: Install pinned disposable cluster tool
         if: matrix.presidio == 'false'
-        run: |
-          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64 -o /tmp/kind-linux-amd64
-          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256sum
-          (cd /tmp && sha256sum -c kind.sha256sum)
-          chmod +x /tmp/kind-linux-amd64
+        run: scripts/ci/install_kind.sh
       - name: Exercise migration, rollout and pod loss
         if: matrix.presidio == 'false'
         run: >-

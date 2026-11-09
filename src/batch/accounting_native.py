@@ -432,6 +432,7 @@ def terminal_checkpoint(
             event_id=uuid5(checkpoint.operation_id, "provider-finalization:v2"),
             status="error",
             metadata={"batch": True, "outcome_unknown": dispatched},
+            error_type=None if dispatched else "AccountingProviderNotDispatched",
         )
         terminal = (
             prepare_accounting_uncertain(

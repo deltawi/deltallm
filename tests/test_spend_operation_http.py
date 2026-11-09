@@ -383,3 +383,43 @@ async def test_media_modalities_reserve_before_provider_and_accept_same_slot(
     assert receipt["call_type"] == handle.intent.call_type == call_type
     assert receipt["organization_id"] == handle.intent.principal.organization_id
     operations.unknown.assert_not_awaited()
+
+
+async def test_provider_pool_refusal_releases_native_allowance(client, test_app):
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+    from src.billing.accounting.accounting_service import AccountingProtocolService
+    import httpx
+    from tests.test_accounting_request_path import _AccountingRepository
+
+    repository = _AccountingRepository()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    test_app.state.accounting_protocol_enabled = True
+    test_app.state.accounting_protocol_service = accounting
+    test_app.state.spend_tracking_service = ReadySpend(
+        db_client=None,
+        writer=SpendTrackingService(None),
+        config=SpendIngestionConfig(enabled=True),
+        accounting=accounting,
+    )
+    refusal = httpx.PoolTimeout("pool busy")
+    setattr(refusal, "_provider_pool_refused_before_send", True)
+    test_app.state.http_client.post = AsyncMock(side_effect=refusal)
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={**headers(test_app), "x-request-id": "test-correlation"},
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+        )
+    finally:
+        await accounting.close()
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["type"] == "gateway_capacity_error"
+    (terminal,) = repository.finalizations
+    assert terminal.outcome is AccountingOutcome.NOT_DISPATCHED
+    assert terminal.uncertainty_reason is None
+    audit = terminal.audit_envelope["payload"]["event"]
+    assert audit["error_type"] == "AccountingProviderNotDispatched"
+    assert audit["request_id"] == str(terminal.operation_id)
+    assert audit["correlation_id"] == response.headers["x-request-id"] == "test-correlation"

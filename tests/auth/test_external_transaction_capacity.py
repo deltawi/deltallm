@@ -142,3 +142,29 @@ async def test_runtime_deadline_and_denial_labels_never_use_caller_values():
     finally:
         runtime.cleanup_task.cancel()
         await asyncio.gather(runtime.cleanup_task, return_exceptions=True)
+
+
+async def test_startup_cleanup_retries_a_slow_maintenance_transaction(monkeypatch):
+    from src.services.identity.external import external_auth_runtime
+
+    monkeypatch.setattr(external_auth_runtime, "STARTUP_CLEANUP_RETRY_DELAYS", (0, 0))
+    runtime = ExternalAuthRuntime.__new__(ExternalAuthRuntime)
+    runtime.cleanup_healthy = False
+    attempts = []
+
+    async def cleanup_once(*, failures):
+        attempts.append(1)
+        if len(attempts) <= failures:
+            raise ExternalAuthUnavailable()
+        runtime.cleanup_healthy = True
+
+    runtime._cleanup_once = lambda: cleanup_once(failures=2)
+    await runtime._startup_cleanup()
+    assert len(attempts) == 3 and runtime.cleanup_healthy
+
+    attempts.clear()
+    runtime.cleanup_healthy = False
+    runtime._cleanup_once = lambda: cleanup_once(failures=3)
+    with pytest.raises(ExternalAuthUnavailable):
+        await runtime._startup_cleanup()
+    assert len(attempts) == 3 and not runtime.cleanup_healthy
