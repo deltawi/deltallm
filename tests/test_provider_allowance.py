@@ -304,3 +304,34 @@ def test_chat_bounds_without_an_output_limit_use_the_declared_default():
 
     assert bounds.max_output_tokens is None
     assert allowance(bounds) == Decimal("4.5")
+
+
+def test_live_cache_only_rate_reserves_for_an_ordinary_catalog_charge():
+    from dataclasses import replace
+
+    from src.billing.pricing.pricing import pricing_from_model_info
+    from src.billing.pricing.tier_pricing import resolve_exact_token_quote_pricing
+
+    info = {"input_cost_per_token_cache_hit": "0"}
+    resolution = replace(
+        pricing(info),
+        customer_token_pricing=pricing_from_model_info(info),
+        catalog_pricing_frozen=True,
+        catalog_token_pricing=ModelPricing(input_cost_per_token=0.01, output_cost_per_token=0.02),
+    )
+    result = allowance(ProviderRequestBounds(max_output_tokens=10), price=resolution)
+    quote = resolve_exact_token_quote_pricing(
+        resolution, model=resolution.callable_model, prompt_tokens=100, completion_tokens=10
+    )
+    assert result == quote.pricing.cost(prompt_tokens=100, completion_tokens=10) * 3
+    assert result == Decimal("3.6")
+
+
+def test_live_allowance_uses_exact_configured_price_for_single_meter_usage():
+    from dataclasses import replace
+
+    from src.billing.pricing.pricing import pricing_from_model_info
+
+    info = {"input_cost_per_token": "0.01000000000000000001"}
+    resolution = replace(pricing(info), customer_token_pricing=pricing_from_model_info(info))
+    assert allowance(ProviderRequestBounds(), price=resolution) == Decimal("3.000000000000000003")

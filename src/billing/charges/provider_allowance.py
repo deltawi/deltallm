@@ -8,7 +8,11 @@ from decimal import Decimal, DecimalException, ROUND_CEILING, localcontext
 
 from src.billing.money import canonical_money
 from src.billing.spend.spend_operations import SpendPersistenceUnavailable
-from src.billing.pricing.tier_pricing import PricingResolution, resolve_exact_token_quote_pricing
+from src.billing.pricing.tier_pricing import (
+    PricingResolution,
+    resolve_exact_token_quote_pricing,
+    sync_token_ceiling_rates,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,12 +159,36 @@ def _token_allowance(
             exact_rates.output_rate,
             exact_rates.request_rate,
         )
-    input_ceiling = _positive_int(
-        model_info.get("max_input_tokens") or model_info.get("max_tokens")
-    ) or _positive_int(tokens.context_window)
+    elif any(
+        field in pricing.customer_model_info
+        for field in (
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "input_cost_per_token_cache_hit",
+            "output_cost_per_token_cache_hit",
+        )
+    ):
+        exact_rates = sync_token_ceiling_rates(pricing)
+        input_rate = max(
+            exact_rates.input_cost_per_token,
+            exact_rates.input_cost_per_token_cache_hit or Decimal(0),
+        )
+        output_rate = max(
+            exact_rates.output_cost_per_token,
+            exact_rates.output_cost_per_token_cache_hit or Decimal(0),
+        )
+    input_ceiling = (
+        _positive_int(model_info.get("max_input_tokens") or model_info.get("max_tokens"))
+        or _positive_int(tokens.context_window)
+        or _positive_int(
+            pricing.catalog_token_pricing.context_window if pricing.catalog_token_pricing else None
+        )
+    )
     configured_output = _positive_int(
         model_info.get("max_output_tokens") or tokens.max_output_tokens
     )
+    if configured_output is None and pricing.catalog_token_pricing is not None:
+        configured_output = _positive_int(pricing.catalog_token_pricing.max_output_tokens)
     requested_output = bounds.max_output_tokens
     if requested_output is not None and _positive_int(requested_output) is None:
         raise SpendPersistenceUnavailable()
