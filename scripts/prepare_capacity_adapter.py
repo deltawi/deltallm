@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
+import time
 import urllib.request
 
 from cryptography import x509
@@ -100,6 +102,34 @@ def serving_tls(namespace: str, service: str) -> dict[str, str | bool]:
     }
 
 
+def download_chart(chart: ChartDependency) -> bytes:
+    """Fetch the pinned chart, falling back to its OCI copy on ghcr.io.
+
+    GitHub release downloads sometimes return 504 for many minutes. The chart
+    publisher also pushes each chart to ghcr.io, where the chart layer is the
+    same file; the caller checks the pinned SHA-256 either way.
+    """
+
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(chart.url, timeout=30) as response:
+                return response.read(MAX_CHART_BYTES + 1)
+        except OSError as error:
+            print(f"chart download attempt {attempt + 1} failed: {error}", file=sys.stderr)
+            time.sleep(5 * (attempt + 1))
+    name = chart.url.rsplit("/", 1)[-1].removesuffix(f"-{chart.version}.tgz")
+    repository = f"prometheus-community/charts/{name}"
+    token_url = f"https://ghcr.io/token?scope=repository:{repository}:pull"
+    with urllib.request.urlopen(token_url, timeout=30) as response:
+        token = json.load(response)["token"]
+    request = urllib.request.Request(
+        f"https://ghcr.io/v2/{repository}/blobs/sha256:{chart.sha256}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read(MAX_CHART_BYTES + 1)
+
+
 def prepare_adapter(
     output: Path, *, namespace: str, release: str, prometheus_url: str
 ) -> AdapterFiles:
@@ -110,8 +140,7 @@ def prepare_adapter(
         with chart.open("rb") as source:
             data = source.read(MAX_CHART_BYTES + 1)
     else:
-        with urllib.request.urlopen(dependencies.adapter_chart.url, timeout=30) as response:
-            data = response.read(MAX_CHART_BYTES + 1)
+        data = download_chart(dependencies.adapter_chart)
     if (
         len(data) > MAX_CHART_BYTES
         or hashlib.sha256(data).hexdigest() != dependencies.adapter_chart.sha256

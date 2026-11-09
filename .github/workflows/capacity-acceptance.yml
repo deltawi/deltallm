@@ -36,11 +36,7 @@ jobs:
       - name: Build candidate image
         run: docker build --build-arg INSTALL_PRESIDIO=false -t deltallm-capacity:candidate .
       - name: Install pinned kind
-        run: |
-          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64 -o /tmp/kind-linux-amd64
-          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256sum
-          (cd /tmp && sha256sum -c kind.sha256sum)
-          chmod +x /tmp/kind-linux-amd64
+        run: scripts/ci/install_kind.sh
       - name: Exercise fixed replicas, saturation scaling, metric failure, and pod loss
         run: >-
           uv run python -m tests.performance.run_capacity_acceptance
