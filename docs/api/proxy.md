@@ -186,6 +186,9 @@ DeltaLLM writes the provider's cache counts in the OpenAI shape:
 | Google Gemini | `promptTokenCount` (it includes the cached part) | `cached_tokens` = `cachedContentTokenCount` |
 
 The details object is present only when the provider reports cache tokens.
+Streamed Anthropic answers are an exception: the Anthropic stream translation sends no
+provider usage. DeltaLLM then estimates the token counts and bills all prompt tokens at the
+input price. Use `/v1/messages` to stream Anthropic models with cache prices.
 Self-hosted servers report cached tokens only when you turn the report on. See
 [vLLM cached tokens](../providers/index.md#vllm-cached-tokens) and
 [SGLang cached tokens](../providers/sglang.md#cached-tokens).

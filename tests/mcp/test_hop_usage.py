@@ -55,3 +55,30 @@ def test_add_hop_usage_keeps_earlier_values_when_a_hop_reports_none() -> None:
         "prompt_tokens_details": {"cached_tokens": 5},
         "cost": 0.75,
     }
+
+
+def test_add_hop_usage_drops_a_bad_cache_count_before_the_sum() -> None:
+    # 150 cached tokens cannot come from a 100-token prompt, even when a later hop adds
+    # 100 more prompt tokens.
+    total = add_hop_usage(
+        None,
+        {
+            "prompt_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 150, "cache_write_tokens": 20},
+        },
+    )
+    total = add_hop_usage(total, {"prompt_tokens": 100})
+
+    assert total == {
+        "prompt_tokens": 200,
+        "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 20},
+    }
+
+
+def test_add_hop_usage_keeps_valid_cache_details_unchanged() -> None:
+    hop = {
+        "prompt_tokens": 100,
+        "prompt_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 40, "audio_tokens": 0},
+    }
+
+    assert add_hop_usage(None, hop) == hop
