@@ -13,15 +13,23 @@ COMPLETION_OUTBOX_MAX_CONCURRENCY = 8
 
 
 def batch_database_call_seconds(app: Any) -> float:
-    """Longest one control pool call can take before its caller stops waiting.
+    """Longest one control pool call can keep its caller waiting.
 
-    0 when the pool policy is not known.
+    A transaction waits for a slot and its start, runs up to its timeout,
+    then waits for its last native query and for the rollback, each up to the
+    native query bound. A single query ends sooner. 0 when the pool policy is
+    not known.
     """
     manager = getattr(getattr(app, "state", None), "prisma_manager", None)
     policy = getattr(getattr(manager, "allocation", None), "policy", None)
     if policy is None:
         return 0.0
-    return policy.admission_seconds + max(policy.statement_seconds, policy.transaction_seconds)
+    return (
+        policy.admission_seconds
+        + policy.acquisition_seconds
+        + policy.transaction_seconds
+        + 2 * policy.native_query_seconds
+    )
 
 
 def completion_outbox_concurrency(general: Any) -> int:

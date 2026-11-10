@@ -46,10 +46,11 @@ class ResultSaveWaits:
     renewals only make the real lease longer. A renewal is sent only while
     the known lease covers it and a save call after it. After a long wait,
     the save can also wait in the save queue, so the lease is renewed first
-    when it is shorter than a save on main is sure to have. If the renewal is
-    refused, the save skips the save queue: the reserve covers one save call,
-    not a wait for a save slot. The save checks the owner and claim epoch, so
-    a save after another worker's claim changes nothing.
+    when it is shorter than a save on main is sure to have. A save that comes
+    later than on main (after a long wait or a renewal) and has less lease
+    than main skips the save queue: the lease left covers one save call, not
+    a wait for a save slot. The save checks the owner and claim epoch, so a
+    save after another worker's claim changes nothing.
     """
 
     def __init__(
@@ -70,7 +71,8 @@ class ResultSaveWaits:
         self._lease_until = (
             None if known_lease_seconds is None else monotonic() + known_lease_seconds
         )
-        self._waited_long = False
+        # A long wait or a renewal made the next save later than on main.
+        self._delayed = False
         self._waits: Iterator[BusyWait] = iter(
             [BusyWait(seconds=delay, long=False) for delay in SHORT_DELAYS_SECONDS]
             + [_jittered(delay) for delay in LONG_DELAYS_SECONDS]
@@ -89,12 +91,12 @@ class ResultSaveWaits:
         if self._lease_until is None or renewed_until > self._lease_until:
             self._lease_until = renewed_until
 
-    def long_wait_done(self) -> None:
-        self._waited_long = True
+    def save_delayed(self) -> None:
+        self._delayed = True
 
     def skips_save_queue(self) -> bool:
         """True when the next save goes to the database without the save queue."""
-        return self._waited_long and self.shorter_than_main()
+        return self._delayed and self.shorter_than_main()
 
     def covers(self, wait: BusyWait) -> bool:
         if self._lease_until is None:

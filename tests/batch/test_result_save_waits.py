@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,7 +16,11 @@ from src.batch.worker_persistence import WorkerPersistenceMixin
 from src.batch.worker_types import BatchWorkerConfig
 from src.bootstrap.batch_runtime.pool_sizing import batch_database_call_seconds
 from src.db.runtime.allocation_config import DatabasePolicy
-from src.db.runtime.allocated_client import DatabaseUnavailableError
+from src.db.runtime.allocated_client import (
+    AllocatedTransaction,
+    DatabaseOwner,
+    DatabaseUnavailableError,
+)
 
 _real_sleep = asyncio.sleep
 
@@ -93,6 +99,8 @@ class _Database:
 
     async def renew_item_leases(self, *, item_claim_epochs, worker_id, lease_seconds):
         del worker_id
+        # A database call lets other tasks run.
+        await _real_sleep(0)
         self.renewal_calls += 1
         started = self._call(self.renewal_latency)
         if self.refused_renewals:
@@ -266,6 +274,36 @@ async def test_the_lease_is_renewed_before_a_save_waits_in_the_save_queue(clock)
     assert not database.claimed_by_other
 
 
+async def _save_while_another_save_holds_the_slot(
+    engine: _Engine, *, lease_left: float, hold_seconds: float
+) -> bool:
+    """Another save takes the only save slot when the fourth (busy) save ends.
+
+    If the answer then waits in the save queue, the other save holds the slot
+    for ``hold_seconds`` more.
+    """
+    database = engine.repository
+    queue = engine._result_save_groups()
+    assert queue is not None
+    others: list[asyncio.Task] = []
+
+    def other_save_takes_the_slot(count: int) -> None:
+        if count == 4:
+            others.append(asyncio.create_task(queue.run([{"item_id": "other", "claim_epoch": 1}])))
+
+    database.on_save = other_save_takes_the_slot
+    saving = asyncio.create_task(_save(engine, lease_left=lease_left))
+    while not saving.done() and not (database.other_saving and queue.waiting):
+        await _real_sleep(0)
+    if queue.waiting:
+        database.clock.now += hold_seconds
+    database.other_save_done.set()
+    saved = await saving
+    await asyncio.gather(*others)
+    assert database.other_saving
+    return saved
+
+
 async def test_a_save_skips_the_save_queue_when_the_renewal_after_a_long_wait_is_refused(clock):
     # Codex review 2026-11-10: the busy pool refuses the renewal after the long
     # wait while another save holds the only save slot for 35 s more. In the
@@ -277,29 +315,34 @@ async def test_a_save_skips_the_save_queue_when_the_renewal_after_a_long_wait_is
     )
     database.refused_renewals = 1
     engine = _Engine(database, lease_seconds=60, save_slots=1)
-    queue = engine._result_save_groups()
-    assert queue is not None
-    others: list[asyncio.Task] = []
 
-    def other_save_takes_the_slot(count: int) -> None:
-        # It gets the slot when the fourth (busy) save ends.
-        if count == 4:
-            others.append(asyncio.create_task(queue.run([{"item_id": "other", "claim_epoch": 1}])))
+    assert await _save_while_another_save_holds_the_slot(engine, lease_left=40.0, hold_seconds=35.0)
 
-    database.on_save = other_save_takes_the_slot
-    saving = asyncio.create_task(_save(engine, lease_left=40.0))
-    while not saving.done() and not (database.other_saving and queue.waiting):
-        await _real_sleep(0)
-    if queue.waiting:
-        clock.now += 35.0
-    database.other_save_done.set()
-
-    assert await saving
-    await asyncio.gather(*others)
-    assert database.other_saving
     assert clock.sleeps == [0.5, 1.0, 2.0, 4.0]
     assert database.renewals == []
     assert database.saved_at == 1013.5
+    assert not database.claimed_by_other
+
+
+async def test_a_save_skips_the_save_queue_when_the_renewal_before_a_long_wait_is_refused(clock):
+    # Codex review 2026-11-10: a 60 s lease, 12.2 s database calls, and a
+    # known lease end of 1039 (the real lease ends at 1044). The 4 s wait is
+    # not covered, so the worker renews the lease; the busy pool refuses the
+    # renewal after 7.2 s. The save then comes later than on main, with less
+    # lease, while another save holds the only save slot for 30 s more. It
+    # goes to the database without the queue.
+    database = _Database(
+        clock, lease_until=1044.0, busy_until=1011.0, latency=2.0, renewals_busy=False
+    )
+    database.refused_renewals = 1
+    database.renewal_latency = 7.2
+    engine = _Engine(database, lease_seconds=60, save_slots=1, call_seconds=12.2)
+
+    assert await _save_while_another_save_holds_the_slot(engine, lease_left=39.0, hold_seconds=30.0)
+
+    assert clock.sleeps == [0.5, 1.0, 2.0]
+    assert database.renewal_calls == 1
+    assert database.saved_at == pytest.approx(1020.7)
     assert not database.claimed_by_other
 
 
@@ -371,23 +414,41 @@ async def test_drain_ends_a_long_wait_at_once():
     await asyncio.wait_for(waiting, timeout=1)
 
 
-def test_database_call_time_comes_from_the_control_pool_policy():
-    policy = DatabasePolicy(
-        allocation="control",
-        connections=4,
-        acquisition_seconds=0.2,
-        statement_seconds=5.0,
-        lock_seconds=1.0,
-        transaction_seconds=10.0,
-        queue_seconds=2.0,
-    )
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            prisma_manager=SimpleNamespace(allocation=SimpleNamespace(policy=policy))
-        )
-    )
+class _FastNativePolicy(DatabasePolicy):
+    @property
+    def native_query_seconds(self) -> float:
+        return 0.2
 
-    assert batch_database_call_seconds(app) == pytest.approx(12.2)
+
+async def test_database_call_time_bounds_a_transaction_that_times_out_and_rolls_back_slowly():
+    # Codex review 2026-11-10: after its timeout, a transaction still waits for
+    # its last native query and for the rollback. The call time must cover
+    # both.
+    policy = _FastNativePolicy("control", 1, 0.05, 0.05, 0.05, 0.1, 0.0)
+    owner = DatabaseOwner(policy)
+    app = SimpleNamespace(state=SimpleNamespace(prisma_manager=SimpleNamespace(allocation=owner)))
+
+    async def never_ends() -> None:
+        await asyncio.Event().wait()
+
+    native = SimpleNamespace(
+        start=AsyncMock(return_value=SimpleNamespace()),
+        commit=AsyncMock(),
+        rollback=never_ends,
+    )
+    transaction = AllocatedTransaction(owner, native)
+    started = monotonic()
+    with pytest.raises(DatabaseUnavailableError):
+        async with transaction:
+            # The last query starts just before the transaction timeout.
+            await asyncio.sleep(0.09)
+            await transaction.query(never_ends)
+    elapsed = monotonic() - started
+    await owner.close()
+
+    assert elapsed > 0.4
+    assert elapsed <= batch_database_call_seconds(app)
+    assert batch_database_call_seconds(app) == pytest.approx(0.05 + 0.05 + 0.1 + 0.4)
     assert batch_database_call_seconds(SimpleNamespace(state=SimpleNamespace())) == 0.0
 
 
