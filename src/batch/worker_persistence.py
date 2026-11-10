@@ -325,8 +325,10 @@ class WorkerPersistenceMixin:
             self._result_saves = groups
         return groups
 
-    async def _save_result_rows(self, items: list[dict[str, Any]]) -> str:
-        groups = self._result_save_groups()
+    async def _save_result_rows(
+        self, items: list[dict[str, Any]], *, skip_queue: bool = False
+    ) -> str:
+        groups = None if skip_queue else self._result_save_groups()
         if groups is None:
             return await self.repository.complete_items_with_outbox_bulk(
                 items=items,
@@ -490,11 +492,13 @@ class WorkerPersistenceMixin:
             # When it succeeds, the database answered: try the save again now.
             return await self._renew_for_long_wait(waits, items)
         await self._sleep_unless_draining(wait)
+        waits.long_wait_done()
         if waits.shorter_than_main() and not self._drain_signal().is_set():
             # The save can wait in the save queue before it reaches the
             # database. Renew first, so that it goes in with as much lease as
-            # a save on main. A refused renewal changes nothing: the lease
-            # known before the wait still covers one save call.
+            # a save on main. If the renewal is refused, the save skips the
+            # queue: the lease known before the wait covers one save call, not
+            # a wait for a save slot.
             await self._renew_for_long_wait(waits, items)
         return True
 
@@ -635,7 +639,7 @@ class WorkerPersistenceMixin:
         while failures < 2:
             attempt += 1
             try:
-                result = await self._save_result_rows(items)
+                result = await self._save_result_rows(items, skip_queue=waits.skips_save_queue())
                 if result == "not_owned" and await self._items_still_claimed(items):
                     # The save skipped an item row that another statement held
                     # (FOR UPDATE SKIP LOCKED), such as a lease renewal that

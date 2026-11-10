@@ -52,12 +52,14 @@ class _Database:
         self.on_renew = None
         # Another item's save holds the save slot until this is set.
         self.other_save_done = asyncio.Event()
+        self.other_saving = False
         # Renewals that pass their caller's deadline while the UPDATE goes on
         # and holds the item row for 3 s more.
         self.renewal_deadlines = 0
         self.row_locked_until = float("-inf")
-        # Ownership reads that the busy pool refuses.
+        # Ownership reads and lease renewals that the busy pool refuses.
         self.busy_reads = 0
+        self.refused_renewals = 0
 
     def _call(self) -> float:
         started = self.clock.now
@@ -70,6 +72,7 @@ class _Database:
     async def complete_items_with_outbox_bulk(self, *, items, worker_id, **kwargs):
         del worker_id, kwargs
         if items[0]["item_id"] == "other":
+            self.other_saving = True
             await self.other_save_done.wait()
             return "completed"
         self.saves += 1
@@ -87,6 +90,9 @@ class _Database:
     async def renew_item_leases(self, *, item_claim_epochs, worker_id, lease_seconds):
         del worker_id
         started = self._call()
+        if self.refused_renewals:
+            self.refused_renewals -= 1
+            raise DatabaseUnavailableError()
         if self.renewal_deadlines:
             self.renewal_deadlines -= 1
             self.row_locked_until = self.clock.now + 3.0
@@ -225,6 +231,43 @@ async def test_the_lease_is_renewed_before_a_save_waits_in_the_save_queue(clock)
     # The lease from the claim ended at 1040: without the renewal, another
     # worker could claim the item before the save.
     assert database.saved_at == 1048.5
+    assert not database.claimed_by_other
+
+
+async def test_a_save_skips_the_save_queue_when_the_renewal_after_a_long_wait_is_refused(clock):
+    # Codex review 2026-11-10: the busy pool refuses the renewal after the long
+    # wait while another save holds the only save slot for 35 s more. In the
+    # queue, the lease from the claim (to 1040) would end before the slot is
+    # free, and another worker would claim the item. The save goes to the
+    # database without the queue, under the lease known before the wait.
+    database = _Database(
+        clock, lease_until=1040.0, busy_until=1010.0, latency=1.0, renewals_busy=False
+    )
+    database.refused_renewals = 1
+    engine = _Engine(database, lease_seconds=60, save_slots=1)
+    queue = engine._result_save_groups()
+    assert queue is not None
+    others: list[asyncio.Task] = []
+
+    def other_save_takes_the_slot(count: int) -> None:
+        # It gets the slot when the fourth (busy) save ends.
+        if count == 4:
+            others.append(asyncio.create_task(queue.run([{"item_id": "other", "claim_epoch": 1}])))
+
+    database.on_save = other_save_takes_the_slot
+    saving = asyncio.create_task(_save(engine, lease_left=40.0))
+    while not saving.done() and not (database.other_saving and queue.waiting):
+        await _real_sleep(0)
+    if queue.waiting:
+        clock.now += 35.0
+    database.other_save_done.set()
+
+    assert await saving
+    await asyncio.gather(*others)
+    assert database.other_saving
+    assert clock.sleeps == [0.5, 1.0, 2.0, 4.0]
+    assert database.renewals == []
+    assert database.saved_at == 1013.5
     assert not database.claimed_by_other
 
 
