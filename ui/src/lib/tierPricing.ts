@@ -14,6 +14,8 @@ export type PricingFormField =
   | 'output_cost_per_token'
   | 'cached_input_cost_per_token'
   | 'cached_output_cost_per_token'
+  | 'cache_write_cost_per_token'
+  | 'cache_write_1h_cost_per_token'
   | 'batch_input_cost_per_token'
   | 'batch_output_cost_per_token'
   | 'batch_price_multiplier'
@@ -92,6 +94,26 @@ export const TIER_PRICING_FIELDS: TierPricingFieldDefinition[] = [
     group: 'cache',
     profiles: ['token'],
     help: 'Price for cached output tokens when cache accounting is available.',
+  },
+  {
+    formField: 'cache_write_cost_per_token',
+    payloadField: 'input_cost_per_token_cache_write',
+    label: 'Cache write token price',
+    shortLabel: 'Cache write',
+    unit: '/token',
+    group: 'cache',
+    profiles: ['token'],
+    help: 'Price for prompt tokens that the provider writes to its prompt cache (5-minute cache). Empty uses the input token price.',
+  },
+  {
+    formField: 'cache_write_1h_cost_per_token',
+    payloadField: 'input_cost_per_token_cache_write_1h',
+    label: 'Cache write (1 hour) token price',
+    shortLabel: 'Cache write 1h',
+    unit: '/token',
+    group: 'cache',
+    profiles: ['token'],
+    help: 'Price for prompt tokens written to a 1-hour prompt cache. Empty uses the cache write token price.',
   },
   {
     formField: 'batch_input_cost_per_token',

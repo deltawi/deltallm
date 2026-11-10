@@ -576,3 +576,33 @@ test('edit form loads saved capabilities as declared and round-trips them', () =
   const unset = formFromModel({ ...model, model_info: { mode: 'chat' } }).form;
   assert.equal(unset.chat_capabilities_declared, false);
 });
+
+test('chat cache-write prices round-trip and clear when blank', () => {
+  const model: ModelDeploymentDetail = {
+    deployment_id: 'deployment-claude',
+    model_name: 'claude',
+    provider: 'anthropic',
+    deltallm_params: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    model_info: {
+      mode: 'chat',
+      input_cost_per_token: 0.000003,
+      input_cost_per_token_cache_write: 0.00000375,
+      input_cost_per_token_cache_write_1h: 0.000006,
+    },
+  };
+  const { form } = formFromModel(model);
+  assert.equal(form.input_cost_per_token_cache_write, '0.00000375');
+  assert.equal(form.input_cost_per_token_cache_write_1h, '0.000006');
+
+  const saved = buildModelPayload(form, EMPTY_REQUEST_SHAPING, model.model_info);
+  assert.equal(saved.model_info.input_cost_per_token_cache_write, 0.00000375);
+  assert.equal(saved.model_info.input_cost_per_token_cache_write_1h, 0.000006);
+
+  const cleared = buildModelPayload(
+    { ...form, input_cost_per_token_cache_write: '', input_cost_per_token_cache_write_1h: '' },
+    EMPTY_REQUEST_SHAPING,
+    model.model_info,
+  );
+  assert.equal(cleared.model_info.input_cost_per_token_cache_write, undefined);
+  assert.equal(cleared.model_info.input_cost_per_token_cache_write_1h, undefined);
+});

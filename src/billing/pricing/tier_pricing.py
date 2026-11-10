@@ -10,6 +10,7 @@ from src.billing.pricing.pricing import pricing_from_model_info
 from src.billing.pricing.token_quote_policy import (
     ExactTokenQuote,
     ExactTokenRates,
+    PromptTokenSplit,
     TokenQuoteContext,
     resolve_exact_token_quote,
     sync_ceiling_rates,
@@ -29,6 +30,8 @@ _PRICING_KEYS = frozenset(
         "output_cost_per_token",
         "input_cost_per_token_cache_hit",
         "output_cost_per_token_cache_hit",
+        "input_cost_per_token_cache_write",
+        "input_cost_per_token_cache_write_1h",
         "batch_input_cost_per_token",
         "batch_output_cost_per_token",
         "batch_price_multiplier",
@@ -165,6 +168,8 @@ def resolve_exact_token_quote_pricing(
     cache_hit: bool = False,
     mode: PricingMode | None = None,
     pricing_view: PricingView = "customer",
+    prompt_tokens_cache_write: int = 0,
+    prompt_tokens_cache_write_1h: int = 0,
 ) -> ExactTokenQuote:
     """Select one exact quote from the frozen price inputs."""
     return resolve_exact_token_quote(
@@ -173,6 +178,8 @@ def resolve_exact_token_quote_pricing(
         completion_tokens=completion_tokens,
         prompt_tokens_cached=prompt_tokens_cached,
         cache_hit=cache_hit,
+        prompt_tokens_cache_write=prompt_tokens_cache_write,
+        prompt_tokens_cache_write_1h=prompt_tokens_cache_write_1h,
     )
 
 
@@ -262,13 +269,18 @@ def resolve_token_billing_result(
     usage_data = dict(usage or {})
     prompt_tokens = max(0, int(usage_data.get("prompt_tokens", 0) or 0))
     completion_tokens = max(0, int(usage_data.get("completion_tokens", 0) or 0))
-    prompt_tokens_cached = max(
-        0,
-        int(usage_data.get("prompt_tokens_cached", 0) or 0),
-    )
+    prompt_tokens_cached = _usage_count(usage_data, "prompt_tokens_cached")
     if cache_hit and prompt_tokens > 0 and prompt_tokens_cached == 0:
         prompt_tokens_cached = prompt_tokens
         usage_data["prompt_tokens_cached"] = prompt_tokens_cached
+    split = PromptTokenSplit.of(
+        prompt_tokens=prompt_tokens,
+        cached=prompt_tokens_cached,
+        cache_write=_usage_count(usage_data, "prompt_tokens_cache_write"),
+        cache_write_1h=_usage_count(usage_data, "prompt_tokens_cache_write_1h"),
+        cache_hit=cache_hit,
+    )
+    cache_write = split.cache_write_5m + split.cache_write_1h
     quote = resolve_exact_token_quote_pricing(
         resolution,
         model=model,
@@ -278,16 +290,19 @@ def resolve_token_billing_result(
         cache_hit=cache_hit,
         mode=mode,
         pricing_view=pricing_view,
+        prompt_tokens_cache_write=cache_write,
+        prompt_tokens_cache_write_1h=split.cache_write_1h,
     )
     usage_snapshot = {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
     }
     if prompt_tokens_cached > 0:
-        usage_snapshot["prompt_tokens_cached"] = min(
-            prompt_tokens,
-            prompt_tokens_cached,
-        )
+        usage_snapshot["prompt_tokens_cached"] = split.cached
+    if cache_write > 0:
+        usage_snapshot["prompt_tokens_cache_write"] = cache_write
+    if split.cache_write_1h > 0:
+        usage_snapshot["prompt_tokens_cache_write_1h"] = split.cache_write_1h
     if quote.pricing is None:
         return TokenBillingResolution(
             billing=BillingResult(
@@ -304,8 +319,10 @@ def resolve_token_billing_result(
         exact_cost = quote.pricing.cost(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            prompt_tokens_cached=min(prompt_tokens, prompt_tokens_cached),
+            prompt_tokens_cached=split.cached,
             cache_hit=cache_hit,
+            prompt_tokens_cache_write=cache_write,
+            prompt_tokens_cache_write_1h=split.cache_write_1h,
         )
     except ValueError:
         exact_cost = None
@@ -324,6 +341,10 @@ def resolve_token_billing_result(
         ),
         pricing_sources_used=quote.pricing_sources_used,
     )
+
+
+def _usage_count(usage: Mapping[str, Any], field: str) -> int:
+    return max(0, int(usage.get(field, 0) or 0))
 
 
 def resolve_tier_pricing(

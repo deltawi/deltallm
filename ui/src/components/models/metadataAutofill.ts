@@ -6,6 +6,8 @@ export type MetadataAutofillField =
   | 'output_cost_per_token'
   | 'input_cost_per_token_cache_hit'
   | 'output_cost_per_token_cache_hit'
+  | 'input_cost_per_token_cache_write'
+  | 'input_cost_per_token_cache_write_1h'
   | 'max_context_window'
   | 'max_input_tokens'
   | 'max_output_tokens'
@@ -27,6 +29,8 @@ export const MODEL_METADATA_FIELDS: Record<string, MetadataAutofillField> = {
   output_cost_per_token: 'output_cost_per_token',
   input_cost_per_token_cache_hit: 'input_cost_per_token_cache_hit',
   output_cost_per_token_cache_hit: 'output_cost_per_token_cache_hit',
+  input_cost_per_token_cache_write: 'input_cost_per_token_cache_write',
+  input_cost_per_token_cache_write_1h: 'input_cost_per_token_cache_write_1h',
   max_tokens: 'max_context_window',
   max_input_tokens: 'max_input_tokens',
   max_output_tokens: 'max_output_tokens',

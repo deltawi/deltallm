@@ -465,6 +465,40 @@ model_list:
 
 User-supplied request values still take priority over these defaults.
 
+### Prompt cache prices
+
+Some providers keep a copy of a repeated prompt prefix in a prompt cache. The provider
+reports how many prompt tokens it read from the cache and, for some providers, how many it
+wrote to the cache. DeltaLLM uses these counts with these optional token prices:
+
+| Field | Applies to | When the field is empty |
+| --- | --- | --- |
+| `input_cost_per_token_cache_hit` | Prompt tokens read from the provider cache, and prompts answered from the DeltaLLM response cache | `input_cost_per_token` |
+| `output_cost_per_token_cache_hit` | Output tokens of an answer from the DeltaLLM response cache | `output_cost_per_token` |
+| `input_cost_per_token_cache_write` | Prompt tokens written to a 5-minute provider cache | `input_cost_per_token` |
+| `input_cost_per_token_cache_write_1h` | Prompt tokens written to a 1-hour provider cache | `input_cost_per_token_cache_write`, then `input_cost_per_token` |
+
+Example for Claude Sonnet 4.6 on Anthropic:
+
+```yaml
+model_info:
+  input_cost_per_token: 0.000003
+  output_cost_per_token: 0.000015
+  input_cost_per_token_cache_hit: 0.0000003
+  input_cost_per_token_cache_write: 0.00000375
+  input_cost_per_token_cache_write_1h: 0.000006
+```
+
+Today, only Anthropic on `/v1/messages` reports cache writes. OpenAI, Azure OpenAI, Gemini,
+DeepSeek, vLLM and SGLang do not charge for cache writes, so keep the cache-write fields
+empty for these providers.
+
+Before a call, DeltaLLM holds budget at the highest of the input, cache-read and
+cache-write prices. A cache-write price that is higher than the input price makes this
+hold larger. DeltaLLM releases the unused part of the hold when the call ends.
+
+Pricing tiers can set the same fields. See [Tiers](../admin-ui/tiers.md).
+
 To fix a value the client cannot change, remove a field, send headers or use an outbound proxy, see [Request shaping](request-shaping.md).
 
 ## Provider Prefix Fallback

@@ -75,7 +75,10 @@ def test_fixture_maps_providers_bases_and_prices(fixture_result) -> None:
 
     claude = by_upstream["claude-sonnet-4-5"]
     assert claude["deltallm_params"]["max_tokens"] == 4096
-    assert claude["model_info"] == {"max_input_tokens": 200000}
+    assert claude["model_info"] == {
+        "max_input_tokens": 200000,
+        "input_cost_per_token_cache_write": 0.00000375,
+    }
 
     bedrock = by_upstream["us.anthropic.claude-sonnet-4-5-v1:0"]["deltallm_params"]
     assert bedrock["provider"] == "bedrock" and bedrock["region"] == "us-west-2"

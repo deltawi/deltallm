@@ -80,7 +80,7 @@ For each model, choose:
 - whether the model is allowed
 - the customer-facing price
 - RPM, TPM, and Output TPM limits
-- optional batch and cache pricing
+- optional batch and cache pricing: cached input, cached output, cache write and 1-hour cache write. See [Prompt cache prices](../configuration/models.md#prompt-cache-prices).
 - optional capacity pool
 
 Example `Growth` tier model policy:

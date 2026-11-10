@@ -151,6 +151,8 @@ export interface ModelFormValues {
   output_cost_per_token: string;
   input_cost_per_token_cache_hit: string;
   output_cost_per_token_cache_hit: string;
+  input_cost_per_token_cache_write: string;
+  input_cost_per_token_cache_write_1h: string;
   max_context_window: string;
   max_input_tokens: string;
   max_output_tokens: string;
@@ -218,6 +220,8 @@ export const EMPTY_FORM: ModelFormValues = {
   output_cost_per_token: '',
   input_cost_per_token_cache_hit: '',
   output_cost_per_token_cache_hit: '',
+  input_cost_per_token_cache_write: '',
+  input_cost_per_token_cache_write_1h: '',
   max_context_window: '',
   max_input_tokens: '',
   max_output_tokens: '',
@@ -309,6 +313,8 @@ const FORM_MANAGED_MODEL_INFO_FIELDS = [
   'output_cost_per_token',
   'input_cost_per_token_cache_hit',
   'output_cost_per_token_cache_hit',
+  'input_cost_per_token_cache_write',
+  'input_cost_per_token_cache_write_1h',
   'batch_input_cost_per_token',
   'batch_output_cost_per_token',
   'batch_price_multiplier',
@@ -471,6 +477,8 @@ export function buildModelPayload(
     model_info.output_cost_per_token = numOrUndef(form.output_cost_per_token);
     model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
     model_info.output_cost_per_token_cache_hit = numOrUndef(form.output_cost_per_token_cache_hit);
+    model_info.input_cost_per_token_cache_write = numOrUndef(form.input_cost_per_token_cache_write);
+    model_info.input_cost_per_token_cache_write_1h = numOrUndef(form.input_cost_per_token_cache_write_1h);
     model_info.max_tokens = positiveIntOrUndef(form.max_context_window, 'Context Window');
     model_info.max_input_tokens = positiveIntOrUndef(form.max_input_tokens, 'Max Input Tokens');
     model_info.max_output_tokens = positiveIntOrUndef(form.max_output_tokens, 'Max Output Tokens');
@@ -609,6 +617,8 @@ export function formFromModel(
     output_cost_per_token: strOrEmpty(mi.output_cost_per_token),
     input_cost_per_token_cache_hit: strOrEmpty(mi.input_cost_per_token_cache_hit),
     output_cost_per_token_cache_hit: strOrEmpty(mi.output_cost_per_token_cache_hit),
+    input_cost_per_token_cache_write: strOrEmpty(mi.input_cost_per_token_cache_write),
+    input_cost_per_token_cache_write_1h: strOrEmpty(mi.input_cost_per_token_cache_write_1h),
     max_context_window: positiveIntegerStringOrEmpty(mi.max_tokens),
     max_input_tokens: positiveIntegerStringOrEmpty(mi.max_input_tokens),
     max_output_tokens: positiveIntegerStringOrEmpty(mi.max_output_tokens),

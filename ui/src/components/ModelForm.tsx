@@ -1486,6 +1486,17 @@ export default function ModelForm({
                 <label className="block text-sm font-medium text-gray-700 mb-1">Cached Output Cost / Token ($)</label>
                 <input type="number" step="any" value={form.output_cost_per_token_cache_hit} onChange={(e) => setForm({ ...form, output_cost_per_token_cache_hit: e.target.value })} placeholder="Optional override" className={inputClass} />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cache Write Cost / Token ($)</label>
+                <input type="number" step="any" value={form.input_cost_per_token_cache_write} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_write: e.target.value })} placeholder="Empty uses input cost" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cache Write (1 Hour) Cost / Token ($)</label>
+                <input type="number" step="any" value={form.input_cost_per_token_cache_write_1h} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_write_1h: e.target.value })} placeholder="Empty uses cache write cost" className={inputClass} />
+              </div>
+              <p className="sm:col-span-2 text-xs text-gray-500">
+                Cache write prices apply when the provider charges to store a prompt in its cache, for example Anthropic prompt caching.
+              </p>
             </div>
           )}
 

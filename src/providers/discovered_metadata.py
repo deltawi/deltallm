@@ -20,7 +20,12 @@ _PER_MILLION = 1_000_000
 
 LIMIT_KEYS = frozenset({"max_tokens", "max_input_tokens", "max_output_tokens"})
 PRICE_KEYS = frozenset(
-    {"input_cost_per_token", "output_cost_per_token", "input_cost_per_token_cache_hit"}
+    {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "input_cost_per_token_cache_hit",
+        "input_cost_per_token_cache_write",
+    }
 )
 
 
@@ -80,7 +85,8 @@ def openai_style_metadata(item: Mapping[str, Any], *, provider: str) -> dict[str
 
     Field names by provider:
     - OpenRouter: ``context_length``, ``top_provider.max_completion_tokens``,
-      ``pricing.prompt`` / ``completion`` / ``input_cache_read`` (USD per token).
+      ``pricing.prompt`` / ``completion`` / ``input_cache_read`` / ``input_cache_write``
+      (USD per token).
     - Groq: ``context_window``, ``max_completion_tokens``.
     - Together: ``context_length``, ``pricing.input`` / ``output`` (USD per million tokens).
     - vLLM and SGLang: ``max_model_len``.
@@ -101,6 +107,7 @@ def openai_style_metadata(item: Mapping[str, Any], *, provider: str) -> dict[str
         _set_price(metadata, "input_cost_per_token", pricing.get("prompt"))
         _set_price(metadata, "output_cost_per_token", pricing.get("completion"))
         _set_price(metadata, "input_cost_per_token_cache_hit", pricing.get("input_cache_read"))
+        _set_price(metadata, "input_cost_per_token_cache_write", pricing.get("input_cache_write"))
     elif provider == "together":
         _set_price(metadata, "input_cost_per_token", pricing.get("input"), scale=_PER_MILLION)
         _set_price(metadata, "output_cost_per_token", pricing.get("output"), scale=_PER_MILLION)

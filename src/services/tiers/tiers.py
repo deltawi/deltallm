@@ -15,6 +15,8 @@ PRICING_KEYS = {
     "output_cost_per_token",
     "input_cost_per_token_cache_hit",
     "output_cost_per_token_cache_hit",
+    "input_cost_per_token_cache_write",
+    "input_cost_per_token_cache_write_1h",
     "batch_input_cost_per_token",
     "batch_output_cost_per_token",
     "batch_price_multiplier",

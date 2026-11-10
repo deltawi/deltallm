@@ -175,7 +175,8 @@ def test_native_usage_counts_cache_writes_and_reads_as_prompt_tokens() -> None:
         "completion_tokens": 7,
         "total_tokens": 1117,
         "prompt_tokens_cached": 1000,
-        "cache_creation_input_tokens": 100,
+        "prompt_tokens_cache_write": 100,
+        "prompt_tokens_cache_write_1h": 0,
     }
 
 

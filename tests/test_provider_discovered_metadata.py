@@ -34,6 +34,15 @@ def test_openrouter_limits_and_per_token_prices():
     }
 
 
+def test_openrouter_cache_write_price():
+    item = {
+        "id": "anthropic/claude-sonnet-4.6",
+        "pricing": {"prompt": "0.000003", "input_cache_write": "0.00000375"},
+    }
+    metadata = openai_style_metadata(item, provider="openrouter")
+    assert metadata["input_cost_per_token_cache_write"] == 0.00000375
+
+
 def test_openrouter_variable_price_sentinel_is_ignored():
     item = {"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}}
     assert openai_style_metadata(item, provider="openrouter") == {}

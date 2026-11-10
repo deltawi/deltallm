@@ -62,3 +62,15 @@ test('returns the same form object when nothing changes', () => {
   const result = applyKnownMetadata(EMPTY_FORM, {}, null);
   assert.equal(result.form, EMPTY_FORM);
 });
+
+test('catalog cache-write prices fill the chat form', () => {
+  const claude = {
+    input_cost_per_token: 0.000003,
+    input_cost_per_token_cache_write: 0.00000375,
+    input_cost_per_token_cache_write_1h: 0.000006,
+  };
+  const { form, autofilled } = typeModel(['claude-sonnet-4-6'], { 'claude-sonnet-4-6': claude });
+  assert.equal(form.input_cost_per_token_cache_write, '0.00000375');
+  assert.equal(form.input_cost_per_token_cache_write_1h, '0.000006');
+  assert.equal(autofilled.input_cost_per_token_cache_write, '0.00000375');
+});

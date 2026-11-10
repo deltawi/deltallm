@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fmtUnitPrice, summarizeModelCost } from '../src/lib/modelCost';
+import { fmtUnitPrice, modelPriceRows, summarizeModelCost } from '../src/lib/modelCost';
 
 test('unit prices use two decimals from $1 and three significant digits below', () => {
   assert.equal(fmtUnitPrice(0), '$0');
@@ -62,4 +62,22 @@ test('models without a standard price are not set, and explicit zero is free', (
   assert.deepEqual(cachedOnly.rates, [{ label: 'Cached input', value: '$0.10 / 1M tokens' }]);
   const free = summarizeModelCost('chat', { input_cost_per_token: 0, output_cost_per_token: 0 });
   assert.equal(free.kind === 'priced' && free.primary, 'Free');
+});
+
+test('cache-write prices are listed after the cached prices', () => {
+  const rows = modelPriceRows('chat', {
+    input_cost_per_token: 3e-6,
+    input_cost_per_token_cache_hit: 3e-7,
+    input_cost_per_token_cache_write: 3.75e-6,
+    input_cost_per_token_cache_write_1h: 6e-6,
+  });
+  assert.deepEqual(
+    rows.map((row) => [row.label, row.price]),
+    [
+      ['Input', '$3.00'],
+      ['Cached input', '$0.30'],
+      ['Cache write', '$3.75'],
+      ['Cache write (1 hour)', '$6.00'],
+    ],
+  );
 });

@@ -59,6 +59,8 @@ _MODEL_INFO_KEYS: dict[str, str] = {
     "output_cost_per_token": "output_cost_per_token",
     "cache_read_input_token_cost": "input_cost_per_token_cache_hit",
     "input_cost_per_token_cache_hit": "input_cost_per_token_cache_hit",
+    "cache_creation_input_token_cost": "input_cost_per_token_cache_write",
+    "cache_creation_input_token_cost_above_1hr": "input_cost_per_token_cache_write_1h",
     "input_cost_per_second": "input_cost_per_second",
     "output_cost_per_second": "output_cost_per_second",
     "input_cost_per_character": "input_cost_per_character",
@@ -324,13 +326,7 @@ def _convert_model_info(
     for key in map(str, model_info):
         if key in _MODEL_INFO_KEYS or key in _IGNORED_MODEL_INFO or key == "order":
             continue
-        if key == "cache_creation_input_token_cost":
-            report.add(
-                Severity.CHANGED,
-                f"{path}.model_info.{key}",
-                "dropped. DeltaLLM bills cache writes at the input token price.",
-            )
-        elif not key.startswith("supports_"):
+        if not key.startswith("supports_"):
             report.add(Severity.SKIPPED, f"{path}.model_info.{key}", "has no equivalent.")
     if "mode" not in info:
         inferred = _infer_mode(str(params.get("model") or ""))

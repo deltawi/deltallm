@@ -144,9 +144,12 @@ def _token_allowance(
     tokens = pricing.customer_token_pricing or pricing.catalog_token_pricing
     if tokens is None:
         return request_rate
+    # A prompt token can be uncached, a cache read or a cache write: hold the highest rate.
     input_rate = max(
         _decimal_rate(tokens.input_cost_per_token),
         _decimal_rate(tokens.input_cost_per_token_cache_hit),
+        _decimal_rate(tokens.input_cost_per_token_cache_write),
+        _decimal_rate(tokens.input_cost_per_token_cache_write_1h),
     )
     output_rate = max(
         _decimal_rate(tokens.output_cost_per_token),
@@ -166,12 +169,16 @@ def _token_allowance(
             "output_cost_per_token",
             "input_cost_per_token_cache_hit",
             "output_cost_per_token_cache_hit",
+            "input_cost_per_token_cache_write",
+            "input_cost_per_token_cache_write_1h",
         )
     ):
         exact_rates = sync_token_ceiling_rates(pricing)
         input_rate = max(
             exact_rates.input_cost_per_token,
             exact_rates.input_cost_per_token_cache_hit or Decimal(0),
+            exact_rates.input_cost_per_token_cache_write or Decimal(0),
+            exact_rates.input_cost_per_token_cache_write_1h or Decimal(0),
         )
         output_rate = max(
             exact_rates.output_cost_per_token,

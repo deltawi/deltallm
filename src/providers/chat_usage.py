@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from pydantic import Field, JsonValue
+from pydantic import Field, JsonValue, SerializerFunctionWrapHandler, model_serializer
 
 from src.models.responses import ChatCompletionResponse, Usage
 from src.models.errors import ProxyError
@@ -12,6 +12,17 @@ from src.providers.token_receipt import ProviderTokenReceipt, token_receipt
 
 class CompatibleChatUsage(Usage):
     prompt_tokens_cached: int = Field(default=0, ge=0)
+    # Ledger-only provider cache-write counts. Zero values stay out of the answer.
+    prompt_tokens_cache_write: int = Field(default=0, ge=0)
+    prompt_tokens_cache_write_1h: int = Field(default=0, ge=0)
+
+    @model_serializer(mode="wrap")
+    def serialize_cache_writes(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data = Usage.serialize_details(self, handler)
+        for field in ("prompt_tokens_cache_write", "prompt_tokens_cache_write_1h"):
+            if data.get(field) == 0:
+                data.pop(field, None)
+        return data
 
 
 class CompatibleChatResponse(ChatCompletionResponse):
