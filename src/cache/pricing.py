@@ -14,8 +14,10 @@ def cache_pricing_snapshot_from_deployment(deployment: Any) -> dict[str, Any]:
 
 
 def provider_cache_miss_usage(usage: Mapping[str, Any] | None) -> dict[str, Any]:
+    # Zero, not absent: billing would otherwise read the provider cache counts in the details.
     provider_usage = dict(usage or {})
-    provider_usage.pop("prompt_tokens_cached", None)
+    provider_usage["prompt_tokens_cached"] = 0
+    provider_usage["prompt_tokens_cache_write"] = 0
     return provider_usage
 
 

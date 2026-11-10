@@ -9,6 +9,7 @@ import httpx
 
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.providers.json_guidance import validate_guided_json_support
+from src.providers.chat_usage import separate_cache_chat_usage
 from src.models.requests import ChatCompletionRequest
 from src.services.admission.output_limit_types import complete_output_count
 from src.models.responses import ChatCompletionResponse
@@ -345,8 +346,6 @@ class AnthropicAdapter(ProviderAdapter):
                     }
                 )
         usage = data.get("usage") or {}
-        prompt_tokens = int(usage.get("input_tokens") or 0)
-        completion_tokens = int(usage.get("output_tokens") or 0)
         finish_reason_map = {
             "end_turn": "stop",
             "stop_sequence": "stop",
@@ -369,11 +368,13 @@ class AnthropicAdapter(ProviderAdapter):
                     "finish_reason": finish_reason,
                 }
             ],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            },
+            # Anthropic input_tokens leaves out cache reads and cache writes.
+            "usage": separate_cache_chat_usage(
+                uncached=int(usage.get("input_tokens") or 0),
+                cache_read=int(usage.get("cache_read_input_tokens") or 0),
+                cache_write=int(usage.get("cache_creation_input_tokens") or 0),
+                completion=int(usage.get("output_tokens") or 0),
+            ),
         }
         return ChatCompletionResponse.model_validate(canonical)
 

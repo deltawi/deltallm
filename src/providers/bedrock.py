@@ -19,6 +19,7 @@ from src.models.errors import (
     ServiceUnavailableError,
 )
 from src.providers.json_guidance import validate_guided_json_support
+from src.providers.chat_usage import separate_cache_chat_usage
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
@@ -199,6 +200,22 @@ def _is_valid_bedrock_success_payload(data: Mapping[str, Any]) -> bool:
     )
 
 
+def _bedrock_chat_usage(usage: Mapping[str, Any]) -> dict[str, Any]:
+    # Bedrock inputTokens leaves out cache reads and cache writes; totalTokens includes them.
+    read = usage.get("cacheReadInputTokens") or 0
+    write = usage.get("cacheWriteInputTokens") or 0
+    if not is_valid_provider_token_count(read) or not is_valid_provider_token_count(write):
+        raise invalid_provider_response_error()
+    total = usage.get("totalTokens")
+    return separate_cache_chat_usage(
+        uncached=int(usage.get("inputTokens") or 0),
+        cache_read=read,
+        cache_write=write,
+        completion=int(usage.get("outputTokens") or 0),
+        total=int(total) if total and not (read or write) else None,
+    )
+
+
 def _stream_index(value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise invalid_provider_response_error()
@@ -376,9 +393,6 @@ class BedrockAdapter(ProviderAdapter):
             response_message["tool_calls"] = tool_calls
 
         usage = data.get("usage") or {}
-        prompt_tokens = int(usage.get("inputTokens") or 0)
-        completion_tokens = int(usage.get("outputTokens") or 0)
-        total_tokens = int(usage.get("totalTokens") or (prompt_tokens + completion_tokens))
 
         canonical = {
             "id": data.get("requestId") or f"chatcmpl-bedrock-{int(time.time())}",
@@ -392,11 +406,7 @@ class BedrockAdapter(ProviderAdapter):
                     "finish_reason": finish_reason,
                 }
             ],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            },
+            "usage": _bedrock_chat_usage(usage),
         }
         return ChatCompletionResponse.model_validate(canonical)
 
@@ -543,11 +553,7 @@ class BedrockAdapter(ProviderAdapter):
                         for key in ("inputTokens", "outputTokens", "totalTokens")
                     ):
                         raise invalid_provider_response_error()
-                    usage = {
-                        "prompt_tokens": int(usage_data["inputTokens"]),
-                        "completion_tokens": int(usage_data["outputTokens"]),
-                        "total_tokens": int(usage_data["totalTokens"]),
-                    }
+                    usage = _bedrock_chat_usage(usage_data)
 
         if not saw_message_start or not saw_message_stop:
             raise invalid_provider_response_error()

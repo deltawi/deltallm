@@ -167,8 +167,28 @@ The response cache keys on these parameters too, so answers for different
 When the provider reports them, chat answers keep `usage.prompt_tokens_details`
 (for example `cached_tokens`) and `usage.completion_tokens_details` (for example
 `reasoning_tokens`), plus answer fields such as `service_tier` and
-`message.refusal`. These breakdowns are informational. They do not change how
-DeltaLLM prices the request.
+`message.refusal`.
+
+`prompt_tokens_details.cached_tokens` is the number of prompt tokens that the
+provider read from its prompt cache. DeltaLLM bills these tokens at the model's
+cache-hit input price (`input_cost_per_token_cache_hit`). When the model has no
+cache-hit price, they use the normal input price. A count that is not a whole
+number, or that is more than `prompt_tokens`, is ignored. The other breakdowns are
+informational and do not change the price.
+
+For Anthropic, Amazon Bedrock and Google Gemini models on `/v1/chat/completions`,
+DeltaLLM writes the provider's cache counts in the OpenAI shape:
+
+| Provider | `prompt_tokens` | `prompt_tokens_details` |
+| --- | --- | --- |
+| Anthropic | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cached_tokens` = `cache_read_input_tokens`, `cache_write_tokens` = `cache_creation_input_tokens` |
+| Amazon Bedrock | `inputTokens` + `cacheReadInputTokens` + `cacheWriteInputTokens` | `cached_tokens` = `cacheReadInputTokens`, `cache_write_tokens` = `cacheWriteInputTokens` |
+| Google Gemini | `promptTokenCount` (it includes the cached part) | `cached_tokens` = `cachedContentTokenCount` |
+
+The details object is present only when the provider reports cache tokens.
+Self-hosted servers report cached tokens only when you turn the report on. See
+[vLLM cached tokens](../providers/index.md#vllm-cached-tokens) and
+[SGLang cached tokens](../providers/sglang.md#cached-tokens).
 
 Chat requests also support DeltaLLM-managed MCP tools through `tools: [{ "type": "mcp", ... }]` on non-streaming requests. See [MCP Gateway & Tooling](mcp.md).
 

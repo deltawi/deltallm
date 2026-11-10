@@ -65,3 +65,8 @@ Model names such as `meta-llama/Llama-3.3-70B-Instruct` stay intact.
 
 Set prices on the model before relying on spend reports. DeltaLLM has no
 catalog prices for this provider.
+
+When the service sends `usage.prompt_tokens_details.cached_tokens`, DeltaLLM bills
+those prompt tokens at the model's cache-hit input price
+(`input_cost_per_token_cache_hit`). When the price is not set, they use the normal
+input price.

@@ -260,6 +260,15 @@ class GeminiAdapter(ProviderAdapter):
         prompt_tokens = int(usage.get("promptTokenCount") or 0)
         completion_tokens = int(usage.get("candidatesTokenCount") or 0)
         total_tokens = int(usage.get("totalTokenCount") or (prompt_tokens + completion_tokens))
+        usage_payload: dict[str, Any] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+        # promptTokenCount includes the cached part (implicit or explicit context caching).
+        cached = usage.get("cachedContentTokenCount")
+        if type(cached) is int and 0 < cached <= prompt_tokens:
+            usage_payload["prompt_tokens_details"] = {"cached_tokens": cached}
 
         canonical = {
             "id": data.get("responseId") or f"chatcmpl-gemini-{int(time.time())}",
@@ -273,11 +282,7 @@ class GeminiAdapter(ProviderAdapter):
                     "finish_reason": finish_reason,
                 }
             ],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            },
+            "usage": usage_payload,
         }
         return ChatCompletionResponse.model_validate(canonical)
 

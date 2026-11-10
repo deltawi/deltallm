@@ -115,6 +115,22 @@ with the values fixed by the schema. Cached responses are bypassed. A failed
 request or schema check stops the command with a nonzero exit status.
 Run this check against the exact vLLM version and model before deployment.
 
+## vLLM cached tokens
+
+vLLM reuses the KV cache for prompts that start with the same text (automatic prefix
+caching). To report the reused tokens, start the server with
+`--enable-prompt-tokens-details`:
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct --enable-prompt-tokens-details
+```
+
+vLLM then sends `usage.prompt_tokens_details.cached_tokens`. DeltaLLM bills these
+tokens at the model's cache-hit input price (`input_cost_per_token_cache_hit`). When
+the price is not set, cached tokens use the normal input price. Without the flag, all
+prompt tokens use the normal input price. For SGLang, see
+[SGLang cached tokens](sglang.md#cached-tokens).
+
 ## Support boundaries
 
 - Capability is declared per configured model mode, not inferred from marketing names.
