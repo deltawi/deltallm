@@ -187,9 +187,8 @@ async def _save(engine: _Engine, *, lease_left: float) -> bool:
 async def test_busy_period_is_waited_out_under_the_claimed_lease(clock):
     # Dev load test 2026-11-10: the pool was full for about 10 s while 12 jobs
     # started. The save gave up after 3.5 s and the item later failed as
-    # accounting_closed. The claimed lease covers the longer waits, and
-    # without a save queue no renewal is needed after them: no query is sent
-    # but the saves.
+    # accounting_closed. The claimed lease covers the longer waits, so no
+    # renewal is needed: no query is sent but the saves.
     database = _Database(clock, lease_until=1340.0, busy_until=1012.0, latency=0.01)
     engine = _Engine(database, lease_seconds=360)
 
@@ -236,44 +235,6 @@ async def test_a_renewal_keeps_the_lease_for_the_next_save(clock):
     assert database.saved_at == 1015.5
 
 
-async def test_the_lease_is_renewed_before_a_save_waits_in_the_save_queue(clock):
-    # Codex review 2026-11-10: after a long wait, the save can wait in the save
-    # queue behind slower saves. Here it waits 35 s, longer than the quarter
-    # lease that the wait check keeps. The lease is renewed after the wait,
-    # before the save goes into the queue, so the save goes in with as much
-    # lease as a save on main starts with (60 s less one 15 s heartbeat).
-    database = _Database(
-        clock, lease_until=1040.0, busy_until=1010.0, latency=1.0, renewals_busy=False
-    )
-    engine = _Engine(database, lease_seconds=60, save_slots=1)
-    queue = engine._result_save_groups()
-    assert queue is not None
-    others: list[asyncio.Task] = []
-
-    async def other_save_takes_the_slot() -> None:
-        others.append(asyncio.create_task(queue.run([{"item_id": "other", "claim_epoch": 1}])))
-        others.append(asyncio.create_task(release_the_slot_after_35_seconds()))
-        await _real_sleep(0)
-
-    async def release_the_slot_after_35_seconds() -> None:
-        while queue.waiting == 0:
-            await _real_sleep(0)
-        clock.now += 35.0
-        database.other_save_done.set()
-
-    database.on_renew = other_save_takes_the_slot
-
-    assert await _save(engine, lease_left=40.0)
-    await asyncio.gather(*others)
-
-    assert clock.sleeps == [0.5, 1.0, 2.0, 4.0]
-    assert database.renewals == [1011.5]
-    # The lease from the claim ended at 1040: without the renewal, another
-    # worker could claim the item before the save.
-    assert database.saved_at == 1048.5
-    assert not database.claimed_by_other
-
-
 async def _save_while_another_save_holds_the_slot(
     engine: _Engine, *, lease_left: float, hold_seconds: float
 ) -> bool:
@@ -304,23 +265,23 @@ async def _save_while_another_save_holds_the_slot(
     return saved
 
 
-async def test_a_save_skips_the_save_queue_when_the_renewal_after_a_long_wait_is_refused(clock):
-    # Codex review 2026-11-10: the busy pool refuses the renewal after the long
-    # wait while another save holds the only save slot for 35 s more. In the
-    # queue, the lease from the claim (to 1040) would end before the slot is
-    # free, and another worker would claim the item. The save goes to the
-    # database without the queue, under the lease known before the wait.
+async def test_a_save_after_a_long_wait_skips_the_save_queue(clock):
+    # Codex review 2026-11-10: the save queue has no deadline, and a save can
+    # wait in it behind other saves for longer than a whole lease. Here
+    # another save holds the only save slot for 65 s, more than the 60 s
+    # lease that a renewal would give. The save after the long wait goes to
+    # the database without the queue, under the lease that the wait check
+    # kept (to 1040), and no renewal is sent.
     database = _Database(
         clock, lease_until=1040.0, busy_until=1010.0, latency=1.0, renewals_busy=False
     )
-    database.refused_renewals = 1
     engine = _Engine(database, lease_seconds=60, save_slots=1)
 
-    assert await _save_while_another_save_holds_the_slot(engine, lease_left=40.0, hold_seconds=35.0)
+    assert await _save_while_another_save_holds_the_slot(engine, lease_left=40.0, hold_seconds=65.0)
 
     assert clock.sleeps == [0.5, 1.0, 2.0, 4.0]
-    assert database.renewals == []
-    assert database.saved_at == 1013.5
+    assert database.renewal_calls == 0
+    assert database.saved_at == 1012.5
     assert not database.claimed_by_other
 
 
@@ -348,22 +309,27 @@ async def test_a_save_skips_the_save_queue_when_the_renewal_before_a_long_wait_i
 
 @pytest.mark.parametrize("busy_reads", [0, 1])
 async def test_a_save_that_skips_a_row_held_by_a_late_renewal_is_tried_again(clock, busy_reads):
-    # Codex review 2026-11-10: the renewal after a long wait reports a timeout
-    # at its caller's deadline, but its UPDATE goes on and holds the item row.
-    # The next save skips the row and reports not_owned. The item is still
-    # claimed by this worker at the same epoch, so the worker waits and saves
-    # again instead of giving up the answer. A busy pool that refuses the
-    # ownership read gets the same wait as a busy save.
-    database = _Database(clock, lease_until=1340.0, busy_until=1007.0, latency=0.01)
+    # Codex review 2026-11-10: the lease left (60 s) does not cover a long wait
+    # and its reserve, so the worker renews it. The renewal reports a timeout
+    # at its caller's deadline, but its UPDATE goes on and holds the item row
+    # for 3 s more. The next save skips the row and reports not_owned. The
+    # item is still claimed by this worker at the same epoch, so the worker
+    # waits and saves again instead of giving up the answer. A busy pool that
+    # refuses the ownership read gets the same wait as a busy save.
+    database = _Database(
+        clock, lease_until=1060.0, busy_until=1003.545, latency=0.01, renewals_busy=False
+    )
     database.renewal_deadlines = 1
     database.busy_reads = busy_reads
     engine = _Engine(database, lease_seconds=360, save_slots=1)
 
-    assert await _save(engine, lease_left=340.0)
+    assert await _save(engine, lease_left=60.0)
 
     assert database.busy_reads == 0
-    assert clock.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0]
-    assert database.saves == 6
+    # The first long wait is replaced by the late renewal, the second by a
+    # renewal that succeeds; the save after it still finds the row held.
+    assert clock.sleeps == [0.5, 1.0, 2.0, 8.0]
+    assert database.saves == 7
     assert database.saved_at is not None and database.saved_at < database.lease_until
     assert database.requeues == []
 

@@ -494,25 +494,14 @@ class WorkerPersistenceMixin:
             return waits.can_renew() and await self._renew_for_long_wait(waits, items)
         await self._sleep_unless_draining(wait)
         waits.save_delayed()
-        if (
-            self._result_save_groups() is not None
-            and waits.shorter_than_main()
-            and waits.can_renew()
-            and not self._drain_signal().is_set()
-        ):
-            # The save can wait in the save queue before it reaches the
-            # database. Renew first, so that it goes in with as much lease as
-            # a save on main.
-            await self._renew_for_long_wait(waits, items)
         return True
 
     async def _renew_for_long_wait(
         self, waits: ResultSaveWaits, items: list[dict[str, Any]]
     ) -> bool:
         started_at = waits.now()
-        # If the renewal is refused, the save that follows is later than on
-        # main with less lease, so it skips the save queue: the lease left
-        # after the renewal covers one save call, not a wait for a save slot.
+        # Renewed or not, the next save goes to the database without the save
+        # queue: the lease left covers one save call, not a wait for a slot.
         waits.save_delayed()
         if not await self._renew_unsaved_item_leases(items):
             return False
@@ -639,7 +628,6 @@ class WorkerPersistenceMixin:
         """
         waits = ResultSaveWaits(
             self.config.item_lease_seconds,
-            heartbeat_seconds=self.config.heartbeat_interval_seconds,
             call_seconds=getattr(self.config, "database_call_seconds", 0.0),
             known_lease_seconds=known_lease_seconds(lease_ends),
         )

@@ -44,20 +44,17 @@ class ResultSaveWaits:
     renewal call and a save call at their longest. The lease is known from the
     claim's lease end, or from a renewal that this save made. Heartbeat
     renewals only make the real lease longer. A renewal is sent only while
-    the known lease covers it and a save call after it. After a long wait,
-    the save can also wait in the save queue, so the lease is renewed first
-    when it is shorter than a save on main is sure to have. A save that comes
-    later than on main (after a long wait or a renewal) and has less lease
-    than main skips the save queue: the lease left covers one save call, not
-    a wait for a save slot. The save checks the owner and claim epoch, so a
-    save after another worker's claim changes nothing.
+    the known lease covers it and a save call after it. A save that comes
+    after a long wait or a renewal skips the save queue: the lease left covers
+    one save call, but not a wait for a save slot, which has no bound. The
+    save checks the owner and claim epoch, so a save after another worker's
+    claim changes nothing.
     """
 
     def __init__(
         self,
         lease_seconds: float,
         *,
-        heartbeat_seconds: float,
         call_seconds: float = 0.0,
         known_lease_seconds: float | None = None,
     ) -> None:
@@ -65,13 +62,10 @@ class ResultSaveWaits:
         # A renewal call and then a save call, each at its longest.
         self._two_calls_seconds = 2 * max(0.0, float(call_seconds))
         self._reserve_seconds = max(self._lease_seconds / 4, self._two_calls_seconds)
-        # A save on main starts at most one heartbeat interval after the last
-        # lease renewal, so with at least this much of its lease left.
-        self._main_lease_seconds = self._lease_seconds - max(0.0, float(heartbeat_seconds))
         self._lease_until = (
             None if known_lease_seconds is None else monotonic() + known_lease_seconds
         )
-        # A long wait or a renewal made the next save later than on main.
+        # A long wait or a renewal came before the next save.
         self._delayed = False
         self._waits: Iterator[BusyWait] = iter(
             [BusyWait(seconds=delay, long=False) for delay in SHORT_DELAYS_SECONDS]
@@ -96,7 +90,7 @@ class ResultSaveWaits:
 
     def skips_save_queue(self) -> bool:
         """True when the next save goes to the database without the save queue."""
-        return self._delayed and self.shorter_than_main()
+        return self._delayed
 
     def covers(self, wait: BusyWait) -> bool:
         if self._lease_until is None:
@@ -111,12 +105,6 @@ class ResultSaveWaits:
         if self._lease_until is None or not self._two_calls_seconds:
             return True
         return self._lease_until - monotonic() >= self._two_calls_seconds
-
-    def shorter_than_main(self) -> bool:
-        """True when the known lease is shorter than a save on main is sure to have."""
-        if self._lease_until is None:
-            return True
-        return self._lease_until - monotonic() < self._main_lease_seconds
 
 
 def _jittered(delay: float) -> BusyWait:
