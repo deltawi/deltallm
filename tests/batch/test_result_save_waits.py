@@ -56,6 +56,8 @@ class _Database:
         # and holds the item row for 3 s more.
         self.renewal_deadlines = 0
         self.row_locked_until = float("-inf")
+        # Ownership reads that the busy pool refuses.
+        self.busy_reads = 0
 
     def _call(self) -> float:
         started = self.clock.now
@@ -101,6 +103,9 @@ class _Database:
 
     async def list_items_by_ids(self, item_ids):
         self._call()
+        if self.busy_reads:
+            self.busy_reads -= 1
+            raise DatabaseUnavailableError()
         owner = "w2" if self.claimed_by_other else "w1"
         return [
             SimpleNamespace(item_id=item_id, status="in_progress", locked_by=owner, claim_epoch=1)
@@ -223,18 +228,22 @@ async def test_the_lease_is_renewed_before_a_save_waits_in_the_save_queue(clock)
     assert not database.claimed_by_other
 
 
-async def test_a_save_that_skips_a_row_held_by_a_late_renewal_is_tried_again(clock):
+@pytest.mark.parametrize("busy_reads", [0, 1])
+async def test_a_save_that_skips_a_row_held_by_a_late_renewal_is_tried_again(clock, busy_reads):
     # Codex review 2026-11-10: the renewal after a long wait reports a timeout
     # at its caller's deadline, but its UPDATE goes on and holds the item row.
     # The next save skips the row and reports not_owned. The item is still
     # claimed by this worker at the same epoch, so the worker waits and saves
-    # again instead of giving up the answer.
+    # again instead of giving up the answer. A busy pool that refuses the
+    # ownership read gets the same wait as a busy save.
     database = _Database(clock, lease_until=1340.0, busy_until=1007.0, latency=0.01)
     database.renewal_deadlines = 1
+    database.busy_reads = busy_reads
     engine = _Engine(database, lease_seconds=360)
 
     assert await _save(engine, lease_left=340.0)
 
+    assert database.busy_reads == 0
     assert clock.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0]
     assert database.saves == 6
     assert database.saved_at is not None and database.saved_at < database.lease_until

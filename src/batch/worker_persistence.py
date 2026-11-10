@@ -508,17 +508,13 @@ class WorkerPersistenceMixin:
         return True
 
     async def _items_still_claimed(self, items: list[dict[str, Any]]) -> bool:
-        """True when this worker still holds every item at its claim epoch."""
+        """True when this worker still holds every item at its claim epoch.
+
+        A failed read raises: only a read that the database answered can show
+        that another worker or claim holds an item.
+        """
         epochs = {str(item["item_id"]): item.get("claim_epoch") for item in items}
-        try:
-            records = await self.repository.list_items_by_ids(list(epochs))
-        except Exception as exc:
-            logger.warning(
-                "batch completion persistence ownership check failed item_ids=%s error=%s",
-                list(epochs),
-                exc,
-            )
-            return False
+        records = await self.repository.list_items_by_ids(list(epochs))
         return len(records) == len(epochs) and all(
             record.status == "in_progress"
             and record.locked_by == self.config.worker_id
@@ -640,6 +636,11 @@ class WorkerPersistenceMixin:
             attempt += 1
             try:
                 result = await self._save_result_rows(items)
+                if result == "not_owned" and await self._items_still_claimed(items):
+                    # The save skipped an item row that another statement held
+                    # (FOR UPDATE SKIP LOCKED), such as a lease renewal that
+                    # ran on after its caller stopped waiting.
+                    result = "skipped_held_row"
             except Exception as exc:
                 logger.warning(
                     "batch completion persistence attempt failed context=%s item_ids=%s attempt=%s error=%s",
@@ -650,7 +651,8 @@ class WorkerPersistenceMixin:
                     exc_info=True,
                 )
                 # A busy database is waited out before it counts as a
-                # failure. The save is idempotent, so a retry after an
+                # failure, also when it refuses the ownership read after a
+                # skipped row. The save is idempotent, so a retry after an
                 # uncertain commit returns already_completed.
                 if not (
                     is_gateway_busy(exc) and await self._wait_before_result_save_retry(waits, items)
@@ -660,15 +662,12 @@ class WorkerPersistenceMixin:
 
             if result in {"completed", "already_completed"}:
                 return True
+            if result == "skipped_held_row":
+                # The items are still ours: wait and save again.
+                if not await self._wait_before_result_save_retry(waits, items):
+                    failures += 1
+                continue
             if result == "not_owned":
-                if await self._items_still_claimed(items):
-                    # The save skipped an item row that another statement held
-                    # (FOR UPDATE SKIP LOCKED), such as a lease renewal that
-                    # ran on after its caller stopped waiting. The items are
-                    # still ours: wait and save again.
-                    if not await self._wait_before_result_save_retry(waits, items):
-                        failures += 1
-                    continue
                 logger.warning(
                     "batch completion persistence lost ownership context=%s item_ids=%s",
                     context_label,

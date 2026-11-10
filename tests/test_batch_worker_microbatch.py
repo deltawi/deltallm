@@ -2311,6 +2311,15 @@ async def test_worker_requeues_unpersisted_items_after_grouped_completion_salvag
             self.completed_bulk_calls.append(kwargs)
             return "not_owned"
 
+        async def list_items_by_ids(self, item_ids):
+            # Another worker claimed the items.
+            return [
+                SimpleNamespace(
+                    item_id=item_id, status="in_progress", locked_by="w2", claim_epoch=2
+                )
+                for item_id in item_ids
+            ]
+
     worker, _, _, _, failover = _build_worker(
         deployment_model_info={"upstream_max_batch_inputs": 4}
     )

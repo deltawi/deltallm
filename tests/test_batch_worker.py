@@ -5214,6 +5214,15 @@ async def test_batch_worker_skips_spend_logging_when_item_completion_loses_owner
             self.completed_calls.append(kwargs)
             return False
 
+        async def list_items_by_ids(self, item_ids):
+            # Another worker claimed the item.
+            return [
+                SimpleNamespace(
+                    item_id=item_id, status="in_progress", locked_by="w2", claim_epoch=2
+                )
+                for item_id in item_ids
+            ]
+
     deployment = SimpleNamespace(
         deltallm_params={
             "model": "vllm/sentence-transformers/all-MiniLM-L6-v2",
