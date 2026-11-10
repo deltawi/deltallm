@@ -232,11 +232,14 @@ def test_frozen_accounting_snapshot_keeps_write_prices():
     assert snapshot["catalog.input_cost_per_token_cache_write"] == "0.1"
 
 
-def test_selector_classifier_accepts_cache_write_prices():
-    snapshot = selector_price_snapshot(SONNET)
+def test_selector_classifier_rejects_paid_cache_writes():
+    # The selector receipt, charge and hold have no write dimension.
+    with pytest.raises(ValueError, match="unsupported provider billing dimensions"):
+        selector_price_snapshot(SONNET)
+    free_writes = {**SONNET, "input_cost_per_token_cache_write": 0}
+    free_writes.pop("input_cost_per_token_cache_write_1h")
 
-    assert snapshot.input_cost_per_token == Decimal("0.000003")
-    assert snapshot.input_cost_per_token_cache_hit == Decimal("0.0000003")
+    assert selector_price_snapshot(free_writes).input_cost_per_token == Decimal("0.000003")
 
 
 def test_native_usage_splits_one_hour_writes():
@@ -282,3 +285,92 @@ def test_zero_cache_write_counts_stay_out_of_the_answer():
     assert "prompt_tokens_cache_write" not in plain.model_dump(mode="json")
     assert "prompt_tokens_cache_write_1h" not in written.model_dump(mode="json")
     assert written.model_dump(mode="json")["prompt_tokens_cache_write"] == 2
+
+
+def _batch_charge(info: dict[str, object], usage: dict[str, int]):
+    return resolve_token_billing_result(
+        _resolution(info, mode="batch"), model="claude-sonnet", usage=usage, mode="batch"
+    ).billing
+
+
+@pytest.mark.parametrize("multiplier", [None, "0.5"])
+def test_batch_write_price_follows_the_multiplier(multiplier):
+    info = {"input_cost_per_token": "0.000003", "input_cost_per_token_cache_write_1h": "0.000006"}
+    if multiplier is not None:
+        info["batch_price_multiplier"] = multiplier
+    usage = {
+        "prompt_tokens": 10_000,
+        "completion_tokens": 0,
+        "prompt_tokens_cache_write": 10_000,
+        "prompt_tokens_cache_write_1h": 10_000,
+    }
+    exact = _batch_charge(info, usage).exact_cost
+    legacy = completion_cost(
+        model="claude-sonnet",
+        usage=usage,
+        custom_pricing=pricing_from_model_info(info),
+        pricing_tier="batch",
+        model_info=info,
+    )
+
+    assert exact == (Decimal("0.03") if multiplier else Decimal("0.06"))
+    assert legacy == pytest.approx(float(exact))
+
+
+@pytest.mark.parametrize("multiplier", [None, "0.5"])
+def test_batch_hold_covers_a_full_write_receipt(multiplier):
+    info = {
+        "input_cost_per_token": "0.000003",
+        "output_cost_per_token": "0",
+        "input_cost_per_token_cache_write_1h": "0.000006",
+    }
+    if multiplier is not None:
+        info["batch_price_multiplier"] = multiplier
+    hold = conservative_provider_allowance(
+        pricing=_resolution(info, mode="batch"),
+        model_info={"max_input_tokens": 10_000, "max_output_tokens": 1},
+        call_type="completion",
+        bounds=ProviderRequestBounds(max_output_tokens=1),
+        max_attempts=1,
+    )
+    worst = _batch_charge(
+        info,
+        {
+            "prompt_tokens": 10_000,
+            "completion_tokens": 1,
+            "prompt_tokens_cache_write": 10_000,
+            "prompt_tokens_cache_write_1h": 10_000,
+        },
+    )
+
+    assert worst.exact_cost == (Decimal("0.03") if multiplier else Decimal("0.06"))
+    assert worst.exact_cost <= hold
+
+
+def test_batch_receipt_keeps_write_counts():
+    from src.batch.accounting_execution import _receipt_counts
+
+    plain = {"prompt_tokens": 10, "completion_tokens": 1, "prompt_tokens_cached": 2}
+    assert _receipt_counts(plain) == plain
+    assert _receipt_counts(
+        {**plain, "prompt_tokens_cache_write": 8, "prompt_tokens_cache_write_1h": 3}
+    ) == {**plain, "prompt_tokens_cache_write": 8, "prompt_tokens_cache_write_1h": 3}
+
+
+@pytest.mark.parametrize(
+    "writes",
+    [
+        {"prompt_tokens_cache_write": 9},
+        {"prompt_tokens_cache_write": 2, "prompt_tokens_cache_write_1h": 3},
+        {"prompt_tokens_cache_write": "2"},
+        {"prompt_tokens_cache_write": -1},
+    ],
+)
+def test_batch_receipt_rejects_impossible_write_counts(writes):
+    from src.batch.accounting_checkpoint import BatchAccountingUnavailable
+    from src.batch.accounting_execution import _receipt_counts
+
+    with pytest.raises(BatchAccountingUnavailable):
+        _receipt_counts(
+            {"prompt_tokens": 10, "completion_tokens": 1, "prompt_tokens_cached": 2, **writes}
+        )

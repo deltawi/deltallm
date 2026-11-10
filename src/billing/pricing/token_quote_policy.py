@@ -300,10 +300,11 @@ class _TokenQuotePolicy:
         fields: tuple[CacheWriteField, ...] = (
             (_CACHE_WRITE_1H, _CACHE_WRITE) if write_field == _CACHE_WRITE_1H else (_CACHE_WRITE,)
         )
+        # Batch scales a write price like the input price it falls back to.
         for field in fields:
             rate = self.configured(field)
             if rate is not None:
-                return _SelectedRate(rate, field, self.context.source(field))
+                return _SelectedRate(self.scaled(rate), field, self.context.source(field))
         catalog = self.context.catalog
         if not self.sync and catalog is not None:
             for field in fields:
@@ -313,7 +314,7 @@ class _TokenQuotePolicy:
                     else catalog.input_cost_per_token_cache_write
                 )
                 if value is not None:
-                    return _SelectedRate(Decimal(str(value)), field, "default")
+                    return _SelectedRate(self.scaled(Decimal(str(value))), field, "default")
         return self.regular("input_cost_per_token")
 
     def record(self, target: str, value: _SelectedRate) -> None:

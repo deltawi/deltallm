@@ -176,14 +176,7 @@ def selector_price_snapshot(info: Mapping[str, object]) -> SelectorPriceSnapshot
         if (
             "cost_per_" in key
             and key not in fields
-            # Classifier prompts never ask for prompt caching, so no cache write happens.
-            and key
-            not in {
-                "batch_input_cost_per_token",
-                "batch_output_cost_per_token",
-                "input_cost_per_token_cache_write",
-                "input_cost_per_token_cache_write_1h",
-            }
+            and key not in {"batch_input_cost_per_token", "batch_output_cost_per_token"}
             and value not in (None, 0)
         ):
             raise ValueError("selector has unsupported provider billing dimensions")

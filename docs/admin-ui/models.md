@@ -386,7 +386,7 @@ How list prices are mapped:
 - DeepSeek uses its peak rate. Off-peak requests cost half upstream.
 - Batch prices are never pre-filled. DeltaLLM runs Batch jobs through the provider's regular API, so a provider's batch discount does not apply to them. Set batch prices yourself if you want to bill Batch jobs differently.
 - Cached-input prices are the provider's cache-read rate.
-- Anthropic models also get the 5-minute and 1-hour cache-write prices. Other providers do not charge for cache writes.
+- Anthropic models also get the 5-minute and 1-hour cache-write prices. The catalog has no cache-write prices for other providers. Some of them charge for cache writes (for example OpenAI GPT-5.6 and later), so check the provider price list. See [Prompt cache prices](../configuration/models.md#prompt-cache-prices).
 
 Providers with prices today: OpenAI, Anthropic, Gemini (main chat models), Groq, DeepSeek, Z.ai, ElevenLabs and Mistral Large. For other providers, refresh the provider model list to pick up the limits the provider reports, then enter prices yourself.
 

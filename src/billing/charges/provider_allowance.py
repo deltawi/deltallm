@@ -240,12 +240,24 @@ def _batch_token_ceiling_rates(
         cache_hit=True,
         mode="batch",
     ).pricing
-    if ordinary is None or cached is None:
+    # One 5-minute and one 1-hour write select both batch write rates.
+    written = resolve_exact_token_quote_pricing(
+        pricing,
+        model=pricing.callable_model,
+        prompt_tokens=2,
+        completion_tokens=0,
+        prompt_tokens_cache_write=2,
+        prompt_tokens_cache_write_1h=1,
+        mode="batch",
+    ).pricing
+    if ordinary is None or cached is None or written is None:
         raise SpendPersistenceUnavailable()
     return _TokenCeilingRates(
         input_rate=max(
             ordinary.input_cost_per_token,
             cached.input_cost_per_token_cache_hit or cached.input_cost_per_token,
+            written.input_cost_per_token_cache_write or Decimal(0),
+            written.input_cost_per_token_cache_write_1h or Decimal(0),
         ),
         output_rate=max(
             ordinary.output_cost_per_token,

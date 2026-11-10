@@ -489,9 +489,15 @@ model_info:
   input_cost_per_token_cache_write_1h: 0.000006
 ```
 
-Today, only Anthropic on `/v1/messages` reports cache writes. OpenAI, Azure OpenAI, Gemini,
-DeepSeek, vLLM and SGLang do not charge for cache writes, so keep the cache-write fields
-empty for these providers.
+DeltaLLM reads cache-write counts from Anthropic on `/v1/messages`
+(`cache_creation_input_tokens`, with the 1-hour part from `cache_creation`). Other providers
+can also charge for cache writes. For example, OpenAI charges for writes on GPT-5.6 and later
+models. When DeltaLLM does not read a provider's write count, the written tokens use the
+input price, even if the model has a write price. Check the provider's price list for each
+model before you set a write price.
+
+A model router classifier (selector) cannot bill cache writes. A model with a nonzero
+cache-write price fails selector qualification.
 
 Before a call, DeltaLLM holds budget at the highest of the input, cache-read and
 cache-write prices. A cache-write price that is higher than the input price makes this
