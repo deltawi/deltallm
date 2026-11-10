@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Any, Awaitable, Iterator, Sequence
 
 from src.batch.endpoints import batch_call_type_for_endpoint
+from src.batch.result_save_waits import BusyWait, ResultSaveWaits, known_lease_seconds
 from src.batch.retry import is_gateway_busy
 from src.batch.policy import (
     BatchPolicyLease,
@@ -39,13 +40,8 @@ _POLICY_RELEASE_RETRY_INITIAL_SECONDS = 0.5
 _POLICY_RELEASE_RETRY_MAX_SECONDS = 30.0
 # After the provider has answered, a busy database must not throw the answer
 # away: wait and try the lease renewal or the requeue again before giving up.
+# The result save waits longer (src/batch/result_save_waits.py).
 _GATEWAY_BUSY_SAVE_DELAYS_SECONDS = (0.5, 1.0, 2.0)
-# The result save waits longer. With accounting v2 an answer that is not saved
-# ends the item: its next claim cannot call the provider again, so it fails as
-# accounting_closed. A busy pool (all jobs starting at once, a rollout) usually
-# frees up within seconds, so the save backs off up to 8 s, about 40 s in all.
-_RESULT_SAVE_BUSY_DELAYS_SECONDS = (0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0, 8.0)
-_RESULT_SAVE_BUSY_JITTER = 0.2
 # Rows one grouped result save may write, across all its members.
 RESULT_SAVE_GROUP_MAX_ROWS = 50
 _SAVED_RESULTS = frozenset({"completed", "already_completed"})
@@ -78,24 +74,6 @@ def _shares_an_item(group: Sequence[list[dict[str, Any]]], rows: list[dict[str, 
     return any(str(row["item_id"]) in ids for member in group for row in member)
 
 
-def _result_save_busy_delays(item_lease_seconds: float) -> Iterator[float]:
-    """Waits between result saves that a busy database refused.
-
-    The heartbeat stops before the save, so the waits stay within a quarter of
-    the item lease: the lease it last renewed still covers them, and no other
-    worker can claim the item meanwhile. Jitter keeps items that failed
-    together from coming back together.
-    """
-    budget = max(0.0, float(item_lease_seconds)) / 4
-    waited = 0.0
-    for delay in _RESULT_SAVE_BUSY_DELAYS_SECONDS:
-        wait = delay + random.uniform(0.0, delay * _RESULT_SAVE_BUSY_JITTER)
-        waited += wait
-        if waited > budget:
-            return
-        yield wait
-
-
 def _policy_release_retry_delay_seconds(attempt_count: int) -> float:
     exponential_delay = _POLICY_RELEASE_RETRY_INITIAL_SECONDS * (2 ** max(0, int(attempt_count)))
     capped_delay = min(_POLICY_RELEASE_RETRY_MAX_SECONDS, exponential_delay)
@@ -104,6 +82,9 @@ def _policy_release_retry_delay_seconds(attempt_count: int) -> float:
 
 
 class WorkerPersistenceMixin:
+    # Set once the worker starts its shutdown drain (start_draining).
+    _draining: asyncio.Event | None = None
+
     def _policy_release_retry_queue(self) -> deque[_PolicyReleaseRetry]:
         queue = getattr(self, "_pending_policy_release_retries", None)
         if queue is None:
@@ -476,6 +457,79 @@ class WorkerPersistenceMixin:
             return self._require_native_execution(prepared).completion_payload(payload, usage)
         return payload
 
+    def start_draining(self) -> None:
+        """Stop long result-save waits: the shutdown drain must cover the save.
+
+        Short waits and the requeue keep their bounded waits, so an answer that
+        is still not saved is given back to the queue before the drain ends.
+        """
+        self._drain_signal().set()
+
+    def _drain_signal(self) -> asyncio.Event:
+        signal = self._draining
+        if signal is None:
+            signal = self._draining = asyncio.Event()
+        return signal
+
+    async def _wait_before_result_save_retry(
+        self, waits: ResultSaveWaits, items: list[dict[str, Any]]
+    ) -> bool:
+        """Wait before the next result save; False when the save stops waiting."""
+        wait = waits.next_wait()
+        if wait is None:
+            return False
+        if not wait.long:
+            await asyncio.sleep(wait.seconds)
+            return True
+        if self._drain_signal().is_set():
+            return False
+        if not waits.covers(wait):
+            # No long wait without a lease known to cover it: when the renewal
+            # fails, the save is retried at once, as before the long waits.
+            started_at = waits.now()
+            if not await self._renew_unsaved_item_leases(items):
+                return False
+            waits.lease_renewed(started_at)
+            # The database answered the renewal: try the save again now.
+            return True
+        await self._sleep_unless_draining(wait)
+        return True
+
+    async def _renew_unsaved_item_leases(self, items: list[dict[str, Any]]) -> bool:
+        """True when this worker still owns every item and renewed its lease."""
+        claims = {
+            str(item["item_id"]): int(item["claim_epoch"])
+            for item in items
+            if item.get("claim_epoch") is not None
+        }
+        if len(claims) != len(items):
+            return False
+        try:
+            owned = await self.repository.renew_item_leases(
+                item_claim_epochs=claims,
+                worker_id=self.config.worker_id,
+                lease_seconds=self.config.item_lease_seconds,
+            )
+        except Exception as exc:
+            logger.warning(
+                "batch completion persistence lease renewal failed item_ids=%s error=%s",
+                list(claims),
+                exc,
+                exc_info=not is_gateway_busy(exc),
+            )
+            return False
+        return set(owned) == set(claims)
+
+    async def _sleep_unless_draining(self, wait: BusyWait) -> None:
+        sleeper = asyncio.ensure_future(asyncio.sleep(wait.seconds))
+        drained = asyncio.ensure_future(self._drain_signal().wait())
+        try:
+            await asyncio.wait({sleeper, drained}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleeper.cancel()
+            drained.cancel()
+            await asyncio.gather(sleeper, drained, return_exceptions=True)
+
     async def _requeue_unsaved_items(
         self,
         *,
@@ -521,8 +575,16 @@ class WorkerPersistenceMixin:
         items: list[dict[str, Any]],
         item_ids: list[str],
         context_label: str,
+        lease_ends: Sequence[datetime | None] = (),
     ) -> bool:
-        busy_delays = _result_save_busy_delays(self.config.item_lease_seconds)
+        """Save provider answers; requeue them when the save keeps failing.
+
+        ``lease_ends`` are the lease ends that the items' claims returned.
+        They tell how long the leases are known to last without a renewal.
+        """
+        waits = ResultSaveWaits(
+            self.config.item_lease_seconds, known_lease_seconds=known_lease_seconds(lease_ends)
+        )
         failures = 0
         attempt = 0
         while failures < 2:
@@ -538,13 +600,12 @@ class WorkerPersistenceMixin:
                     exc,
                     exc_info=True,
                 )
-                # A busy database gets short waits before it counts as a
+                # A busy database is waited out before it counts as a
                 # failure. The save is idempotent, so a retry after an
                 # uncertain commit returns already_completed.
-                delay = next(busy_delays, None) if is_gateway_busy(exc) else None
-                if delay is not None:
-                    await asyncio.sleep(delay)
-                else:
+                if not (
+                    is_gateway_busy(exc) and await self._wait_before_result_save_retry(waits, items)
+                ):
                     failures += 1
                 continue
 

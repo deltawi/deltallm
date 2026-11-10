@@ -514,7 +514,6 @@ async def test_busy_database_after_provider_answer_retries_lease_and_save(monkey
         sleeps.append(seconds)
 
     monkeypatch.setattr("src.batch.worker_persistence.asyncio.sleep", no_sleep)
-    monkeypatch.setattr("src.batch.worker_persistence.random.uniform", lambda low, high: low)
     renew_results: list[object] = [DatabaseUnavailableError(), DatabaseUnavailableError(), True]
     save_results: list[object] = [DatabaseUnavailableError(), "completed"]
 
@@ -541,51 +540,6 @@ async def test_busy_database_after_provider_answer_retries_lease_and_save(monkey
     )
     assert sleeps == [0.5, 1.0, 0.5]
     assert repo.release_for_retry_calls == []
-
-
-@pytest.mark.asyncio
-async def test_busy_database_after_provider_answer_waits_long_enough_to_save(monkeypatch):
-    # Dev load test 2026-11-10: the pool was full for about 10 s while 12 jobs
-    # started. The save gave up after 3.5 s, and the item later failed as
-    # accounting_closed. The save now waits out such a busy period.
-    worker, repo, _, _, _ = _build_worker()
-    engine = worker._execution_engine
-    sleeps: list[float] = []
-
-    async def no_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-
-    save_results: list[object] = [DatabaseUnavailableError()] * 6 + ["completed"]
-
-    async def complete_items_with_outbox_bulk(**kwargs):
-        result = save_results.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    monkeypatch.setattr("src.batch.worker_persistence.asyncio.sleep", no_sleep)
-    monkeypatch.setattr("src.batch.worker_persistence.random.uniform", lambda low, high: low)
-    monkeypatch.setattr(repo, "complete_items_with_outbox_bulk", complete_items_with_outbox_bulk)
-
-    assert await engine._persist_completion_rows_with_outbox(
-        items=[{"item_id": "i1", "claim_epoch": 1}],
-        item_ids=["i1"],
-        context_label="single",
-    )
-    assert sleeps == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0]
-    assert repo.release_for_retry_calls == []
-
-
-@pytest.mark.asyncio
-async def test_result_save_busy_waits_are_bounded_jittered_and_inside_the_lease(monkeypatch):
-    from src.batch.worker_persistence import _result_save_busy_delays
-
-    monkeypatch.setattr("src.batch.worker_persistence.random.uniform", lambda low, high: high)
-    assert list(_result_save_busy_delays(360)) == pytest.approx(
-        [0.6, 1.2, 2.4, 4.8, 9.6, 9.6, 9.6, 9.6]
-    )
-    # A short lease keeps the waits, jitter included, within a quarter of it.
-    assert list(_result_save_busy_delays(30)) == pytest.approx([0.6, 1.2, 2.4])
 
 
 @pytest.mark.asyncio

@@ -328,6 +328,7 @@ class ChatItemExecutionMixin:
                 ],
                 item_ids=[prepared.item.item_id],
                 context_label="chat",
+                lease_ends=[prepared.item.lease_expires_at],
             )
             if persisted:
                 self._native_completion_saved([prepared])

@@ -606,6 +606,7 @@ class EmbeddingWorkerExecutionMixin:
                 ],
                 item_ids=[prepared.item.item_id],
                 context_label="single",
+                lease_ends=[prepared.item.lease_expires_at],
             )
             if persisted:
                 self._native_completion_saved([prepared])
@@ -877,6 +878,7 @@ class EmbeddingWorkerExecutionMixin:
             context_label=(
                 f"microbatch:{served_deployment_id or getattr(first_item.primary_deployment, 'deployment_id', None) or 'unknown'}"
             ),
+            lease_ends=[prepared.item.lease_expires_at for prepared in prepared_items],
         )
         if not persisted:
             return

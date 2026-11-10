@@ -275,6 +275,7 @@ class BatchExecutorWorker:
     def stop(self) -> None:
         self._stop_requested = True
         self._running = False
+        self._execution_engine.start_draining()
         # Wake a pool loop waiting for a free slot so it can drain and return.
         self._execution_slots.notify()
 
