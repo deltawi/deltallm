@@ -507,6 +507,26 @@ class WorkerPersistenceMixin:
         waits.lease_renewed(started_at)
         return True
 
+    async def _items_still_claimed(self, items: list[dict[str, Any]]) -> bool:
+        """True when this worker still holds every item at its claim epoch."""
+        epochs = {str(item["item_id"]): item.get("claim_epoch") for item in items}
+        try:
+            records = await self.repository.list_items_by_ids(list(epochs))
+        except Exception as exc:
+            logger.warning(
+                "batch completion persistence ownership check failed item_ids=%s error=%s",
+                list(epochs),
+                exc,
+            )
+            return False
+        return len(records) == len(epochs) and all(
+            record.status == "in_progress"
+            and record.locked_by == self.config.worker_id
+            and epochs.get(str(record.item_id)) is not None
+            and int(record.claim_epoch) == int(epochs[str(record.item_id)])
+            for record in records
+        )
+
     async def _renew_unsaved_item_leases(self, items: list[dict[str, Any]]) -> bool:
         """True when this worker still owns every item and renewed its lease."""
         claims = {
@@ -641,6 +661,14 @@ class WorkerPersistenceMixin:
             if result in {"completed", "already_completed"}:
                 return True
             if result == "not_owned":
+                if await self._items_still_claimed(items):
+                    # The save skipped an item row that another statement held
+                    # (FOR UPDATE SKIP LOCKED), such as a lease renewal that
+                    # ran on after its caller stopped waiting. The items are
+                    # still ours: wait and save again.
+                    if not await self._wait_before_result_save_retry(waits, items):
+                        failures += 1
+                    continue
                 logger.warning(
                     "batch completion persistence lost ownership context=%s item_ids=%s",
                     context_label,

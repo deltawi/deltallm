@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,6 +52,10 @@ class _Database:
         self.on_renew = None
         # Another item's save holds the save slot until this is set.
         self.other_save_done = asyncio.Event()
+        # Renewals that pass their caller's deadline while the UPDATE goes on
+        # and holds the item row for 3 s more.
+        self.renewal_deadlines = 0
+        self.row_locked_until = float("-inf")
 
     def _call(self) -> float:
         started = self.clock.now
@@ -71,7 +76,8 @@ class _Database:
         started = self._call()
         if started < self.busy_until:
             raise DatabaseUnavailableError()
-        if self.claimed_by_other:
+        if self.claimed_by_other or started < self.row_locked_until:
+            # FOR UPDATE SKIP LOCKED skips a row that another statement holds.
             return "not_owned"
         self.saved_at = self.clock.now
         return "completed"
@@ -79,6 +85,10 @@ class _Database:
     async def renew_item_leases(self, *, item_claim_epochs, worker_id, lease_seconds):
         del worker_id
         started = self._call()
+        if self.renewal_deadlines:
+            self.renewal_deadlines -= 1
+            self.row_locked_until = self.clock.now + 3.0
+            raise DatabaseUnavailableError()
         if self.renewals_busy and started < self.busy_until:
             raise DatabaseUnavailableError()
         self.renewals.append(started)
@@ -88,6 +98,14 @@ class _Database:
         if self.on_renew is not None:
             await self.on_renew()
         return set(item_claim_epochs)
+
+    async def list_items_by_ids(self, item_ids):
+        self._call()
+        owner = "w2" if self.claimed_by_other else "w1"
+        return [
+            SimpleNamespace(item_id=item_id, status="in_progress", locked_by=owner, claim_epoch=1)
+            for item_id in item_ids
+        ]
 
     async def release_items_for_retry(self, *, item_ids, **kwargs):
         del kwargs
@@ -203,6 +221,24 @@ async def test_the_lease_is_renewed_before_a_save_waits_in_the_save_queue(clock)
     # worker could claim the item before the save.
     assert database.saved_at == 1048.5
     assert not database.claimed_by_other
+
+
+async def test_a_save_that_skips_a_row_held_by_a_late_renewal_is_tried_again(clock):
+    # Codex review 2026-11-10: the renewal after a long wait reports a timeout
+    # at its caller's deadline, but its UPDATE goes on and holds the item row.
+    # The next save skips the row and reports not_owned. The item is still
+    # claimed by this worker at the same epoch, so the worker waits and saves
+    # again instead of giving up the answer.
+    database = _Database(clock, lease_until=1340.0, busy_until=1007.0, latency=0.01)
+    database.renewal_deadlines = 1
+    engine = _Engine(database, lease_seconds=360)
+
+    assert await _save(engine, lease_left=340.0)
+
+    assert clock.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0]
+    assert database.saves == 6
+    assert database.saved_at is not None and database.saved_at < database.lease_until
+    assert database.requeues == []
 
 
 async def test_no_long_wait_without_a_lease_known_to_cover_it(clock):
