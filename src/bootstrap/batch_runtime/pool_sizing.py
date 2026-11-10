@@ -12,6 +12,18 @@ BATCH_BACKGROUND_DB_CONNECTIONS = 2
 COMPLETION_OUTBOX_MAX_CONCURRENCY = 8
 
 
+def batch_database_call_seconds(app: Any) -> float:
+    """Longest one control pool call can take before its caller stops waiting.
+
+    0 when the pool policy is not known.
+    """
+    manager = getattr(getattr(app, "state", None), "prisma_manager", None)
+    policy = getattr(getattr(manager, "allocation", None), "policy", None)
+    if policy is None:
+        return 0.0
+    return policy.admission_seconds + max(policy.statement_seconds, policy.transaction_seconds)
+
+
 def completion_outbox_concurrency(general: Any) -> int:
     return min(
         COMPLETION_OUTBOX_MAX_CONCURRENCY,

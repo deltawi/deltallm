@@ -40,15 +40,16 @@ class ResultSaveWaits:
     The short waits need no lease check, as before. The heartbeat stops before
     the save and, with write grouping, no renewal comes before it, so the lease
     can be old. A long wait is therefore taken only while the known lease
-    covers the wait plus one more save call (a quarter of the lease). The
-    lease is known from the claim's lease end, or from a renewal that this
-    save made. Heartbeat renewals only make the real lease longer. After a
-    long wait, the save can also wait in the save queue, so the lease is
-    renewed first when it is shorter than a save on main is sure to have. If
-    the renewal is refused, the save skips the save queue: the known lease
-    covers one save call, not a wait for a save slot. The save checks the
-    owner and claim epoch, so a save after another worker's claim changes
-    nothing.
+    covers the wait plus a reserve: a quarter of the lease, and at least a
+    renewal call and a save call at their longest. The lease is known from the
+    claim's lease end, or from a renewal that this save made. Heartbeat
+    renewals only make the real lease longer. A renewal is sent only while
+    the known lease covers it and a save call after it. After a long wait,
+    the save can also wait in the save queue, so the lease is renewed first
+    when it is shorter than a save on main is sure to have. If the renewal is
+    refused, the save skips the save queue: the reserve covers one save call,
+    not a wait for a save slot. The save checks the owner and claim epoch, so
+    a save after another worker's claim changes nothing.
     """
 
     def __init__(
@@ -56,9 +57,13 @@ class ResultSaveWaits:
         lease_seconds: float,
         *,
         heartbeat_seconds: float,
+        call_seconds: float = 0.0,
         known_lease_seconds: float | None = None,
     ) -> None:
         self._lease_seconds = max(0.0, float(lease_seconds))
+        # A renewal call and then a save call, each at its longest.
+        self._two_calls_seconds = 2 * max(0.0, float(call_seconds))
+        self._reserve_seconds = max(self._lease_seconds / 4, self._two_calls_seconds)
         # A save on main starts at most one heartbeat interval after the last
         # lease renewal, so with at least this much of its lease left.
         self._main_lease_seconds = self._lease_seconds - max(0.0, float(heartbeat_seconds))
@@ -94,7 +99,16 @@ class ResultSaveWaits:
     def covers(self, wait: BusyWait) -> bool:
         if self._lease_until is None:
             return False
-        return monotonic() + wait.seconds + self._lease_seconds / 4 <= self._lease_until
+        return monotonic() + wait.seconds + self._reserve_seconds <= self._lease_until
+
+    def can_renew(self) -> bool:
+        """True when the known lease covers a renewal call and then a save call.
+
+        Also True when the lease or the call time is not known, as before.
+        """
+        if self._lease_until is None or not self._two_calls_seconds:
+            return True
+        return self._lease_until - monotonic() >= self._two_calls_seconds
 
     def shorter_than_main(self) -> bool:
         """True when the known lease is shorter than a save on main is sure to have."""

@@ -488,17 +488,23 @@ class WorkerPersistenceMixin:
             return False
         if not waits.covers(wait):
             # No long wait without a lease known to cover it: when the renewal
-            # fails, the save is retried at once, as before the long waits.
-            # When it succeeds, the database answered: try the save again now.
-            return await self._renew_for_long_wait(waits, items)
+            # fails or the lease is too short for one, the save is retried at
+            # once, as before the long waits. When it succeeds, the database
+            # answered: try the save again now.
+            return waits.can_renew() and await self._renew_for_long_wait(waits, items)
         await self._sleep_unless_draining(wait)
         waits.long_wait_done()
-        if waits.shorter_than_main() and not self._drain_signal().is_set():
+        if (
+            self._result_save_groups() is not None
+            and waits.shorter_than_main()
+            and waits.can_renew()
+            and not self._drain_signal().is_set()
+        ):
             # The save can wait in the save queue before it reaches the
             # database. Renew first, so that it goes in with as much lease as
             # a save on main. If the renewal is refused, the save skips the
-            # queue: the lease known before the wait covers one save call, not
-            # a wait for a save slot.
+            # queue: the reserve left after the renewal covers one save call,
+            # not a wait for a save slot.
             await self._renew_for_long_wait(waits, items)
         return True
 
@@ -632,6 +638,7 @@ class WorkerPersistenceMixin:
         waits = ResultSaveWaits(
             self.config.item_lease_seconds,
             heartbeat_seconds=self.config.heartbeat_interval_seconds,
+            call_seconds=getattr(self.config, "database_call_seconds", 0.0),
             known_lease_seconds=known_lease_seconds(lease_ends),
         )
         failures = 0

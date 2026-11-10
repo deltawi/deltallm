@@ -12,6 +12,8 @@ from src.batch import result_save_waits
 from src.batch.result_save_waits import CLOCK_SKEW_SECONDS, BusyWait, known_lease_seconds
 from src.batch.worker_persistence import WorkerPersistenceMixin
 from src.batch.worker_types import BatchWorkerConfig
+from src.bootstrap.batch_runtime.pool_sizing import batch_database_call_seconds
+from src.db.runtime.allocation_config import DatabasePolicy
 from src.db.runtime.allocated_client import DatabaseUnavailableError
 
 _real_sleep = asyncio.sleep
@@ -60,10 +62,12 @@ class _Database:
         # Ownership reads and lease renewals that the busy pool refuses.
         self.busy_reads = 0
         self.refused_renewals = 0
+        self.renewal_latency: float | None = None
+        self.renewal_calls = 0
 
-    def _call(self) -> float:
+    def _call(self, latency: float | None = None) -> float:
         started = self.clock.now
-        self.clock.now += self.latency
+        self.clock.now += self.latency if latency is None else latency
         if self.clock.now > self.lease_until:
             # Another worker claims the item as soon as its lease runs out.
             self.claimed_by_other = True
@@ -89,7 +93,8 @@ class _Database:
 
     async def renew_item_leases(self, *, item_claim_epochs, worker_id, lease_seconds):
         del worker_id
-        started = self._call()
+        self.renewal_calls += 1
+        started = self._call(self.renewal_latency)
         if self.refused_renewals:
             self.refused_renewals -= 1
             raise DatabaseUnavailableError()
@@ -128,13 +133,21 @@ class _Database:
 
 
 class _Engine(WorkerPersistenceMixin):
-    def __init__(self, database: _Database, *, lease_seconds: int, save_slots: int = 0) -> None:
+    def __init__(
+        self,
+        database: _Database,
+        *,
+        lease_seconds: int,
+        save_slots: int = 0,
+        call_seconds: float = 0.0,
+    ) -> None:
         self.repository = database
         self.config = BatchWorkerConfig(
             worker_id="w1",
             item_lease_seconds=lease_seconds,
             result_save_concurrency=save_slots,
             write_grouping_enabled=save_slots > 0,
+            database_call_seconds=call_seconds,
         )
 
 
@@ -166,10 +179,9 @@ async def _save(engine: _Engine, *, lease_left: float) -> bool:
 async def test_busy_period_is_waited_out_under_the_claimed_lease(clock):
     # Dev load test 2026-11-10: the pool was full for about 10 s while 12 jobs
     # started. The save gave up after 3.5 s and the item later failed as
-    # accounting_closed. The claimed lease covers the longer waits, so no
-    # query is needed before them. After each long wait the lease is renewed
-    # before the save; the busy pool refuses the first renewal, and the save
-    # is tried anyway.
+    # accounting_closed. The claimed lease covers the longer waits, and
+    # without a save queue no renewal is needed after them: no query is sent
+    # but the saves.
     database = _Database(clock, lease_until=1340.0, busy_until=1012.0, latency=0.01)
     engine = _Engine(database, lease_seconds=360)
 
@@ -177,8 +189,28 @@ async def test_busy_period_is_waited_out_under_the_claimed_lease(clock):
 
     assert clock.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0]
     assert database.saved_at is not None and database.saved_at < database.lease_until
-    assert database.renewals == [pytest.approx(1015.56)]
+    assert database.renewal_calls == 0
     assert database.requeues == []
+
+
+async def test_a_slow_refused_renewal_cannot_use_the_lease_left_for_the_save(clock):
+    # Codex review 2026-11-10: a 30 s lease, and database calls that can take
+    # 7 s (pool admission and statement timeout). A renewal refused after
+    # 14 s would leave no lease for the save. The known lease (to 1025) does
+    # not cover a long wait plus a renewal and a save, nor a renewal and a
+    # save after it, so the worker sends no renewal and saves at once, as
+    # before the long waits.
+    database = _Database(clock, lease_until=1025.0, busy_until=1011.0, latency=2.0)
+    database.refused_renewals = 1
+    database.renewal_latency = 14.0
+    engine = _Engine(database, lease_seconds=30, save_slots=1, call_seconds=7.0)
+
+    assert await _save(engine, lease_left=25.0)
+
+    assert clock.sleeps == [0.5, 1.0, 2.0]
+    assert database.renewal_calls == 0
+    assert database.saved_at == 1013.5
+    assert not database.claimed_by_other
 
 
 async def test_a_renewal_keeps_the_lease_for_the_next_save(clock):
@@ -282,7 +314,7 @@ async def test_a_save_that_skips_a_row_held_by_a_late_renewal_is_tried_again(clo
     database = _Database(clock, lease_until=1340.0, busy_until=1007.0, latency=0.01)
     database.renewal_deadlines = 1
     database.busy_reads = busy_reads
-    engine = _Engine(database, lease_seconds=360)
+    engine = _Engine(database, lease_seconds=360, save_slots=1)
 
     assert await _save(engine, lease_left=340.0)
 
@@ -337,6 +369,26 @@ async def test_drain_ends_a_long_wait_at_once():
     engine.start_draining()
 
     await asyncio.wait_for(waiting, timeout=1)
+
+
+def test_database_call_time_comes_from_the_control_pool_policy():
+    policy = DatabasePolicy(
+        allocation="control",
+        connections=4,
+        acquisition_seconds=0.2,
+        statement_seconds=5.0,
+        lock_seconds=1.0,
+        transaction_seconds=10.0,
+        queue_seconds=2.0,
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            prisma_manager=SimpleNamespace(allocation=SimpleNamespace(policy=policy))
+        )
+    )
+
+    assert batch_database_call_seconds(app) == pytest.approx(12.2)
+    assert batch_database_call_seconds(SimpleNamespace(state=SimpleNamespace())) == 0.0
 
 
 def test_known_lease_is_the_earliest_claimed_lease_end_minus_clock_skew():

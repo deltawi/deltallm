@@ -116,6 +116,9 @@ class BatchWorkerConfig:
     # 0 (or grouping off) leaves result saves unlimited, one statement each.
     result_save_concurrency: int = 0
     write_grouping_enabled: bool = False
+    # Longest one database call can take before its caller stops waiting
+    # (pool admission plus the statement or transaction timeout). 0: unknown.
+    database_call_seconds: float = 0.0
     max_slices_in_flight: int = 2
     item_buffer_multiplier: int = 2
     finalization_page_size: int = 500

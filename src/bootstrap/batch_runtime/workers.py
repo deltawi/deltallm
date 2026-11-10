@@ -39,6 +39,7 @@ from src.batch.webhooks.observability import (
 from src.batch.webhooks.worker import BatchWebhookOutboxWorker, BatchWebhookOutboxWorkerConfig
 from src.bootstrap.batch_runtime.core import BatchCoreComponents
 from src.bootstrap.batch_runtime.pool_sizing import (
+    batch_database_call_seconds,
     batch_result_save_concurrency,
     completion_outbox_concurrency,
     completion_outbox_sent_mark_concurrency,
@@ -124,6 +125,7 @@ def _start_executor_worker(
             write_grouping_enabled=getattr(
                 general, "embeddings_batch_write_grouping_enabled", False
             ),
+            database_call_seconds=batch_database_call_seconds(app),
             max_slices_in_flight=getattr(
                 general, "embeddings_batch_worker_max_slices_in_flight", 2
             ),
