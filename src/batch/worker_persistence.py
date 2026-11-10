@@ -38,8 +38,14 @@ _POLICY_RELEASE_RETRY_QUEUE_LIMIT = 1024
 _POLICY_RELEASE_RETRY_INITIAL_SECONDS = 0.5
 _POLICY_RELEASE_RETRY_MAX_SECONDS = 30.0
 # After the provider has answered, a busy database must not throw the answer
-# away: wait and try the lease renewal or save again before giving up.
+# away: wait and try the lease renewal or the requeue again before giving up.
 _GATEWAY_BUSY_SAVE_DELAYS_SECONDS = (0.5, 1.0, 2.0)
+# The result save waits longer. With accounting v2 an answer that is not saved
+# ends the item: its next claim cannot call the provider again, so it fails as
+# accounting_closed. A busy pool (all jobs starting at once, a rollout) usually
+# frees up within seconds, so the save backs off up to 8 s, about 40 s in all.
+_RESULT_SAVE_BUSY_DELAYS_SECONDS = (0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0, 8.0)
+_RESULT_SAVE_BUSY_JITTER = 0.2
 # Rows one grouped result save may write, across all its members.
 RESULT_SAVE_GROUP_MAX_ROWS = 50
 _SAVED_RESULTS = frozenset({"completed", "already_completed"})
@@ -70,6 +76,24 @@ class _BatchItemCosts:
 def _shares_an_item(group: Sequence[list[dict[str, Any]]], rows: list[dict[str, Any]]) -> bool:
     ids = {str(row["item_id"]) for row in rows}
     return any(str(row["item_id"]) in ids for member in group for row in member)
+
+
+def _result_save_busy_delays(item_lease_seconds: float) -> Iterator[float]:
+    """Waits between result saves that a busy database refused.
+
+    The heartbeat stops before the save, so the waits stay within a quarter of
+    the item lease: the lease it last renewed still covers them, and no other
+    worker can claim the item meanwhile. Jitter keeps items that failed
+    together from coming back together.
+    """
+    budget = max(0.0, float(item_lease_seconds)) / 4
+    waited = 0.0
+    for delay in _RESULT_SAVE_BUSY_DELAYS_SECONDS:
+        wait = delay + random.uniform(0.0, delay * _RESULT_SAVE_BUSY_JITTER)
+        waited += wait
+        if waited > budget:
+            return
+        yield wait
 
 
 def _policy_release_retry_delay_seconds(attempt_count: int) -> float:
@@ -452,6 +476,45 @@ class WorkerPersistenceMixin:
             return self._require_native_execution(prepared).completion_payload(payload, usage)
         return payload
 
+    async def _requeue_unsaved_items(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        item_ids: list[str],
+        context_label: str,
+    ) -> list[str] | None:
+        """Give unsaved items back to the queue; None when the database refused.
+
+        An item that is not given back stays claimed until its lease expires.
+        So a busy database is waited out here too. The release checks the owner
+        and claim epoch, so a repeat after a lost reply changes nothing.
+        """
+        busy_delays = iter(_GATEWAY_BUSY_SAVE_DELAYS_SECONDS)
+        while True:
+            try:
+                return await self.repository.release_items_for_retry(
+                    item_ids=item_ids,
+                    worker_id=self.config.worker_id,
+                    item_claim_epochs={
+                        str(item["item_id"]): int(item["claim_epoch"])
+                        for item in items
+                        if item.get("claim_epoch") is not None
+                    },
+                )
+            except Exception as exc:
+                delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                logger.warning(
+                    "batch completion persistence requeue failed context=%s item_ids=%s retry_in_seconds=%s error=%s",
+                    context_label,
+                    item_ids,
+                    delay,
+                    exc,
+                    exc_info=delay is None,
+                )
+                if delay is None:
+                    return None
+                await asyncio.sleep(delay)
+
     async def _persist_completion_rows_with_outbox(
         self,
         *,
@@ -459,7 +522,7 @@ class WorkerPersistenceMixin:
         item_ids: list[str],
         context_label: str,
     ) -> bool:
-        busy_delays = iter(_GATEWAY_BUSY_SAVE_DELAYS_SECONDS)
+        busy_delays = _result_save_busy_delays(self.config.item_lease_seconds)
         failures = 0
         attempt = 0
         while failures < 2:
@@ -496,24 +559,10 @@ class WorkerPersistenceMixin:
                 return False
             failures += 1
 
-        try:
-            requeued_item_ids = await self.repository.release_items_for_retry(
-                item_ids=item_ids,
-                worker_id=self.config.worker_id,
-                item_claim_epochs={
-                    str(item["item_id"]): int(item["claim_epoch"])
-                    for item in items
-                    if item.get("claim_epoch") is not None
-                },
-            )
-        except Exception as exc:
-            logger.warning(
-                "batch completion persistence requeue failed context=%s item_ids=%s error=%s",
-                context_label,
-                item_ids,
-                exc,
-                exc_info=True,
-            )
+        requeued_item_ids = await self._requeue_unsaved_items(
+            items=items, item_ids=item_ids, context_label=context_label
+        )
+        if requeued_item_ids is None:
             return False
 
         expected_ids = set(item_ids)
