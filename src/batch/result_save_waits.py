@@ -29,8 +29,8 @@ CLOCK_SKEW_SECONDS = 5.0
 @dataclass(frozen=True, slots=True)
 class BusyWait:
     seconds: float
-    # A long wait needs a lease renewal that covers it, and a shutdown drain
-    # stops it.
+    # A long wait needs a lease known to cover it, and a shutdown drain stops
+    # it.
     long: bool
 
 
@@ -42,13 +42,24 @@ class ResultSaveWaits:
     can be old. A long wait is therefore taken only while the known lease
     covers the wait plus one more save call (a quarter of the lease). The
     lease is known from the claim's lease end, or from a renewal that this
-    save made. Heartbeat renewals only make the real lease longer. The save
-    checks the owner and claim epoch, so a save after another worker's claim
-    changes nothing.
+    save made. Heartbeat renewals only make the real lease longer. After a
+    long wait, the save can also wait in the save queue, so the lease is
+    renewed first when it is shorter than a save on main is sure to have. The
+    save checks the owner and claim epoch, so a save after another worker's
+    claim changes nothing.
     """
 
-    def __init__(self, lease_seconds: float, *, known_lease_seconds: float | None = None) -> None:
+    def __init__(
+        self,
+        lease_seconds: float,
+        *,
+        heartbeat_seconds: float,
+        known_lease_seconds: float | None = None,
+    ) -> None:
         self._lease_seconds = max(0.0, float(lease_seconds))
+        # A save on main starts at most one heartbeat interval after the last
+        # lease renewal, so with at least this much of its lease left.
+        self._main_lease_seconds = self._lease_seconds - max(0.0, float(heartbeat_seconds))
         self._lease_until = (
             None if known_lease_seconds is None else monotonic() + known_lease_seconds
         )
@@ -74,6 +85,12 @@ class ResultSaveWaits:
         if self._lease_until is None:
             return False
         return monotonic() + wait.seconds + self._lease_seconds / 4 <= self._lease_until
+
+    def shorter_than_main(self) -> bool:
+        """True when the known lease is shorter than a save on main is sure to have."""
+        if self._lease_until is None:
+            return True
+        return self._lease_until - monotonic() < self._main_lease_seconds
 
 
 def _jittered(delay: float) -> BusyWait:

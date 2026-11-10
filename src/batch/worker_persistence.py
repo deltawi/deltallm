@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Any, Awaitable, Iterator, Sequence
 
 from src.batch.endpoints import batch_call_type_for_endpoint
+from src.batch.models import BatchItemRecord
 from src.batch.result_save_waits import BusyWait, ResultSaveWaits, known_lease_seconds
 from src.batch.retry import is_gateway_busy
 from src.batch.policy import (
@@ -486,13 +487,24 @@ class WorkerPersistenceMixin:
         if not waits.covers(wait):
             # No long wait without a lease known to cover it: when the renewal
             # fails, the save is retried at once, as before the long waits.
-            started_at = waits.now()
-            if not await self._renew_unsaved_item_leases(items):
-                return False
-            waits.lease_renewed(started_at)
-            # The database answered the renewal: try the save again now.
-            return True
+            # When it succeeds, the database answered: try the save again now.
+            return await self._renew_for_long_wait(waits, items)
         await self._sleep_unless_draining(wait)
+        if waits.shorter_than_main() and not self._drain_signal().is_set():
+            # The save can wait in the save queue before it reaches the
+            # database. Renew first, so that it goes in with as much lease as
+            # a save on main. A refused renewal changes nothing: the lease
+            # known before the wait still covers one save call.
+            await self._renew_for_long_wait(waits, items)
+        return True
+
+    async def _renew_for_long_wait(
+        self, waits: ResultSaveWaits, items: list[dict[str, Any]]
+    ) -> bool:
+        started_at = waits.now()
+        if not await self._renew_unsaved_item_leases(items):
+            return False
+        waits.lease_renewed(started_at)
         return True
 
     async def _renew_unsaved_item_leases(self, items: list[dict[str, Any]]) -> bool:
@@ -569,6 +581,21 @@ class WorkerPersistenceMixin:
                     return None
                 await asyncio.sleep(delay)
 
+    async def _persist_claimed_completions(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        claimed: Sequence[BatchItemRecord],
+        context_label: str,
+    ) -> bool:
+        """Save the answers of claimed items, with the lease ends of their claims."""
+        return await self._persist_completion_rows_with_outbox(
+            items=items,
+            item_ids=[item.item_id for item in claimed],
+            context_label=context_label,
+            lease_ends=[item.lease_expires_at for item in claimed],
+        )
+
     async def _persist_completion_rows_with_outbox(
         self,
         *,
@@ -583,7 +610,9 @@ class WorkerPersistenceMixin:
         They tell how long the leases are known to last without a renewal.
         """
         waits = ResultSaveWaits(
-            self.config.item_lease_seconds, known_lease_seconds=known_lease_seconds(lease_ends)
+            self.config.item_lease_seconds,
+            heartbeat_seconds=self.config.heartbeat_interval_seconds,
+            known_lease_seconds=known_lease_seconds(lease_ends),
         )
         failures = 0
         attempt = 0

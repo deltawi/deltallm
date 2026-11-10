@@ -574,7 +574,7 @@ class EmbeddingWorkerExecutionMixin:
             if item_heartbeat is not None:
                 await self._stop_heartbeat_fn(item_heartbeat)
                 item_heartbeat = None
-            persisted = await self._persist_completion_rows_with_outbox(
+            persisted = await self._persist_claimed_completions(
                 items=[
                     {
                         "item_id": prepared.item.item_id,
@@ -604,9 +604,8 @@ class EmbeddingWorkerExecutionMixin:
                         "outbox_max_attempts": COMPLETION_OUTBOX_MAX_ATTEMPTS,
                     }
                 ],
-                item_ids=[prepared.item.item_id],
+                claimed=[prepared.item],
                 context_label="single",
-                lease_ends=[prepared.item.lease_expires_at],
             )
             if persisted:
                 self._native_completion_saved([prepared])
@@ -850,7 +849,7 @@ class EmbeddingWorkerExecutionMixin:
         await self._stop_heartbeat_tasks(item_heartbeats.values())
         item_heartbeats.clear()
 
-        persisted = await self._persist_completion_rows_with_outbox(
+        persisted = await self._persist_claimed_completions(
             items=[
                 {
                     "item_id": row["prepared"].item.item_id,
@@ -874,11 +873,10 @@ class EmbeddingWorkerExecutionMixin:
                 }
                 for row in completion_rows
             ],
-            item_ids=item_ids,
+            claimed=[prepared.item for prepared in prepared_items],
             context_label=(
                 f"microbatch:{served_deployment_id or getattr(first_item.primary_deployment, 'deployment_id', None) or 'unknown'}"
             ),
-            lease_ends=[prepared.item.lease_expires_at for prepared in prepared_items],
         )
         if not persisted:
             return

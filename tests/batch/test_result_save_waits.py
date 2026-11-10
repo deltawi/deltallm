@@ -13,6 +13,8 @@ from src.batch.worker_persistence import WorkerPersistenceMixin
 from src.batch.worker_types import BatchWorkerConfig
 from src.db.runtime.allocated_client import DatabaseUnavailableError
 
+_real_sleep = asyncio.sleep
+
 
 class _Clock:
     def __init__(self, now: float) -> None:
@@ -46,6 +48,9 @@ class _Database:
         self.renewals: list[float] = []
         self.requeues: list[float] = []
         self.on_save = None
+        self.on_renew = None
+        # Another item's save holds the save slot until this is set.
+        self.other_save_done = asyncio.Event()
 
     def _call(self) -> float:
         started = self.clock.now
@@ -56,7 +61,10 @@ class _Database:
         return started
 
     async def complete_items_with_outbox_bulk(self, *, items, worker_id, **kwargs):
-        del items, worker_id, kwargs
+        del worker_id, kwargs
+        if items[0]["item_id"] == "other":
+            await self.other_save_done.wait()
+            return "completed"
         self.saves += 1
         if self.on_save is not None:
             self.on_save(self.saves)
@@ -77,6 +85,8 @@ class _Database:
         if self.claimed_by_other:
             return set()
         self.lease_until = self.clock.now + lease_seconds
+        if self.on_renew is not None:
+            await self.on_renew()
         return set(item_claim_epochs)
 
     async def release_items_for_retry(self, *, item_ids, **kwargs):
@@ -89,20 +99,24 @@ class _Database:
 
 
 class _Engine(WorkerPersistenceMixin):
-    def __init__(self, database: _Database, *, lease_seconds: int) -> None:
+    def __init__(self, database: _Database, *, lease_seconds: int, save_slots: int = 0) -> None:
         self.repository = database
-        self.config = BatchWorkerConfig(worker_id="w1", item_lease_seconds=lease_seconds)
+        self.config = BatchWorkerConfig(
+            worker_id="w1",
+            item_lease_seconds=lease_seconds,
+            result_save_concurrency=save_slots,
+            write_grouping_enabled=save_slots > 0,
+        )
 
 
 @pytest.fixture
 def clock(monkeypatch) -> _Clock:
     clock = _Clock(1000.0)
-    real_sleep = asyncio.sleep
 
     async def fake_sleep(seconds: float) -> None:
         clock.sleeps.append(seconds)
         clock.now += seconds
-        await real_sleep(0)
+        await _real_sleep(0)
 
     monkeypatch.setattr(result_save_waits, "monotonic", clock)
     monkeypatch.setattr(result_save_waits.random, "uniform", lambda low, high: low)
@@ -123,8 +137,10 @@ async def _save(engine: _Engine, *, lease_left: float) -> bool:
 async def test_busy_period_is_waited_out_under_the_claimed_lease(clock):
     # Dev load test 2026-11-10: the pool was full for about 10 s while 12 jobs
     # started. The save gave up after 3.5 s and the item later failed as
-    # accounting_closed. The claimed lease covers the longer waits, so the
-    # answer is saved with no extra query.
+    # accounting_closed. The claimed lease covers the longer waits, so no
+    # query is needed before them. After each long wait the lease is renewed
+    # before the save; the busy pool refuses the first renewal, and the save
+    # is tried anyway.
     database = _Database(clock, lease_until=1340.0, busy_until=1012.0, latency=0.01)
     engine = _Engine(database, lease_seconds=360)
 
@@ -132,7 +148,7 @@ async def test_busy_period_is_waited_out_under_the_claimed_lease(clock):
 
     assert clock.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0]
     assert database.saved_at is not None and database.saved_at < database.lease_until
-    assert database.renewals == []
+    assert database.renewals == [pytest.approx(1015.56)]
     assert database.requeues == []
 
 
@@ -149,6 +165,44 @@ async def test_a_renewal_keeps_the_lease_for_the_next_save(clock):
     assert database.renewals == [1011.5]
     assert not database.claimed_by_other
     assert database.saved_at == 1015.5
+
+
+async def test_the_lease_is_renewed_before_a_save_waits_in_the_save_queue(clock):
+    # Codex review 2026-11-10: after a long wait, the save can wait in the save
+    # queue behind slower saves. Here it waits 35 s, longer than the quarter
+    # lease that the wait check keeps. The lease is renewed after the wait,
+    # before the save goes into the queue, so the save goes in with as much
+    # lease as a save on main starts with (60 s less one 15 s heartbeat).
+    database = _Database(
+        clock, lease_until=1040.0, busy_until=1010.0, latency=1.0, renewals_busy=False
+    )
+    engine = _Engine(database, lease_seconds=60, save_slots=1)
+    queue = engine._result_save_groups()
+    assert queue is not None
+    others: list[asyncio.Task] = []
+
+    async def other_save_takes_the_slot() -> None:
+        others.append(asyncio.create_task(queue.run([{"item_id": "other", "claim_epoch": 1}])))
+        others.append(asyncio.create_task(release_the_slot_after_35_seconds()))
+        await _real_sleep(0)
+
+    async def release_the_slot_after_35_seconds() -> None:
+        while queue.waiting == 0:
+            await _real_sleep(0)
+        clock.now += 35.0
+        database.other_save_done.set()
+
+    database.on_renew = other_save_takes_the_slot
+
+    assert await _save(engine, lease_left=40.0)
+    await asyncio.gather(*others)
+
+    assert clock.sleeps == [0.5, 1.0, 2.0, 4.0]
+    assert database.renewals == [1011.5]
+    # The lease from the claim ended at 1040: without the renewal, another
+    # worker could claim the item before the save.
+    assert database.saved_at == 1048.5
+    assert not database.claimed_by_other
 
 
 async def test_no_long_wait_without_a_lease_known_to_cover_it(clock):

@@ -746,11 +746,10 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
         increment_batch_chat_microbatch_request(status=status)
 
         if success_rows:
-            persisted = await self._persist_completion_rows_with_outbox(
+            persisted = await self._persist_claimed_completions(
                 items=success_rows,
-                item_ids=[prepared.item.item_id for prepared in success_prepared],
+                claimed=[prepared.item for prepared in success_prepared],
                 context_label=f"chat_microbatch:{served_deployment_id or 'unknown'}",
-                lease_ends=[prepared.item.lease_expires_at for prepared in success_prepared],
             )
             if persisted:
                 self._native_completion_saved(success_prepared)
