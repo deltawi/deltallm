@@ -144,9 +144,12 @@ def _token_allowance(
     tokens = pricing.customer_token_pricing or pricing.catalog_token_pricing
     if tokens is None:
         return request_rate
+    # A prompt token can be uncached, a cache read or a cache write: hold the highest rate.
     input_rate = max(
         _decimal_rate(tokens.input_cost_per_token),
         _decimal_rate(tokens.input_cost_per_token_cache_hit),
+        _decimal_rate(tokens.input_cost_per_token_cache_write),
+        _decimal_rate(tokens.input_cost_per_token_cache_write_1h),
     )
     output_rate = max(
         _decimal_rate(tokens.output_cost_per_token),
@@ -166,12 +169,16 @@ def _token_allowance(
             "output_cost_per_token",
             "input_cost_per_token_cache_hit",
             "output_cost_per_token_cache_hit",
+            "input_cost_per_token_cache_write",
+            "input_cost_per_token_cache_write_1h",
         )
     ):
         exact_rates = sync_token_ceiling_rates(pricing)
         input_rate = max(
             exact_rates.input_cost_per_token,
             exact_rates.input_cost_per_token_cache_hit or Decimal(0),
+            exact_rates.input_cost_per_token_cache_write or Decimal(0),
+            exact_rates.input_cost_per_token_cache_write_1h or Decimal(0),
         )
         output_rate = max(
             exact_rates.output_cost_per_token,
@@ -233,12 +240,24 @@ def _batch_token_ceiling_rates(
         cache_hit=True,
         mode="batch",
     ).pricing
-    if ordinary is None or cached is None:
+    # One 5-minute and one 1-hour write select both batch write rates.
+    written = resolve_exact_token_quote_pricing(
+        pricing,
+        model=pricing.callable_model,
+        prompt_tokens=2,
+        completion_tokens=0,
+        prompt_tokens_cache_write=2,
+        prompt_tokens_cache_write_1h=1,
+        mode="batch",
+    ).pricing
+    if ordinary is None or cached is None or written is None:
         raise SpendPersistenceUnavailable()
     return _TokenCeilingRates(
         input_rate=max(
             ordinary.input_cost_per_token,
             cached.input_cost_per_token_cache_hit or cached.input_cost_per_token,
+            written.input_cost_per_token_cache_write or Decimal(0),
+            written.input_cost_per_token_cache_write_1h or Decimal(0),
         ),
         output_rate=max(
             ordinary.output_cost_per_token,

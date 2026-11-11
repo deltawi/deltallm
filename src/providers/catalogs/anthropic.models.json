@@ -21,6 +21,8 @@
       "metadata": {
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00005,
+        "input_cost_per_token_cache_write": 0.0000125,
+        "input_cost_per_token_cache_write_1h": 0.00002,
         "input_cost_per_token_cache_hit": 0.00000025,
         "max_tokens": 1000000,
         "max_output_tokens": 128000
@@ -34,6 +36,8 @@
       "metadata": {
         "input_cost_per_token": 0.000004,
         "output_cost_per_token": 0.00002,
+        "input_cost_per_token_cache_write": 0.000005,
+        "input_cost_per_token_cache_write_1h": 0.000008,
         "input_cost_per_token_cache_hit": 0.0000002,
         "max_tokens": 1000000,
         "max_output_tokens": 128000
@@ -47,6 +51,8 @@
       "metadata": {
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_write": 0.0000025,
+        "input_cost_per_token_cache_write_1h": 0.000004,
         "input_cost_per_token_cache_hit": 0.0000001,
         "max_tokens": 1000000,
         "max_output_tokens": 128000
@@ -60,6 +66,8 @@
       "metadata": {
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000005,
+        "input_cost_per_token_cache_write": 0.000000125,
+        "input_cost_per_token_cache_write_1h": 0.0000002,
         "input_cost_per_token_cache_hit": 0.00000001,
         "max_tokens": 1000000,
         "max_output_tokens": 128000
@@ -75,6 +83,8 @@
         "output_cost_per_token": 0.000025,
         "max_tokens": 200000,
         "max_output_tokens": 128000,
+        "input_cost_per_token_cache_write": 0.00000625,
+        "input_cost_per_token_cache_write_1h": 0.00001,
         "input_cost_per_token_cache_hit": 0.0000005
       }
     },
@@ -88,6 +98,8 @@
         "output_cost_per_token": 0.000015,
         "max_tokens": 200000,
         "max_output_tokens": 64000,
+        "input_cost_per_token_cache_write": 0.00000375,
+        "input_cost_per_token_cache_write_1h": 0.000006,
         "input_cost_per_token_cache_hit": 0.0000003
       }
     },
@@ -102,6 +114,8 @@
         "output_cost_per_token": 0.000005,
         "max_tokens": 200000,
         "max_output_tokens": 64000,
+        "input_cost_per_token_cache_write": 0.00000125,
+        "input_cost_per_token_cache_write_1h": 0.000002,
         "input_cost_per_token_cache_hit": 0.0000001
       }
     }

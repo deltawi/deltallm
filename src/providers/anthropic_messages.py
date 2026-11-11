@@ -140,7 +140,9 @@ def native_usage(usage: object) -> dict[str, int]:
     """Map Messages usage to the ledger vocabulary.
 
     Anthropic reports uncached input, cache writes and cache reads separately; all three are
-    prompt tokens. Cache reads use the cached-input price when the model has one.
+    prompt tokens. Cache reads use the cached-input price and cache writes use the cache-write
+    prices when the model has them. The nested ``cache_creation`` object splits the writes by
+    cache lifetime; without it, all writes are 5-minute writes.
     """
 
     if not isinstance(usage, Mapping):
@@ -154,7 +156,14 @@ def native_usage(usage: object) -> dict[str, int]:
             "cache_read_input_tokens",
         )
     }
-    if not all(is_valid_provider_token_count(value) for value in counts.values()):
+    creation = usage.get("cache_creation")
+    if creation is not None and not isinstance(creation, Mapping):
+        raise invalid_provider_response_error()
+    write_1h = (creation or {}).get("ephemeral_1h_input_tokens")
+    write_1h = 0 if write_1h is None else write_1h
+    if not all(is_valid_provider_token_count(value) for value in (*counts.values(), write_1h)):
+        raise invalid_provider_response_error()
+    if write_1h > counts["cache_creation_input_tokens"]:
         raise invalid_provider_response_error()
     prompt = (
         counts["input_tokens"]
@@ -166,7 +175,8 @@ def native_usage(usage: object) -> dict[str, int]:
         "completion_tokens": counts["output_tokens"],
         "total_tokens": prompt + counts["output_tokens"],
         "prompt_tokens_cached": counts["cache_read_input_tokens"],
-        "cache_creation_input_tokens": counts["cache_creation_input_tokens"],
+        "prompt_tokens_cache_write": counts["cache_creation_input_tokens"],
+        "prompt_tokens_cache_write_1h": write_1h,
     }
 
 

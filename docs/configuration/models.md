@@ -465,6 +465,46 @@ model_list:
 
 User-supplied request values still take priority over these defaults.
 
+### Prompt cache prices
+
+Some providers keep a copy of a repeated prompt prefix in a prompt cache. The provider
+reports how many prompt tokens it read from the cache and, for some providers, how many it
+wrote to the cache. DeltaLLM uses these counts with these optional token prices:
+
+| Field | Applies to | When the field is empty |
+| --- | --- | --- |
+| `input_cost_per_token_cache_hit` | Prompt tokens read from the provider cache, and prompts answered from the DeltaLLM response cache | `input_cost_per_token` |
+| `output_cost_per_token_cache_hit` | Output tokens of an answer from the DeltaLLM response cache | `output_cost_per_token` |
+| `input_cost_per_token_cache_write` | Prompt tokens written to a 5-minute provider cache | `input_cost_per_token` |
+| `input_cost_per_token_cache_write_1h` | Prompt tokens written to a 1-hour provider cache | `input_cost_per_token_cache_write`, then `input_cost_per_token` |
+
+Example for Claude Sonnet 4.6 on Anthropic:
+
+```yaml
+model_info:
+  input_cost_per_token: 0.000003
+  output_cost_per_token: 0.000015
+  input_cost_per_token_cache_hit: 0.0000003
+  input_cost_per_token_cache_write: 0.00000375
+  input_cost_per_token_cache_write_1h: 0.000006
+```
+
+DeltaLLM reads cache-write counts from Anthropic on `/v1/messages`
+(`cache_creation_input_tokens`, with the 1-hour part from `cache_creation`). Other providers
+can also charge for cache writes. For example, OpenAI charges for writes on GPT-5.6 and later
+models. When DeltaLLM does not read a provider's write count, the written tokens use the
+input price, even if the model has a write price. Check the provider's price list for each
+model before you set a write price.
+
+A model router classifier (selector) cannot bill cache writes. A model with a nonzero
+cache-write price fails selector qualification.
+
+Before a call, DeltaLLM holds budget at the highest of the input, cache-read and
+cache-write prices. A cache-write price that is higher than the input price makes this
+hold larger. DeltaLLM releases the unused part of the hold when the call ends.
+
+Pricing tiers can set the same fields. See [Tiers](../admin-ui/tiers.md).
+
 To fix a value the client cannot change, remove a field, send headers or use an outbound proxy, see [Request shaping](request-shaping.md).
 
 ## Provider Prefix Fallback

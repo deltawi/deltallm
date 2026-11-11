@@ -220,6 +220,30 @@ async def test_completed_batch_prices_are_frozen_before_provider_and_exact(nativ
     )
 
 
+async def test_batch_completion_bills_cache_writes(native_batch):
+    owner, checkpoints, service = native_batch
+    executions, payload, auth, deployment = subjects(owner)
+    deployment.model_info["input_cost_per_token_cache_write"] = "0.0125"
+    deployment.model_info["input_cost_per_token_cache_write_1h"] = "0.02"
+    await fund(owner, executions, payload, auth, deployment)
+    execution = executions[0]
+    usage = {
+        "prompt_tokens": 5,
+        "completion_tokens": 2,
+        "prompt_tokens_cached": 0,
+        "prompt_tokens_cache_write": 4,
+        "prompt_tokens_cache_write_1h": 3,
+    }
+    execution.completion_payload({"completed_at": datetime.now(UTC).isoformat()}, usage)
+    terminal = execution.checkpoint.terminal
+    # Customer (batch): 1 x 0.001 + 1 x 0.0125 + 3 x 0.02 + 2 x 0.002.
+    assert terminal.exact_charge == Decimal("0.0775")
+    # Provider (sync): 1 x 0.01 + 1 x 0.0125 + 3 x 0.02 + 2 x 0.02.
+    assert terminal.spend_payload["provider_cost_exact"] == "0.122500000000000000"
+    assert terminal.spend_payload["usage"] == usage
+    await owner.close_group(executions)
+
+
 def unpriced(deployment, *, embedding=False):
     # As a new self-hosted deployment is saved: a mode and no price or context window.
     deployment.model_info.clear()

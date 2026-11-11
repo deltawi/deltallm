@@ -94,13 +94,27 @@ Anthropic reports `input_tokens`, `cache_creation_input_tokens`, and
 
 - Prompt tokens: the sum of the three values.
 - Cached prompt tokens: `cache_read_input_tokens`.
+- Cache-write tokens: `cache_creation_input_tokens`. The `cache_creation` object splits
+  them into 5-minute and 1-hour writes. When the object is missing, all writes are
+  5-minute writes.
 
-Cache reads use the model's `input_cost_per_token_cache_hit` price when it is set.
-Other prompt tokens, which include cache writes, use `input_cost_per_token`.
+Prices:
+
+- Cache reads use `input_cost_per_token_cache_hit`.
+- 5-minute cache writes use `input_cost_per_token_cache_write`.
+- 1-hour cache writes use `input_cost_per_token_cache_write_1h`. When this field is empty,
+  they use `input_cost_per_token_cache_write`.
+- Other prompt tokens use `input_cost_per_token`.
+
+A cache price that is not set falls back to `input_cost_per_token`. See
+[Prompt cache prices](../configuration/models.md#prompt-cache-prices).
+
+Example with Claude Sonnet 4.6 prices: a turn has 2,000 new prompt tokens, 30,000
+5-minute cache-write tokens, 70,000 cache-read tokens and 1,000 output tokens. The cost
+is 2,000 × $3/M + 30,000 × $3.75/M + 70,000 × $0.30/M + 1,000 × $15/M = $0.1545.
 
 DeltaLLM does not apply Anthropic price changes that its pricing cannot show. These include
-the cache-write price, the long-context price of the `context-1m` beta, and the priority
-tier price.
+the long-context price of the `context-1m` beta and the priority tier price.
 
 ## Translation hop (other providers)
 

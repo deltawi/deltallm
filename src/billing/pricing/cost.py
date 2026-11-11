@@ -16,6 +16,8 @@ class ModelPricing:
     cost_per_request: float = 0.0
     context_window: int = 8192
     max_output_tokens: int | None = None
+    input_cost_per_token_cache_write: float | None = None
+    input_cost_per_token_cache_write_1h: float | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,14 @@ def resolve_batch_pricing(
             cost_per_request=sync_pricing.cost_per_request if sync_pricing is not None else 0.0,
             context_window=sync_pricing.context_window if sync_pricing is not None else 8192,
             max_output_tokens=sync_pricing.max_output_tokens if sync_pricing is not None else None,
+            input_cost_per_token_cache_write=(
+                sync_pricing.input_cost_per_token_cache_write if sync_pricing is not None else None
+            ),
+            input_cost_per_token_cache_write_1h=(
+                sync_pricing.input_cost_per_token_cache_write_1h
+                if sync_pricing is not None
+                else None
+            ),
         )
 
     if sync_pricing is None:
@@ -149,6 +159,16 @@ def resolve_batch_pricing(
             cost_per_request=sync_pricing.cost_per_request * factor,
             context_window=sync_pricing.context_window,
             max_output_tokens=sync_pricing.max_output_tokens,
+            input_cost_per_token_cache_write=(
+                sync_pricing.input_cost_per_token_cache_write * factor
+                if sync_pricing.input_cost_per_token_cache_write is not None
+                else None
+            ),
+            input_cost_per_token_cache_write_1h=(
+                sync_pricing.input_cost_per_token_cache_write_1h * factor
+                if sync_pricing.input_cost_per_token_cache_write_1h is not None
+                else None
+            ),
         )
 
     return sync_pricing
@@ -174,17 +194,36 @@ def completion_cost(
     prompt_tokens = max(0, int(data.get("prompt_tokens", 0) or 0))
     completion_tokens = max(0, int(data.get("completion_tokens", 0) or 0))
     cached_prompt_tokens = max(0, int(data.get("prompt_tokens_cached", 0) or 0))
-    uncached_prompt_tokens = max(0, prompt_tokens - cached_prompt_tokens)
+    # The gateway response cache makes no provider cache write.
+    write_tokens = 0 if cache_hit else max(0, int(data.get("prompt_tokens_cache_write", 0) or 0))
+    write_tokens = min(write_tokens, max(0, prompt_tokens - cached_prompt_tokens))
+    write_1h_tokens = min(
+        write_tokens, max(0, int(data.get("prompt_tokens_cache_write_1h", 0) or 0))
+    )
+    uncached_prompt_tokens = max(0, prompt_tokens - cached_prompt_tokens - write_tokens)
+    input_rate = pricing.input_cost_per_token
+    write_rate = (
+        input_rate
+        if pricing.input_cost_per_token_cache_write is None
+        else pricing.input_cost_per_token_cache_write
+    )
+    write_1h_rate = (
+        write_rate
+        if pricing.input_cost_per_token_cache_write_1h is None
+        else pricing.input_cost_per_token_cache_write_1h
+    )
+    write_cost = (write_tokens - write_1h_tokens) * write_rate + write_1h_tokens * write_1h_rate
 
     if pricing.input_cost_per_token_cache_hit is not None and (
         cache_hit or cached_prompt_tokens > 0
     ):
         prompt_cost = (
             cached_prompt_tokens * pricing.input_cost_per_token_cache_hit
-            + uncached_prompt_tokens * pricing.input_cost_per_token
+            + uncached_prompt_tokens * input_rate
+            + write_cost
         )
     else:
-        prompt_cost = prompt_tokens * pricing.input_cost_per_token
+        prompt_cost = (prompt_tokens - write_tokens) * input_rate + write_cost
 
     if cache_hit and pricing.output_cost_per_token_cache_hit is not None:
         output_cost = completion_tokens * pricing.output_cost_per_token_cache_hit

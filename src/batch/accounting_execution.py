@@ -179,8 +179,18 @@ def _receipt_counts(usage: Mapping[str, object]) -> dict[str, int]:
             "prompt_tokens_cached",
         )
     }
+    # Write counts are kept only when present, so receipts without writes keep their shape.
+    for field in _CACHE_WRITE_COUNTS:
+        if usage.get(field):
+            counts[field] = usage[field]
     if any(type(value) is not int or not 0 <= value < 2**31 for value in counts.values()):
         raise BatchAccountingUnavailable()
-    if counts["prompt_tokens_cached"] > counts["prompt_tokens"]:
+    written = counts.get("prompt_tokens_cache_write", 0)
+    if counts["prompt_tokens_cached"] + written > counts["prompt_tokens"]:
+        raise BatchAccountingUnavailable()
+    if counts.get("prompt_tokens_cache_write_1h", 0) > written:
         raise BatchAccountingUnavailable()
     return {field: int(value) for field, value in counts.items()}
+
+
+_CACHE_WRITE_COUNTS = ("prompt_tokens_cache_write", "prompt_tokens_cache_write_1h")

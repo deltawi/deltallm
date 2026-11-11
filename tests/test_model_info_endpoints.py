@@ -164,6 +164,8 @@ async def test_model_info_lists_visible_deployments_without_secrets(client, test
     assert info["max_output_tokens"] == 16384
     assert info["input_cost_per_token"] == 0.00000015
     assert info["cache_read_input_token_cost"] == 0.000000075
+    assert info["cache_creation_input_token_cost"] is None
+    assert info["cache_creation_input_token_cost_above_1hr"] is None
     assert info["rpm"] == 100
     assert info["tpm"] == 1000
     assert info["supports_function_calling"] is True
@@ -292,3 +294,25 @@ def test_deployment_info_never_copies_unlisted_params() -> None:
 
     assert row["litellm_params"] == {"model": "openai/x", "custom_llm_provider": "openai"}
     assert row["model_info"]["mode"] is None
+
+
+def test_cache_write_prices_use_litellm_names_and_group_maximum() -> None:
+    def claude(deployment_id: str, write: float, write_1h: float | None) -> Deployment:
+        info: dict[str, object] = {"mode": "chat", "input_cost_per_token_cache_write": write}
+        if write_1h is not None:
+            info["input_cost_per_token_cache_write_1h"] = write_1h
+        return Deployment(
+            deployment_id=deployment_id,
+            model_name="claude",
+            deltallm_params={"model": "anthropic/claude-sonnet-4-6"},
+            model_info=info,
+        )
+
+    rows = [claude("a", 0.00000375, 0.000006), claude("b", 0.000005, None)]
+
+    info = deployment_info("claude", rows[0], mode="chat")["model_info"]
+    assert info["cache_creation_input_token_cost"] == 0.00000375
+    assert info["cache_creation_input_token_cost_above_1hr"] == 0.000006
+    group = model_group_info("claude", rows, mode="chat", target_type="model")
+    assert group["cache_creation_input_token_cost"] == 0.000005
+    assert group["cache_creation_input_token_cost_above_1hr"] == 0.000006

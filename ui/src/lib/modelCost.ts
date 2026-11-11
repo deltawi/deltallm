@@ -39,6 +39,8 @@ const RATE_FIELDS: RateField[] = [
   { field: 'input_cost_per_token_cache_hit', label: 'Cached input', scale: TOKEN, unit: '/ 1M tokens' },
   { field: 'output_cost_per_token', label: 'Output', scale: TOKEN, unit: '/ 1M tokens' },
   { field: 'output_cost_per_token_cache_hit', label: 'Cached output', scale: TOKEN, unit: '/ 1M tokens' },
+  { field: 'input_cost_per_token_cache_write', label: 'Cache write', scale: TOKEN, unit: '/ 1M tokens' },
+  { field: 'input_cost_per_token_cache_write_1h', label: 'Cache write (1 hour)', scale: TOKEN, unit: '/ 1M tokens' },
   { field: 'batch_input_cost_per_token', label: 'Batch input', scale: TOKEN, unit: '/ 1M tokens' },
   { field: 'batch_output_cost_per_token', label: 'Batch output', scale: TOKEN, unit: '/ 1M tokens' },
   { field: 'input_cost_per_audio_token', label: 'Audio input', scale: TOKEN, unit: '/ 1M tokens' },

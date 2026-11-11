@@ -70,6 +70,10 @@ def deployment_info(public_name: str, deployment: Any, *, mode: str | None) -> d
     info["input_cost_per_token"] = model_info.get("input_cost_per_token")
     info["output_cost_per_token"] = model_info.get("output_cost_per_token")
     info["cache_read_input_token_cost"] = model_info.get("input_cost_per_token_cache_hit")
+    info["cache_creation_input_token_cost"] = model_info.get("input_cost_per_token_cache_write")
+    info["cache_creation_input_token_cost_above_1hr"] = model_info.get(
+        "input_cost_per_token_cache_write_1h"
+    )
     for key in _PRICE_KEYS:
         if key not in info and model_info.get(key) is not None:
             info[key] = model_info[key]
@@ -115,6 +119,12 @@ def model_group_info(
         "output_cost_per_token": _max_known(row["output_cost_per_token"] for row in rows),
         "cache_read_input_token_cost": _max_known(
             row["cache_read_input_token_cost"] for row in rows
+        ),
+        "cache_creation_input_token_cost": _max_known(
+            row["cache_creation_input_token_cost"] for row in rows
+        ),
+        "cache_creation_input_token_cost_above_1hr": _max_known(
+            row["cache_creation_input_token_cost_above_1hr"] for row in rows
         ),
         "rpm": _sum_if_all(row["rpm"] for row in rows),
         "tpm": _sum_if_all(row["tpm"] for row in rows),

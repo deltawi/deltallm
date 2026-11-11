@@ -186,6 +186,8 @@ class ModelInfo(BaseModel):
     output_cost_per_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     output_cost_per_token_cache_hit: float | None = None
+    input_cost_per_token_cache_write: float | None = None
+    input_cost_per_token_cache_write_1h: float | None = None
     batch_input_cost_per_token: float | None = None
     batch_output_cost_per_token: float | None = None
     batch_price_multiplier: float | None = None

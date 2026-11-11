@@ -61,6 +61,8 @@ export type TierModelPolicyForm = {
   output_cost_per_token: string;
   cached_input_cost_per_token: string;
   cached_output_cost_per_token: string;
+  cache_write_cost_per_token: string;
+  cache_write_1h_cost_per_token: string;
   batch_input_cost_per_token: string;
   batch_output_cost_per_token: string;
   batch_price_multiplier: string;
@@ -228,6 +230,8 @@ export function emptyModelPolicyForm(pricingProfile: TierPricingProfile = 'token
     output_cost_per_token: '',
     cached_input_cost_per_token: '',
     cached_output_cost_per_token: '',
+    cache_write_cost_per_token: '',
+    cache_write_1h_cost_per_token: '',
     batch_input_cost_per_token: '',
     batch_output_cost_per_token: '',
     batch_price_multiplier: '',
@@ -269,6 +273,8 @@ export function modelPolicyToForm(
     output_cost_per_token: numberToInput(pricing.output_cost_per_token),
     cached_input_cost_per_token: numberToInput(pricing.input_cost_per_token_cache_hit),
     cached_output_cost_per_token: numberToInput(pricing.output_cost_per_token_cache_hit),
+    cache_write_cost_per_token: numberToInput(pricing.input_cost_per_token_cache_write),
+    cache_write_1h_cost_per_token: numberToInput(pricing.input_cost_per_token_cache_write_1h),
     batch_input_cost_per_token: numberToInput(pricing.batch_input_cost_per_token),
     batch_output_cost_per_token: numberToInput(pricing.batch_output_cost_per_token),
     batch_price_multiplier: numberToInput(pricing.batch_price_multiplier),

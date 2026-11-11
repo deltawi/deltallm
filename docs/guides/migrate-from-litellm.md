@@ -125,7 +125,7 @@ Then:
 | `aws_region_name` | `region` |
 | `temperature`, `top_p` and other request values in `litellm_params` | `model_info.default_params`. A value in the client request has priority. |
 | `order` | `model_info.priority`. It applies with `routing_strategy: priority-based-routing`. |
-| `model_info` prices and limits, `mode`, `access_groups`, `id` | The same `model_info` fields. `cache_read_input_token_cost` becomes `input_cost_per_token_cache_hit`, and `id` becomes `deployment_id`. |
+| `model_info` prices and limits, `mode`, `access_groups`, `id` | The same `model_info` fields. `cache_read_input_token_cost` becomes `input_cost_per_token_cache_hit`, `cache_creation_input_token_cost` becomes `input_cost_per_token_cache_write`, `cache_creation_input_token_cost_above_1hr` becomes `input_cost_per_token_cache_write_1h`, and `id` becomes `deployment_id`. |
 | `router_settings` strategy, retries, timeout, cooldown, `model_group_alias` | The same `router_settings` keys. `usage-based-routing-v2` becomes `usage-based-routing`. |
 | `fallbacks`, `context_window_fallbacks`, `content_policy_fallbacks` in `router_settings` or `litellm_settings` | `deltallm_settings`, merged into one list |
 | `router_settings.redis_host`, `redis_port`, `redis_password` | `general_settings` |

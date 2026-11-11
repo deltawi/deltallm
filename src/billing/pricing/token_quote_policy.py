@@ -13,6 +13,9 @@ from src.billing.money import canonical_money
 PricingMode = Literal["sync", "batch"]
 PricingSource = Literal["tier", "deployment", "default"]
 PricingView = Literal["customer", "provider"]
+CacheWriteField = Literal["input_cost_per_token_cache_write", "input_cost_per_token_cache_write_1h"]
+_CACHE_WRITE: CacheWriteField = "input_cost_per_token_cache_write"
+_CACHE_WRITE_1H: CacheWriteField = "input_cost_per_token_cache_write_1h"
 _ZERO = Decimal(0)
 
 
@@ -23,6 +26,8 @@ class ExactTokenRates:
     input_cost_per_token_cache_hit: Decimal | None = None
     output_cost_per_token_cache_hit: Decimal | None = None
     cost_per_request: Decimal = _ZERO
+    input_cost_per_token_cache_write: Decimal | None = None
+    input_cost_per_token_cache_write_1h: Decimal | None = None
 
     def __post_init__(self) -> None:
         rates = (
@@ -31,6 +36,8 @@ class ExactTokenRates:
             self.input_cost_per_token_cache_hit,
             self.output_cost_per_token_cache_hit,
             self.cost_per_request,
+            self.input_cost_per_token_cache_write,
+            self.input_cost_per_token_cache_write_1h,
         )
         if any(rate is not None and (not rate.is_finite() or rate < 0) for rate in rates):
             raise ValueError("Invalid exact token price")
@@ -42,21 +49,30 @@ class ExactTokenRates:
         completion_tokens: int,
         prompt_tokens_cached: int = 0,
         cache_hit: bool = False,
+        prompt_tokens_cache_write: int = 0,
+        prompt_tokens_cache_write_1h: int = 0,
     ) -> Decimal:
-        if (
-            any(
-                type(count) is not int or not 0 <= count < 2**31
-                for count in (
-                    prompt_tokens,
-                    completion_tokens,
-                    prompt_tokens_cached,
-                )
-            )
-            or prompt_tokens_cached > prompt_tokens
-        ):
+        counts = (
+            prompt_tokens,
+            completion_tokens,
+            prompt_tokens_cached,
+            prompt_tokens_cache_write,
+            prompt_tokens_cache_write_1h,
+        )
+        if any(type(count) is not int or not 0 <= count < 2**31 for count in counts):
             raise ValueError("Invalid exact token receipt")
-        cached = prompt_tokens if cache_hit and prompt_tokens_cached == 0 else prompt_tokens_cached
+        split = PromptTokenSplit.of(
+            prompt_tokens=prompt_tokens,
+            cached=prompt_tokens_cached,
+            cache_write=prompt_tokens_cache_write,
+            cache_write_1h=prompt_tokens_cache_write_1h,
+            cache_hit=cache_hit,
+            strict=True,
+        )
+        input_rate = self.input_cost_per_token
         cache_rate = self.input_cost_per_token_cache_hit
+        write_rate = self.input_cost_per_token_cache_write
+        write_1h_rate = self.input_cost_per_token_cache_write_1h
         output_rate = (
             self.output_cost_per_token_cache_hit
             if cache_hit and self.output_cost_per_token_cache_hit is not None
@@ -65,8 +81,10 @@ class ExactTokenRates:
         with localcontext() as context:
             context.prec = 80
             return canonical_money(
-                (prompt_tokens - cached) * self.input_cost_per_token
-                + cached * (self.input_cost_per_token if cache_rate is None else cache_rate)
+                split.uncached * input_rate
+                + split.cached * (input_rate if cache_rate is None else cache_rate)
+                + split.cache_write_5m * (input_rate if write_rate is None else write_rate)
+                + split.cache_write_1h * (input_rate if write_1h_rate is None else write_1h_rate)
                 + completion_tokens * output_rate
                 + self.cost_per_request
             )
@@ -87,6 +105,57 @@ class ExactTokenRates:
                 else float(self.output_cost_per_token_cache_hit)
             ),
             cost_per_request=float(self.cost_per_request),
+            input_cost_per_token_cache_write=(
+                None
+                if self.input_cost_per_token_cache_write is None
+                else float(self.input_cost_per_token_cache_write)
+            ),
+            input_cost_per_token_cache_write_1h=(
+                None
+                if self.input_cost_per_token_cache_write_1h is None
+                else float(self.input_cost_per_token_cache_write_1h)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PromptTokenSplit:
+    """Split prompt tokens into the price dimensions that they use.
+
+    Provider prompt totals include cache reads and cache writes. A response-cache hit of
+    the gateway makes no provider cache write, so its write counts do not apply.
+    """
+
+    uncached: int
+    cached: int
+    cache_write_5m: int
+    cache_write_1h: int
+
+    @classmethod
+    def of(
+        cls,
+        *,
+        prompt_tokens: int,
+        cached: int,
+        cache_write: int,
+        cache_write_1h: int,
+        cache_hit: bool,
+        strict: bool = False,
+    ) -> PromptTokenSplit:
+        if cache_hit:
+            cache_write = cache_write_1h = 0
+        if strict and (cached + cache_write > prompt_tokens or cache_write_1h > cache_write):
+            raise ValueError("Invalid exact token receipt")
+        cached = min(prompt_tokens, cached)
+        if cache_hit and cached == 0:
+            cached = prompt_tokens
+        cache_write = min(cache_write, prompt_tokens - cached)
+        cache_write_1h = min(cache_write_1h, cache_write)
+        return cls(
+            uncached=prompt_tokens - cached - cache_write,
+            cached=cached,
+            cache_write_5m=cache_write - cache_write_1h,
+            cache_write_1h=cache_write_1h,
         )
 
 
@@ -225,6 +294,29 @@ class _TokenQuotePolicy:
                 return _SelectedRate(Decimal(str(rate)), cache_field, "default")
         return self.regular(regular_field)
 
+    def cache_write(self, write_field: CacheWriteField) -> _SelectedRate:
+        # A 1-hour write without its own price uses the 5-minute write price. A write
+        # without a write price uses the input price, which keeps older configurations.
+        fields: tuple[CacheWriteField, ...] = (
+            (_CACHE_WRITE_1H, _CACHE_WRITE) if write_field == _CACHE_WRITE_1H else (_CACHE_WRITE,)
+        )
+        # Batch scales a write price like the input price it falls back to.
+        for field in fields:
+            rate = self.configured(field)
+            if rate is not None:
+                return _SelectedRate(self.scaled(rate), field, self.context.source(field))
+        catalog = self.context.catalog
+        if not self.sync and catalog is not None:
+            for field in fields:
+                value = (
+                    catalog.input_cost_per_token_cache_write_1h
+                    if field == _CACHE_WRITE_1H
+                    else catalog.input_cost_per_token_cache_write
+                )
+                if value is not None:
+                    return _SelectedRate(self.scaled(Decimal(str(value))), field, "default")
+        return self.regular("input_cost_per_token")
+
     def record(self, target: str, value: _SelectedRate) -> None:
         if value.rate is None or value.source is None:
             self.missing.append(target)
@@ -240,6 +332,8 @@ class _TokenQuotePolicy:
         completion_tokens: int,
         prompt_tokens_cached: int,
         cache_hit: bool,
+        prompt_tokens_cache_write: int = 0,
+        prompt_tokens_cache_write_1h: int = 0,
     ) -> ExactTokenQuote:
         cache_fields = cache_hit and self.has_cache_prices()
         has_usage = prompt_tokens > 0 or completion_tokens > 0
@@ -254,16 +348,24 @@ class _TokenQuotePolicy:
             return self.quote(
                 ExactTokenRates(cost_per_request=self.request_rate), request_only=True
             )
-        cached = min(prompt_tokens, prompt_tokens_cached)
-        if cache_hit and prompt_tokens > 0 and cached == 0:
-            cached = prompt_tokens
-        if prompt_tokens > cached:
+        split = PromptTokenSplit.of(
+            prompt_tokens=prompt_tokens,
+            cached=prompt_tokens_cached,
+            cache_write=prompt_tokens_cache_write,
+            cache_write_1h=prompt_tokens_cache_write_1h,
+            cache_hit=cache_hit,
+        )
+        if split.uncached:
             self.record("input_cost_per_token", self.regular("input_cost_per_token"))
-        if cached:
+        if split.cached:
             self.record(
                 "input_cost_per_token_cache_hit",
                 self.cached("input_cost_per_token_cache_hit", "input_cost_per_token"),
             )
+        if split.cache_write_5m:
+            self.record(_CACHE_WRITE, self.cache_write(_CACHE_WRITE))
+        if split.cache_write_1h:
+            self.record(_CACHE_WRITE_1H, self.cache_write(_CACHE_WRITE_1H))
         if completion_tokens:
             selected = (
                 self.cached("output_cost_per_token_cache_hit", "output_cost_per_token")
@@ -287,6 +389,8 @@ class _TokenQuotePolicy:
                 input_cost_per_token_cache_hit=self.rates.get("input_cost_per_token_cache_hit"),
                 output_cost_per_token_cache_hit=self.rates.get("output_cost_per_token_cache_hit"),
                 cost_per_request=self.request_rate,
+                input_cost_per_token_cache_write=self.rates.get(_CACHE_WRITE),
+                input_cost_per_token_cache_write_1h=self.rates.get(_CACHE_WRITE_1H),
             )
         )
 
@@ -318,6 +422,8 @@ class _TokenQuotePolicy:
                 "output_cost_per_token_cache_hit", "output_cost_per_token"
             ).rate,
             cost_per_request=self.request_rate,
+            input_cost_per_token_cache_write=self.cache_write(_CACHE_WRITE).rate,
+            input_cost_per_token_cache_write_1h=self.cache_write(_CACHE_WRITE_1H).rate,
         )
 
     def quote(
@@ -344,6 +450,8 @@ def resolve_exact_token_quote(
     completion_tokens: int,
     prompt_tokens_cached: int = 0,
     cache_hit: bool = False,
+    prompt_tokens_cache_write: int = 0,
+    prompt_tokens_cache_write_1h: int = 0,
 ) -> ExactTokenQuote:
     """The caller must supply frozen prices and normalized provider token counts."""
     return _TokenQuotePolicy(context).resolve(
@@ -351,6 +459,8 @@ def resolve_exact_token_quote(
         completion_tokens=max(0, int(completion_tokens)),
         prompt_tokens_cached=max(0, int(prompt_tokens_cached)),
         cache_hit=cache_hit,
+        prompt_tokens_cache_write=max(0, int(prompt_tokens_cache_write)),
+        prompt_tokens_cache_write_1h=max(0, int(prompt_tokens_cache_write_1h)),
     )
 
 

@@ -30,8 +30,11 @@ Notes:
 - Claude Code can read the model list from `GET /v1/models`. Set
   `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` to turn this on. Claude Code shows only
   model names that contain `claude` or `anthropic`.
-- Set the model price `input_cost_per_token_cache_hit`. Claude Code reads most of its
-  prompt from the Anthropic prompt cache, and DeltaLLM bills cache reads at this price.
+- Set the model prices `input_cost_per_token_cache_hit` and
+  `input_cost_per_token_cache_write`, and `input_cost_per_token_cache_write_1h` if you
+  use the 1-hour cache. Claude Code reads most of its prompt from the Anthropic prompt
+  cache and writes new parts of the prompt to it. DeltaLLM bills cache reads and cache
+  writes at these prices. See [Prompt cache prices](../configuration/models.md#prompt-cache-prices).
 - If the model also has deployments with other providers, those deployments use the
   translation hop. On those deployments, thinking and prompt caching are not available.
 - Claude Code counts tokens with `POST /v1/messages/count_tokens`. DeltaLLM asks

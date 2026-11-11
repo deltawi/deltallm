@@ -535,6 +535,8 @@ Provider credentials and endpoints are never returned. `litellm_params` only car
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_creation_input_token_cost": null,
+        "cache_creation_input_token_cost_above_1hr": null,
         "rpm": null,
         "tpm": null,
         "chat_capabilities": {"tools": true, "json_object": true, "json_schema": true, "image": true, "audio": false, "file": false, "streaming": true, "multiple_choices": true},
@@ -550,7 +552,7 @@ Provider credentials and endpoints are never returned. `litellm_params` only car
 }
 ```
 
-Prices are the gateway prices configured on the model (what DeltaLLM charges), not the provider's list price. `cache_read_input_token_cost` is the model's cache-hit input price. Other configured prices (batch, audio, image, per character, per second, per request) are included when set.
+Prices are the gateway prices configured on the model (what DeltaLLM charges), not the provider's list price. `cache_read_input_token_cost` is the model's cache-hit input price. `cache_creation_input_token_cost` and `cache_creation_input_token_cost_above_1hr` are the model's 5-minute and 1-hour cache-write prices, or `null` when they are not set. Other configured prices (batch, audio, image, per character, per second, per request) are included when set.
 
 Capability flags come only from the model's declared chat capabilities (`model_info.chat_capabilities`, see [model capability metadata](../configuration/models.md#model-router-capability-and-price-metadata)); DeltaLLM does not guess them from the model name. When a model has no declared capabilities the `supports_*` flags are `null`, meaning unknown.
 
@@ -569,6 +571,8 @@ Capability flags come only from the model's declared chat capabilities (`model_i
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 6e-07,
       "cache_read_input_token_cost": 7.5e-08,
+      "cache_creation_input_token_cost": null,
+      "cache_creation_input_token_cost_above_1hr": null,
       "rpm": 150,
       "tpm": null,
       "supports_function_calling": true,
