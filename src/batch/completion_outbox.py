@@ -13,6 +13,7 @@ from src.batch.accounting_delivery import NativeBatchCompletionDelivery
 from src.batch.completion_sent_marks import GroupedSentMarks
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.spend.spend import SpendTrackingService
+from src.db.runtime.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_completion_outbox_failure,
     increment_request,
@@ -82,6 +83,7 @@ class BatchCompletionOutboxWorker:
     def _concurrency(self) -> int:
         return max(1, int(self.config.max_concurrency))
 
+    @with_database_caller("batch_outbox")
     async def run(self) -> None:
         """Keep every delivery slot busy: claim again as rows finish, not per claim."""
         self.started.set()

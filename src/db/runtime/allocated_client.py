@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
 from typing import TypeVar
@@ -21,6 +22,7 @@ from prometheus_client import Counter, Gauge, Histogram
 
 from src.concurrency import BoundedCapacityGate, CapacityGateFull, CapacityGateTimedOut
 from src.db.runtime.allocation_config import DatabasePolicy
+from src.db.runtime.database_caller import current_database_caller
 from src.metrics.prometheus import get_prometheus_registry
 from src.models.errors import RoutingFailureAction, ServiceUnavailableError
 
@@ -44,10 +46,81 @@ _duration = Histogram(
     ["allocation", "operation"],
     registry=_registry,
 )
+# Which code path holds, waits for, or is refused a slot. Callers are fixed
+# classes (src/db/runtime/database_caller.py), never tenant or request values.
+_caller_slots = Gauge(
+    "deltallm_database_caller_slots",
+    "Database slots held now, by caller",
+    ["allocation", "caller"],
+    registry=_registry,
+)
+_caller_events = Counter(
+    "deltallm_database_caller_events_total",
+    "Database slot outcomes, by caller",
+    ["allocation", "caller", "outcome"],
+    registry=_registry,
+)
+_caller_wait = Histogram(
+    "deltallm_database_caller_wait_seconds",
+    "Time a caller waited for a database slot",
+    ["allocation", "caller"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0),
+    registry=_registry,
+)
+_caller_hold = Histogram(
+    "deltallm_database_caller_hold_seconds",
+    "Time a caller held a database slot",
+    ["allocation", "caller"],
+    buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0),
+    registry=_registry,
+)
+_waiters = Gauge(
+    "deltallm_database_allocation_waiters",
+    "Callers waiting for a database slot now",
+    ["allocation"],
+    registry=_registry,
+)
+_abandoned = Gauge(
+    "deltallm_database_allocation_abandoned",
+    "Database slots still held for work whose caller stopped waiting",
+    ["allocation"],
+    registry=_registry,
+)
 
 
 # Waiting positions on the receipt (settlement) allocation, whatever its size.
 SETTLEMENT_MIN_WAITERS = 64
+
+
+class _CallerSeries:
+    """Bound metric children for one allocation and caller (no label lookup per query)."""
+
+    __slots__ = ("caller", "slots", "wait", "hold", "_events", "_allocation")
+
+    def __init__(self, allocation: str, caller: str):
+        self._allocation = allocation
+        self.caller = caller
+        self.slots = _caller_slots.labels(allocation, caller)
+        self.wait = _caller_wait.labels(allocation, caller)
+        self.hold = _caller_hold.labels(allocation, caller)
+        self._events: dict[str, Counter] = {}
+
+    def event(self, outcome: str) -> None:
+        counter = self._events.get(outcome)
+        if counter is None:
+            counter = self._events[outcome] = _caller_events.labels(
+                self._allocation, self.caller, outcome
+            )
+        counter.inc()
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseSlot:
+    """One held slot: who holds it and since when."""
+
+    caller: str
+    acquired_at: float
+    series: _CallerSeries
 
 
 class DatabaseUnavailableError(ServiceUnavailableError):
@@ -112,10 +185,38 @@ class DatabaseOwner:
         self.tasks: set[asyncio.Task] = set()
         self.closed = False
         self._probe_active = False
+        allocation = policy.allocation
+        self._occupied = _occupied.labels(allocation)
+        self._waiters = _waiters.labels(allocation)
+        self.abandoned_slots = _abandoned.labels(allocation)
+        self._query_duration = _duration.labels(allocation, "query")
+        self._readiness_duration = _duration.labels(allocation, "readiness")
+        self._outcomes: dict[str, Counter] = {}
+        # Bounded by the fixed caller classes in database_caller.py.
+        self._callers: dict[str, _CallerSeries] = {}
 
-    async def acquire(self, *, timeout_seconds: float | None = None):
+    def _event(self, outcome: str) -> None:
+        counter = self._outcomes.get(outcome)
+        if counter is None:
+            counter = self._outcomes[outcome] = _events.labels(self.policy.allocation, outcome)
+        counter.inc()
+
+    def _caller_series(self, caller: str) -> _CallerSeries:
+        series = self._callers.get(caller)
+        if series is None:
+            series = self._callers[caller] = _CallerSeries(self.policy.allocation, caller)
+        return series
+
+    async def acquire(
+        self, *, timeout_seconds: float | None = None, caller: str | None = None
+    ) -> DatabaseSlot:
         if self.closed:
             raise DatabaseUnavailableError()
+        series = self._caller_series(caller or current_database_caller())
+        started = monotonic()
+        waiting = self.gate.active >= self.gate.concurrency
+        if waiting:
+            self._waiters.inc()
         try:
             await self.gate.acquire(
                 timeout_seconds=self.policy.queue_seconds
@@ -127,19 +228,35 @@ class DatabaseOwner:
                 )
             )
         except CapacityGateFull:
-            _events.labels(self.policy.allocation, "full").inc()
+            self._event("full")
+            series.event("full")
             raise DatabaseUnavailableError() from None
         except CapacityGateTimedOut:
-            _events.labels(self.policy.allocation, "queue_timeout").inc()
+            self._event("queue_timeout")
+            series.event("queue_timeout")
+            series.wait.observe(monotonic() - started)
             raise DatabaseUnavailableError() from None
+        finally:
+            if waiting:
+                self._waiters.dec()
         if self.closed:
             await self.gate.release()
             raise DatabaseUnavailableError()
-        _occupied.labels(self.policy.allocation).inc()
+        acquired_at = monotonic()
+        self._occupied.inc()
+        series.slots.inc()
+        series.event("acquired")
+        series.wait.observe(acquired_at - started)
+        return DatabaseSlot(series.caller, acquired_at, series)
 
-    async def release(self):
+    async def release(self, slot: DatabaseSlot | None = None):
         await self.gate.release()
-        _occupied.labels(self.policy.allocation).dec()
+        self._occupied.dec()
+        if slot is None:
+            self._caller_series(current_database_caller()).slots.dec()
+            return
+        slot.series.slots.dec()
+        slot.series.hold.observe(monotonic() - slot.acquired_at)
 
     def spawn(self, operation: Awaitable[T]) -> asyncio.Task[T]:
         # Callers must own a pool slot (or a transaction's single query slot).
@@ -155,9 +272,9 @@ class DatabaseOwner:
 
     async def query(self, operation: Callable[[], Awaitable[T]]) -> T:
         deadline = monotonic() + self.policy.admission_seconds + self.policy.statement_seconds
-        await self.acquire()
-        task = self.spawn(self._query(operation))
-        return await self._wait_query(task, deadline)
+        slot = await self.acquire()
+        task = self.spawn(self._query(operation, slot))
+        return await self._wait_query(task, deadline, slot)
 
     async def readiness_query(self, operation: Callable[[], Awaitable[T]]) -> T:
         # Borrow one existing slot. A business operation may wait behind this
@@ -169,7 +286,7 @@ class DatabaseOwner:
         deadline = monotonic() + self.policy.acquisition_seconds + self.policy.statement_seconds
         self._probe_active = True
         try:
-            await self.acquire()
+            slot = await self.acquire(caller="readiness")
         except BaseException:
             self._probe_active = False
             raise
@@ -179,23 +296,40 @@ class DatabaseOwner:
             )
         except BaseException:
             self._probe_active = False
-            await self.release()
+            await self.release(slot)
             raise
-        task = self.spawn(self._query(operation, readiness=True))
-        return await self._wait_query(task, deadline)
+        task = self.spawn(self._query(operation, slot, readiness=True))
+        return await self._wait_query(task, deadline, slot)
 
-    async def _wait_query(self, task: asyncio.Task[T], deadline: float) -> T:
+    async def _wait_query(self, task: asyncio.Task[T], deadline: float, slot: DatabaseSlot) -> T:
         try:
             async with asyncio.timeout(max(0, deadline - monotonic())):
                 return await asyncio.shield(task)
         except TimeoutError:
-            _events.labels(self.policy.allocation, "caller_deadline").inc()
+            self._event("caller_deadline")
+            slot.series.event("caller_deadline")
+            self.track_abandoned(task)
             raise DatabaseUnavailableError() from None
         except asyncio.CancelledError:
-            _events.labels(self.policy.allocation, "caller_cancelled").inc()
+            self._event("caller_cancelled")
+            slot.series.event("caller_cancelled")
+            self.track_abandoned(task)
             raise
 
-    async def _query(self, operation: Callable[[], Awaitable[T]], *, readiness: bool = False) -> T:
+    def track_abandoned(self, task: asyncio.Task) -> None:
+        """Count a slot that native work keeps after its caller stopped waiting."""
+        if task.done():
+            return
+        self.abandoned_slots.inc()
+        task.add_done_callback(lambda _task: self.abandoned_slots.dec())
+
+    async def _query(
+        self,
+        operation: Callable[[], Awaitable[T]],
+        slot: DatabaseSlot,
+        *,
+        readiness: bool = False,
+    ) -> T:
         started = monotonic()
         outcome = "error"
         try:
@@ -203,8 +337,9 @@ class DatabaseOwner:
             outcome = "completed"
             return result
         finally:
-            _events.labels(self.policy.allocation, outcome).inc()
-            _duration.labels(self.policy.allocation, "readiness" if readiness else "query").observe(
+            self._event(outcome)
+            slot.series.event(outcome)
+            (self._readiness_duration if readiness else self._query_duration).observe(
                 monotonic() - started
             )
             if readiness:
@@ -212,7 +347,7 @@ class DatabaseOwner:
                 await self.gate.reconfigure(
                     concurrency=self.policy.connections, max_waiters=self._business_waiters
                 )
-            await self.release()
+            await self.release(slot)
 
     async def close(self):
         self.closed = True
@@ -311,6 +446,8 @@ class AllocatedTransaction:
         self._ready = False
         self._finishing = False
         self._owns_slot = False
+        self._slot: DatabaseSlot | None = None
+        self._abandoned = False
         self.failed = False
         self._deadline = None
         self._expiration_task = None
@@ -330,7 +467,7 @@ class AllocatedTransaction:
             raise RuntimeError("Transaction has already started")
         self._started = True
         acquisition_deadline = monotonic() + self.acquisition_seconds
-        await self.owner.acquire(timeout_seconds=self.acquisition_seconds)
+        self._slot = await self.owner.acquire(timeout_seconds=self.acquisition_seconds)
         self._owns_slot = True
         if self.owner.policy.queue_seconds:
             # A caller that queued for its slot still gets the full native
@@ -345,6 +482,7 @@ class AllocatedTransaction:
                 return await asyncio.shield(task)
         except (asyncio.CancelledError, TimeoutError) as exc:
             self._finishing = True
+            self._mark_abandoned()
             self.owner.spawn(self._abandon_start(task))
             if isinstance(exc, TimeoutError):
                 raise DatabaseUnavailableError() from None
@@ -358,6 +496,7 @@ class AllocatedTransaction:
             self._expiration_task = self.owner.spawn(self._expire_and_release())
             return client
         except BaseException:
+            self._mark_abandoned()
             self.owner.spawn(self._expire_and_release())
             raise
 
@@ -401,15 +540,23 @@ class AllocatedTransaction:
         finally:
             await self._release()
 
+    def _mark_abandoned(self) -> None:
+        # The slot stays held until native work ends or its timeout expires.
+        if self._owns_slot and not self._abandoned:
+            self._abandoned = True
+            self.owner.abandoned_slots.inc()
+
     async def _release(self):
         if self._owns_slot:
             self._owns_slot = False
+            if self._abandoned:
+                self.owner.abandoned_slots.dec()
             if (
                 self._expiration_task is not None
                 and self._expiration_task is not asyncio.current_task()
             ):
                 self._expiration_task.cancel()
-            await self.owner.release()
+            await self.owner.release(self._slot)
 
     async def _finish(self, *, commit: bool):
         if self.closed:
@@ -429,6 +576,7 @@ class AllocatedTransaction:
                 self.owner.policy.native_query_seconds,
             )
         except BaseException:
+            self._mark_abandoned()
             self.owner.spawn(self._expire_and_release())
             raise
         else:

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from src.batch.models import BatchWebhookOutboxRecord, BatchWebhookQueueSummary
 from src.batch.repository import BatchRepository
+from src.db.runtime.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_webhook_delivery_attempt,
     increment_batch_webhook_lease_recovery,
@@ -48,6 +49,7 @@ class BatchWebhookObservabilityWorker:
         summary = await self.repository.summarize_webhook_outbox()
         publish_webhook_queue_summary(summary)
 
+    @with_database_caller("batch_webhook")
     async def run(self) -> None:
         while not self._stop_event.is_set():
             failed = False

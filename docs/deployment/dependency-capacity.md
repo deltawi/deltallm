@@ -158,6 +158,76 @@ constructors retain an optional worker-client argument for compatibility; produc
 bootstrap always supplies the isolated worker client. Remove that constructor fallback
 only after its external callers migrate.
 
+### Find which work holds the database slots
+
+The error "Database capacity is temporarily unavailable" means one of these:
+
+- The pod's own pool had no free slot and no free waiting position. The event
+  outcome is `full`.
+- The caller waited for a slot for the full queue time. The outcome is
+  `queue_timeout`.
+- The caller had a slot, but the query did not finish in time. The outcome is
+  `caller_deadline`.
+- PostgreSQL refused the connection or cancelled the statement.
+
+The first two come from the pod, not from PostgreSQL. To find which work fills the
+pool, use these metrics. Each one has the `allocation` label (`control`,
+`foreground`, `telemetry`, `telemetry_worker` or `telemetry_settlement`):
+
+| Metric | What it shows |
+|---|---|
+| `deltallm_database_caller_slots{caller}` | Slots that each kind of work holds now |
+| `deltallm_database_caller_hold_seconds{caller}` | How long each kind of work holds a slot. A transaction holds one slot from `BEGIN` to `COMMIT`. |
+| `deltallm_database_caller_wait_seconds{caller}` | How long each kind of work waited for a slot |
+| `deltallm_database_caller_events_total{caller,outcome}` | `acquired`, `completed`, `error`, `full`, `queue_timeout`, `caller_deadline` and `caller_cancelled`, by kind of work |
+| `deltallm_database_allocation_waiters` | Callers that wait for a slot now |
+| `deltallm_database_allocation_abandoned` | Slots that are still held for a query or transaction whose caller stopped waiting. The slot stays held until PostgreSQL finishes the work or its timeout expires. |
+
+The `caller` label has a fixed set of values:
+
+| Caller | Work |
+|---|---|
+| `batch_claim` | Batch worker loop: claims, scheduler reads and other work outside a slice |
+| `batch_item` | Item work in a claimed slice that has no more specific class |
+| `batch_checkpoint` | Billing checkpoint writes before a provider call |
+| `batch_result_save` | Result saves with their completion outbox rows |
+| `batch_requeue` | Items given back for a retry or released after a claim |
+| `batch_lease` | Item and job lease renewals |
+| `batch_progress` | Job progress refreshes |
+| `batch_finalize` | Job finalization |
+| `batch_outbox` | The completion outbox worker |
+| `batch_webhook` | Batch webhook delivery and its observability scan |
+| `batch_maintenance` | Stale lease sweeper, retention cleanup, create-session cleanup and scheduler backfill |
+| `auth` | API key lookups after a key cache miss |
+| `key_last_used` | Key last-used writes |
+| `spend` | Spend writes and the spend outbox worker |
+| `audit` | Audit writes and the audit outbox worker |
+| `cache_invalidation` | The cache invalidation worker |
+| `organization_deletion` | The organization deletion worker |
+| `readiness` | Readiness probes |
+| `other` | Work that has no class yet |
+
+Example queries:
+
+```promql
+# Which work holds the batch pool, per pod
+max by (pod, caller) (deltallm_database_caller_slots{allocation="control"})
+
+# Which work is refused a slot
+sum by (caller, outcome) (rate(deltallm_database_caller_events_total{outcome=~"full|queue_timeout|caller_deadline"}[1m]))
+
+# p95 slot hold time by work
+histogram_quantile(0.95, sum by (le, caller) (rate(deltallm_database_caller_hold_seconds_bucket{allocation="control"}[5m])))
+```
+
+To make sure that PostgreSQL itself is not the limit, compare these metrics with the
+server during the same minutes. Look at CPU, active connections in `pg_stat_activity`
+by `application_name` (`deltallm_control`, `deltallm_foreground` and the others), and
+statement times in `pg_stat_statements`. Many `full` events while PostgreSQL has free
+CPU and connections mean that the pod pool is too small for the work that it runs.
+More `caller_deadline` events and longer statement times mean that PostgreSQL is
+slow.
+
 ## Redis ownership and configuration
 
 ```yaml

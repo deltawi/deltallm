@@ -45,6 +45,7 @@ from src.batch.webhooks.events import (
     build_batch_webhook_event,
 )
 from src.metrics import increment_batch_duplicate_completion_rejection
+from src.db.runtime.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 
@@ -627,6 +628,7 @@ class BatchRepository:
     async def load_claim_items(self, item_ids: list[str]) -> list[BatchItemRecord]:
         return await self.items.list_items_by_ids(item_ids)
 
+    @with_database_caller("batch_requeue")
     async def release_claim_items(
         self,
         *,
@@ -693,9 +695,11 @@ class BatchRepository:
             refund_attempt=refund_attempt,
         )
 
+    @with_database_caller("batch_progress")
     async def refresh_job_progress(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.refresh_job_progress(batch_id)
 
+    @with_database_caller("batch_progress")
     async def refresh_jobs_after_claim(self, batch_ids: list[str]) -> list[BatchJobRecord]:
         records: list[BatchJobRecord] = []
         seen: set[str] = set()
@@ -708,6 +712,7 @@ class BatchRepository:
                 records.append(record)
         return records
 
+    @with_database_caller("batch_lease")
     async def renew_job_lease(self, *, batch_id: str, worker_id: str, lease_seconds: int) -> bool:
         return await self.jobs.renew_job_lease(
             batch_id=batch_id, worker_id=worker_id, lease_seconds=lease_seconds
@@ -729,6 +734,7 @@ class BatchRepository:
     async def release_job_lease(self, *, batch_id: str, worker_id: str) -> None:
         await self.jobs.release_job_lease(batch_id=batch_id, worker_id=worker_id)
 
+    @with_database_caller("batch_lease")
     async def renew_item_lease(
         self,
         *,
@@ -746,6 +752,7 @@ class BatchRepository:
             expires_at=expires_at,
         )
 
+    @with_database_caller("batch_lease")
     async def renew_item_leases(
         self,
         *,
@@ -759,6 +766,7 @@ class BatchRepository:
             lease_seconds=lease_seconds,
         )
 
+    @with_database_caller("batch_requeue")
     async def release_items_for_retry(
         self,
         *,
@@ -1062,6 +1070,7 @@ class BatchRepository:
             after_line_number=after_line_number,
         )
 
+    @with_database_caller("batch_requeue")
     async def requeue_expired_in_progress_items(self, batch_id: str) -> int:
         return await self.items.requeue_expired_in_progress_items(batch_id)
 
@@ -1338,6 +1347,7 @@ class BatchRepository:
             worker_id=worker_id,
         )
 
+    @with_database_caller("batch_result_save")
     async def complete_items_with_outbox_bulk(
         self,
         *,
@@ -1455,6 +1465,7 @@ class BatchRepository:
             model_group=model_group,
         )
 
+    @with_database_caller("batch_maintenance")
     async def sweep_expired_batch_leases(
         self,
         *,

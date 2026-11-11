@@ -40,6 +40,7 @@ from src.batch.webhooks.signing import (
 )
 from src.batch.webhooks.terminalization import BatchWebhookTerminalRecorder
 from src.services.audit.audit_service import AuditService
+from src.db.runtime.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ class BatchWebhookOutboxWorker:
     def stop(self) -> None:
         self._stop_event.set()
 
+    @with_database_caller("batch_webhook")
     async def run(self) -> None:
         self.started.set()
         try:

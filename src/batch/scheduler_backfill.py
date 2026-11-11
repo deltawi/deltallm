@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 
 from src.batch.repository import BatchRepository
+from src.db.runtime.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_scheduler_backfill_rows,
     increment_batch_scheduler_backfill_run,
@@ -71,6 +72,7 @@ class BatchSchedulerBackfillWorker:
         await self._refresh_batch_runtime_metrics(now=datetime.now(tz=UTC))
         return {"jobs": jobs, "items": items}
 
+    @with_database_caller("batch_maintenance")
     async def run(self) -> None:
         self._running = True
         while self._running and not self._stop_event.is_set():

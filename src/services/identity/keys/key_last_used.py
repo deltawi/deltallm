@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from src.metrics.key_last_used import KeyLastUsedEvent, record_key_last_used_event
+from src.db.runtime.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class KeyLastUsedRecorder:
             return
         self._pending[token_hash] = self._now()
 
+    @with_database_caller("key_last_used")
     async def flush(self) -> None:
         if not self._pending:
             return
@@ -75,6 +77,7 @@ class KeyLastUsedRecorder:
     def stop(self) -> None:
         self._stopped.set()
 
+    @with_database_caller("key_last_used")
     async def run(self) -> None:
         while not self._stopped.is_set():
             try:

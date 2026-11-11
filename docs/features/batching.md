@@ -227,6 +227,7 @@ Sizing rule:
 - Keep `embeddings_batch_worker_concurrency` at or below `db_pool_size`. The worker logs a warning at startup when it is higher.
 - For more batch throughput, add `batchWorker` replicas instead of raising per-pod concurrency, and check the connection budget above.
 - Watch `deltallm_batch_accounting_checkpoint_write_seconds` (by `outcome`) and `deltallm_batch_accounting_checkpoint_write_retries_total`. A rising `unavailable` count means the database or pool is saturated: lower concurrency or claim size, or add database capacity.
+- To see which batch work fills the pool (checkpoints, result saves, the outbox, leases, claims or maintenance), use the `deltallm_database_caller_*` metrics. See [Find which work holds the database slots](../deployment/dependency-capacity.md#find-which-work-holds-the-database-slots).
 
 #### Grouping writes while the database is busy
 

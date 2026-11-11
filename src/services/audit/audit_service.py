@@ -56,6 +56,7 @@ from src.telemetry.lifecycle import (
     wait_for_startup,
 )
 from src.telemetry.worker_idle import IdleWorkerPoll
+from src.db.runtime.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -539,6 +540,7 @@ class AuditService:
         )
         self._worker_detail = None
 
+    @with_database_caller("audit")
     async def enqueue_event(
         self,
         event: AuditEventInput,
@@ -648,6 +650,7 @@ class AuditService:
         self._wake.set()
         return result.status
 
+    @with_database_caller("audit")
     async def enqueue_prompt_render(self, event: PromptRenderEvent) -> str:
         redacted_event = event.redacted()
         if not self.ingestion_config.enabled:
@@ -819,6 +822,7 @@ class AuditService:
             )
             return "dropped"
 
+    @with_database_caller("audit")
     async def record_event_sync(
         self,
         event: AuditEventInput,
@@ -837,6 +841,7 @@ class AuditService:
             repository=repository,
         )
 
+    @with_database_caller("audit")
     async def _worker_loop(self) -> None:
         self._worker_started.set()
         while True:
@@ -858,6 +863,7 @@ class AuditService:
     def _total_queue_depth(self) -> int:
         return self._queue.qsize()
 
+    @with_database_caller("audit")
     async def _durable_worker_loop(self) -> None:
         self._worker_started.set()
         consecutive_failures = 0
@@ -1100,6 +1106,7 @@ class AuditService:
             capacity=self.ingestion_config.max_pending_events,
         )
 
+    @with_database_caller("audit")
     async def _durable_cleanup_loop(self) -> None:
         self._cleanup_started.set()
         while not self._closed:

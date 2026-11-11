@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 
 from src.batch.repository import BatchRepository
+from src.db.runtime.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_stale_lease_sweeper_rows,
     increment_batch_stale_lease_sweeper_run,
@@ -140,6 +141,7 @@ class BatchStaleLeaseSweeperWorker:
             "skipped_active_jobs": skipped_active_jobs,
         }
 
+    @with_database_caller("batch_maintenance")
     async def run(self) -> None:
         self.started.set()
         self._running = True
