@@ -164,10 +164,11 @@ class OpenAIAdapter(ProviderAdapter):
         *,
         details: ProviderErrorDetails | None = None,
     ) -> ProxyError:
-        classification = self._classify_failure(details or provider_error_details(provider_error))
+        details = details or provider_error_details(provider_error)
         return map_standard_provider_error(
             provider_error,
-            failure_classification=classification,
+            failure_classification=self._classify_failure(details),
+            details=details,
         )
 
     def native_responses_adapter(
