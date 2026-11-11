@@ -276,11 +276,14 @@ class NativeSelectorStore:
         status: str,
         error_type: str | None = None,
     ) -> dict[str, object]:
+        metadata: dict[str, object] = {"attempt_count": 1, "component_purpose": "selector:v1"}
+        if error_type is not None:
+            metadata["uncertainty_reason"] = error_type
         return accounting_audit_envelope(
             handle,
             event_id=self.operation.attribution.component_event_id,
             status=status,
-            metadata={"attempt_count": 1, "component_purpose": "selector:v1"},
+            metadata=metadata,
             error_type=error_type,
         )
 
