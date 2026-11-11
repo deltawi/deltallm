@@ -627,21 +627,36 @@ class BatchItemRepository:
         *,
         item_ids: list[str],
         worker_id: str,
+        item_claim_epochs: Mapping[str, int] | None = None,
     ) -> int:
+        """Give claimed items that did not finish back to the queue.
+
+        With ``item_claim_epochs``, only rows still at that claim epoch are
+        released, and ids without an epoch are left alone. An item that was
+        retried and claimed again, also by this worker, is then not released
+        under the claim that came after.
+        """
+        if item_claim_epochs is not None:
+            item_ids = [item_id for item_id in item_ids if item_id in item_claim_epochs]
         if self.prisma is None or not item_ids:
             return 0
 
         values_sql: list[str] = []
         params: list[Any] = []
-        for index, item_id in enumerate(item_ids, start=1):
-            values_sql.append(f"(${index})")
-            params.append(item_id)
+        for item_id in item_ids:
+            if item_claim_epochs is None:
+                values_sql.append(f"(${len(params) + 1}, NULL::bigint)")
+                params.append(item_id)
+            else:
+                values_sql.append(f"(${len(params) + 1}, ${len(params) + 2}::bigint)")
+                params.extend((item_id, int(item_claim_epochs[item_id])))
+        epoch_sql = "" if item_claim_epochs is None else "AND i.claim_epoch = p.claim_epoch"
 
         worker_id_param = len(params) + 1
         params.append(worker_id)
         rows = await self.prisma.query_raw(
             f"""
-            WITH payload(item_id) AS (
+            WITH payload(item_id, claim_epoch) AS (
                 VALUES {", ".join(values_sql)}
             ),
             updated AS (
@@ -654,6 +669,7 @@ class BatchItemRepository:
                 WHERE i.item_id = p.item_id
                   AND i.locked_by = ${worker_id_param}
                   AND i.status = 'in_progress'
+                  {epoch_sql}
                 RETURNING i.item_id
             )
             SELECT item_id FROM updated

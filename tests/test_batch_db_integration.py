@@ -6661,6 +6661,76 @@ async def test_db_backed_slice_lease_renewal_keeps_only_items_this_worker_still_
 
 
 @pytest.mark.asyncio
+async def test_db_backed_slice_release_leaves_an_item_claimed_again_by_the_same_worker(
+    batch_db,
+) -> None:
+    # Native acceptance rollout 2026-11-10: an item of a running slice was
+    # retried and claimed again by another slice of the same worker. When the
+    # first slice ended, its release gave the item back to the queue while
+    # the second claim was still saving the provider answer. The next claim
+    # then failed the item as accounting_closed.
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=line, custom_id=f"c{line}", request_body={"model": "m1"})
+            for line in range(1, 3)
+        ],
+    )
+    await repository.set_job_queued(job.batch_id, 2)
+    first = await repository.claim_next_work(
+        worker_id="w1", max_items=2, max_work_units=100, lease_seconds=120
+    )
+    assert first is not None
+    retried, unfinished = await repository.load_claim_items(first.item_ids)
+    assert await repository.mark_item_failed(
+        item_id=retried.item_id,
+        worker_id="w1",
+        error_body={"message": "Gateway busy"},
+        last_error="Gateway busy",
+        retryable=True,
+        retry_delay_seconds=1,
+        claim_epoch=retried.claim_epoch,
+    )
+    await batch_db.execute_raw(
+        "UPDATE deltallm_batch_item SET not_before_at = NULL, lease_expires_at = NULL"
+        " WHERE item_id = $1",
+        retried.item_id,
+    )
+    second = await repository.claim_next_work(
+        worker_id="w1", max_items=2, max_work_units=100, lease_seconds=120
+    )
+    assert second is not None and second.item_ids == [retried.item_id]
+
+    released = await repository.release_claim_items(
+        item_ids=first.item_ids,
+        worker_id="w1",
+        item_claim_epochs={
+            retried.item_id: retried.claim_epoch,
+            unfinished.item_id: unfinished.claim_epoch,
+        },
+    )
+
+    assert released == 1
+    reclaimed, given_back = await repository.load_claim_items(first.item_ids)
+    assert (reclaimed.status, reclaimed.locked_by) == ("in_progress", "w1")
+    assert reclaimed.claim_epoch == retried.claim_epoch + 1
+    assert (given_back.status, given_back.locked_by) == ("pending", None)
+
+
+@pytest.mark.asyncio
 async def test_db_backed_claim_next_work_does_not_strand_items_when_job_finalizing(
     batch_db,
 ) -> None:

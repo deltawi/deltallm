@@ -10,7 +10,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Sequence
 
 from src.batch.claim_diagnostics import (
     BatchClaimDecisionDiagnostic,
@@ -113,6 +113,17 @@ def _optional_worker_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _claim_epochs(items: Sequence[Any]) -> dict[str, int] | None:
+    """The claim epoch of each loaded item; None when an item has none."""
+    epochs: dict[str, int] = {}
+    for item in items:
+        epoch = _optional_worker_int(getattr(item, "claim_epoch", None))
+        if epoch is None:
+            return None
+        epochs[str(item.item_id)] = epoch
+    return epochs
 
 
 class BatchExecutorWorker:
@@ -1264,6 +1275,10 @@ class BatchExecutorWorker:
         # Cancel branch already releases items explicitly; skip the redundant
         # finally release in that case to save one DB round trip per cancel.
         needs_finally_release = True
+        # The claim epochs of the loaded items. A retried item can be claimed
+        # again, also by this worker, while this slice still runs: the release
+        # below must leave that later claim alone.
+        claim_epochs: dict[str, int] | None = None
         try:
             job = await self.repository.get_job(claim.batch_id)
             if job is None:
@@ -1280,6 +1295,7 @@ class BatchExecutorWorker:
                 needs_finally_release = False
             else:
                 items = await self.repository.load_claim_items(claim.item_ids)
+                claim_epochs = _claim_epochs(items)
                 slots.set_waiting(len(items))
                 if not items:
                     logger.warning(
@@ -1298,6 +1314,7 @@ class BatchExecutorWorker:
                 released = await self.repository.release_claim_items(
                     item_ids=claim.item_ids,
                     worker_id=self.config.worker_id,
+                    item_claim_epochs=claim_epochs,
                 )
                 if released:
                     logger.info(

@@ -632,8 +632,11 @@ class BatchRepository:
         *,
         item_ids: list[str],
         worker_id: str,
+        item_claim_epochs: Mapping[str, int] | None = None,
     ) -> int:
-        return await self.items.release_claim_items(item_ids=item_ids, worker_id=worker_id)
+        return await self.items.release_claim_items(
+            item_ids=item_ids, worker_id=worker_id, item_claim_epochs=item_claim_epochs
+        )
 
     async def mark_item_completed(
         self,

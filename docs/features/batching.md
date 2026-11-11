@@ -278,6 +278,8 @@ A worker can hold up to `embeddings_batch_worker_concurrency + embeddings_batch_
 
 A worker claims a slice of items at once, and items can wait for a free slot before they start. On every heartbeat the worker renews the leases of all items in its slice that it still owns, in one database statement, so a waiting item is not taken by another worker before it runs. A running item also renews its own lease.
 
+When a slice ends, the worker gives back its items that did not finish. It gives back only items that are still at the claim of that slice. An item of the slice that was retried and claimed again, also by the same worker in another slice, stays with its new claim.
+
 Use `embeddings_batch_max_attempts: 5` for production if provider hiccups are common. Keep retry jitter enabled so workers do not retry the same provider or model group at the same instant.
 
 #### Retries with accounting v2
