@@ -57,6 +57,24 @@ model_list:
 The model can also be written as `sglang/meta-llama/Llama-3.1-8B-Instruct`;
 DeltaLLM removes the `sglang/` prefix before calling the server.
 
+## Cached tokens
+
+SGLang reuses the KV cache for prompts that start with the same text (RadixAttention).
+To report the reused tokens, start the server with `--enable-cache-report`:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 --port 30000 \
+  --enable-cache-report
+```
+
+SGLang then sends `usage.prompt_tokens_details.cached_tokens`. DeltaLLM bills these
+tokens at the model's cache-hit input price. Set **Cached Input Cost / Token** on the
+model to give a discount. When the price is not set, cached tokens use the normal
+input price. Without `--enable-cache-report`, all prompt tokens use the normal input
+price.
+
 ## Credentials
 
 An SGLang deployment never inherits the gateway's `OPENAI_API_KEY` or

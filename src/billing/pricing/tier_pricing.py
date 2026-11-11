@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from src.billing.money import money_string
 from src.billing.pricing.cost import BillingResult, ModelPricing, completion_cost, get_model_pricing
-from src.billing.pricing.pricing import pricing_from_model_info
+from src.billing.pricing.pricing import pricing_from_model_info, with_reported_prompt_cache
 from src.billing.pricing.token_quote_policy import (
     ExactTokenQuote,
     ExactTokenRates,
@@ -266,7 +266,8 @@ def resolve_token_billing_result(
     pricing_view: PricingView = "customer",
 ) -> TokenBillingResolution:
     """Resolve and calculate a token charge with explicit unpriced state."""
-    usage_data = dict(usage or {})
+    # A gateway cache hit bills the whole prompt as cached, so the provider count does not apply.
+    usage_data = dict(usage or {}) if cache_hit else with_reported_prompt_cache(usage)
     prompt_tokens = max(0, int(usage_data.get("prompt_tokens", 0) or 0))
     completion_tokens = max(0, int(usage_data.get("completion_tokens", 0) or 0))
     prompt_tokens_cached = _usage_count(usage_data, "prompt_tokens_cached")

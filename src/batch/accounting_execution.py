@@ -15,6 +15,7 @@ from src.billing.accounting.accounting_finalization import accounting_audit_enve
 from src.billing.accounting.accounting_protocol import AccountingOutcome
 from src.billing.accounting.journal.accounting_terminal_preparation import prepare_accounting_charge
 from src.billing.money import money_string
+from src.billing.pricing.pricing import with_reported_prompt_cache
 from src.billing.pricing.token_quote_policy import ExactTokenQuote
 from src.billing.pricing.tier_pricing import PricingResolution, resolve_exact_token_quote_pricing
 
@@ -171,6 +172,7 @@ def _unpriced_billing(quote: ExactTokenQuote) -> dict[str, object]:
 
 
 def _receipt_counts(usage: Mapping[str, object]) -> dict[str, int]:
+    usage = with_reported_prompt_cache(usage)
     counts = {
         field: usage.get(field, 0)
         for field in (

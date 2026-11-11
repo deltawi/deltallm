@@ -29,6 +29,30 @@ class CompatibleChatResponse(ChatCompletionResponse):
     usage: CompatibleChatUsage
 
 
+def separate_cache_chat_usage(
+    *, uncached: int, cache_read: int, cache_write: int, completion: int, total: int | None = None
+) -> dict[str, JsonValue]:
+    """Build OpenAI chat usage when a provider counts cache tokens apart from input.
+
+    Anthropic and Bedrock report uncached input, cache reads and cache writes separately.
+    OpenAI clients expect all of them in ``prompt_tokens``, cache reads in
+    ``prompt_tokens_details.cached_tokens`` and cache writes in
+    ``prompt_tokens_details.cache_write_tokens``.
+    """
+    prompt = uncached + cache_read + cache_write
+    usage: dict[str, JsonValue] = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion if total is None else total,
+    }
+    if cache_read or cache_write:
+        usage["prompt_tokens_details"] = {
+            "cached_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+        }
+    return usage
+
+
 def normalize_chat_usage(value: object) -> dict[str, JsonValue]:
     """Map documented cache counters to the existing ledger vocabulary once."""
     receipt = _parse_chat_usage(value)

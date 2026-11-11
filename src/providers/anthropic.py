@@ -9,6 +9,7 @@ import httpx
 
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.providers.json_guidance import validate_guided_json_support
+from src.providers.chat_usage import separate_cache_chat_usage
 from src.models.requests import ChatCompletionRequest
 from src.services.admission.output_limit_types import complete_output_count
 from src.models.responses import ChatCompletionResponse
@@ -174,6 +175,21 @@ def _chat_tool_choice_to_anthropic(tool_choice: Any) -> dict[str, Any] | None:
     if isinstance(named_function, dict) and named_function.get("name"):
         return {"type": "tool", "name": str(named_function["name"])}
     return None
+
+
+def _anthropic_chat_usage(usage: Mapping[str, Any]) -> dict[str, Any]:
+    # Anthropic input_tokens leaves out cache reads and cache writes. The cache counts
+    # are added to prompt_tokens, so a negative or fractional count must not pass.
+    read = usage.get("cache_read_input_tokens") or 0
+    write = usage.get("cache_creation_input_tokens") or 0
+    if not is_valid_provider_token_count(read) or not is_valid_provider_token_count(write):
+        raise invalid_provider_response_error()
+    return separate_cache_chat_usage(
+        uncached=int(usage.get("input_tokens") or 0),
+        cache_read=read,
+        cache_write=write,
+        completion=int(usage.get("output_tokens") or 0),
+    )
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -345,8 +361,6 @@ class AnthropicAdapter(ProviderAdapter):
                     }
                 )
         usage = data.get("usage") or {}
-        prompt_tokens = int(usage.get("input_tokens") or 0)
-        completion_tokens = int(usage.get("output_tokens") or 0)
         finish_reason_map = {
             "end_turn": "stop",
             "stop_sequence": "stop",
@@ -369,11 +383,7 @@ class AnthropicAdapter(ProviderAdapter):
                     "finish_reason": finish_reason,
                 }
             ],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            },
+            "usage": _anthropic_chat_usage(usage),
         }
         return ChatCompletionResponse.model_validate(canonical)
 

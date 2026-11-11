@@ -48,10 +48,14 @@ def pricing_from_model_info(
 
 
 def normalize_gateway_cache_hit_usage(usage: Mapping[str, Any] | None) -> dict[str, Any]:
+    # A gateway response-cache hit sends no provider request. The whole prompt is billed as
+    # cached, even when the stored answer has a smaller provider count (for example an MCP
+    # answer whose hops used different providers), and nothing is written to a provider cache.
     normalized = dict(usage or {})
-    if normalized.get("prompt_tokens_cached") is None:
-        prompt_tokens = max(0, int(normalized.get("prompt_tokens", 0) or 0))
-        normalized["prompt_tokens_cached"] = prompt_tokens
+    normalized["prompt_tokens_cached"] = max(0, int(normalized.get("prompt_tokens", 0) or 0))
+    for written in ("prompt_tokens_cache_write", "prompt_tokens_cache_write_1h"):
+        if written in normalized:
+            normalized[written] = 0
     return normalized
 
 
@@ -62,3 +66,35 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def with_reported_prompt_cache(usage: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Copy usage and add the cache counts that a provider reports only in details.
+
+    OpenAI-shaped answers (OpenAI, Azure OpenAI, vLLM, SGLang, OpenAI-compatible servers and
+    translated Gemini, Bedrock and Anthropic answers) report cache reads in
+    ``prompt_tokens_details.cached_tokens`` and some report cache writes in
+    ``prompt_tokens_details.cache_write_tokens``. This adds them as ``prompt_tokens_cached``
+    and ``prompt_tokens_cache_write``. An explicit count wins. Counts that are not whole
+    numbers, or that add up to more than ``prompt_tokens``, are ignored, so those tokens
+    keep the input price.
+    """
+    data = dict(usage or {})
+    details = data.get("prompt_tokens_details")
+    prompt = data.get("prompt_tokens")
+    if not isinstance(details, Mapping) or not _is_count(prompt):
+        return data
+    if data.get("prompt_tokens_cached") is None:
+        cached = details.get("cached_tokens")
+        if _is_count(cached) and 0 < cached <= prompt:
+            data["prompt_tokens_cached"] = cached
+    if data.get("prompt_tokens_cache_write") is None:
+        written = details.get("cache_write_tokens")
+        cached = data.get("prompt_tokens_cached") or 0
+        if _is_count(written) and _is_count(cached) and 0 < written <= prompt - cached:
+            data["prompt_tokens_cache_write"] = written
+    return data
+
+
+def _is_count(value: object) -> bool:
+    return type(value) is int and value >= 0

@@ -22,8 +22,8 @@ class Usage(BaseModel):
     completion_tokens: int
     total_tokens: int
     # Provider breakdowns (cached_tokens, reasoning_tokens, audio_tokens, ...) returned to
-    # the client unchanged. Chat charges read only the counters above and
-    # prompt_tokens_cached, never these objects.
+    # the client unchanged. Chat charges read the counters above, prompt_tokens_cached,
+    # and the prompt cache counts in prompt_tokens_details (with_reported_prompt_cache).
     prompt_tokens_details: dict[str, JsonValue] | None = None
     completion_tokens_details: dict[str, JsonValue] | None = None
 
