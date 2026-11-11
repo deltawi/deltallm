@@ -228,6 +228,14 @@ Sizing rule:
 - For more batch throughput, add `batchWorker` replicas instead of raising per-pod concurrency, and check the connection budget above.
 - Watch `deltallm_batch_accounting_checkpoint_write_seconds` (by `outcome`) and `deltallm_batch_accounting_checkpoint_write_retries_total`. A rising `unavailable` count means the database or pool is saturated: lower concurrency or claim size, or add database capacity.
 
+#### Result saves are one statement
+
+A result save marks the items completed and adds their completion outbox rows in one SQL statement. It holds a database connection for one round trip, not for a transaction of four (`BEGIN`, item update, outbox insert, `COMMIT`). The statement saves every item in it or none:
+
+- Every item must still be in progress, owned by this worker and on the same claim epoch. If one is not, nothing is saved and the save returns `not_owned`, as before.
+- If an outbox row already exists for one of the items, the statement fails and the item updates are undone with it.
+- If the reply to a save is lost, the retry finds the items completed with their outbox rows and returns `already_completed`, as before.
+
 #### Grouping writes while the database is busy
 
 With `embeddings_batch_write_grouping_enabled` on (the default), billing checkpoints and result saves that would wait for a write slot are saved together:
@@ -237,7 +245,7 @@ With `embeddings_batch_write_grouping_enabled` on (the default), billing checkpo
 - Result saves get as many slots of their own as checkpoint writes (`embeddings_batch_accounting_write_concurrency`, default half of `db_pool_size`), so a burst of saves no longer takes the whole pool.
 - A group holds at most 128 checkpoints (1 MiB) or 50 result rows, and never two writes for the same item. It uses the earliest time budget among its members that still leaves time for one attempt.
 - Every fence is still checked per item inside the statement, exactly as for a single write. For checkpoints that is the owner, claim epoch, live lease, job state and stored checkpoint. For result saves it is the owner, claim epoch and item status. A group applies to every member or to none. If the database rejects a group, or the group fails for any reason, each member is saved again alone, ahead of newer writes, so each item gets exactly the answer (or error) it would get on its own and one bad row never fails the others.
-- The separate lease check before each result save is skipped, because the save checks the same owner, claim epoch and status in its own transaction. A lost item gets `not_owned` from the save instead and follows the same path as before.
+- The separate lease check before each result save is skipped, because the save checks the same owner, claim epoch and status in its own statement. A lost item gets `not_owned` from the save instead and follows the same path as before.
 - On accounting v2, the completion outbox's sent marks are grouped the same way. At most a quarter of the outbox concurrency (at least 1) mark statements run at once per process, and marks that would wait go out together. Unlike the writes above, each row in a grouped mark keeps its own fence (status, owner, attempt and live lease) and gets its own answer, so a row whose lease ran out never changes another row's result. The money receipt is still accepted before the mark, and no transaction spans the accounting call.
 
 `deltallm_batch_write_group_size` (by `kind`) shows how many writes each statement carried. Turn grouping off to go back to one statement per write, unlimited result saves and sent marks, and the lease check before each save. The setting is read when the batch worker starts, so restart the batch workers after changing it.

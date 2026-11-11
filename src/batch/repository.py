@@ -38,6 +38,7 @@ from src.batch.repositories import (
     BatchMaintenanceRepository,
     BatchWebhookOutboxRepository,
 )
+from src.batch.repositories.completion_outbox_repository import completion_outbox_id
 from src.batch.scheduling import parse_tenant_scope_preference
 from src.batch.webhooks.events import (
     batch_webhook_event_payload_sha256,
@@ -1348,59 +1349,46 @@ class BatchRepository:
         if not items:
             return "completed"
 
-        async def _run_in_current_repo(
-            repo: BatchRepository,
-        ) -> Literal["completed", "already_completed", "not_owned"]:
-            updated = await repo.mark_items_completed_bulk(
-                items=[
-                    {
-                        "item_id": item["item_id"],
-                        "response_body": item["response_body"],
-                        "usage": item.get("usage"),
-                        "provider_cost": item["provider_cost"],
-                        "billed_cost": item["billed_cost"],
-                        "claim_epoch": item.get("claim_epoch"),
-                    }
-                    for item in items
-                ],
-                worker_id=worker_id,
+        rows: list[dict[str, Any]] = []
+        for item in items:
+            outbox = BatchCompletionOutboxCreate(
+                batch_id=str(item["outbox_payload"]["batch_id"]),
+                item_id=str(item["item_id"]),
+                payload_json=dict(item["outbox_payload"]),
+                status=BatchCompletionOutboxStatus.QUEUED,
+                max_attempts=int(item.get("outbox_max_attempts") or 5),
             )
-            if updated:
-                completion_ids = await repo.enqueue_completion_outbox_many(
-                    [
-                        BatchCompletionOutboxCreate(
-                            batch_id=str(item["outbox_payload"]["batch_id"]),
-                            item_id=str(item["item_id"]),
-                            payload_json=dict(item["outbox_payload"]),
-                            status=BatchCompletionOutboxStatus.QUEUED,
-                            max_attempts=int(item.get("outbox_max_attempts") or 5),
-                        )
-                        for item in items
-                    ]
-                )
-                if len(completion_ids) != len(items):
-                    raise RuntimeError("failed to enqueue one or more batch completion outbox rows")
-                return "completed"
+            rows.append(
+                {
+                    "item_id": item["item_id"],
+                    "response_body": item["response_body"],
+                    "usage": item.get("usage"),
+                    "provider_cost": item["provider_cost"],
+                    "billed_cost": item["billed_cost"],
+                    "claim_epoch": item.get("claim_epoch"),
+                    "completion_id": completion_outbox_id(outbox),
+                    "batch_id": outbox.batch_id,
+                    "payload_json": outbox.payload_json,
+                    "max_attempts": outbox.max_attempts,
+                }
+            )
+        # One statement, one database round trip: the items and their outbox
+        # rows are saved together or not at all. The slot is held only for it.
+        if await self.items.complete_items_with_outbox(items=rows, worker_id=worker_id):
+            return "completed"
 
-            item_ids = [str(item["item_id"]) for item in items]
-            existing_items = await repo.list_items_by_ids(item_ids)
-            existing_outbox = await repo.list_completion_outbox_by_item_ids(item_ids)
-            completed_item_ids = {
-                item.item_id for item in existing_items if item.status == "completed"
-            }
-            outbox_item_ids = {record.item_id for record in existing_outbox}
-            if completed_item_ids == set(item_ids) and outbox_item_ids == set(item_ids):
-                return "already_completed"
-            if count_rejections:
-                increment_batch_duplicate_completion_rejection(
-                    reason="not_owned", count=len(item_ids)
-                )
-            return "not_owned"
-
-        if self.prisma is not None and hasattr(self.prisma, "tx"):
-            async with self.prisma.tx() as tx:
-                return await _run_in_current_repo(self.with_prisma(tx))
-        return await _run_in_current_repo(self)
+        # Not saved. A retry after an uncertain commit finds its own earlier
+        # save; anything else means this worker no longer owns every item.
+        item_ids = [str(item["item_id"]) for item in items]
+        existing_items = await self.list_items_by_ids(item_ids)
+        existing_outbox = await self.list_completion_outbox_by_item_ids(item_ids)
+        completed_item_ids = {item.item_id for item in existing_items if item.status == "completed"}
+        outbox_item_ids = {record.item_id for record in existing_outbox}
+        if completed_item_ids == set(item_ids) and outbox_item_ids == set(item_ids):
+            return "already_completed"
+        if count_rejections:
+            increment_batch_duplicate_completion_rejection(reason="not_owned", count=len(item_ids))
+        return "not_owned"
 
     async def set_provider_error(
         self, *, batch_id: str, provider_error: str | None

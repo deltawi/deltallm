@@ -57,6 +57,16 @@ def _record_from_row(row: dict[str, Any]) -> BatchCompletionOutboxRecord:
     )
 
 
+def completion_outbox_id(record: BatchCompletionOutboxCreate) -> str:
+    """Return the new row's id: the billing event id for a selector charge, else random."""
+    if "billing_event_id" not in record.payload_json:
+        return str(uuid4())
+    completion_id = str(batch_selector_operation_id(record.batch_id, record.item_id))
+    if record.payload_json["billing_event_id"] != completion_id:
+        raise ValueError("Invalid Batch answer billing identity")
+    return completion_id
+
+
 class BatchCompletionOutboxRepository:
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
@@ -70,11 +80,7 @@ class BatchCompletionOutboxRepository:
         param_index = 1
         completion_ids: list[str] = []
         for record in records:
-            completion_id = str(uuid4())
-            if "billing_event_id" in record.payload_json:
-                completion_id = str(batch_selector_operation_id(record.batch_id, record.item_id))
-                if record.payload_json["billing_event_id"] != completion_id:
-                    raise ValueError("Invalid Batch answer billing identity")
+            completion_id = completion_outbox_id(record)
             completion_ids.append(completion_id)
             values_sql.append(
                 f"(${param_index}, ${param_index + 1}, ${param_index + 2}, ${param_index + 3}::jsonb, "
