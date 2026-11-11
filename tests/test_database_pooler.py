@@ -313,3 +313,14 @@ def test_generator_prints_the_aliases_for_the_running_configuration(tmp_path, mo
     finally:
         get_settings.cache_clear()
     assert "public schema" in capsys.readouterr().err
+    # The pooler URL must not set another schema either.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://direct/deltallm")
+    monkeypatch.setenv("DELTALLM_DATABASE_POOLER_URL", POOLER + "&schema=tenant")
+    get_settings.cache_clear()
+    try:
+        assert pooler_config.main(["--host", "postgres", "--dbname", "deltallm"]) == 2
+    finally:
+        get_settings.cache_clear()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "schema other than public" in captured.err

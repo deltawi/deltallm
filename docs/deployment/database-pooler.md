@@ -45,7 +45,7 @@ The pooler supports only the `public` schema. Prisma sends a session
 command changes one shared server connection, which then keeps the schema for other
 clients. Thus the gateway gives Prisma no `schema` behind the pooler. If
 `DATABASE_URL` or the pooler URL sets a schema other than `public`, the gateway does
-not start.
+not start, and the alias generator prints an error instead of the aliases.
 
 ## Set up PgBouncer
 

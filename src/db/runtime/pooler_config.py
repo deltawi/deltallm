@@ -22,6 +22,7 @@ from src.database_pooler import (
     POOLER_ALLOCATIONS,
     POOLER_SEARCH_PATH,
     pgbouncer_database_lines,
+    pooled_database_url,
     require_pooler_schema,
 )
 from src.db.runtime.accounting_pool import accounting_session_settings
@@ -77,6 +78,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         require_pooler_schema(direct_url)
+        if settings.database_pooler_url is not None:
+            # Startup refuses a pooler URL with a schema other than public.
+            pooled_database_url(direct_url, settings.database_pooler_url, "control")
         lines = pgbouncer_database_lines(
             alias_template=args.alias or _alias_template(settings.database_pooler_url),
             host=args.host,
