@@ -288,6 +288,141 @@ class BatchItemRepository:
         )
         return len(rows) == len(items)
 
+    async def complete_items_with_outbox(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        worker_id: str | None,
+    ) -> bool:
+        """Complete owned items and add their completion outbox rows in one statement.
+
+        Each item carries its completion fields, ``claim_epoch``, and the outbox
+        row's ``completion_id``, ``batch_id``, ``payload_json`` and ``max_attempts``.
+        Either every item is completed and gets its outbox row, or nothing
+        changes. An outbox row that already exists for an item fails the whole
+        statement, so the item update is undone with it.
+        """
+        if self.prisma is None:
+            return False
+        if not items:
+            return True
+        if worker_id is None:
+            logger.warning("refusing bulk item completion without worker ownership")
+            return False
+        if any(item.get("claim_epoch") is None for item in items):
+            logger.warning("refusing bulk item completion without claim epochs")
+            return False
+
+        values_sql: list[str] = []
+        params: list[Any] = []
+        index = 1
+        for item in items:
+            values_sql.append(
+                f"(${index}, ${index + 1}::jsonb, ${index + 2}::jsonb, ${index + 3}, "
+                f"${index + 4}, ${index + 5}::bigint, ${index + 6}, ${index + 7}, "
+                f"${index + 8}::jsonb, ${index + 9}::integer)"
+            )
+            params.extend(
+                [
+                    item["item_id"],
+                    json.dumps(item["response_body"]),
+                    json.dumps(item.get("usage") or {}),
+                    item["provider_cost"],
+                    item["billed_cost"],
+                    item.get("claim_epoch"),
+                    item["completion_id"],
+                    item["batch_id"],
+                    json.dumps(item["payload_json"]),
+                    int(item["max_attempts"]),
+                ]
+            )
+            index += 10
+
+        worker_id_param = index
+        expected_count_param = index + 1
+        params.extend([worker_id, len(items)])
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH payload(
+                item_id, response_body, usage, provider_cost, billed_cost, claim_epoch,
+                completion_id, batch_id, payload_json, max_attempts
+            ) AS (
+                VALUES {", ".join(values_sql)}
+            ),
+            candidate AS (
+                SELECT i.item_id
+                FROM deltallm_batch_item i
+                JOIN payload p ON i.item_id = p.item_id
+                WHERE i.status = 'in_progress'
+                  AND i.locked_by = ${worker_id_param}
+                  AND i.claim_epoch = p.claim_epoch
+                FOR UPDATE SKIP LOCKED
+            ),
+            eligible AS (
+                SELECT COUNT(*) AS eligible_count
+                FROM candidate
+            ),
+            updated AS (
+                UPDATE deltallm_batch_item i
+                SET status = 'completed',
+                    response_body = p.response_body,
+                    usage = p.usage,
+                    provider_cost = p.provider_cost,
+                    billed_cost = p.billed_cost,
+                    lease_expires_at = NULL,
+                    not_before_at = NULL,
+                    locked_by = NULL,
+                    completed_at = NOW()
+                FROM payload p
+                JOIN candidate c ON c.item_id = p.item_id
+                CROSS JOIN eligible
+                WHERE i.item_id = c.item_id
+                  AND eligible.eligible_count = ${expected_count_param}
+                RETURNING i.item_id
+            ),
+            enqueued AS (
+                INSERT INTO deltallm_batch_completion_outbox (
+                    completion_id,
+                    batch_id,
+                    item_id,
+                    payload_json,
+                    status,
+                    attempt_count,
+                    max_attempts,
+                    next_attempt_at,
+                    last_error,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    p.completion_id,
+                    p.batch_id,
+                    p.item_id,
+                    p.payload_json,
+                    'queued',
+                    0,
+                    p.max_attempts,
+                    NOW(),
+                    NULL,
+                    NOW(),
+                    NOW()
+                FROM payload p
+                JOIN updated u ON u.item_id = p.item_id
+                RETURNING item_id
+            )
+            SELECT
+                (SELECT COUNT(*) FROM updated)::integer AS completed,
+                (SELECT COUNT(*) FROM enqueued)::integer AS enqueued
+            """,
+            *params,
+        )
+        completed = int(rows[0]["completed"]) if rows else 0
+        enqueued = int(rows[0]["enqueued"]) if rows else 0
+        if completed != enqueued:
+            # One statement inserts a row for each completed item or fails whole.
+            raise RuntimeError("failed to enqueue one or more batch completion outbox rows")
+        return completed == len(items)
+
     async def release_items_for_retry(
         self,
         *,
