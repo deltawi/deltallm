@@ -62,7 +62,7 @@ from src.metrics import (
 from src.router.usage import record_router_usage
 from src.routers.embeddings import _execute_embedding
 from src.batch.accounting_native import NativeBatchBilling
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 

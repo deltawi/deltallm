@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from src.batch.models import BatchWebhookOutboxRecord, BatchWebhookQueueSummary
 from src.batch.repository import BatchRepository
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_webhook_delivery_attempt,
     increment_batch_webhook_lease_recovery,

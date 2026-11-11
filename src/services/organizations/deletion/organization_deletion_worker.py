@@ -25,7 +25,7 @@ from src.metrics.organization_deletion import (
     deltallm_organization_deletion_phase_metric,
 )
 from src.services.organizations.organization_lifecycle import OrganizationLifecycleAuthorizer
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 

@@ -45,7 +45,7 @@ from src.batch.webhooks.events import (
     build_batch_webhook_event,
 )
 from src.metrics import increment_batch_duplicate_completion_rejection
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 

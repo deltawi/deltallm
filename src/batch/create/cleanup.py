@@ -16,7 +16,7 @@ from src.batch.create.defaults import (
 from src.batch.create.session_repository import BatchCreateSessionRepository
 from src.batch.create.staging import BatchCreateStagingBackend, staged_artifact_from_session
 from src.metrics import increment_batch_create_session_action, publish_batch_create_session_summary
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 

@@ -56,7 +56,7 @@ from src.telemetry.lifecycle import (
     wait_for_startup,
 )
 from src.telemetry.worker_idle import IdleWorkerPoll
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 
 from src.batch.repository import BatchRepository
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_scheduler_backfill_rows,
     increment_batch_scheduler_backfill_run,

@@ -40,7 +40,7 @@ from src.batch.webhooks.signing import (
 )
 from src.batch.webhooks.terminalization import BatchWebhookTerminalRecorder
 from src.services.audit.audit_service import AuditService
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 

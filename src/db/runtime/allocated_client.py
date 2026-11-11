@@ -22,7 +22,7 @@ from prometheus_client import Counter, Gauge, Histogram
 
 from src.concurrency import BoundedCapacityGate, CapacityGateFull, CapacityGateTimedOut
 from src.db.runtime.allocation_config import DatabasePolicy
-from src.db.runtime.database_caller import current_database_caller
+from src.database_caller import current_database_caller
 from src.metrics.prometheus import get_prometheus_registry
 from src.models.errors import RoutingFailureAction, ServiceUnavailableError
 
@@ -47,7 +47,7 @@ _duration = Histogram(
     registry=_registry,
 )
 # Which code path holds, waits for, or is refused a slot. Callers are fixed
-# classes (src/db/runtime/database_caller.py), never tenant or request values.
+# classes (src/database_caller.py), never tenant or request values.
 _caller_slots = Gauge(
     "deltallm_database_caller_slots",
     "Database slots held now, by caller",

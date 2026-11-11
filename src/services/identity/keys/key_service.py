@@ -24,7 +24,7 @@ from src.services.identity.keys.auth_fallback import AuthFallback, AuthFallbackL
 from src.models.responses import UserAPIKeyAuth
 from src.services.invalidation.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 from src.services.access.runtime_scopes import annotate_auth_metadata
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 from src.services.organizations.organization_lifecycle import (
     OrganizationLifecycleAuthorizer,

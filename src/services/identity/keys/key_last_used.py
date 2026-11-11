@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from src.metrics.key_last_used import KeyLastUsedEvent, record_key_last_used_event
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 

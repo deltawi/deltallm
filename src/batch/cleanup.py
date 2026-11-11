@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from src.batch.models import BatchWebhookOwnershipConflictError
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_artifact_failure,
     publish_batch_runtime_summary,

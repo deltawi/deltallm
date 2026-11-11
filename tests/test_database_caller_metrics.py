@@ -11,7 +11,7 @@ from src.db.runtime.allocated_client import (
     DatabaseUnavailableError,
 )
 from src.db.runtime.allocation_config import DatabasePolicy
-from src.db.runtime.database_caller import (
+from src.database_caller import (
     current_database_caller,
     database_caller,
     with_database_caller,

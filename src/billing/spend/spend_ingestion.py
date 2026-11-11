@@ -54,7 +54,7 @@ from src.telemetry.lifecycle import (
     wait_for_startup,
 )
 from src.telemetry.worker_idle import IdleWorkerPoll
-from src.db.runtime.database_caller import with_database_caller
+from src.database_caller import with_database_caller
 
 if TYPE_CHECKING:
     from src.db.billing.billing_operation_recovery import BillingOperationRecovery
