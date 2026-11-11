@@ -44,6 +44,18 @@ class _Repository:
     async def release_items_for_retry(self, **kwargs):
         raise AssertionError(f"unexpected requeue: {kwargs}")
 
+    async def list_items_by_ids(self, item_ids):
+        # Another worker claimed the not owned items.
+        return [
+            SimpleNamespace(
+                item_id=item_id,
+                status="in_progress",
+                locked_by="w2" if item_id in self.not_owned else "w1",
+                claim_epoch=1,
+            )
+            for item_id in item_ids
+        ]
+
     async def renew_item_lease(self, *, item_id, **kwargs):
         del kwargs
         self.renewed.append(item_id)

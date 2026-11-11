@@ -315,7 +315,7 @@ class ChatItemExecutionMixin:
                 return
             if item_heartbeat is not None:
                 await item_heartbeat.stop()
-            persisted = await self._persist_completion_rows_with_outbox(
+            persisted = await self._persist_claimed_completions(
                 items=[
                     self._build_chat_completion_persistence_row(
                         job=job,
@@ -326,7 +326,7 @@ class ChatItemExecutionMixin:
                         batch_execution_mode=batch_execution_mode,
                     )
                 ],
-                item_ids=[prepared.item.item_id],
+                claimed=[prepared.item],
                 context_label="chat",
             )
             if persisted:

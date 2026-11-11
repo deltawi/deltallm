@@ -76,8 +76,10 @@ class _PoolRepository:
             for item_id in item_ids
         ]
 
-    async def release_claim_items(self, *, item_ids: list[str], worker_id: str) -> int:
-        del worker_id
+    async def release_claim_items(
+        self, *, item_ids: list[str], worker_id: str, item_claim_epochs=None
+    ) -> int:
+        del worker_id, item_claim_epochs
         self.released.append(tuple(item_ids))
         return 0
 

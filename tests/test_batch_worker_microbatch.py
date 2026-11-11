@@ -543,6 +543,72 @@ async def test_busy_database_after_provider_answer_retries_lease_and_save(monkey
 
 
 @pytest.mark.asyncio
+async def test_busy_database_requeue_is_retried_so_the_item_is_not_left_claimed(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    engine = worker._execution_engine
+    sleeps: list[float] = []
+    save_errors = 0
+    release_results: list[object] = [DatabaseUnavailableError(), DatabaseUnavailableError(), None]
+
+    async def no_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def complete_items_with_outbox_bulk(**kwargs):
+        nonlocal save_errors
+        save_errors += 1
+        raise RuntimeError("save failed")
+
+    async def release_items_for_retry(**kwargs):
+        repo.release_for_retry_calls.append(kwargs)
+        result = release_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return list(kwargs["item_ids"])
+
+    monkeypatch.setattr("src.batch.worker_persistence.asyncio.sleep", no_sleep)
+    monkeypatch.setattr(repo, "complete_items_with_outbox_bulk", complete_items_with_outbox_bulk)
+    monkeypatch.setattr(repo, "release_items_for_retry", release_items_for_retry)
+
+    assert not await engine._persist_completion_rows_with_outbox(
+        items=[{"item_id": "i1", "claim_epoch": 3}],
+        item_ids=["i1"],
+        context_label="single",
+    )
+    assert save_errors == 2
+    assert sleeps == [0.5, 1.0]
+    assert len(repo.release_for_retry_calls) == 3
+    assert repo.release_for_retry_calls[-1]["item_claim_epochs"] == {"i1": 3}
+
+
+@pytest.mark.asyncio
+async def test_requeue_gives_up_after_bounded_busy_waits(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    engine = worker._execution_engine
+    sleeps: list[float] = []
+
+    async def no_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def release_items_for_retry(**kwargs):
+        repo.release_for_retry_calls.append(kwargs)
+        raise DatabaseUnavailableError()
+
+    monkeypatch.setattr("src.batch.worker_persistence.asyncio.sleep", no_sleep)
+    monkeypatch.setattr(repo, "release_items_for_retry", release_items_for_retry)
+
+    assert (
+        await engine._requeue_unsaved_items(
+            items=[{"item_id": "i1", "claim_epoch": 1}],
+            item_ids=["i1"],
+            context_label="single",
+        )
+        is None
+    )
+    assert sleeps == [0.5, 1.0, 2.0]
+    assert len(repo.release_for_retry_calls) == 4
+
+
+@pytest.mark.asyncio
 async def test_busy_database_lease_renewal_gives_up_after_bounded_waits(monkeypatch):
     worker, repo, _, _, _ = _build_worker()
     sleeps: list[float] = []
@@ -2244,6 +2310,15 @@ async def test_worker_requeues_unpersisted_items_after_grouped_completion_salvag
         async def complete_items_with_outbox_bulk(self, **kwargs) -> str:
             self.completed_bulk_calls.append(kwargs)
             return "not_owned"
+
+        async def list_items_by_ids(self, item_ids):
+            # Another worker claimed the items.
+            return [
+                SimpleNamespace(
+                    item_id=item_id, status="in_progress", locked_by="w2", claim_epoch=2
+                )
+                for item_id in item_ids
+            ]
 
     worker, _, _, _, failover = _build_worker(
         deployment_model_info={"upstream_max_batch_inputs": 4}

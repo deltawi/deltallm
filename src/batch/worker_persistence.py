@@ -12,6 +12,8 @@ from time import perf_counter
 from typing import Any, Awaitable, Iterator, Sequence
 
 from src.batch.endpoints import batch_call_type_for_endpoint
+from src.batch.models import BatchItemRecord
+from src.batch.result_save_waits import BusyWait, ResultSaveWaits, known_lease_seconds
 from src.batch.retry import is_gateway_busy
 from src.batch.policy import (
     BatchPolicyLease,
@@ -38,7 +40,8 @@ _POLICY_RELEASE_RETRY_QUEUE_LIMIT = 1024
 _POLICY_RELEASE_RETRY_INITIAL_SECONDS = 0.5
 _POLICY_RELEASE_RETRY_MAX_SECONDS = 30.0
 # After the provider has answered, a busy database must not throw the answer
-# away: wait and try the lease renewal or save again before giving up.
+# away: wait and try the lease renewal or the requeue again before giving up.
+# The result save waits longer (src/batch/result_save_waits.py).
 _GATEWAY_BUSY_SAVE_DELAYS_SECONDS = (0.5, 1.0, 2.0)
 # Rows one grouped result save may write, across all its members.
 RESULT_SAVE_GROUP_MAX_ROWS = 50
@@ -80,6 +83,9 @@ def _policy_release_retry_delay_seconds(attempt_count: int) -> float:
 
 
 class WorkerPersistenceMixin:
+    # Set once the worker starts its shutdown drain (start_draining).
+    _draining: asyncio.Event | None = None
+
     def _policy_release_retry_queue(self) -> deque[_PolicyReleaseRetry]:
         queue = getattr(self, "_pending_policy_release_retries", None)
         if queue is None:
@@ -319,8 +325,10 @@ class WorkerPersistenceMixin:
             self._result_saves = groups
         return groups
 
-    async def _save_result_rows(self, items: list[dict[str, Any]]) -> str:
-        groups = self._result_save_groups()
+    async def _save_result_rows(
+        self, items: list[dict[str, Any]], *, skip_queue: bool = False
+    ) -> str:
+        groups = None if skip_queue else self._result_save_groups()
         if groups is None:
             return await self.repository.complete_items_with_outbox_bulk(
                 items=items,
@@ -452,20 +460,188 @@ class WorkerPersistenceMixin:
             return self._require_native_execution(prepared).completion_payload(payload, usage)
         return payload
 
+    def start_draining(self) -> None:
+        """Stop long result-save waits: the shutdown drain must cover the save.
+
+        Short waits and the requeue keep their bounded waits, so an answer that
+        is still not saved is given back to the queue before the drain ends.
+        """
+        self._drain_signal().set()
+
+    def _drain_signal(self) -> asyncio.Event:
+        signal = self._draining
+        if signal is None:
+            signal = self._draining = asyncio.Event()
+        return signal
+
+    async def _wait_before_result_save_retry(
+        self, waits: ResultSaveWaits, items: list[dict[str, Any]]
+    ) -> bool:
+        """Wait before the next result save; False when the save stops waiting."""
+        wait = waits.next_wait()
+        if wait is None:
+            return False
+        if not wait.long:
+            await asyncio.sleep(wait.seconds)
+            return True
+        if self._drain_signal().is_set():
+            return False
+        if not waits.covers(wait):
+            # No long wait without a lease known to cover it: when the renewal
+            # fails or the lease is too short for one, the save is retried at
+            # once, as before the long waits. When it succeeds, the database
+            # answered: try the save again now.
+            return waits.can_renew() and await self._renew_for_long_wait(waits, items)
+        await self._sleep_unless_draining(wait)
+        waits.save_delayed()
+        return True
+
+    async def _renew_for_long_wait(
+        self, waits: ResultSaveWaits, items: list[dict[str, Any]]
+    ) -> bool:
+        started_at = waits.now()
+        # Renewed or not, the next save goes to the database without the save
+        # queue: the lease left covers one save call, not a wait for a slot.
+        waits.save_delayed()
+        if not await self._renew_unsaved_item_leases(items):
+            return False
+        waits.lease_renewed(started_at)
+        return True
+
+    async def _items_still_claimed(self, items: list[dict[str, Any]]) -> bool:
+        """True when this worker still holds every item at its claim epoch.
+
+        A failed read raises: only a read that the database answered can show
+        that another worker or claim holds an item.
+        """
+        epochs = {str(item["item_id"]): item.get("claim_epoch") for item in items}
+        records = await self.repository.list_items_by_ids(list(epochs))
+        return len(records) == len(epochs) and all(
+            record.status == "in_progress"
+            and record.locked_by == self.config.worker_id
+            and epochs.get(str(record.item_id)) is not None
+            and int(record.claim_epoch) == int(epochs[str(record.item_id)])
+            for record in records
+        )
+
+    async def _renew_unsaved_item_leases(self, items: list[dict[str, Any]]) -> bool:
+        """True when this worker still owns every item and renewed its lease."""
+        claims = {
+            str(item["item_id"]): int(item["claim_epoch"])
+            for item in items
+            if item.get("claim_epoch") is not None
+        }
+        if len(claims) != len(items):
+            return False
+        try:
+            owned = await self.repository.renew_item_leases(
+                item_claim_epochs=claims,
+                worker_id=self.config.worker_id,
+                lease_seconds=self.config.item_lease_seconds,
+            )
+        except Exception as exc:
+            logger.warning(
+                "batch completion persistence lease renewal failed item_ids=%s error=%s",
+                list(claims),
+                exc,
+                exc_info=not is_gateway_busy(exc),
+            )
+            return False
+        return set(owned) == set(claims)
+
+    async def _sleep_unless_draining(self, wait: BusyWait) -> None:
+        sleeper = asyncio.ensure_future(asyncio.sleep(wait.seconds))
+        drained = asyncio.ensure_future(self._drain_signal().wait())
+        try:
+            await asyncio.wait({sleeper, drained}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleeper.cancel()
+            drained.cancel()
+            await asyncio.gather(sleeper, drained, return_exceptions=True)
+
+    async def _requeue_unsaved_items(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        item_ids: list[str],
+        context_label: str,
+    ) -> list[str] | None:
+        """Give unsaved items back to the queue; None when the database refused.
+
+        An item that is not given back stays claimed until its lease expires.
+        So a busy database is waited out here too. The release checks the owner
+        and claim epoch, so a repeat after a lost reply changes nothing.
+        """
+        busy_delays = iter(_GATEWAY_BUSY_SAVE_DELAYS_SECONDS)
+        while True:
+            try:
+                return await self.repository.release_items_for_retry(
+                    item_ids=item_ids,
+                    worker_id=self.config.worker_id,
+                    item_claim_epochs={
+                        str(item["item_id"]): int(item["claim_epoch"])
+                        for item in items
+                        if item.get("claim_epoch") is not None
+                    },
+                )
+            except Exception as exc:
+                delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                logger.warning(
+                    "batch completion persistence requeue failed context=%s item_ids=%s retry_in_seconds=%s error=%s",
+                    context_label,
+                    item_ids,
+                    delay,
+                    exc,
+                    exc_info=delay is None,
+                )
+                if delay is None:
+                    return None
+                await asyncio.sleep(delay)
+
+    async def _persist_claimed_completions(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        claimed: Sequence[BatchItemRecord],
+        context_label: str,
+    ) -> bool:
+        """Save the answers of claimed items, with the lease ends of their claims."""
+        return await self._persist_completion_rows_with_outbox(
+            items=items,
+            item_ids=[item.item_id for item in claimed],
+            context_label=context_label,
+            lease_ends=[item.lease_expires_at for item in claimed],
+        )
+
     async def _persist_completion_rows_with_outbox(
         self,
         *,
         items: list[dict[str, Any]],
         item_ids: list[str],
         context_label: str,
+        lease_ends: Sequence[datetime | None] = (),
     ) -> bool:
-        busy_delays = iter(_GATEWAY_BUSY_SAVE_DELAYS_SECONDS)
+        """Save provider answers; requeue them when the save keeps failing.
+
+        ``lease_ends`` are the lease ends that the items' claims returned.
+        They tell how long the leases are known to last without a renewal.
+        """
+        waits = ResultSaveWaits(
+            self.config.item_lease_seconds,
+            call_seconds=getattr(self.config, "database_call_seconds", 0.0),
+            known_lease_seconds=known_lease_seconds(lease_ends),
+        )
         failures = 0
         attempt = 0
         while failures < 2:
             attempt += 1
             try:
-                result = await self._save_result_rows(items)
+                result = await self._save_result_rows(items, skip_queue=waits.skips_save_queue())
+                if result == "not_owned" and await self._items_still_claimed(items):
+                    # The save skipped an item row that another statement held
+                    # (FOR UPDATE SKIP LOCKED), such as a lease renewal that
+                    # ran on after its caller stopped waiting.
+                    result = "skipped_held_row"
             except Exception as exc:
                 logger.warning(
                     "batch completion persistence attempt failed context=%s item_ids=%s attempt=%s error=%s",
@@ -475,18 +651,23 @@ class WorkerPersistenceMixin:
                     exc,
                     exc_info=True,
                 )
-                # A busy database gets short waits before it counts as a
-                # failure. The save is idempotent, so a retry after an
+                # A busy database is waited out before it counts as a
+                # failure, also when it refuses the ownership read after a
+                # skipped row. The save is idempotent, so a retry after an
                 # uncertain commit returns already_completed.
-                delay = next(busy_delays, None) if is_gateway_busy(exc) else None
-                if delay is not None:
-                    await asyncio.sleep(delay)
-                else:
+                if not (
+                    is_gateway_busy(exc) and await self._wait_before_result_save_retry(waits, items)
+                ):
                     failures += 1
                 continue
 
             if result in {"completed", "already_completed"}:
                 return True
+            if result == "skipped_held_row":
+                # The items are still ours: wait and save again.
+                if not await self._wait_before_result_save_retry(waits, items):
+                    failures += 1
+                continue
             if result == "not_owned":
                 logger.warning(
                     "batch completion persistence lost ownership context=%s item_ids=%s",
@@ -496,24 +677,10 @@ class WorkerPersistenceMixin:
                 return False
             failures += 1
 
-        try:
-            requeued_item_ids = await self.repository.release_items_for_retry(
-                item_ids=item_ids,
-                worker_id=self.config.worker_id,
-                item_claim_epochs={
-                    str(item["item_id"]): int(item["claim_epoch"])
-                    for item in items
-                    if item.get("claim_epoch") is not None
-                },
-            )
-        except Exception as exc:
-            logger.warning(
-                "batch completion persistence requeue failed context=%s item_ids=%s error=%s",
-                context_label,
-                item_ids,
-                exc,
-                exc_info=True,
-            )
+        requeued_item_ids = await self._requeue_unsaved_items(
+            items=items, item_ids=item_ids, context_label=context_label
+        )
+        if requeued_item_ids is None:
             return False
 
         expected_ids = set(item_ids)

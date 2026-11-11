@@ -5214,6 +5214,15 @@ async def test_batch_worker_skips_spend_logging_when_item_completion_loses_owner
             self.completed_calls.append(kwargs)
             return False
 
+        async def list_items_by_ids(self, item_ids):
+            # Another worker claimed the item.
+            return [
+                SimpleNamespace(
+                    item_id=item_id, status="in_progress", locked_by="w2", claim_epoch=2
+                )
+                for item_id in item_ids
+            ]
+
     deployment = SimpleNamespace(
         deltallm_params={
             "model": "vllm/sentence-transformers/all-MiniLM-L6-v2",
@@ -6588,7 +6597,10 @@ async def test_batch_worker_work_slice_mode_processes_claim_without_job_lease():
         "scheduler_mode": "slice_v1",
     }
     assert processed == [("b-work", ["item-1"])]
-    assert repo.release_claim_items_calls == [{"item_ids": ["item-1"], "worker_id": "w1"}]
+    # The release is fenced on the claim epochs of the loaded items.
+    assert repo.release_claim_items_calls == [
+        {"item_ids": ["item-1"], "worker_id": "w1", "item_claim_epochs": {"item-1": 0}}
+    ]
     assert repo.refreshed == [["b-work"]]
     assert repo.release_job_lease_called is False
 
@@ -8535,7 +8547,10 @@ async def test_batch_worker_redis_unavailable_shadow_recommends_fair_share_witho
             self.loaded_item_ids.append(list(item_ids))
             return [SimpleNamespace(item_id=item_id, claim_epoch=1) for item_id in item_ids]
 
-        async def release_claim_items(self, *, item_ids: list[str], worker_id: str) -> int:
+        async def release_claim_items(
+            self, *, item_ids: list[str], worker_id: str, item_claim_epochs=None
+        ) -> int:
+            del item_claim_epochs
             self.release_calls.append({"item_ids": list(item_ids), "worker_id": worker_id})
             return 0
 
