@@ -113,9 +113,34 @@ Each tab loads when you first open it.
 - pricing metadata for spend tracking
 - default request parameters
 
+## Add and Edit Form
+
+**Add model** and **Edit model** use the same form. The fields are in panels on the left. A summary is on the right.
+
+- **Model**: the model type, the name, and the API model ID that clients send.
+- **Connection**: the provider, the provider model, and the credential. **Test connection** is in the panel header.
+- **Pricing**: the prices that the provider charges the gateway. Realtime models show a **Realtime audio** panel.
+- **More settings**: limits and routing, context and output limits, capabilities, batch execution, default parameters, and headers and network. Each row opens when you click it. A row with an error opens automatically.
+
+The summary shows which required steps are done, and an example request for the model type with a copy button.
+
+### Provider Picker
+
+Click the **Provider** field to open a list of providers. Type to search by name, provider key, or API base. The list groups providers by type and shows the model types that each provider supports.
+
+- Use the up and down arrow keys to move, **Enter** to select, and **Esc** to close.
+- Providers that do not support the selected model type are not in the list. A note under the list names them.
+- When no provider matches your search, use **Use OpenAI-compatible** for any endpoint with an OpenAI-style API.
+
+### Prices
+
+Token prices are per 1M tokens, the same unit that providers use in their price lists. For example, enter `2.50` for $2.50 per 1M input tokens. DeltaLLM stores the price per token (`0.0000025`). The conversion is exact, so the stored value does not change when you open and save a model.
+
+Prices per image, per second, or per character use those units. Cache write, cached output, and batch prices are in disclosures under the main prices.
+
 ## Model Suggestions
 
-The **Upstream model** field suggests models from DeltaLLM's built-in catalog. After you add a provider key or pick a named credential, **Refresh provider models** also loads the provider's live model list.
+The **Provider model** field suggests models from DeltaLLM's built-in catalog, with the context window and the price per 1M input and output tokens. You can also type any model ID. After you add a provider key or pick a named credential, **Load live models** also loads the provider's live model list.
 
 Suggestions can carry known prices and limits that pre-fill the form:
 
@@ -135,7 +160,7 @@ Values that are missing, negative or out of range are ignored.
 
 ### vLLM Servers
 
-For a vLLM server, **Refresh provider models** reads the server itself:
+For a vLLM server, **Load live models** reads the server itself:
 
 - **Context window** comes from `max_model_len` in `/v1/models`. A LoRA adapter uses its base model's context window.
 - **Request types** come from the server's `/openapi.json`. Recent vLLM versions only add the routes the loaded model supports, so DeltaLLM can tell chat, embeddings, rerank and transcription servers apart. If you pick a mode the server does not serve, the form lists no models and says which modes the server does serve.
@@ -145,10 +170,10 @@ vLLM has no separate output limit or prices, so those fields stay empty. If the 
 
 ## Test Connection
 
-**Test connection**, at the bottom of the add and edit forms, checks the provider settings in the form before you save them. It makes no billable call:
+**Test connection**, in the header of the **Connection** panel, checks the provider settings in the form before you save them. It makes no billable call:
 
 1. It calls the same free endpoint as the health check, usually the provider's model list, with the key, API base, auth headers and outbound proxy from the form.
-2. When the provider publishes a model list, it looks for the **Provider Model** you entered there.
+2. When the provider publishes a model list, it looks for the **Provider model** you entered there.
 
 | Result | Meaning |
 |---|---|
@@ -173,7 +198,7 @@ If you do not set a `deployment_id`, DeltaLLM creates one automatically.
 
 ## Auto-filled Prices and Limits
 
-When the upstream model matches a suggestion that has known data, the form fills prices and limits (for example input and output price per token, cached input price, context window, and max output tokens).
+When the upstream model matches a suggestion that has known data, the form fills prices and limits (for example input and output price per 1M tokens, cached input price, context window, and max output tokens).
 
 - Auto-filled fields follow the model you pick. If you change the model, they switch to the new model's values, or clear when the new model has no known data.
 - A field you edit yourself is never changed again by auto-fill.

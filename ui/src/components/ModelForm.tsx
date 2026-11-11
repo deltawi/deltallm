@@ -1,11 +1,8 @@
 import { useId, useRef, useState } from 'react';
-import RealtimeModelFields from './models/RealtimeModelFields';
-import ChatCapabilitiesFields from './models/ChatCapabilitiesFields';
-import Card from './Card';
-import { AlertTriangle, CheckCircle2, ChevronDown, ExternalLink, Info, XCircle } from 'lucide-react';
-import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
-import ProviderBadge from './ProviderBadge';
+import { AlertTriangle, CheckCircle2, Info, PlugZap, RefreshCw, Sparkles, XCircle } from 'lucide-react';
+import { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
 import Button from './Button';
+import SegmentedControl from './SegmentedControl';
 import { useApi } from '../lib/hooks';
 import {
   models,
@@ -21,8 +18,6 @@ import NamedCredentialCreateDialog from './NamedCredentialCreateDialog';
 import type { NamedCredentialAudienceOption } from './NamedCredentialForm';
 import {
   canonicalNamedCredentialProvider,
-  DEFAULT_CUSTOM_AUTH_HEADER_FORMAT,
-  DEFAULT_CUSTOM_AUTH_HEADER_NAME,
   providerDisplayName,
   supportsCustomUpstreamAuthProvider,
 } from '../lib/providers';
@@ -31,26 +26,42 @@ import {
   MODE_OPTIONS,
   buildModelPayload,
   suggestApiModelSlug,
-  validateContextCapacityFields,
-  type ContextCapacityField,
-  type ChatBatchingMode,
   type ModelFormValues,
   type ModelMode,
   type ModelPayload,
 } from './modelFormShared';
+import RealtimeModelFields from './models/RealtimeModelFields';
+import ChatCapabilitiesFields from './models/ChatCapabilitiesFields';
 import { HeadersNetworkCardBody, ParametersCardBody } from './models/RequestShapingCards';
 import {
   EMPTY_REQUEST_SHAPING,
   activeNetworkCount,
   activeParamCount,
-  validateRequestShaping,
   type RequestShapingForm,
 } from './models/requestShaping';
 import { applyKnownMetadata, type AutofilledValues } from './models/metadataAutofill';
 import { buildConnectionTestPayload, connectionTestBlocker, connectionTestKey } from './models/connectionTest';
-
-let collapsibleIdCounter = 0;
-const MODEL_BATCH_CONFIG_DOCS_URL = 'https://deltallm.readthedocs.io/en/latest/admin-ui/models/#chat-batch-execution';
+import ProviderPicker from './models/ProviderPicker';
+import ProviderModelPicker from './models/ProviderModelPicker';
+import { compactTokenCount, modeShortLabel } from './models/providerListing';
+import CredentialFields from './models/form/CredentialFields';
+import PricingFields from './models/form/PricingFields';
+import ModelFormAside from './models/form/ModelFormAside';
+import { BatchExecutionFields, ChatLimitsFields, EmbeddingLimitsFields, LimitsRoutingFields } from './models/form/AdvancedSettings';
+import { FieldError, FieldLabel, FormPanel, SettingsList, SettingsRow } from './models/form/formPrimitives';
+import { HELP_CLASS, fieldClass } from './models/form/formStyles';
+import { modelFormChecklist } from './models/form/modelFormSummary';
+import { validateModelForm, type ErrorSection, type RequiredField } from './models/form/modelFormValidation';
+import {
+  PROVIDER_API_BASE_PLACEHOLDERS,
+  PROVIDER_API_KEY_HINTS,
+  buildLiveDiscoveryRequestKey,
+  defaultParameterHint,
+  emptyDiscoveryResult,
+  findProviderModelOption,
+  normalizedProviderKey,
+  upstreamModelPlaceholder,
+} from './models/form/modelFormHints';
 
 const CONNECTION_TEST_STYLES: Record<ModelConnectionTestStatus, { box: string; icon: typeof Info; title: string }> = {
   passed: { box: 'border-green-200 bg-green-50 text-green-800', icon: CheckCircle2, title: 'Connection works' },
@@ -73,144 +84,32 @@ function ConnectionTestNotice({ result }: { result: ModelConnectionTestResult })
   );
 }
 
-function CountBadge({ count }: { count: number }) {
-  if (count === 0) return null;
-  return (
-    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{count}</span>
-  );
-}
+const MODE_SHORT: Record<ModelMode, string> = {
+  chat: 'Chat',
+  embedding: 'Embedding',
+  image_generation: 'Image',
+  audio_speech: 'Speech',
+  audio_transcription: 'Transcription',
+  realtime: 'Realtime',
+  rerank: 'Rerank',
+};
+const MODE_ITEMS = MODE_OPTIONS.map((option) => ({
+  value: option.value,
+  label: MODE_SHORT[option.value] || option.label,
+  icon: option.icon,
+  title: `${option.label}: ${option.description}`,
+}));
 
-function CollapsibleCard({
-  title,
-  badge,
-  defaultOpen = false,
-  children,
-}: {
-  title: string;
-  badge?: React.ReactNode;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const [id] = useState(() => `collapsible-${++collapsibleIdCounter}`);
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        aria-controls={id}
-        className="flex items-center justify-between w-full px-5 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-inset rounded-xl"
-      >
-        <span className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-          {badge}
-        </span>
-        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && <div id={id} role="region" aria-label={title} className="px-5 pb-5">{children}</div>}
-    </div>
-  );
-}
-
-type DefaultParameterHint = {
-  description: string;
-  details?: string[];
-  keyPlaceholder: string;
-  valuePlaceholder: string;
+const NAME_PLACEHOLDERS: Partial<Record<ModelMode, string>> = {
+  image_generation: 'Image Generator',
+  audio_speech: 'Voice Assistant',
+  audio_transcription: 'Meeting Transcriber',
+  embedding: 'Document Embeddings',
+  rerank: 'Search Reranker',
 };
 
-const PROVIDER_MODEL_PLACEHOLDERS: Partial<Record<string, Partial<Record<ModelMode, string>>>> = {
-  elevenlabs: {
-    audio_speech: 'eleven_multilingual_v2',
-    audio_transcription: 'scribe_v2',
-  },
-  sglang: {
-    chat: 'meta-llama/Llama-3.1-8B-Instruct',
-    embedding: 'Qwen/Qwen3-Embedding-0.6B',
-  },
-};
-
-// Providers with no built-in API base: show a typical address instead.
-const PROVIDER_API_BASE_PLACEHOLDERS: Partial<Record<string, string>> = {
-  sglang: 'http://sglang:30000/v1',
-  openai_compatible: 'https://your-server.example/v1',
-};
-
-const PROVIDER_API_KEY_HINTS: Partial<Record<string, string>> = {
-  sglang: 'Use the --api-key value of the SGLang server. If it runs without one, enter any value.',
-  openai_compatible: 'The key your server expects. If it needs none, enter any value.',
-};
-
-function normalizedProviderKey(provider: string | null | undefined): string {
-  return (provider || '').trim().toLowerCase();
-}
-
-function upstreamModelPlaceholder(mode: ModelMode, provider?: string): string {
-  const providerPlaceholder = PROVIDER_MODEL_PLACEHOLDERS[normalizedProviderKey(provider)]?.[mode];
-  if (providerPlaceholder) return providerPlaceholder;
-  if (mode === 'image_generation') return 'gpt-image-1.5';
-  if (mode === 'audio_speech') return 'gpt-4o-mini-tts';
-  if (mode === 'realtime') return 'gpt-realtime';
-  if (mode === 'audio_transcription') return 'gpt-4o-transcribe';
-  if (mode === 'embedding') return 'text-embedding-3-large';
-  if (mode === 'rerank') return 'rerank-english-v3.0';
-  return 'gpt-5.4';
-}
-
-function defaultParameterHint(provider: string, mode: ModelMode): DefaultParameterHint {
-  const providerKey = normalizedProviderKey(provider);
-  if (providerKey === 'elevenlabs' && mode === 'audio_speech') {
-    return {
-      description: 'Default values injected into ElevenLabs TTS requests when callers omit them.',
-      details: [
-        'Use voice_id as the fallback voice when the public request does not include voice.',
-        'Use output_format for provider-native formats such as mp3_44100_128; public response_format still takes priority.',
-      ],
-      keyPlaceholder: 'Key (voice_id or output_format)',
-      valuePlaceholder: 'Value (voice ID or mp3_44100_128)',
-    };
-  }
-
-  if (providerKey === 'elevenlabs' && mode === 'audio_transcription') {
-    return {
-      description: 'Default values injected into ElevenLabs STT requests when callers omit them.',
-      details: [
-        'Common safe defaults include language_code, timestamps_granularity, diarize, num_speakers, and tag_audio_events.',
-      ],
-      keyPlaceholder: 'Key (e.g. timestamps_granularity)',
-      valuePlaceholder: 'Value (e.g. word)',
-    };
-  }
-
-  return {
-    description: 'Default values injected into provider requests when not specified by the caller (e.g. voice, response_format)',
-    keyPlaceholder: 'Key (e.g. voice)',
-    valuePlaceholder: 'Value (e.g. alloy)',
-  };
-}
-
-function findProviderModelOption(options: ProviderModelOption[], modelId: string): ProviderModelOption | null {
-  const normalizedId = modelId.trim().toLowerCase();
-  if (!normalizedId) return null;
-  return options.find((option) => option.id.trim().toLowerCase() === normalizedId) || null;
-}
-
-function emptyDiscoveryResult(): { data: ProviderModelOption[]; warnings: string[] } {
-  return { data: [], warnings: [] };
-}
-
-function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayload): string {
-  return [
-    payload.provider || '',
-    payload.mode || '',
-    payload.named_credential_id || '',
-    payload.api_key || '',
-    payload.api_base || '',
-    payload.api_version || '',
-    payload.auth_header_name || '',
-    payload.auth_header_format || '',
-  ].join('::');
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 interface ModelFormProps {
@@ -234,92 +133,6 @@ interface ModelFormProps {
   namedCredentialAudiencesLoading?: boolean;
   namedCredentialAudiencesError?: string | null;
   onRetryNamedCredentialAudiences?: () => void;
-}
-
-const inputClass = "control-field w-full px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary";
-const CREATE_NEW_NAMED_CREDENTIAL = '__create_new_named_credential__';
-type RequiredField =
-  | 'model_name'
-  | 'api_model_id'
-  | 'api_model_slug'
-  | 'api_namespace'
-  | 'provider'
-  | 'model'
-  | 'api_base'
-  | 'named_credential_id'
-  | ContextCapacityField;
-const CHAT_BATCHING_MODES: { value: ChatBatchingMode; label: string }[] = [
-  { value: '', label: 'Default concurrent' },
-  { value: 'disabled', label: 'Disabled' },
-  { value: 'concurrent', label: 'Concurrent' },
-  { value: 'sync_microbatch', label: 'Sync microbatch' },
-];
-
-function inputClasses(hasError = false): string {
-  return `${inputClass} ${hasError ? 'border-red-300 bg-red-50/40 focus:ring-red-500' : ''}`;
-}
-
-function ContextCapacityInput({
-  id,
-  label,
-  value,
-  placeholder,
-  error,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  placeholder: string;
-  error?: string;
-  onChange: (value: string) => void;
-}) {
-  const errorId = `${id}-error`;
-  return (
-    <div>
-      <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      <input
-        id={id}
-        type="number"
-        min="1"
-        step="1"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className={inputClasses(Boolean(error))}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
-      />
-      {error ? <p id={errorId} className="mt-1 text-xs text-red-600">{error}</p> : null}
-    </div>
-  );
-}
-
-function FieldLabel({ label, required = false }: { label: string; required?: boolean }) {
-  return (
-    <label className="mb-1 block text-sm font-medium text-gray-700">
-      {label}
-      {required ? <span className="ml-1 text-red-500">*</span> : null}
-    </label>
-  );
-}
-
-function validatePositiveInteger(value: string, label: string, minimum = 1): string | null {
-  if (!value.trim()) return null;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
-    return `${label} must be a whole number greater than or equal to ${minimum}.`;
-  }
-  return null;
-}
-
-function validateCapacityFraction(value: string): string | null {
-  if (!value.trim()) return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
-    return 'Capacity Fraction must be greater than 0 and less than or equal to 1.';
-  }
-  return null;
 }
 
 export default function ModelForm({
@@ -352,6 +165,7 @@ export default function ModelForm({
   const [shaping, setShaping] = useState<RequestShapingForm>(initialShaping || EMPTY_REQUEST_SHAPING);
   const [initialModelInfoSnapshot] = useState<Record<string, unknown>>(() => ({ ...(initialModelInfo || {}) }));
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [errorSection, setErrorSection] = useState<ErrorSection>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
   const [apiIdentityEdited, setApiIdentityEdited] = useState(
     () => Boolean(initialValues?.api_model_id || initialValues?.api_model_slug),
@@ -415,10 +229,15 @@ export default function ModelForm({
       mode,
     ],
   );
-  const modelSuggestionListId = useId();
-  const contextWindowInputId = useId();
-  const maxInputTokensInputId = useId();
-  const maxOutputTokensInputId = useId();
+  const fieldId = useId();
+  const ids = {
+    name: `${fieldId}-name`,
+    apiId: `${fieldId}-api-id`,
+    provider: `${fieldId}-provider`,
+    providerError: `${fieldId}-provider-error`,
+    model: `${fieldId}-model`,
+    modelHelp: `${fieldId}-model-help`,
+  };
 
   const providerPresets = providerPresetResponse?.data || [];
   const listedNamedCredentials = namedCredentialResponse?.data || [];
@@ -456,9 +275,6 @@ export default function ModelForm({
     .length;
   const canFillFromKnownMetadata = Boolean(selectedModelOption?.known_metadata)
     && applyKnownMetadata(form, autofilledValues, selectedModelOption?.known_metadata || null).form !== form;
-  const chatBatchingDisabled = form.chat_batching_mode === 'disabled';
-  const chatBatchingSyncMicrobatch = form.chat_batching_mode === 'sync_microbatch';
-  const supportsBatchCapacity = mode === 'chat' || mode === 'embedding';
   const defaultParamHint = defaultParameterHint(form.provider, mode);
   const paramCount = activeParamCount(shaping);
   const networkCount = activeNetworkCount(shaping, { chat: mode === 'chat' });
@@ -467,6 +283,17 @@ export default function ModelForm({
   const currentConnectionTestKey = connectionTestKey(connectionTestPayload);
   const connectionTestBlockedBy = connectionTestBlocker(form, connectionTestContext);
   const visibleConnectionTest = connectionTest?.key === currentConnectionTestKey ? connectionTest : null;
+  const credentialReady = form.credential_source === 'named'
+    ? form.keep_existing_named_credential || Boolean(form.named_credential_id.trim())
+    : Boolean(form.api_key.trim() || (form.inline_credentials_present && !form.clear_inline_api_key));
+  const canRefreshModels = Boolean(form.provider) && (
+    form.credential_source === 'named'
+      ? Boolean(form.named_credential_id.trim())
+      : Boolean(form.api_key.trim())
+  );
+  const apiModelIdPreview = namespaceRequired
+    ? `${form.api_namespace}/${form.api_model_slug}`
+    : form.api_model_id;
 
   const runConnectionTest = async () => {
     if (connectionTestBlockedBy) return;
@@ -481,13 +308,9 @@ export default function ModelForm({
     }
   };
 
-  const updateShaping = (next: RequestShapingForm) => {
-    setShaping(next);
-    if (validationError) setValidationError(null);
-  };
-
   const clearValidation = (field?: RequiredField) => {
     if (validationError) setValidationError(null);
+    if (errorSection) setErrorSection(null);
     if (field && fieldErrors[field]) {
       setFieldErrors((current) => {
         const next = { ...current };
@@ -495,6 +318,26 @@ export default function ModelForm({
         return next;
       });
     }
+  };
+
+  const updateForm = (patch: Partial<ModelFormValues>) => {
+    setForm((current) => ({ ...current, ...patch }));
+    const touched = Object.keys(patch) as RequiredField[];
+    if (validationError || errorSection || touched.some((field) => fieldErrors[field])) {
+      setValidationError(null);
+      setErrorSection(null);
+      setFieldErrors((current) => {
+        const next = { ...current };
+        for (const field of touched) delete next[field];
+        return next;
+      });
+    }
+  };
+
+  const updateShaping = (next: RequestShapingForm) => {
+    setShaping(next);
+    if (validationError) setValidationError(null);
+    if (errorSection) setErrorSection(null);
   };
 
   const invalidateLiveDiscovery = () => {
@@ -544,25 +387,21 @@ export default function ModelForm({
       delete next.max_context_window;
       delete next.max_input_tokens;
       delete next.max_output_tokens;
+      delete next.provider;
       return next;
     });
     if (validationError) setValidationError(null);
+    if (errorSection) setErrorSection(null);
   };
 
-  const updateProviderCredentialField = (
-    field: 'api_key' | 'api_base' | 'api_version',
-    value: string,
-    clearField?: RequiredField,
-  ) => {
+  const updateProviderCredentialField = (field: 'api_key' | 'api_base' | 'api_version', value: string) => {
     invalidateLiveDiscovery();
     setForm((current) => ({
       ...current,
       [field]: value,
       clear_inline_api_key: field === 'api_key' ? false : current.clear_inline_api_key,
     }));
-    if (clearField) {
-      clearValidation(clearField);
-    }
+    if (field === 'api_base') clearValidation('api_base');
   };
 
   const setCredentialSource = (credentialSource: 'inline' | 'named') => {
@@ -590,12 +429,14 @@ export default function ModelForm({
     clearValidation('named_credential_id');
   };
 
-  const selectNamedCredentialOption = (credentialId: string) => {
-    if (credentialId === CREATE_NEW_NAMED_CREDENTIAL) {
-      setCredentialCreateOpen(true);
-      return;
-    }
-    applyNamedCredential(credentialId);
+  const replaceKeptCredential = () => {
+    invalidateLiveDiscovery();
+    setForm((current) => ({
+      ...current,
+      keep_existing_named_credential: false,
+      named_credential_id: '',
+      named_credential_name: '',
+    }));
   };
 
   const handleNamedCredentialCreated = (credential: NamedCredential) => {
@@ -636,20 +477,7 @@ export default function ModelForm({
   };
 
   const refreshProviderModels = async () => {
-    if (!form.provider) {
-      return;
-    }
-    if (
-      form.credential_source === 'named'
-      && !form.keep_existing_named_credential
-      && !form.named_credential_id.trim()
-    ) {
-      return;
-    }
-    if (form.credential_source === 'inline' && !form.api_key.trim()) {
-      return;
-    }
-
+    if (!canRefreshModels) return;
     setLiveDiscoveryState({
       requestKey: liveDiscoveryRequestKey,
       data: [],
@@ -678,968 +506,386 @@ export default function ModelForm({
 
   const handleSubmit = async () => {
     setValidationError(null);
+    setErrorSection(null);
     const accessGroupCommit = accessGroupInputRef.current?.validateAndCommit();
     if (accessGroupCommit && !accessGroupCommit.valid) {
       setValidationError(accessGroupCommit.message || 'Fix the invalid access group before saving.');
+      setErrorSection('limits');
       return;
     }
-    const nextFieldErrors: Partial<Record<RequiredField, string>> = {};
-    const modelName = form.model_name.trim();
-    const apiNamespace = form.api_namespace.trim().toLowerCase();
-    const apiModelSlug = form.api_model_slug.trim().toLowerCase();
-    const apiModelId = namespaceRequired
-      ? `${apiNamespace}/${apiModelSlug}`
-      : form.api_model_id.trim();
-    const provider = form.provider.trim();
-    const upstreamModel = form.model.trim();
-    const apiBase = form.api_base.trim();
-    const namedCredentialId = form.named_credential_id.trim();
-    const useNamedCredential = !allowInlineCredentials || form.credential_source === 'named';
-
-    if (!modelName) {
-      nextFieldErrors.model_name = 'Model Name is required.';
-    }
-    if (namespaceRequired) {
-      if (
-        apiNamespace.length < 3
-        || apiNamespace.length > 32
-        || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(apiNamespace)
-        || apiNamespace.includes('--')
-      ) {
-        nextFieldErrors.api_namespace = 'Use 3-32 lowercase letters, numbers, or hyphens.';
-      }
-      if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(apiModelSlug) || apiModelSlug.includes('--')) {
-        nextFieldErrors.api_model_slug = 'Use 1-64 lowercase letters, numbers, or hyphens.';
-      }
-    } else if (lockApiModelId ? !apiModelId : (
-      !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(apiModelId) || apiModelId.includes('--')
-    )) {
-      nextFieldErrors.api_model_id = 'Use 1-64 lowercase letters, numbers, or hyphens.';
-    }
-    if (!provider) {
-      nextFieldErrors.provider = 'Provider is required.';
-    }
-    if (!upstreamModel) {
-      nextFieldErrors.model = 'Provider Model is required.';
-    }
-    if (useNamedCredential && !form.keep_existing_named_credential && !namedCredentialId) {
-      nextFieldErrors.named_credential_id = 'Named credential is required.';
-    }
-    if (!useNamedCredential && !apiBase) {
-      nextFieldErrors.api_base = 'API Base URL is required.';
-    }
-    if (Object.keys(nextFieldErrors).length > 0) {
-      setFieldErrors(nextFieldErrors);
-      setValidationError('Fill in the required fields highlighted below.');
+    const result = validateModelForm(form, shaping, {
+      namespaceRequired,
+      lockApiModelId,
+      allowInlineCredentials,
+      preset: selectedProviderPreset,
+    });
+    if (!result.ok) {
+      setFieldErrors(result.fieldErrors);
+      setValidationError(result.message);
+      setErrorSection(result.section);
       return;
-    }
-    const contextCapacityErrors = validateContextCapacityFields(form);
-    if (Object.keys(contextCapacityErrors).length > 0) {
-      setFieldErrors(contextCapacityErrors);
-      setValidationError('Fix the context capacity settings highlighted below.');
-      return;
-    }
-    if (mode === 'embedding' && form.upstream_max_batch_inputs.trim()) {
-      const upstreamMaxBatchInputsError = validatePositiveInteger(
-        form.upstream_max_batch_inputs,
-        'Batch Worker Upstream Max Inputs',
-      );
-      if (upstreamMaxBatchInputsError) {
-        setValidationError(
-          `${upstreamMaxBatchInputsError} Leave it blank to keep batch-worker micro-batching disabled.`,
-        );
-        return;
-      }
-    }
-    if (mode === 'chat') {
-      const chatBatchingErrors = [
-        chatBatchingDisabled ? null : validatePositiveInteger(form.chat_batching_max_in_flight, 'Chat Batch Max In-Flight'),
-        chatBatchingSyncMicrobatch
-          ? validatePositiveInteger(form.chat_batching_upstream_max_batch_size, 'Chat Batch Upstream Max Size')
-          : null,
-        chatBatchingSyncMicrobatch
-          ? validatePositiveInteger(form.chat_batching_max_total_input_tokens, 'Chat Batch Max Total Input Tokens')
-          : null,
-      ].filter(Boolean);
-      if (chatBatchingErrors.length > 0) {
-        setValidationError(chatBatchingErrors[0] || 'Fix the chat batching settings before saving.');
-        return;
-      }
-      if (chatBatchingSyncMicrobatch) {
-        const upstreamMaxBatchSize = Number(form.chat_batching_upstream_max_batch_size);
-        if (!Number.isInteger(upstreamMaxBatchSize) || upstreamMaxBatchSize < 2) {
-          setValidationError('Sync microbatch mode requires Chat Batch Upstream Max Size of at least 2.');
-          return;
-        }
-      }
-    }
-    if (supportsBatchCapacity) {
-      const batchCapacityErrors = [
-        validatePositiveInteger(form.batch_capacity_max_in_flight, 'Scheduler Max In-Flight'),
-        validatePositiveInteger(form.batch_capacity_max_claim_work_units, 'Scheduler Max Claim Work Units'),
-        validateCapacityFraction(form.batch_capacity_capacity_fraction),
-      ].filter(Boolean);
-      if (batchCapacityErrors.length > 0) {
-        setValidationError(batchCapacityErrors[0] || 'Fix the scheduler capacity settings before saving.');
-        return;
-      }
     }
     setFieldErrors({});
-    if (selectedProviderPreset && !selectedProviderPreset.supported_modes.includes(mode)) {
-      const modeLabel = MODE_OPTIONS.find((m) => m.value === mode)?.label || mode;
-      const supported = selectedProviderPreset.supported_modes
-        .map((m) => MODE_OPTIONS.find((opt) => opt.value === m)?.label || m)
-        .join(', ');
-      setValidationError(
-        `Provider "${providerDisplayName(selectedProviderPreset.provider)}" does not support "${modeLabel}". Supported types: ${supported || 'none'}.`,
-      );
-      return;
-    }
-    const shapingError = validateRequestShaping(shaping, { chat: mode === 'chat' });
-    if (shapingError) {
-      setValidationError(shapingError);
-      return;
-    }
     const payload = buildModelPayload(
-      {
-        ...form,
-        model_name: modelName,
-        api_model_id: apiModelId,
-        api_model_slug: apiModelSlug,
-        api_namespace: apiNamespace,
-        provider,
-        model: upstreamModel,
-        api_base: apiBase,
-        named_credential_id: namedCredentialId,
-        access_groups: accessGroupCommit?.value ?? form.access_groups,
-      },
+      { ...result.values, access_groups: accessGroupCommit?.value ?? form.access_groups },
       shaping,
       initialModelInfoSnapshot,
     );
     await onSubmit(payload);
   };
 
-  const batchCapacityFields = supportsBatchCapacity ? (
-    <div className="border-t border-gray-100 pt-4">
-      <h4 className="mb-3 text-sm font-medium text-gray-700">Scheduler Capacity</h4>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Scheduler Max In-Flight</label>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={form.batch_capacity_max_in_flight}
-            onChange={(e) => {
-              setForm({ ...form, batch_capacity_max_in_flight: e.target.value });
-              clearValidation();
-            }}
-            placeholder="Optional, e.g. 4"
-            className={inputClass}
-          />
-          <p className="mt-1 text-xs text-gray-400">Slots this deployment contributes to batch scheduling.</p>
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Scheduler Max Claim Work Units</label>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={form.batch_capacity_max_claim_work_units}
-            onChange={(e) => {
-              setForm({ ...form, batch_capacity_max_claim_work_units: e.target.value });
-              clearValidation();
-            }}
-            placeholder="Optional, e.g. 200"
-            className={inputClass}
-          />
-          <p className="mt-1 text-xs text-gray-400">Work-unit cap per scheduler claim.</p>
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Capacity Fraction</label>
-          <input
-            type="number"
-            min="0"
-            max="1"
-            step="any"
-            value={form.batch_capacity_capacity_fraction}
-            onChange={(e) => {
-              setForm({ ...form, batch_capacity_capacity_fraction: e.target.value });
-              clearValidation();
-            }}
-            placeholder="Optional, e.g. 0.25"
-            className={inputClass}
-          />
-          <p className="mt-1 text-xs text-gray-400">Only used when capacity is inferred from router limits.</p>
-        </div>
-      </div>
-    </div>
-  ) : null;
+  const capacityErrors = {
+    max_context_window: fieldErrors.max_context_window,
+    max_input_tokens: fieldErrors.max_input_tokens,
+    max_output_tokens: fieldErrors.max_output_tokens,
+  };
+  const limitsSummary = [
+    form.rpm ? `${form.rpm} RPM` : null,
+    form.tpm ? `${form.tpm} TPM` : null,
+    form.weight ? `weight ${form.weight}` : null,
+    form.priority ? `priority ${form.priority}` : null,
+  ].filter(Boolean).join(' · ') || 'Gateway defaults';
+  const contextSummary = compactTokenCount(Number(form.max_context_window || form.max_input_tokens) || null);
+  const capabilityCount = Object.values(form.chat_capabilities).filter(Boolean).length;
+  const hasPrice = Object.entries(form).some(([field, value]) => field.includes('cost_per_') && typeof value === 'string' && value.trim() !== '');
+  const checklist = modelFormChecklist({
+    modelName: form.model_name,
+    apiModelId: namespaceRequired ? form.api_model_slug : form.api_model_id,
+    provider: form.provider,
+    model: form.model,
+    credentialReady,
+    hasPrice,
+  });
+  const modelFooter = !form.provider ? null
+    : form.credential_source === 'inline' && !form.api_key.trim() && !form.inline_credentials_present
+      ? 'Built-in suggestions. Add the API key, then refresh the list to load live models.'
+      : form.credential_source === 'named' && !form.keep_existing_named_credential && !form.named_credential_id.trim()
+        ? 'Select a saved credential to load live models.'
+        : `${countLabel(modelOptions.length, 'suggestion')}. Any model ID works.`;
 
   return (
-    <div className="space-y-6">
-      <Card title="Model Type">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {MODE_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => applyMode(opt.value)}
-              className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-colors ${
-                mode === opt.value
-                  ? 'border-brand-primary bg-blue-50 text-blue-700'
-                  : 'border-gray-200 hover:border-gray-300 text-gray-600'
-              }`}
-            >
-              <opt.icon className="w-4 h-4" />
-              <div>
-                <div className="font-medium text-xs">{opt.label}</div>
-                <div className="text-[10px] text-gray-400 leading-tight">{opt.description}</div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </Card>
-
-      <Card title="Model Identity & Provider Connection">
-        <div className="space-y-4">
-          <p className="text-xs text-gray-500">Fields marked <span className="text-red-500">*</span> are required.</p>
-          {validationError ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{validationError}</div> : null}
-          <div>
-            <FieldLabel label="Model Name" required />
-            <input
-              value={form.model_name}
-              onChange={(e) => {
-                const displayName = e.target.value;
-                const suggestedSlug = suggestApiModelSlug(displayName);
-                setForm((current) => ({
-                  ...current,
-                  model_name: displayName,
-                  api_model_slug: namespaceRequired && !apiIdentityEdited
-                    ? suggestedSlug
-                    : current.api_model_slug,
-                  api_model_id: !namespaceRequired && !apiIdentityEdited
-                    ? suggestedSlug
-                    : current.api_model_id,
-                }));
-                clearValidation('model_name');
-              }}
-              placeholder={mode === 'image_generation' ? 'Image Generator' : mode === 'audio_speech' ? 'Voice Assistant' : mode === 'audio_transcription' ? 'Meeting Transcriber' : mode === 'embedding' ? 'Document Embeddings' : mode === 'rerank' ? 'Search Reranker' : 'Customer Support Model'}
-              className={`${inputClasses(Boolean(fieldErrors.model_name))} read-only:bg-gray-100 read-only:text-gray-500`}
-            />
-            {fieldErrors.model_name ? <p className="mt-1 text-xs text-red-600">{fieldErrors.model_name}</p> : null}
-            <p className="text-xs text-gray-400 mt-1">
-              A friendly label shown in the dashboard. It changes only when you edit it.
-            </p>
-          </div>
-          <div>
-            <FieldLabel label="API Model ID" required />
-            {namespaceRequired && !lockApiModelId ? (
-              <div
-                aria-label="Generated API Model ID"
-                className="flex min-h-10 items-center rounded-lg border border-gray-200 bg-gray-50 px-3 font-mono text-sm text-gray-700"
-              >
-                <span className="text-gray-500">{form.api_namespace}/</span>
-                <span>{form.api_model_slug || 'model'}</span>
-              </div>
-            ) : namespaceRequired ? (
-              <div className="flex items-stretch">
-                <input
-                  aria-label="Creator namespace"
-                  readOnly={lockApiModelId || form.api_namespace_locked}
-                  value={form.api_namespace}
-                  onChange={(e) => {
-                    setForm((current) => ({ ...current, api_namespace: e.target.value.toLowerCase() }));
-                    clearValidation('api_namespace');
-                  }}
-                  className={`${inputClasses(Boolean(fieldErrors.api_namespace))} min-w-0 rounded-r-none font-mono read-only:bg-gray-100 read-only:text-gray-500`}
-                />
-                <span className="flex items-center border-y border-gray-300 bg-gray-50 px-2 font-mono text-sm text-gray-400">/</span>
-                <input
-                  aria-label="API model slug"
-                  readOnly={lockApiModelId}
-                  value={form.api_model_slug}
-                  onChange={(e) => {
-                    setApiIdentityEdited(true);
-                    setForm((current) => ({ ...current, api_model_slug: e.target.value.toLowerCase() }));
-                    clearValidation('api_model_slug');
-                  }}
-                  className={`${inputClasses(Boolean(fieldErrors.api_model_slug))} min-w-0 rounded-l-none font-mono read-only:bg-gray-100 read-only:text-gray-500`}
-                />
-              </div>
-            ) : (
-              <input
-                readOnly={lockApiModelId}
-                value={form.api_model_id}
-                onChange={(e) => {
-                  setApiIdentityEdited(true);
-                  setForm((current) => ({ ...current, api_model_id: e.target.value }));
-                  clearValidation('api_model_id');
-                }}
-                className={`${inputClasses(Boolean(fieldErrors.api_model_id))} font-mono read-only:bg-gray-100 read-only:text-gray-500`}
-              />
-            )}
-            {fieldErrors.api_namespace ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_namespace}</p> : null}
-            {fieldErrors.api_model_slug ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_model_slug}</p> : null}
-            {fieldErrors.api_model_id ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_model_id}</p> : null}
-            <p className="mt-1 text-xs text-gray-400">
-              {lockApiModelId
-                ? 'This callable ID is fixed so existing API clients keep working.'
-                : namespaceRequired
-                  ? 'Generated from Model Name. The friendly name keeps your exact text; this callable ID becomes fixed after creation.'
-                    : 'Choose the short callable ID used in API requests. It becomes fixed after creation.'}
-            </p>
-          </div>
-          <div>
-            <FieldLabel label="Provider and Provider Model" required />
-            <div className={`flex overflow-hidden rounded-lg border bg-white focus-within:ring-2 ${fieldErrors.provider || fieldErrors.model ? 'border-red-300 focus-within:ring-red-500' : 'border-gray-300 focus-within:ring-brand-primary'}`}>
-              <select
-                value={form.provider}
-                onChange={(e) => applyProvider(e.target.value)}
-                disabled={form.keep_existing_named_credential}
-                className="control-field-inset w-40 shrink-0 border-r border-gray-300 bg-gray-50 px-3 text-gray-900 focus:outline-none disabled:cursor-not-allowed disabled:text-gray-500"
-              >
-                <option value="">Select provider</option>
-                {providerPresets.map((preset) => (
-                  <option key={preset.provider} value={preset.provider}>
-                    {providerDisplayName(preset.provider)}
-                  </option>
-                ))}
-              </select>
-              <input
-                list={modelSuggestionListId}
-                value={form.model}
-                onChange={(e) => updateModelValue(e.target.value)}
-                placeholder={upstreamModelPlaceholder(mode, form.provider)}
-                className="control-field-inset min-w-0 flex-1 px-3 text-gray-900 focus:outline-none"
-              />
-            </div>
-            <datalist id={modelSuggestionListId}>
-              {modelOptions.map((option) => (
-                <option
-                  key={`${option.provider}:${option.id}`}
-                  value={option.id}
-                  label={option.label}
-                />
-              ))}
-            </datalist>
-            {fieldErrors.provider ? <p className="mt-1 text-xs text-red-600">{fieldErrors.provider}</p> : null}
-            {!fieldErrors.provider && fieldErrors.model ? <p className="mt-1 text-xs text-red-600">{fieldErrors.model}</p> : null}
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-gray-500">Selected provider:</span>
-              {form.provider ? <ProviderBadge provider={form.provider} model={form.model} /> : <span className="text-xs text-gray-400">Choose a provider first</span>}
-            </div>
-            {discoveryLoading ? <p className="mt-1 text-xs text-gray-500">Loading provider model suggestions...</p> : null}
-            {form.provider && !discoveryLoading && modelOptions.length > 0 ? (
-              <p className="mt-1 text-xs text-gray-500">
-                {modelOptions.length} suggested model{modelOptions.length === 1 ? '' : 's'} available. Custom values are still allowed.
-              </p>
-            ) : null}
-            {form.provider && form.credential_source === 'inline' && !form.api_key.trim() ? (
-              <p className="mt-1 text-xs text-gray-400">
-                Showing built-in suggestions first. Add the provider API key, then refresh to fetch live provider models when supported.
-              </p>
-            ) : null}
-            {form.provider && form.credential_source === 'named' && !form.keep_existing_named_credential && !form.named_credential_id.trim() ? (
-              <p className="mt-1 text-xs text-gray-400">
-                Select a named credential to fetch live provider models without entering inline secrets.
-              </p>
-            ) : null}
-            {form.provider && ((form.credential_source === 'named' && form.named_credential_id.trim()) || (form.credential_source === 'inline' && form.api_key.trim())) ? (
-              <div className="mt-2">
-                <button
-                  type="button"
-                  onClick={() => { void refreshProviderModels(); }}
-                  disabled={discoveryLoading}
-                  className="control-sm inline-flex items-center rounded-md border border-gray-300 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {hasActiveLiveDiscovery && liveDiscoveryState.loading ? 'Refreshing...' : 'Refresh provider models'}
-                </button>
-              </div>
-            ) : null}
-            {autofilledCount > 0 ? (
-              <p className="mt-1 text-xs text-emerald-700">
-                Filled {autofilledCount} pricing and limit field{autofilledCount === 1 ? '' : 's'} from known data for this model. They follow the model you pick until you edit them. Check them before saving.
-              </p>
-            ) : canFillFromKnownMetadata ? (
-              <p className="mt-1 text-xs text-gray-500">
-                Known pricing and limit data exists for this model.{' '}
-                <button
-                  type="button"
-                  onClick={fillFromKnownMetadata}
-                  className="font-medium text-brand-primary hover:underline"
-                >
-                  Fill empty fields
-                </button>
-              </p>
-            ) : null}
-            {selectedProviderPreset && (
-              <p className="text-xs text-gray-500 mt-1">
-                Supported model types: {selectedProviderPreset.supported_modes.join(', ')}
-              </p>
-            )}
-            {discoveryWarnings.length > 0 ? (
-              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                {discoveryWarnings.join(' ')}
-              </div>
-            ) : null}
-            <p className="text-xs text-gray-400 mt-1">Enter the upstream model name only. Example for Groq: <code>openai/gpt-oss-120b</code>.</p>
-          </div>
-          <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50/60 p-4">
+    <div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="min-w-0 space-y-6 lg:col-span-2">
+          <FormPanel title="Model" description="What the model does and the name clients use.">
             <div>
-              <FieldLabel label="Credential Source" required />
-              <div className="grid gap-2 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setCredentialSource('named')}
-                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'named' ? 'border-brand-primary bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
-                >
-                  <div className="font-medium">Named Credential</div>
-                  <div className="mt-0.5 text-xs text-gray-500">Recommended for shared provider access and credential rotation.</div>
-                </button>
-                {allowInlineCredentials ? (
-                  <button
-                    type="button"
-                    onClick={() => setCredentialSource('inline')}
-                    className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'inline' ? 'border-brand-primary bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
-                  >
-                    <div className="font-medium">Inline Credentials</div>
-                    <div className="mt-0.5 text-xs text-gray-500">Use deployment-specific provider credentials directly on this model.</div>
-                  </button>
-                ) : null}
-              </div>
+              <FieldLabel label="Type" />
+              <SegmentedControl label="Model type" items={MODE_ITEMS} value={mode} onChange={applyMode} />
             </div>
-
-            {form.credential_source === 'named' ? (
-              <div className="space-y-3">
-                {form.keep_existing_named_credential ? (
-                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm">
-                    <div className="font-medium text-blue-900">Owner-managed credential</div>
-                    <p className="mt-1 text-xs text-blue-700">
-                      This model keeps using its existing private credential. You can edit other model settings without seeing or changing it.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        invalidateLiveDiscovery();
-                        setForm((current) => ({
-                          ...current,
-                          keep_existing_named_credential: false,
-                          named_credential_id: '',
-                          named_credential_name: '',
-                        }));
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <FieldLabel htmlFor={ids.name} label="Name" required />
+                <input
+                  id={ids.name}
+                  value={form.model_name}
+                  onChange={(e) => {
+                    const displayName = e.target.value;
+                    const suggestedSlug = suggestApiModelSlug(displayName);
+                    setForm((current) => ({
+                      ...current,
+                      model_name: displayName,
+                      api_model_slug: namespaceRequired && !apiIdentityEdited ? suggestedSlug : current.api_model_slug,
+                      api_model_id: !namespaceRequired && !apiIdentityEdited ? suggestedSlug : current.api_model_id,
+                    }));
+                    clearValidation('model_name');
+                  }}
+                  placeholder={NAME_PLACEHOLDERS[mode] || 'Customer Support Model'}
+                  aria-invalid={Boolean(fieldErrors.model_name) || undefined}
+                  className={fieldClass(Boolean(fieldErrors.model_name))}
+                />
+                <FieldError message={fieldErrors.model_name} />
+                <p className={HELP_CLASS}>Shown in the dashboard. You can change it later.</p>
+              </div>
+              <div>
+                <FieldLabel htmlFor={ids.apiId} label="API model ID" required />
+                {namespaceRequired && !lockApiModelId ? (
+                  <div
+                    id={ids.apiId}
+                    aria-label="Generated API Model ID"
+                    className="control-field flex items-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50 px-3 font-mono text-gray-700"
+                  >
+                    <span className="text-gray-500">{form.api_namespace}/</span>
+                    <span className="truncate">{form.api_model_slug || 'model'}</span>
+                  </div>
+                ) : namespaceRequired ? (
+                  <div className="flex items-stretch">
+                    <input
+                      aria-label="Creator namespace"
+                      readOnly={lockApiModelId || form.api_namespace_locked}
+                      value={form.api_namespace}
+                      onChange={(e) => {
+                        setForm((current) => ({ ...current, api_namespace: e.target.value.toLowerCase() }));
+                        clearValidation('api_namespace');
                       }}
-                      className="control-sm mt-3 inline-flex items-center rounded-md border border-blue-200 bg-white font-medium text-blue-700 hover:bg-blue-50"
-                    >
-                      Replace with a credential I can access
-                    </button>
+                      className={`${fieldClass(Boolean(fieldErrors.api_namespace))} rounded-r-none font-mono`}
+                    />
+                    <span className="flex items-center border-y border-gray-200 bg-gray-50 px-2 font-mono text-sm text-gray-400">/</span>
+                    <input
+                      aria-label="API model slug"
+                      readOnly={lockApiModelId}
+                      value={form.api_model_slug}
+                      onChange={(e) => {
+                        setApiIdentityEdited(true);
+                        setForm((current) => ({ ...current, api_model_slug: e.target.value.toLowerCase() }));
+                        clearValidation('api_model_slug');
+                      }}
+                      className={`${fieldClass(Boolean(fieldErrors.api_model_slug))} rounded-l-none font-mono`}
+                    />
                   </div>
                 ) : (
-                <div>
-                  <FieldLabel label="Named Credential" required />
-                  <select
-                    value={form.named_credential_id}
-                    onChange={(e) => selectNamedCredentialOption(e.target.value)}
-                    className={inputClasses(Boolean(fieldErrors.named_credential_id))}
-                  >
-                    <option value="">Select named credential</option>
-                    <option value={CREATE_NEW_NAMED_CREDENTIAL}>＋ Create new credential…</option>
-                    {availableNamedCredentials.map((credential) => (
-                      <option key={credential.credential_id} value={credential.credential_id}>
-                        {credential.name}
-                      </option>
-                    ))}
-                  </select>
-                  {fieldErrors.named_credential_id ? <p className="mt-1 text-xs text-red-600">{fieldErrors.named_credential_id}</p> : null}
-                  {form.provider && availableNamedCredentials.length === 0 ? (
-                    <p className="mt-1 text-xs text-gray-400">
-                      No existing credentials for {providerDisplayName(form.provider)}. Choose Create new credential above.
-                    </p>
-                  ) : null}
-                </div>
-
+                  <input
+                    id={ids.apiId}
+                    readOnly={lockApiModelId}
+                    value={form.api_model_id}
+                    placeholder="customer-support"
+                    onChange={(e) => {
+                      setApiIdentityEdited(true);
+                      setForm((current) => ({ ...current, api_model_id: e.target.value }));
+                      clearValidation('api_model_id');
+                    }}
+                    aria-invalid={Boolean(fieldErrors.api_model_id) || undefined}
+                    className={`${fieldClass(Boolean(fieldErrors.api_model_id))} font-mono`}
+                  />
                 )}
-
-                {!form.keep_existing_named_credential && selectedNamedCredential ? (
-                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm">
-                    <div className="font-medium text-blue-900">{selectedNamedCredential.name}</div>
-                    <div className="mt-1 text-xs text-blue-700">
-                      {selectedNamedCredential.connection_config?.api_base
-                        ? `API base: ${String(selectedNamedCredential.connection_config.api_base)}`
-                        : selectedNamedCredential.connection_config?.region
-                          ? `Region: ${String(selectedNamedCredential.connection_config.region)}`
-                          : 'Connection details are managed by this credential.'}
-                    </div>
-                    <div className="mt-1 text-xs text-blue-700">
-                      Linked deployments: {selectedNamedCredential.usage_count || 0}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <FieldLabel label="API Key" />
-                    <input type="password" value={form.api_key} onChange={(e) => updateProviderCredentialField('api_key', e.target.value)} placeholder="sk-..." className={inputClass} />
-                    {PROVIDER_API_KEY_HINTS[normalizedProviderKey(form.provider)] && !form.inline_credentials_present ? (
-                      <p className="mt-1 text-xs text-gray-400">{PROVIDER_API_KEY_HINTS[normalizedProviderKey(form.provider)]}</p>
-                    ) : null}
-                    <div className="mt-1 flex items-center gap-3 text-xs">
-                      {form.inline_credentials_present && !form.clear_inline_api_key ? (
-                        <span className="text-gray-500">Stored inline key present. Leave blank to keep it.</span>
-                      ) : null}
-                      {form.clear_inline_api_key ? <span className="text-red-600">Stored inline key will be cleared on save.</span> : null}
-                      {form.inline_credentials_present ? (
-                        <button
-                          type="button"
-                          onClick={() => setForm((current) => ({ ...current, api_key: '', clear_inline_api_key: true }))}
-                          className="font-medium text-red-600 hover:text-red-700"
-                        >
-                          Clear stored key
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div>
-                    <FieldLabel label="API Base URL" required />
-                    <input value={form.api_base} onChange={(e) => updateProviderCredentialField('api_base', e.target.value, 'api_base')} placeholder={selectedProviderPreset?.api_base || PROVIDER_API_BASE_PLACEHOLDERS[normalizedProviderKey(form.provider)] || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
-                    {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
-                    <p className="mt-1 text-xs text-gray-400">
-                      {selectedProviderPreset?.api_base
-                        ? 'Filled from the selected provider. Override it if your deployment uses a custom endpoint.'
-                        : form.provider
-                          ? 'This provider has no built-in default. You must enter the API base URL.'
-                          : 'Choose a provider to auto-fill its default API base URL when one is available.'}
-                    </p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <FieldLabel label="API Version" />
-                    <input value={form.api_version} onChange={(e) => updateProviderCredentialField('api_version', e.target.value)} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
-                  </div>
-                  <div>
-                    <FieldLabel label="Timeout (s)" />
-                    <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
-                  </div>
-                </div>
-                {supportsCustomAuth ? (
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div>
-                      <FieldLabel label="Auth Header Name" />
-                      <input
-                        value={form.auth_header_name}
-                        onChange={(e) => setForm({ ...form, auth_header_name: e.target.value })}
-                        placeholder={DEFAULT_CUSTOM_AUTH_HEADER_NAME}
-                        className={inputClass}
-                      />
-                    </div>
-                    <div>
-                      <FieldLabel label="Auth Header Format" />
-                      <input
-                        value={form.auth_header_format}
-                        onChange={(e) => setForm({ ...form, auth_header_format: e.target.value })}
-                        placeholder={DEFAULT_CUSTOM_AUTH_HEADER_FORMAT}
-                        className={inputClass}
-                      />
-                    </div>
-                    <p className="sm:col-span-2 text-xs text-gray-400">
-                      Optional override for OpenAI-compatible providers. Only the <code>{'{api_key}'}</code> placeholder is supported.
-                    </p>
-                  </div>
-                ) : null}
-              </>
-            )}
-          </div>
-
-          {form.credential_source === 'named' ? (
-            <div>
-              <FieldLabel label="Timeout (s)" />
-              <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
-            </div>
-          ) : null}
-        </div>
-      </Card>
-
-      <CollapsibleCard title="Rate Limits & Routing">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">RPM</label>
-              <input type="number" value={form.rpm} onChange={(e) => setForm({ ...form, rpm: e.target.value })} placeholder="500" className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">TPM</label>
-              <input type="number" value={form.tpm} onChange={(e) => setForm({ ...form, tpm: e.target.value })} placeholder="100000" className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Weight</label>
-              <input type="number" value={form.weight} onChange={(e) => setForm({ ...form, weight: e.target.value })} placeholder="1" className={inputClass} />
-              <p className="text-xs text-gray-400 mt-1">Load balancing</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-              <input type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} placeholder="0" className={inputClass} />
-              <p className="text-xs text-gray-400 mt-1">Higher = preferred</p>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
-            <input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="production, fast, us-east" className={inputClass} />
-            <p className="text-xs text-gray-400 mt-1">Comma-separated, for tag-based routing</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Access Groups</label>
-            <AccessGroupTokenInput
-              ref={accessGroupInputRef}
-              value={form.access_groups}
-              onChange={(accessGroups) => setForm((current) => ({ ...current, access_groups: accessGroups }))}
-              placeholder="premium, beta, internal"
-            />
-            <p className="text-xs text-gray-400 mt-1">Choose existing authorization labels or type a group key, then press comma or Enter</p>
-          </div>
-        </div>
-      </CollapsibleCard>
-
-      {mode === 'chat' && (
-        <CollapsibleCard title="Chat Settings">
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Stream Timeout (s)</label>
-                <input type="number" value={form.stream_timeout} onChange={(e) => setForm({ ...form, stream_timeout: e.target.value })} placeholder="120" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Max Tokens / Request</label>
-                <input type="number" value={form.max_tokens} onChange={(e) => setForm({ ...form, max_tokens: e.target.value })} placeholder="4096" className={inputClass} />
-              </div>
-              <ContextCapacityInput id={contextWindowInputId} label="Context Window" value={form.max_context_window} onChange={(value) => { setForm({ ...form, max_context_window: value }); clearValidation('max_context_window'); }} placeholder="128000" error={fieldErrors.max_context_window} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <ContextCapacityInput id={maxInputTokensInputId} label="Max Input Tokens" value={form.max_input_tokens} onChange={(value) => { setForm({ ...form, max_input_tokens: value }); clearValidation('max_input_tokens'); }} placeholder="e.g. 128000" error={fieldErrors.max_input_tokens} />
-              <ContextCapacityInput id={maxOutputTokensInputId} label="Max Output Tokens" value={form.max_output_tokens} onChange={(value) => { setForm({ ...form, max_output_tokens: value }); clearValidation('max_output_tokens'); }} placeholder="e.g. 4096" error={fieldErrors.max_output_tokens} />
-            </div>
-            <div className="border-t border-gray-100 pt-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h4 className="text-sm font-medium text-gray-700">Batch Execution</h4>
-                <a
-                  href={MODEL_BATCH_CONFIG_DOCS_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
-                >
-                  Batch config docs
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                </a>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
-                  <select
-                    value={form.chat_batching_mode}
-                    onChange={(e) => {
-                      setForm({ ...form, chat_batching_mode: e.target.value as ChatBatchingMode });
-                      clearValidation();
-                    }}
-                    className={inputClass}
-                  >
-                    {CHAT_BATCHING_MODES.map((option) => (
-                      <option key={option.value || 'default'} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-400 mt-1">Default concurrent keeps one upstream request per batch item.</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Max In-Flight</label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={form.chat_batching_max_in_flight}
-                    onChange={(e) => {
-                      setForm({ ...form, chat_batching_max_in_flight: e.target.value });
-                      clearValidation();
-                    }}
-                    disabled={chatBatchingDisabled}
-                    placeholder="Optional, e.g. 32"
-                    className={inputClass}
-                  />
-                  <p className="text-xs text-gray-400 mt-1">Per worker replica; total capacity scales with replicas.</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Upstream Max Size</label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={form.chat_batching_upstream_max_batch_size}
-                    onChange={(e) => {
-                      setForm({ ...form, chat_batching_upstream_max_batch_size: e.target.value });
-                      clearValidation();
-                    }}
-                    disabled={!chatBatchingSyncMicrobatch}
-                    placeholder={chatBatchingSyncMicrobatch ? 'Required, e.g. 8' : 'Sync microbatch only'}
-                    className={inputClass}
-                  />
-                  <p className="text-xs text-gray-400 mt-1">Required for sync microbatch mode; use at least 2.</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Max Total Input Tokens</label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={form.chat_batching_max_total_input_tokens}
-                    onChange={(e) => {
-                      setForm({ ...form, chat_batching_max_total_input_tokens: e.target.value });
-                      clearValidation();
-                    }}
-                    disabled={!chatBatchingSyncMicrobatch}
-                    placeholder="Optional, e.g. 32000"
-                    className={inputClass}
-                  />
-                </div>
-              </div>
-            </div>
-            {batchCapacityFields}
-          </div>
-        </CollapsibleCard>
-      )}
-
-      {mode === 'chat' && (
-        <CollapsibleCard
-          title="Capabilities"
-          badge={form.chat_capabilities_declared ? <CountBadge count={Object.values(form.chat_capabilities).filter(Boolean).length} /> : null}
-        >
-          <ChatCapabilitiesFields
-            declared={form.chat_capabilities_declared}
-            capabilities={form.chat_capabilities}
-            onDeclaredChange={(declared) => setForm((current) => ({
-              ...current,
-              chat_capabilities_declared: declared,
-              chat_capabilities_cleared: !declared,
-            }))}
-            onCapabilityChange={(key, supported) => setForm((current) => ({
-              ...current,
-              chat_capabilities: { ...current.chat_capabilities, [key]: supported },
-            }))}
-          />
-        </CollapsibleCard>
-      )}
-
-      {mode === 'embedding' && (
-        <CollapsibleCard title="Embedding Settings">
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <ContextCapacityInput id={contextWindowInputId} label="Context Window" value={form.max_context_window} onChange={(value) => { setForm({ ...form, max_context_window: value }); clearValidation('max_context_window'); }} placeholder="8192" error={fieldErrors.max_context_window} />
-              <ContextCapacityInput id={maxInputTokensInputId} label="Max Input Tokens" value={form.max_input_tokens} onChange={(value) => { setForm({ ...form, max_input_tokens: value }); clearValidation('max_input_tokens'); }} placeholder="e.g. 8192" error={fieldErrors.max_input_tokens} />
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Output Vector Size</label>
-                <input type="number" value={form.output_vector_size} onChange={(e) => setForm({ ...form, output_vector_size: e.target.value })} placeholder="1536" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Batch Worker Upstream Max Inputs</label>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={form.upstream_max_batch_inputs}
-                  onChange={(e) => {
-                    setForm({ ...form, upstream_max_batch_inputs: e.target.value });
-                    clearValidation();
-                  }}
-                  placeholder="Optional, e.g. 8"
-                  className={inputClass}
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  Advanced. Only used for compatible async embedding batch jobs, not synchronous /v1/embeddings.
-                  Leave blank or use 1 to disable batch-worker micro-batching. Start small and increase only after
-                  validating provider behavior and throughput.
+                <FieldError message={fieldErrors.api_namespace || fieldErrors.api_model_slug || fieldErrors.api_model_id} />
+                <p className={HELP_CLASS}>
+                  {lockApiModelId
+                    ? 'This ID is fixed so existing API clients keep working.'
+                    : namespaceRequired
+                      ? 'Made from the name. Clients send it as "model". It cannot change after you create the model.'
+                      : 'Clients send this as "model". It cannot change after you create the model.'}
                 </p>
               </div>
             </div>
-            {batchCapacityFields}
-          </div>
-        </CollapsibleCard>
-      )}
+          </FormPanel>
 
-      {mode === 'realtime' && <RealtimeModelFields form={form} onChange={setForm} />}
-
-      {mode !== 'realtime' && <CollapsibleCard title="Cost Tracking">
-        <div className="space-y-4">
-          {mode === 'chat' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <FormPanel
+            title="Connection"
+            description="Where requests to this model are sent."
+            actions={(
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { void runConnectionTest(); }}
+                disabled={Boolean(connectionTestBlockedBy) || saving}
+                loading={Boolean(visibleConnectionTest?.loading)}
+                title={connectionTestBlockedBy || 'Check the provider settings without saving. No billable call is made.'}
+              >
+                {visibleConnectionTest?.loading ? null : <PlugZap className="h-3.5 w-3.5" aria-hidden="true" />}
+                {visibleConnectionTest?.loading ? 'Testing...' : 'Test connection'}
+              </Button>
+            )}
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Token ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_token} onChange={(e) => setForm({ ...form, input_cost_per_token: e.target.value })} placeholder="0.000005" className={inputClass} />
+                <FieldLabel htmlFor={ids.provider} label="Provider" required />
+                <ProviderPicker
+                  id={ids.provider}
+                  presets={providerPresets}
+                  value={form.provider}
+                  mode={mode}
+                  onChange={applyProvider}
+                  disabled={form.keep_existing_named_credential}
+                  invalid={Boolean(fieldErrors.provider)}
+                  describedBy={fieldErrors.provider ? ids.providerError : undefined}
+                />
+                <FieldError id={ids.providerError} message={fieldErrors.provider} />
+                {form.keep_existing_named_credential ? (
+                  <p className={HELP_CLASS}>The provider comes from the owner-managed credential.</p>
+                ) : null}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Token ($)</label>
-                <input type="number" step="any" value={form.output_cost_per_token} onChange={(e) => setForm({ ...form, output_cost_per_token: e.target.value })} placeholder="0.000015" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cached Input Cost / Token ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_token_cache_hit} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_hit: e.target.value })} placeholder="Optional override" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cached Output Cost / Token ($)</label>
-                <input type="number" step="any" value={form.output_cost_per_token_cache_hit} onChange={(e) => setForm({ ...form, output_cost_per_token_cache_hit: e.target.value })} placeholder="Optional override" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cache Write Cost / Token ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_token_cache_write} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_write: e.target.value })} placeholder="Empty uses input cost" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cache Write (1 Hour) Cost / Token ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_token_cache_write_1h} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_write_1h: e.target.value })} placeholder="Empty uses cache write cost" className={inputClass} />
-              </div>
-              <p className="sm:col-span-2 text-xs text-gray-500">
-                Cache write prices apply when the provider charges to store a prompt in its cache, for example Anthropic prompt caching.
-              </p>
-            </div>
-          )}
-
-          {mode === 'embedding' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Token ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_token} onChange={(e) => setForm({ ...form, input_cost_per_token: e.target.value })} placeholder="0.0000001" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cached Input Cost / Token ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_token_cache_hit} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_hit: e.target.value })} placeholder="Optional override" className={inputClass} />
-              </div>
-            </div>
-          )}
-
-          {mode === 'image_generation' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cost / Image ($)</label>
-              <input type="number" step="any" value={form.input_cost_per_image} onChange={(e) => setForm({ ...form, input_cost_per_image: e.target.value })} placeholder="0.04" className={inputClass} />
-              <p className="text-xs text-gray-400 mt-1">Cost per generated image</p>
-            </div>
-          )}
-
-          {mode === 'audio_speech' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cost / Character ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_character} onChange={(e) => setForm({ ...form, input_cost_per_character: e.target.value })} placeholder="0.000015" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Character ($)</label>
-                <input type="number" step="any" value={form.output_cost_per_character} onChange={(e) => setForm({ ...form, output_cost_per_character: e.target.value })} placeholder="0.000015" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Second ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_second} onChange={(e) => setForm({ ...form, input_cost_per_second: e.target.value })} placeholder="0.00025" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Second ($)</label>
-                <input type="number" step="any" value={form.output_cost_per_second} onChange={(e) => setForm({ ...form, output_cost_per_second: e.target.value })} placeholder="0.00025" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Input Audio Token Cost ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_audio_token} onChange={(e) => setForm({ ...form, input_cost_per_audio_token: e.target.value })} placeholder="0.0001" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Output Audio Token Cost ($)</label>
-                <input type="number" step="any" value={form.output_cost_per_audio_token} onChange={(e) => setForm({ ...form, output_cost_per_audio_token: e.target.value })} placeholder="0.0001" className={inputClass} />
+                <FieldLabel
+                  htmlFor={ids.model}
+                  label="Provider model"
+                  required
+                  action={canRefreshModels ? (
+                    <button
+                      type="button"
+                      onClick={() => { void refreshProviderModels(); }}
+                      disabled={discoveryLoading}
+                      className="inline-flex items-center gap-1 rounded text-[11px] font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${hasActiveLiveDiscovery && liveDiscoveryState.loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                      {hasActiveLiveDiscovery && liveDiscoveryState.loading ? 'Loading...' : 'Load live models'}
+                    </button>
+                  ) : null}
+                />
+                <ProviderModelPicker
+                  id={ids.model}
+                  value={form.model}
+                  onChange={updateModelValue}
+                  options={modelOptions}
+                  providerLabel={form.provider ? providerDisplayName(form.provider) : 'the provider'}
+                  placeholder={form.provider ? upstreamModelPlaceholder(mode, form.provider) : 'Select a provider first'}
+                  loading={discoveryLoading}
+                  disabled={!form.provider}
+                  invalid={Boolean(fieldErrors.model)}
+                  describedBy={ids.modelHelp}
+                  footer={modelFooter}
+                />
+                <FieldError message={fieldErrors.model} />
+                <p id={ids.modelHelp} className={HELP_CLASS}>The model name at the provider, for example openai/gpt-oss-120b on Groq.</p>
               </div>
             </div>
+            {discoveryWarnings.length > 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">{discoveryWarnings.join(' ')}</div>
+            ) : null}
+            <CredentialFields
+              form={form}
+              allowInlineCredentials={allowInlineCredentials}
+              supportsCustomAuth={supportsCustomAuth}
+              credentials={availableNamedCredentials}
+              selectedCredential={selectedNamedCredential}
+              apiBasePlaceholder={selectedProviderPreset?.api_base || PROVIDER_API_BASE_PLACEHOLDERS[normalizedProviderKey(form.provider)] || 'https://your-provider.example/v1'}
+              apiBaseHelp={selectedProviderPreset?.api_base
+                ? 'Filled from the provider. Change it for a custom endpoint.'
+                : form.provider
+                  ? 'This provider has no default. Enter the API base URL.'
+                  : 'Select a provider to fill its default API base URL.'}
+              apiKeyHint={PROVIDER_API_KEY_HINTS[normalizedProviderKey(form.provider)]}
+              errors={{ named_credential_id: fieldErrors.named_credential_id, api_base: fieldErrors.api_base }}
+              onSourceChange={setCredentialSource}
+              onSelectCredential={applyNamedCredential}
+              onCreateCredential={() => setCredentialCreateOpen(true)}
+              onReplaceKeptCredential={replaceKeptCredential}
+              onCredentialFieldChange={updateProviderCredentialField}
+              onChange={updateForm}
+            />
+            {visibleConnectionTest?.result ? <ConnectionTestNotice result={visibleConnectionTest.result} /> : null}
+            {visibleConnectionTest?.error ? (
+              <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{visibleConnectionTest.error}</div>
+            ) : null}
+          </FormPanel>
+
+          {mode === 'realtime' ? (
+            <FormPanel title="Realtime audio" description="Session type and prices for WebSocket sessions.">
+              <RealtimeModelFields form={form} onChange={setForm} />
+            </FormPanel>
+          ) : (
+            <FormPanel
+              title="Pricing"
+              description="Used for spend, budgets and usage reports."
+              actions={autofilledCount > 0 ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                  <Sparkles className="h-3 w-3" aria-hidden="true" />
+                  Filled from known data
+                </span>
+              ) : null}
+            >
+              {autofilledCount > 0 ? (
+                <p className="text-xs text-gray-500">
+                  {countLabel(autofilledCount, 'price or limit', 'prices and limits')} came from known data for this model. They follow the model you pick until you edit them. Check them before you save.
+                </p>
+              ) : canFillFromKnownMetadata ? (
+                <p className="text-xs text-gray-500">
+                  Known prices and limits exist for this model.{' '}
+                  <button type="button" onClick={fillFromKnownMetadata} className="font-medium text-brand-primary-ink hover:underline">Fill empty fields</button>
+                </p>
+              ) : null}
+              <PricingFields form={form} onChange={updateForm} />
+            </FormPanel>
           )}
 
-          {mode === 'audio_transcription' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Second ($)</label>
-                <input type="number" step="any" value={form.input_cost_per_second} onChange={(e) => setForm({ ...form, input_cost_per_second: e.target.value })} placeholder="0.0001" className={inputClass} />
-                <p className="text-xs text-gray-400 mt-1">Primary STT pricing field for duration-based billing</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Second ($)</label>
-                <input type="number" step="any" value={form.output_cost_per_second} onChange={(e) => setForm({ ...form, output_cost_per_second: e.target.value })} placeholder="0" className={inputClass} />
-                <p className="text-xs text-gray-400 mt-1">Optional for providers that bill output audio duration separately</p>
-              </div>
-            </div>
-          )}
-
-          {mode === 'rerank' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Token ($)</label>
-              <input type="number" step="any" value={form.input_cost_per_token} onChange={(e) => setForm({ ...form, input_cost_per_token: e.target.value })} placeholder="0.000002" className={inputClass} />
-              <p className="text-xs text-gray-400 mt-1">Cost per token in query + documents</p>
-            </div>
-          )}
-
-          {(mode === 'chat' || mode === 'embedding') && (
-            <>
-              <div className="border-t border-gray-100 pt-4 mt-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-1">Batch Pricing</h4>
-                <p className="text-xs text-gray-400 mb-3">Optional overrides for batch API processing. Set a multiplier (e.g. 0.5 = 50% discount) or explicit per-token costs. Explicit costs take priority over the multiplier.</p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Price Multiplier</label>
-                    <input type="number" step="any" value={form.batch_price_multiplier} onChange={(e) => setForm({ ...form, batch_price_multiplier: e.target.value })} placeholder="0.5" className={inputClass} />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Batch Input Cost / Token ($)</label>
-                    <input type="number" step="any" value={form.batch_input_cost_per_token} onChange={(e) => setForm({ ...form, batch_input_cost_per_token: e.target.value })} placeholder="e.g. 0.0000025" className={inputClass} />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Batch Output Cost / Token ($)</label>
-                    <input type="number" step="any" value={form.batch_output_cost_per_token} onChange={(e) => setForm({ ...form, batch_output_cost_per_token: e.target.value })} placeholder="e.g. 0.0000075" className={inputClass} />
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
+          <SettingsList title="More settings" description="Optional. The defaults work for most models.">
+            <SettingsRow
+              title="Limits and routing"
+              description="Requests and tokens per minute, weight, priority, tags, access groups"
+              value={limitsSummary}
+              hasError={errorSection === 'limits' && !Object.values(capacityErrors).some(Boolean)}
+            >
+              <LimitsRoutingFields form={form} onChange={updateForm} accessGroupInputRef={accessGroupInputRef} />
+            </SettingsRow>
+            {mode === 'chat' || mode === 'embedding' ? (
+              <SettingsRow
+                title="Context and output limits"
+                description={mode === 'chat' ? 'Context window, input and output tokens, stream timeout' : 'Context window, input tokens, vector size'}
+                value={contextSummary ? `${contextSummary} context` : 'Not set'}
+                hasError={Object.values(capacityErrors).some(Boolean)}
+              >
+                {mode === 'chat'
+                  ? <ChatLimitsFields form={form} onChange={updateForm} errors={capacityErrors} />
+                  : <EmbeddingLimitsFields form={form} onChange={updateForm} errors={capacityErrors} />}
+              </SettingsRow>
+            ) : null}
+            {mode === 'chat' ? (
+              <SettingsRow
+                title="Capabilities"
+                description="Tools, images, structured outputs and more, for auto-routing"
+                value={form.chat_capabilities_declared ? `${capabilityCount} declared` : 'Not declared'}
+              >
+                <ChatCapabilitiesFields
+                  declared={form.chat_capabilities_declared}
+                  capabilities={form.chat_capabilities}
+                  onDeclaredChange={(declared) => setForm((current) => ({
+                    ...current,
+                    chat_capabilities_declared: declared,
+                    chat_capabilities_cleared: !declared,
+                  }))}
+                  onCapabilityChange={(key, supported) => setForm((current) => ({
+                    ...current,
+                    chat_capabilities: { ...current.chat_capabilities, [key]: supported },
+                  }))}
+                />
+              </SettingsRow>
+            ) : null}
+            {mode === 'chat' || mode === 'embedding' ? (
+              <SettingsRow
+                title="Batch execution"
+                description="How batch jobs send work to this deployment"
+                value={mode === 'chat' && form.chat_batching_mode ? modeLabelForBatch(form.chat_batching_mode) : 'Defaults'}
+                hasError={errorSection === 'batch'}
+              >
+                <BatchExecutionFields form={form} onChange={updateForm} />
+              </SettingsRow>
+            ) : null}
+            <SettingsRow
+              title="Default parameters"
+              description="Values added to, changed in or removed from each request"
+              value={paramCount ? countLabel(paramCount, 'rule') : 'None'}
+              hasError={errorSection === 'shaping'}
+            >
+              <ParametersCardBody
+                shaping={shaping}
+                onChange={updateShaping}
+                chat={mode === 'chat'}
+                description={defaultParamHint.description}
+                details={defaultParamHint.details}
+                keyPlaceholder={defaultParamHint.keyPlaceholder}
+                valuePlaceholder={defaultParamHint.valuePlaceholder}
+              />
+            </SettingsRow>
+            <SettingsRow
+              title={mode === 'chat' ? 'Headers and network' : 'Network'}
+              description={mode === 'chat' ? 'Session and forwarded headers, extra headers, outbound proxy' : 'Extra headers and outbound proxy'}
+              value={networkCount ? countLabel(networkCount, 'rule') : 'None'}
+              hasError={errorSection === 'shaping'}
+            >
+              <HeadersNetworkCardBody shaping={shaping} onChange={updateShaping} chat={mode === 'chat'} />
+            </SettingsRow>
+          </SettingsList>
         </div>
-      </CollapsibleCard>}
 
-      <CollapsibleCard title="Parameters" badge={<CountBadge count={paramCount} />}>
-        <ParametersCardBody
-          shaping={shaping}
-          onChange={updateShaping}
-          chat={mode === 'chat'}
-          description={defaultParamHint.description}
-          details={defaultParamHint.details}
-          keyPlaceholder={defaultParamHint.keyPlaceholder}
-          valuePlaceholder={defaultParamHint.valuePlaceholder}
+        <ModelFormAside
+          name={form.model_name}
+          provider={form.provider}
+          model={form.model}
+          mode={mode}
+          apiModelId={apiModelIdPreview}
+          checklist={checklist}
         />
-      </CollapsibleCard>
+      </div>
 
-      <CollapsibleCard
-        title={mode === 'chat' ? 'Headers & Network' : 'Network'}
-        badge={<CountBadge count={networkCount} />}
-      >
-        <HeadersNetworkCardBody shaping={shaping} onChange={updateShaping} chat={mode === 'chat'} />
-      </CollapsibleCard>
-
-      {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
-
-      {visibleConnectionTest?.result ? <ConnectionTestNotice result={visibleConnectionTest.result} /> : null}
-      {visibleConnectionTest?.error ? (
-        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {visibleConnectionTest.error}
+      {validationError || error ? (
+        <div role="alert" className="mt-6 space-y-1 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {validationError ? <p>{validationError}</p> : null}
+          {error ? <p>{error}</p> : null}
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        <div className="mr-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={() => { void runConnectionTest(); }}
-            disabled={Boolean(connectionTestBlockedBy) || saving}
-            loading={Boolean(visibleConnectionTest?.loading)}
-            title={connectionTestBlockedBy || 'Check the provider settings without saving. No billable call is made.'}
-          >
-            {visibleConnectionTest?.loading ? 'Testing...' : 'Test connection'}
-          </Button>
-          {connectionTestBlockedBy ? <span className="text-xs text-gray-400">{connectionTestBlockedBy}</span> : null}
-        </div>
-        <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-gray-200 pt-4">
+        {connectionTestBlockedBy ? <span className="mr-auto text-xs text-gray-400">{connectionTestBlockedBy}</span> : null}
+        <Button variant="outline" onClick={onCancel} disabled={saving}>Cancel</Button>
         <Button onClick={handleSubmit} loading={saving}>{saving ? 'Saving...' : submitLabel}</Button>
       </div>
 
@@ -1660,4 +906,11 @@ export default function ModelForm({
       />
     </div>
   );
+}
+
+function modeLabelForBatch(mode: string): string {
+  if (mode === 'disabled') return 'Off';
+  if (mode === 'concurrent') return 'Concurrent';
+  if (mode === 'sync_microbatch') return 'Sync microbatch';
+  return modeShortLabel(mode);
 }
