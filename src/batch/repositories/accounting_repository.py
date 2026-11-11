@@ -26,6 +26,7 @@ from src.metrics import (
     observe_batch_accounting_checkpoint_write,
 )
 from src.batch.repositories.completion_outbox_fences import SENT_SQL, execute_completion_transition
+from src.database_caller import with_database_caller
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -150,6 +151,7 @@ class BatchAccountingRepository:
             enabled=group_waiting_writes,
         )
 
+    @with_database_caller("batch_checkpoint")
     async def write_many(
         self,
         writes: Sequence[BatchAccountingWrite],

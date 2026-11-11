@@ -54,6 +54,7 @@ from src.telemetry.lifecycle import (
     wait_for_startup,
 )
 from src.telemetry.worker_idle import IdleWorkerPoll
+from src.database_caller import with_database_caller
 
 if TYPE_CHECKING:
     from src.db.billing.billing_operation_recovery import BillingOperationRecovery
@@ -341,6 +342,7 @@ class SpendIngestionService:
                 )
                 raise
 
+    @with_database_caller("spend")
     async def log_spend(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
         operation = kwargs.pop("operation", None)
@@ -373,6 +375,7 @@ class SpendIngestionService:
             return
         await self._enqueue("spend", kwargs, event_id=event_id)
 
+    @with_database_caller("spend")
     async def log_request_failure(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
         operation = kwargs.pop("operation", None)
@@ -424,9 +427,11 @@ class SpendIngestionService:
     ) -> None:
         await self._accounting_finalizer.log_failure(operation, event_id=event_id, payload=payload)
 
+    @with_database_caller("spend")
     async def log_spend_once(self, **kwargs: Any) -> Any:
         return await self.writer.log_spend_once(**kwargs)
 
+    @with_database_caller("spend")
     async def log_selector_charge(
         self, charge: AcceptedSelectorCharge, *, expires_at: float
     ) -> None:
@@ -539,6 +544,7 @@ class SpendIngestionService:
         set_spend_ingestion_fallback_active(self._fallback_gate.active)
         set_spend_ingestion_fallback_waiters(self._fallback_gate.waiters)
 
+    @with_database_caller("spend")
     async def _worker_loop(self) -> None:
         self._worker_started.set()
         consecutive_failures = 0
@@ -787,6 +793,7 @@ class SpendIngestionService:
             capacity=self.config.max_pending_events,
         )
 
+    @with_database_caller("spend")
     async def _cleanup_loop(self) -> None:
         self._cleanup_started.set()
         while self._running:

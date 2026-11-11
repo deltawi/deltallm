@@ -12,6 +12,7 @@ from src.db.runtime.cache_invalidation_outbox import (
 )
 from src.metrics.external_auth import external_key_revocation_delay
 from src.services.invalidation.cache_invalidation_errors import CacheInvalidationBackendUnavailable
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class CacheInvalidationWorker:
     def stop(self) -> None:
         self._stopped = True
 
+    @with_database_caller("cache_invalidation")
     async def run(self) -> None:
         self.started.set()
         while not self._stopped:

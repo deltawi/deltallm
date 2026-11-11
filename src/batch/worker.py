@@ -62,6 +62,7 @@ from src.metrics import (
 from src.router.usage import record_router_usage
 from src.routers.embeddings import _execute_embedding
 from src.batch.accounting_native import NativeBatchBilling
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +242,7 @@ class BatchExecutorWorker:
     async def _call_stop_heartbeat(self, task: asyncio.Task[None]) -> None:
         await self._stop_heartbeat(task)
 
+    @with_database_caller("batch_claim")
     async def run(self) -> None:
         self.started.set()
         if self._stop_requested:
@@ -1141,6 +1143,7 @@ class BatchExecutorWorker:
                 batch_id=job.batch_id, worker_id=self.config.worker_id
             )
 
+    @with_database_caller("batch_finalize")
     async def _process_finalization_job(self, job) -> None:  # noqa: ANN001
         logger.info("batch finalization claimed id=%s", job.batch_id)
         job_heartbeat = self._start_heartbeat(
@@ -1249,6 +1252,7 @@ class BatchExecutorWorker:
         )
         return False
 
+    @with_database_caller("batch_item")
     async def _process_claimed_work_slice(
         self,
         claim: Any,
@@ -2631,6 +2635,7 @@ class BatchExecutorWorker:
         self._sync_dependencies()
         return self._artifact_finalizer.resolve_final_status(job)
 
+    @with_database_caller("batch_finalize")
     async def _finalize_with_retry(self, job) -> None:  # noqa: ANN001
         self._sync_dependencies()
         await self._artifact_finalizer.finalize_with_retry(

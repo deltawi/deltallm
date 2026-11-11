@@ -11,6 +11,7 @@ from src.billing.money import canonical_money, money_string
 from src.billing.spend.spend_events import build_spend_event
 from src.billing.spend.spend_preparation import PreparedSpendEvent, prepare_spend_event
 from src.db.runtime.client import is_prisma_transaction_client
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class SpendTrackingService:
     def with_db(self, db_client: Any | None) -> SpendTrackingService:
         return SpendTrackingService(db_client, ledger=SpendLedgerService(db_client, strict=True))
 
+    @with_database_caller("spend")
     async def log_spend(
         self,
         *,
@@ -67,6 +69,7 @@ class SpendTrackingService:
             update_ledger=True,
         )
 
+    @with_database_caller("spend")
     async def log_request_failure(
         self,
         *,
@@ -117,6 +120,7 @@ class SpendTrackingService:
             update_ledger=False,
         )
 
+    @with_database_caller("spend")
     async def log_spend_once(
         self,
         *,
@@ -249,6 +253,7 @@ class SpendTrackingService:
         )
         return result
 
+    @with_database_caller("spend")
     async def log_request_failure_once(
         self,
         *,

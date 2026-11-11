@@ -24,6 +24,7 @@ from src.services.identity.keys.auth_fallback import AuthFallback, AuthFallbackL
 from src.models.responses import UserAPIKeyAuth
 from src.services.invalidation.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 from src.services.access.runtime_scopes import annotate_auth_metadata
+from src.database_caller import with_database_caller
 
 from src.services.organizations.organization_lifecycle import (
     OrganizationLifecycleAuthorizer,
@@ -114,6 +115,7 @@ class KeyService:
         auth_events.labels("cache_read", "hit").inc()
         return cached
 
+    @with_database_caller("auth")
     async def _load_auth(
         self, token_hash: str, lookup: AuthLookup, cached: KeyCacheLookup | None
     ) -> UserAPIKeyAuth:

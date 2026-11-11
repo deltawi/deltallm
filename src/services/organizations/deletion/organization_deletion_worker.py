@@ -25,6 +25,7 @@ from src.metrics.organization_deletion import (
     deltallm_organization_deletion_phase_metric,
 )
 from src.services.organizations.organization_lifecycle import OrganizationLifecycleAuthorizer
+from src.database_caller import with_database_caller
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,7 @@ class OrganizationDeletionWorker:
     def is_ready(self) -> bool:
         return self.health_snapshot().fresh
 
+    @with_database_caller("organization_deletion")
     async def run(self) -> None:
         self.started.set()
         self._started = True

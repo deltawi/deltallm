@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from src.batch.models import BatchWebhookOwnershipConflictError
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
+from src.database_caller import with_database_caller
 from src.metrics import (
     increment_batch_artifact_failure,
     publish_batch_runtime_summary,
@@ -100,6 +101,7 @@ class BatchRetentionCleanupWorker:
             )
         return deleted
 
+    @with_database_caller("batch_maintenance")
     async def run(self) -> None:
         self._running = True
         while self._running and not self._stop_event.is_set():
