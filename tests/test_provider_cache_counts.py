@@ -6,9 +6,14 @@ import httpx
 import pytest
 
 from src.batch.accounting_execution import _receipt_counts
-from src.billing.pricing.pricing import pricing_from_model_info, with_reported_prompt_cache
+from src.billing.pricing.pricing import (
+    normalize_gateway_cache_hit_usage,
+    pricing_from_model_info,
+    with_reported_prompt_cache,
+)
 from src.billing.pricing.tier_pricing import PricingResolution, resolve_token_billing_result
 from src.cache.pricing import provider_cache_miss_usage
+from src.mcp.hop_usage import add_hop_usage
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.gemini import GeminiAdapter
@@ -71,6 +76,37 @@ def test_reported_cache_writes_use_the_write_price():
     assert written.billing.exact_cost == Decimal("0.000555")
     # Without a write price the written tokens use the input price.
     assert no_write_price.billing.exact_cost == Decimal("0.00048")
+
+
+def test_gateway_cache_hit_of_a_mixed_mcp_answer_bills_the_whole_prompt_as_cached():
+    # A DeepSeek hop reports an explicit 0, an OpenAI hop reports 80 in the details. The
+    # MCP total then has an explicit 80 of 200. A later gateway cache hit sends no provider
+    # request, so all 200 prompt tokens use the cache-hit price.
+    total = add_hop_usage(
+        None,
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 0,
+            "total_tokens": 100,
+            "prompt_tokens_cached": 0,
+        },
+    )
+    total = add_hop_usage(
+        total,
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 0,
+            "total_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        },
+    )
+    assert total["prompt_tokens_cached"] == 80
+
+    usage = normalize_gateway_cache_hit_usage(total)
+    billing = _charge(usage, cache_hit=True)
+
+    # 200 x $0.10/M
+    assert billing.exact_cost == Decimal("0.00002")
 
 
 def test_reported_cache_counts_are_added():

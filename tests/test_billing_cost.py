@@ -110,6 +110,22 @@ def test_normalize_gateway_cache_hit_usage_marks_full_prompt_cached() -> None:
     assert usage["prompt_tokens_cached"] == 10
 
 
+def test_normalize_gateway_cache_hit_usage_replaces_a_partial_provider_count() -> None:
+    usage = normalize_gateway_cache_hit_usage(
+        {
+            "prompt_tokens": 200,
+            "completion_tokens": 0,
+            "total_tokens": 200,
+            "prompt_tokens_cached": 80,
+            "prompt_tokens_cache_write": 30,
+            "prompt_tokens_cache_write_1h": 10,
+        }
+    )
+    assert usage["prompt_tokens_cached"] == 200
+    assert usage["prompt_tokens_cache_write"] == 0
+    assert usage["prompt_tokens_cache_write_1h"] == 0
+
+
 def test_pricing_from_model_info_includes_cache_hit_fields() -> None:
     pricing = pricing_from_model_info(
         {

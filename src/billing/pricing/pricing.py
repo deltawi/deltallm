@@ -48,10 +48,14 @@ def pricing_from_model_info(
 
 
 def normalize_gateway_cache_hit_usage(usage: Mapping[str, Any] | None) -> dict[str, Any]:
+    # A gateway response-cache hit sends no provider request. The whole prompt is billed as
+    # cached, even when the stored answer has a smaller provider count (for example an MCP
+    # answer whose hops used different providers), and nothing is written to a provider cache.
     normalized = dict(usage or {})
-    if normalized.get("prompt_tokens_cached") is None:
-        prompt_tokens = max(0, int(normalized.get("prompt_tokens", 0) or 0))
-        normalized["prompt_tokens_cached"] = prompt_tokens
+    normalized["prompt_tokens_cached"] = max(0, int(normalized.get("prompt_tokens", 0) or 0))
+    for written in ("prompt_tokens_cache_write", "prompt_tokens_cache_write_1h"):
+        if written in normalized:
+            normalized[written] = 0
     return normalized
 
 
