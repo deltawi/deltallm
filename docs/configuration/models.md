@@ -489,12 +489,19 @@ model_info:
   input_cost_per_token_cache_write_1h: 0.000006
 ```
 
-DeltaLLM reads cache-write counts from Anthropic on `/v1/messages`
-(`cache_creation_input_tokens`, with the 1-hour part from `cache_creation`). Other providers
-can also charge for cache writes. For example, OpenAI charges for writes on GPT-5.6 and later
-models. When DeltaLLM does not read a provider's write count, the written tokens use the
-input price, even if the model has a write price. Check the provider's price list for each
-model before you set a write price.
+DeltaLLM reads cache-write counts from these answers:
+
+- Anthropic on `/v1/messages` (`cache_creation_input_tokens`, with the 1-hour part from
+  `cache_creation`).
+- Anthropic (not streamed) and Amazon Bedrock on `/v1/chat/completions`.
+- OpenAI-compatible answers that report `prompt_tokens_details.cache_write_tokens`, for
+  example OpenRouter.
+
+Only `/v1/messages` gives the 1-hour part. On the other paths, all written tokens use
+`input_cost_per_token_cache_write`. Other providers can also charge for cache writes. For
+example, OpenAI charges for writes on GPT-5.6 and later models. When an answer has no write
+count that DeltaLLM reads, the written tokens use the input price, even if the model has a
+write price. Check the provider's price list for each model before you set a write price.
 
 A model router classifier (selector) cannot bill cache writes. A model with a nonzero
 cache-write price fails selector qualification.

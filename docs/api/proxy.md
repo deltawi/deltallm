@@ -172,9 +172,17 @@ When the provider reports them, chat answers keep `usage.prompt_tokens_details`
 `prompt_tokens_details.cached_tokens` is the number of prompt tokens that the
 provider read from its prompt cache. DeltaLLM bills these tokens at the model's
 cache-hit input price (`input_cost_per_token_cache_hit`). When the model has no
-cache-hit price, they use the normal input price. A count that is not a whole
-number, or that is more than `prompt_tokens`, is ignored. The other breakdowns are
-informational and do not change the price.
+cache-hit price, they use the normal input price.
+
+`prompt_tokens_details.cache_write_tokens` is the number of prompt tokens that the
+provider wrote to its prompt cache. DeltaLLM bills these tokens at the model's
+cache-write price (`input_cost_per_token_cache_write`). When the model has no
+cache-write price, they use the normal input price. See
+[Prompt cache prices](../configuration/models.md#prompt-cache-prices).
+
+A cache count that is not a whole number, or a count that does not fit in
+`prompt_tokens`, is ignored. Those tokens keep the input price. The other breakdowns
+are informational and do not change the price.
 
 For Anthropic, Amazon Bedrock and Google Gemini models on `/v1/chat/completions`,
 DeltaLLM writes the provider's cache counts in the OpenAI shape:

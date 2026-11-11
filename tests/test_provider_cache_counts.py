@@ -54,6 +54,25 @@ def _charge(usage: dict[str, object], *, cache_hit: bool = False):
     ).billing
 
 
+def test_reported_cache_writes_use_the_write_price():
+    # OpenRouter reports cache writes only in prompt_tokens_details.cache_write_tokens.
+    info = {**PRICES, "input_cost_per_token_cache_write": "0.00000125"}
+    usage = {
+        "prompt_tokens": 1_000,
+        "completion_tokens": 10,
+        "total_tokens": 1_010,
+        "prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 300},
+    }
+
+    written = resolve_token_billing_result(_resolution(info), model="m", usage=usage)
+    no_write_price = resolve_token_billing_result(_resolution(), model="m", usage=usage)
+
+    # 100 x $1/M + 600 x $0.10/M + 300 x $1.25/M + 10 x $2/M
+    assert written.billing.exact_cost == Decimal("0.000555")
+    # Without a write price the written tokens use the input price.
+    assert no_write_price.billing.exact_cost == Decimal("0.00048")
+
+
 def test_reported_cache_counts_are_added():
     usage = {
         **OPENAI_USAGE,
