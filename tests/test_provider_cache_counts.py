@@ -244,6 +244,57 @@ async def test_anthropic_chat_answer_counts_cache_tokens_in_the_prompt():
     }
 
 
+@pytest.mark.parametrize("field", ["cache_read_input_tokens", "cache_creation_input_tokens"])
+@pytest.mark.parametrize("bad", [-800, 1.5, 800.0, True, "800"])
+async def test_anthropic_rejects_a_bad_cache_count(field, bad):
+    from src.models.errors import ProxyError
+
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        # A negative count would lower prompt_tokens below the known input tokens.
+        with pytest.raises(ProxyError):
+            await adapter.translate_response(
+                {
+                    "id": "msg_1",
+                    "model": "claude",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1_000, "output_tokens": 0, field: bad},
+                },
+                model_name="anthropic/claude",
+            )
+    finally:
+        await adapter.http_client.aclose()
+
+
+async def test_anthropic_accepts_null_cache_counts():
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        canonical = await adapter.translate_response(
+            {
+                "id": "msg_1",
+                "model": "claude",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": None,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+            model_name="anthropic/claude",
+        )
+    finally:
+        await adapter.http_client.aclose()
+
+    assert canonical.model_dump(mode="json")["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 7,
+        "total_tokens": 17,
+    }
+
+
 def _bedrock_answer(usage: dict[str, int]) -> dict[str, object]:
     return {
         "output": {"message": {"content": [{"text": "ok"}]}},

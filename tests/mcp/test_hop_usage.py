@@ -155,3 +155,22 @@ def test_add_hop_usage_replaces_a_non_int_cache_count_with_int_zero(bad, bad_fir
     cached = total["prompt_tokens_details"]["cached_tokens"]
     assert type(cached) is int and cached == 80
     assert with_reported_prompt_cache(total)["prompt_tokens_cached"] == 80
+
+
+@pytest.mark.parametrize("bad", [[], "80", True, 80])
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_add_hop_usage_drops_details_that_are_not_an_object(bad, bad_first) -> None:
+    bad_hop = {"prompt_tokens": 100, "prompt_tokens_details": bad}
+    hops = (bad_hop, _VALID_HOP) if bad_first else (_VALID_HOP, bad_hop)
+    total = None
+    for hop in hops:
+        total = add_hop_usage(total, hop)
+
+    assert total == {"prompt_tokens": 200, "prompt_tokens_details": {"cached_tokens": 80}}
+    assert bad_hop["prompt_tokens_details"] == bad
+
+
+def test_add_hop_usage_drops_details_that_are_not_an_object_from_one_hop() -> None:
+    assert add_hop_usage(None, {"prompt_tokens": 100, "prompt_tokens_details": []}) == {
+        "prompt_tokens": 100
+    }

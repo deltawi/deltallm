@@ -31,8 +31,11 @@ def _with_valid_cache_details(usage: Mapping[str, Any]) -> Mapping[str, Any]:
     # Billing checks the cache counts against prompt_tokens. Check each hop before the
     # sum, so a bad count in one hop cannot pass beside the prompt tokens of another hop.
     details = usage.get("prompt_tokens_details")
-    if not isinstance(details, Mapping):
+    if details is None:
         return usage
+    if not isinstance(details, Mapping):
+        # A list, string or boolean here must not replace the valid details of other hops.
+        return {key: value for key, value in usage.items() if key != "prompt_tokens_details"}
     valid = with_reported_prompt_cache(
         {"prompt_tokens": usage.get("prompt_tokens"), "prompt_tokens_details": details}
     )

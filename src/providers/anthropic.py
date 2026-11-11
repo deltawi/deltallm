@@ -177,6 +177,21 @@ def _chat_tool_choice_to_anthropic(tool_choice: Any) -> dict[str, Any] | None:
     return None
 
 
+def _anthropic_chat_usage(usage: Mapping[str, Any]) -> dict[str, Any]:
+    # Anthropic input_tokens leaves out cache reads and cache writes. The cache counts
+    # are added to prompt_tokens, so a negative or fractional count must not pass.
+    read = usage.get("cache_read_input_tokens") or 0
+    write = usage.get("cache_creation_input_tokens") or 0
+    if not is_valid_provider_token_count(read) or not is_valid_provider_token_count(write):
+        raise invalid_provider_response_error()
+    return separate_cache_chat_usage(
+        uncached=int(usage.get("input_tokens") or 0),
+        cache_read=read,
+        cache_write=write,
+        completion=int(usage.get("output_tokens") or 0),
+    )
+
+
 class AnthropicAdapter(ProviderAdapter):
     def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
         return anthropic_token_receipt(payload)
@@ -368,13 +383,7 @@ class AnthropicAdapter(ProviderAdapter):
                     "finish_reason": finish_reason,
                 }
             ],
-            # Anthropic input_tokens leaves out cache reads and cache writes.
-            "usage": separate_cache_chat_usage(
-                uncached=int(usage.get("input_tokens") or 0),
-                cache_read=int(usage.get("cache_read_input_tokens") or 0),
-                cache_write=int(usage.get("cache_creation_input_tokens") or 0),
-                completion=int(usage.get("output_tokens") or 0),
-            ),
+            "usage": _anthropic_chat_usage(usage),
         }
         return ChatCompletionResponse.model_validate(canonical)
 
