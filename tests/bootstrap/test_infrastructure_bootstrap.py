@@ -149,10 +149,13 @@ async def test_init_and_shutdown_infrastructure_runtime(
             self.disconnected = False
             self.database_settings = None
 
-        async def connect(self, database_settings=None, *, policy=None) -> None:  # noqa: ANN001
+        async def connect(  # noqa: ANN001
+            self, database_settings=None, *, policy=None, prioritized=False
+        ) -> None:
             self.connected = True
             self.database_settings = database_settings
             self.policy = policy
+            self.prioritized = prioritized
 
         async def disconnect(self) -> None:
             self.disconnected = True
@@ -396,6 +399,9 @@ async def test_init_and_shutdown_infrastructure_runtime(
     assert app.state.prisma_manager.database_settings is not None
     assert app.state.prisma_manager.database_settings.pool_size == 25
     assert app.state.prisma_manager.database_settings.pool_timeout == 45
+    # The batch worker is on by default: its control pool serves paid work first.
+    assert app.state.prisma_manager.prioritized is True
+    assert app.state.foreground_prisma_manager.prioritized is False
     assert app.state.prisma_manager.database_settings.url == (
         "postgresql://env-user:env-pass@env-host:5432/env-db?connection_limit=25&pool_timeout=45"
     )

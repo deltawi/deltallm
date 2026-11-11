@@ -35,6 +35,7 @@ class PrismaClientManager:
         database_settings: DatabaseConnectionSettings | None = None,
         *,
         policy: DatabasePolicy | None = None,
+        prioritized: bool = False,
     ) -> None:
         try:
             from prisma import Prisma  # type: ignore
@@ -51,7 +52,7 @@ class PrismaClientManager:
 
             if database_settings is None:
                 raise RuntimeError("An allocated database requires an explicit database URL")
-            self.allocation = DatabaseOwner(policy)
+            self.allocation = DatabaseOwner(policy, prioritized=prioritized)
             self.client = AllocatedPrisma(
                 datasource={
                     "url": policy.connection_url(

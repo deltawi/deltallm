@@ -14,6 +14,7 @@ from src.batch.accounting_checkpoint import (
 )
 from src.batch.accounting_execution import BatchAccountingExecution
 from src.batch.accounting_native import NativeBatchBilling, deadline
+from src.batch.retry import jittered_busy_wait
 
 # The hold is the last write before the item is closed for good, and the
 # busy database that refused the proof (a rollout, for example) usually
@@ -135,4 +136,4 @@ async def _write_hold(
 
 
 async def _pause(seconds: float) -> None:
-    await asyncio.sleep(seconds)
+    await asyncio.sleep(jittered_busy_wait(seconds))

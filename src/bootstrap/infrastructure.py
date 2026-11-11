@@ -141,6 +141,10 @@ async def _init_infrastructure_runtime(
             "control",
             database_settings.pool_size,
         ),
+        # The batch worker uses the control pool for all its work. Its saves of
+        # paid answers, billing checkpoints and lease renewals get a free slot
+        # before claims and background work.
+        prioritized=bool(getattr(cfg.general_settings, "embeddings_batch_worker_enabled", False)),
     )
     app.state.prisma_manager = prisma_manager
     if startup.lifecycle.migration_mode == "external":

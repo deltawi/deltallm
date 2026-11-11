@@ -20,9 +20,21 @@ from prisma._raw_query import deserialize_raw_results
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, TransactionExpiredError
 from prometheus_client import Counter, Gauge, Histogram
 
-from src.concurrency import BoundedCapacityGate, CapacityGateFull, CapacityGateTimedOut
+from src.concurrency import (
+    BoundedCapacityGate,
+    CapacityGateDisplaced,
+    CapacityGateFull,
+    CapacityGateTimedOut,
+    PriorityCapacityGate,
+)
 from src.db.runtime.allocation_config import DatabasePolicy
-from src.database_caller import current_database_caller
+from src.database_caller import (
+    BACKGROUND_PRIORITY,
+    OUTBOX_PRIORITY,
+    background_slots,
+    caller_priority,
+    current_database_caller,
+)
 from src.metrics.prometheus import get_prometheus_registry
 from src.models.errors import RoutingFailureAction, ServiceUnavailableError
 
@@ -123,6 +135,8 @@ class DatabaseSlot:
     caller: str
     acquired_at: float
     series: _CallerSeries
+    # Background work in a prioritized pool, which holds a capped number of slots.
+    capped: bool = False
 
 
 class DatabaseUnavailableError(ServiceUnavailableError):
@@ -165,7 +179,7 @@ async def _native_call(operation: Callable[[], Awaitable[T]], seconds: float) ->
 
 
 class DatabaseOwner:
-    def __init__(self, policy: DatabasePolicy):
+    def __init__(self, policy: DatabasePolicy, *, prioritized: bool = False):
         self.policy = policy
         # Request pools, required acceptance and receipts need a finite burst
         # buffer, as do allocations given a queue wait (batch workers). Only the
@@ -187,9 +201,23 @@ class DatabaseOwner:
             self._business_waiters = policy.connections
         else:
             self._business_waiters = 0
-        self.gate = BoundedCapacityGate(
-            concurrency=policy.connections, max_waiters=self._business_waiters
-        )
+        self.gate: BoundedCapacityGate | PriorityCapacityGate
+        if prioritized:
+            # The batch worker's pool: a free slot goes to the most urgent
+            # waiting work (src/database_caller.py), and urgent work may take
+            # the waiting position of less urgent work. Twice the pool size
+            # in waiting positions keeps a burst of urgent work from being
+            # refused while low-priority work waits.
+            self._business_waiters = 2 * policy.connections
+            self.gate = PriorityCapacityGate(
+                concurrency=policy.connections,
+                max_waiters=self._business_waiters,
+                capped_slots=background_slots(policy.connections),
+            )
+        else:
+            self.gate = BoundedCapacityGate(
+                concurrency=policy.connections, max_waiters=self._business_waiters
+            )
         self.tasks: set[asyncio.Task] = set()
         self.closed = False
         self._probe_active = False
@@ -222,19 +250,32 @@ class DatabaseOwner:
             raise DatabaseUnavailableError()
         series = self._caller_series(caller or current_database_caller())
         started = monotonic()
-        waiting = self.gate.active >= self.gate.concurrency
+        gate = self.gate
+        prioritized = isinstance(gate, PriorityCapacityGate)
+        priority = caller_priority(series.caller) if prioritized else 0
+        # Background work in a prioritized pool holds a capped number of slots.
+        capped = prioritized and priority >= BACKGROUND_PRIORITY
+        waiting = gate.active >= gate.concurrency or (
+            isinstance(gate, PriorityCapacityGate)
+            and capped
+            and gate.capped_active >= gate.capped_slots
+        )
         if waiting:
             self._waiters.inc()
+        wait_seconds = self.policy.queue_seconds + min(
+            self.policy.acquisition_seconds,
+            timeout_seconds if timeout_seconds is not None else self.policy.acquisition_seconds,
+        )
         try:
-            await self.gate.acquire(
-                timeout_seconds=self.policy.queue_seconds
-                + min(
-                    self.policy.acquisition_seconds,
-                    timeout_seconds
-                    if timeout_seconds is not None
-                    else self.policy.acquisition_seconds,
-                )
-            )
+            if isinstance(gate, PriorityCapacityGate):
+                await gate.acquire(timeout_seconds=wait_seconds, priority=priority, capped=capped)
+            else:
+                await gate.acquire(timeout_seconds=wait_seconds)
+        except CapacityGateDisplaced:
+            self._event("displaced")
+            series.event("displaced")
+            series.wait.observe(monotonic() - started)
+            raise DatabaseUnavailableError() from None
         except CapacityGateFull:
             self._event("full")
             series.event("full")
@@ -248,17 +289,36 @@ class DatabaseOwner:
             if waiting:
                 self._waiters.dec()
         if self.closed:
-            await self.gate.release()
+            await self._release_gate(capped)
             raise DatabaseUnavailableError()
         acquired_at = monotonic()
         self._occupied.inc()
         series.slots.inc()
         series.event("acquired")
         series.wait.observe(acquired_at - started)
-        return DatabaseSlot(series.caller, acquired_at, series)
+        return DatabaseSlot(series.caller, acquired_at, series, capped)
+
+    async def _release_gate(self, capped: bool) -> None:
+        if isinstance(self.gate, PriorityCapacityGate):
+            await self.gate.release(capped=capped)
+        else:
+            await self.gate.release()
+
+    def queue_is_deep(self) -> bool:
+        """True while much claimed batch work waits for a slot of a prioritized pool.
+
+        Result saves, requeues, billing checkpoints, lease renewals and the
+        completion outbox count. The batch worker claims no new work then, so
+        the work that it already holds gets the pool first.
+        """
+        if not isinstance(self.gate, PriorityCapacityGate):
+            return False
+        return self.gate.waiters_at_or_above(OUTBOX_PRIORITY) >= max(
+            1, self.policy.connections // 4
+        )
 
     async def release(self, slot: DatabaseSlot | None = None):
-        await self.gate.release()
+        await self._release_gate(slot is not None and slot.capped)
         self._occupied.dec()
         if slot is None:
             self._caller_series(current_database_caller()).slots.dec()

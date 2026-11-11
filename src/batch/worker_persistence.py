@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Iterator, Sequence
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.models import BatchItemRecord
 from src.batch.result_save_waits import BusyWait, ResultSaveWaits, known_lease_seconds
-from src.batch.retry import is_gateway_busy
+from src.batch.retry import is_gateway_busy, jittered_busy_wait
 from src.batch.policy import (
     BatchPolicyLease,
     acquire_batch_policy_lease,
@@ -32,6 +32,7 @@ from src.billing.pricing.tier_pricing import (
     resolve_deployment_tier_pricing,
     resolve_token_billing_result,
 )
+from src.database_caller import with_database_caller
 from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
 
 logger = logging.getLogger(__name__)
@@ -362,6 +363,8 @@ class WorkerPersistenceMixin:
                 )
             except Exception as exc:
                 delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                if delay is not None:
+                    delay = jittered_busy_wait(delay)
                 logger.warning(
                     "batch item lease renewal before persistence failed item_id=%s retry_in_seconds=%s error=%s",
                     item_id,
@@ -508,6 +511,9 @@ class WorkerPersistenceMixin:
         waits.lease_renewed(started_at)
         return True
 
+    # This read decides if a provider answer is saved or dropped, so it waits
+    # for a database slot with the result saves.
+    @with_database_caller("batch_result_save")
     async def _items_still_claimed(self, items: list[dict[str, Any]]) -> bool:
         """True when this worker still holds every item at its claim epoch.
 
@@ -586,6 +592,8 @@ class WorkerPersistenceMixin:
                 )
             except Exception as exc:
                 delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                if delay is not None:
+                    delay = jittered_busy_wait(delay)
                 logger.warning(
                     "batch completion persistence requeue failed context=%s item_ids=%s retry_in_seconds=%s error=%s",
                     context_label,

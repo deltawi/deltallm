@@ -509,6 +509,8 @@ async def test_busy_database_after_provider_answer_retries_lease_and_save(monkey
     worker, repo, _, _, _ = _build_worker()
     engine = worker._execution_engine
     sleeps: list[float] = []
+    # No jitter: the waits are the nominal 0.5, 1 and 2 s.
+    monkeypatch.setattr("src.batch.retry.random.uniform", lambda low, high: low)
 
     async def no_sleep(seconds: float) -> None:
         sleeps.append(seconds)
@@ -547,6 +549,8 @@ async def test_busy_database_requeue_is_retried_so_the_item_is_not_left_claimed(
     worker, repo, _, _, _ = _build_worker()
     engine = worker._execution_engine
     sleeps: list[float] = []
+    # No jitter: the waits are the nominal 0.5, 1 and 2 s.
+    monkeypatch.setattr("src.batch.retry.random.uniform", lambda low, high: low)
     save_errors = 0
     release_results: list[object] = [DatabaseUnavailableError(), DatabaseUnavailableError(), None]
 
@@ -585,6 +589,8 @@ async def test_requeue_gives_up_after_bounded_busy_waits(monkeypatch):
     worker, repo, _, _, _ = _build_worker()
     engine = worker._execution_engine
     sleeps: list[float] = []
+    # No jitter: the waits are the nominal 0.5, 1 and 2 s.
+    monkeypatch.setattr("src.batch.retry.random.uniform", lambda low, high: low)
 
     async def no_sleep(seconds: float) -> None:
         sleeps.append(seconds)
@@ -612,6 +618,8 @@ async def test_requeue_gives_up_after_bounded_busy_waits(monkeypatch):
 async def test_busy_database_lease_renewal_gives_up_after_bounded_waits(monkeypatch):
     worker, repo, _, _, _ = _build_worker()
     sleeps: list[float] = []
+    # No jitter: the waits are the nominal 0.5, 1 and 2 s.
+    monkeypatch.setattr("src.batch.retry.random.uniform", lambda low, high: low)
 
     async def no_sleep(seconds: float) -> None:
         sleeps.append(seconds)
