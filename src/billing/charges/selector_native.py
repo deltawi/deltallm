@@ -269,12 +269,19 @@ class NativeSelectorStore:
         if operation != self.operation or asyncio.get_running_loop().time() >= expires_at:
             raise BillingOperationUnavailable()
 
-    def _audit(self, handle: AccountingOperationHandle, *, status: str) -> dict[str, object]:
+    def _audit(
+        self,
+        handle: AccountingOperationHandle,
+        *,
+        status: str,
+        error_type: str | None = None,
+    ) -> dict[str, object]:
         return accounting_audit_envelope(
             handle,
             event_id=self.operation.attribution.component_event_id,
             status=status,
             metadata={"attempt_count": 1, "component_purpose": "selector:v1"},
+            error_type=error_type,
         )
 
     def _uncertain(self, handle: AccountingOperationHandle, reason: str) -> AccountingFinalization:
@@ -282,7 +289,7 @@ class NativeSelectorStore:
             handle,
             reason=reason,
             occurred_at=datetime.now(UTC),
-            audit_envelope=self._audit(handle, status="error"),
+            audit_envelope=self._audit(handle, status="error", error_type=reason),
             event_id=UUID(self.operation.attribution.component_event_id),
         )
 

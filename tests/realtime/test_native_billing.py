@@ -193,6 +193,7 @@ async def test_disconnect_without_usage_uses_shared_conservative_finalization(ru
     assert str(terminal.operation_id) == operation
     assert terminal.outcome is AccountingOutcome.UNCERTAIN
     assert terminal.uncertainty_reason == "terminal_usage_missing"
+    assert terminal.audit_envelope["payload"]["event"]["error_type"] == "terminal_usage_missing"
     assert billing.proofs.entries == 0
 
 

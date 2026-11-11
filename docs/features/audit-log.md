@@ -131,6 +131,22 @@ Common event fields include:
 
 When you fetch one event directly, DeltaLLM also returns any stored `payloads`.
 
+### Failed provider calls with accounting v2
+
+With accounting v2, each provider call also writes an `ACCOUNTING_PROVIDER_FINALIZATION`
+event. When the call fails, the event has `status` `error`, and `error_type` tells why:
+
+- `AccountingProviderNotDispatched`: the gateway did not send the call, so it released
+  the reserved amount.
+- `AccountingOutcomeUnknown`: the gateway sent the call, and it does not know the reason,
+  for example for a batch item whose result is unknown. It keeps the reserved amount as a
+  provisional charge.
+- Any other value: the gateway sent the call, and the call failed or its charge could not
+  be proven. The value is the reason, for example `service_unavailable` for a provider 503,
+  and `metadata.uncertainty_reason` has the same value. The gateway cannot prove whether
+  the provider charged for the call, so it keeps the reserved amount as a provisional
+  charge.
+
 ## Payload Storage and Redaction
 
 Audit payloads are handled differently depending on the event type:

@@ -179,6 +179,7 @@ class AccountingSpendFinalizer:
                 operation,
                 event_id=final_event_id,
                 status="error",
+                error_type=reason,
                 correlation_id=payload.get("request_id"),
                 metadata={
                     "attempt_count": len(operation.attempts),
