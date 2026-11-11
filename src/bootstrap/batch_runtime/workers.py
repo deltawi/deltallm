@@ -43,6 +43,7 @@ from src.bootstrap.batch_runtime.pool_sizing import (
     batch_result_save_concurrency,
     completion_outbox_concurrency,
     completion_outbox_sent_mark_concurrency,
+    require_batch_write_budget,
     warn_if_batch_db_pool_is_small,
 )
 from src.bootstrap.batch_runtime.runtime import BatchRuntime
@@ -77,7 +78,9 @@ def start_batch_workers(
     runtime: BatchRuntime,
     core: BatchCoreComponents,
 ) -> BatchWebhookCipher | None:
-    warn_if_batch_db_pool_is_small(cfg.general_settings, getattr(app.state, "settings", None))
+    settings = getattr(app.state, "settings", None)
+    require_batch_write_budget(cfg.general_settings, settings)
+    warn_if_batch_db_pool_is_small(cfg.general_settings, settings)
     native_billing = build_native_batch_billing(app.state, cfg.general_settings, repository)
     _start_executor_worker(app, cfg, repository, runtime, core, native_billing=native_billing)
     _start_runtime_summary_worker(cfg, repository, runtime)

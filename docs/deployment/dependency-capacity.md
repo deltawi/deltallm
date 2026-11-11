@@ -135,8 +135,10 @@ plus the telemetry acceptance connections, plus the larger of 64 and the settlem
 connections, plus one during a telemetry worker probe. With the defaults (20, 8, four
 acceptance connections and one settlement connection) that is 96, or 97 during a probe:
 4,268 at most at the illustrative 44-process rollout ceiling below. A waiting operation
-is a suspended coroutine, not a connection or a thread. `db_capacity_wait_seconds`
-makes control and foreground waits longer, but it does not add waiting positions.
+is a suspended coroutine, not a connection or a thread. On a batch worker process, the
+control pool has two waiting positions per connection, so add `db_pool_size` once
+more. `db_capacity_wait_seconds` makes control and foreground waits longer, but it does
+not add waiting positions.
 `deltallm_database_allocation_seconds{operation="readiness"}` measures probe time;
 `deltallm_database_allocation_events_total{outcome="queue_timeout"}` records
 business acquisition deadlines exceeded in these bounded queues.
@@ -177,19 +179,56 @@ constructors retain an optional worker-client argument for compatibility; produc
 bootstrap always supplies the isolated worker client. Remove that constructor fallback
 only after its external callers migrate.
 
+### One prioritized budget on batch worker pods
+
+On a process that runs the batch worker (`embeddings_batch_worker_enabled`), the control
+pool is one budget for all batch work. When a slot becomes free, the most urgent waiting
+work gets it, in this order:
+
+1. API requests (`auth`, `spend`, `audit`), on a process that also serves API traffic.
+2. Saves of provider answers and requeues (`batch_result_save`, `batch_requeue`). A save
+   that fails turns paid work into a failed item.
+3. Billing checkpoints and lease renewals (`batch_checkpoint`, `batch_lease`). A lost
+   lease gives the item to another worker, and its answer is lost too.
+4. The completion outbox (`batch_outbox`).
+5. Claims, progress, finalization and all other work.
+6. Background work (`batch_webhook`, `batch_maintenance`, `cache_invalidation`,
+   `organization_deletion`). It holds at most an eighth of the pool at the same time:
+   at least 1 slot and at most 4.
+
+Work of the same class gets slots in arrival order. The pool has two waiting positions
+per connection. When all are taken, urgent work takes the position of the newest, least
+urgent waiter, and that waiter fails at once with the outcome `displaced`. Urgent work
+is refused only when every waiting position holds work that is at least as urgent.
+
+The batch worker also claims no new work while a quarter of the pool (at least 1) is
+waiting for a slot for work that it already holds: saves, requeues, checkpoints, lease
+renewals and outbox work. Each skipped claim adds 1 to
+`deltallm_batch_work_claims_total{result="database_busy"}`. The worker checks again
+after a random part (half to all) of `embeddings_batch_poll_interval_seconds`, or as
+soon as a running slice ends. The deadlines do not change: each call still waits up to
+`db_capacity_wait_seconds` plus `db_acquisition_timeout_seconds` for its slot.
+
+Billing checkpoint writes and, with write grouping, result saves each use up to
+`embeddings_batch_accounting_write_concurrency` slots (0, the default, means half of
+`db_pool_size`). A batch worker does not start when these shares add up to more than
+`db_pool_size`.
+
 ### Find which work holds the database slots
 
 The error "Database capacity is temporarily unavailable" means one of these:
 
 - The pod's own pool had no free slot and no free waiting position. The event
   outcome is `full`.
+- On a batch worker pod, more urgent work took the waiting position of the caller.
+  The outcome is `displaced`.
 - The caller waited for a slot for the full queue time. The outcome is
   `queue_timeout`.
 - The caller had a slot, but the query did not finish in time. The outcome is
   `caller_deadline`.
 - PostgreSQL refused the connection or cancelled the statement.
 
-The first two come from the pod, not from PostgreSQL. To find which work fills the
+The first three come from the pod, not from PostgreSQL. To find which work fills the
 pool, use these metrics. Each one has the `allocation` label (`control`,
 `foreground`, `telemetry`, `telemetry_worker` or `telemetry_settlement`):
 
@@ -198,7 +237,7 @@ pool, use these metrics. Each one has the `allocation` label (`control`,
 | `deltallm_database_caller_slots{caller}` | Slots that each kind of work holds now |
 | `deltallm_database_caller_hold_seconds{caller}` | How long each kind of work holds a slot. A transaction holds one slot from `BEGIN` to `COMMIT`. |
 | `deltallm_database_caller_wait_seconds{caller}` | How long each kind of work waited for a slot |
-| `deltallm_database_caller_events_total{caller,outcome}` | `acquired`, `completed`, `rolled_back`, `error`, `full`, `queue_timeout`, `caller_deadline` and `caller_cancelled`, by kind of work. A transaction records one result: `completed` (committed), `rolled_back` (no statement failed) or `error`. |
+| `deltallm_database_caller_events_total{caller,outcome}` | `acquired`, `completed`, `rolled_back`, `error`, `full`, `displaced`, `queue_timeout`, `caller_deadline` and `caller_cancelled`, by kind of work. A transaction records one result: `completed` (committed), `rolled_back` (no statement failed) or `error`. |
 | `deltallm_database_allocation_waiters` | Callers that wait for a slot now |
 | `deltallm_database_allocation_abandoned` | Slots that are still held for a query or transaction whose caller stopped waiting, also during `COMMIT`. The slot stays held until PostgreSQL finishes the work or its timeout expires. |
 

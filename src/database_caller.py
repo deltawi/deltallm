@@ -40,6 +40,46 @@ DatabaseCaller = Literal[
     "organization_deletion",
 ]
 DATABASE_CALLERS: frozenset[str] = frozenset(get_args(DatabaseCaller))
+
+# On a process that runs the batch worker, callers that wait for a slot of the
+# control pool get it in this order (lower first). Work that is not listed
+# has CLAIM_PRIORITY. API requests come first: a client waits on them, with a
+# short deadline. Saving an answer that the provider already gave, or giving
+# it back to the queue, comes next. A lost save turns paid work into a failed
+# item. Billing checkpoints and lease renewals follow: a lost lease gives the
+# item to another worker and the answer is lost too. Then the completion
+# outbox, then claims and other batch work.
+REQUEST_PRIORITY = 0
+PAID_RESULT_PRIORITY = 1
+BILLING_PRIORITY = 2
+OUTBOX_PRIORITY = 3
+CLAIM_PRIORITY = 4
+BACKGROUND_PRIORITY = 5
+_CALLER_PRIORITIES: dict[str, int] = {
+    "auth": REQUEST_PRIORITY,
+    "spend": REQUEST_PRIORITY,
+    "audit": REQUEST_PRIORITY,
+    "batch_result_save": PAID_RESULT_PRIORITY,
+    "batch_requeue": PAID_RESULT_PRIORITY,
+    "batch_checkpoint": BILLING_PRIORITY,
+    "batch_lease": BILLING_PRIORITY,
+    "batch_outbox": OUTBOX_PRIORITY,
+    # Background work also holds at most a few slots at a time.
+    "batch_webhook": BACKGROUND_PRIORITY,
+    "batch_maintenance": BACKGROUND_PRIORITY,
+    "cache_invalidation": BACKGROUND_PRIORITY,
+    "organization_deletion": BACKGROUND_PRIORITY,
+}
+
+
+def caller_priority(caller: str) -> int:
+    """Order of ``caller`` in a prioritized pool; lower gets a slot first."""
+    return _CALLER_PRIORITIES.get(caller, CLAIM_PRIORITY)
+
+
+def background_slots(connections: int) -> int:
+    """Slots that background callers may hold at the same time in a pool."""
+    return max(1, min(4, int(connections) // 8))
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 _current: ContextVar[str] = ContextVar("deltallm_database_caller", default="other")

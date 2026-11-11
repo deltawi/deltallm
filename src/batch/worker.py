@@ -250,6 +250,9 @@ class BatchExecutorWorker:
         self._running = True
         try:
             while self._running:
+                if self._database_queue_is_deep():
+                    await self._wait_for_database_queue()
+                    continue
                 try:
                     if self._slice_pool_enabled():
                         did_work = await self._fill_slice_pool()
@@ -272,6 +275,21 @@ class BatchExecutorWorker:
                 await self._finish_pool_tasks()
             finally:
                 await self._cancel_shadow_tasks()
+
+    def _database_queue_is_deep(self) -> bool:
+        """True while much work that this worker holds waits for a database slot."""
+        manager = getattr(getattr(self.app, "state", None), "prisma_manager", None)
+        queue_is_deep = getattr(getattr(manager, "allocation", None), "queue_is_deep", None)
+        return callable(queue_is_deep) and queue_is_deep() is True
+
+    async def _wait_for_database_queue(self) -> None:
+        # Result saves, checkpoints, lease renewals and outbox work already wait
+        # for the pool. A new claim would add more work in front of them, so
+        # claim nothing this round. Running slices continue.
+        increment_batch_work_claim(result="database_busy", claim_mode=self._active_scheduler_mode())
+        self._reap_pool_tasks()
+        poll_seconds = max(0.1, float(self.config.poll_interval_seconds or 1.0))
+        await self._idle_wait(random.uniform(poll_seconds / 2, poll_seconds))
 
     async def _idle_wait(self, delay_seconds: float) -> None:
         if not self._pool_tasks:

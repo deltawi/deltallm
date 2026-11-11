@@ -14,8 +14,10 @@ from datetime import UTC, datetime
 import random
 from time import monotonic
 
-# The first waits are the same as before the longer waits existed, and the same
-# as the lease renewal and requeue waits.
+from src.batch.retry import jittered_busy_wait
+
+# The first waits are the same as the lease renewal and requeue waits: each a
+# random value from half of the delay to all of it.
 SHORT_DELAYS_SECONDS = (0.5, 1.0, 2.0)
 # The longer waits, with up to 20% jitter, bring the total to about 40 s (at
 # most 46.7 s).
@@ -68,7 +70,10 @@ class ResultSaveWaits:
         # A long wait or a renewal came before the next save.
         self._delayed = False
         self._waits: Iterator[BusyWait] = iter(
-            [BusyWait(seconds=delay, long=False) for delay in SHORT_DELAYS_SECONDS]
+            [
+                BusyWait(seconds=jittered_busy_wait(delay), long=False)
+                for delay in SHORT_DELAYS_SECONDS
+            ]
             + [_jittered(delay) for delay in LONG_DELAYS_SECONDS]
         )
 

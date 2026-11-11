@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import random
 
 import httpx
 
@@ -33,6 +34,15 @@ _GATEWAY_BUSY_CODES = frozenset(
         "auth_fallback_unavailable",
     }
 )
+
+
+def jittered_busy_wait(seconds: float) -> float:
+    """A wait after a busy database: random, from half of ``seconds`` to all of it.
+
+    Work that one burst refused then comes back at different times, not
+    together in a second burst.
+    """
+    return seconds - random.uniform(0.0, seconds / 2)
 
 
 class BatchResponseShapeError(ValueError):

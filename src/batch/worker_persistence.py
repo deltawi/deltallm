@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Iterator, Sequence
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.models import BatchItemRecord
 from src.batch.result_save_waits import BusyWait, ResultSaveWaits, known_lease_seconds
-from src.batch.retry import is_gateway_busy
+from src.batch.retry import is_gateway_busy, jittered_busy_wait
 from src.batch.policy import (
     BatchPolicyLease,
     acquire_batch_policy_lease,
@@ -362,6 +362,8 @@ class WorkerPersistenceMixin:
                 )
             except Exception as exc:
                 delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                if delay is not None:
+                    delay = jittered_busy_wait(delay)
                 logger.warning(
                     "batch item lease renewal before persistence failed item_id=%s retry_in_seconds=%s error=%s",
                     item_id,
@@ -586,6 +588,8 @@ class WorkerPersistenceMixin:
                 )
             except Exception as exc:
                 delay = next(busy_delays, None) if is_gateway_busy(exc) else None
+                if delay is not None:
+                    delay = jittered_busy_wait(delay)
                 logger.warning(
                     "batch completion persistence requeue failed context=%s item_ids=%s retry_in_seconds=%s error=%s",
                     context_label,
