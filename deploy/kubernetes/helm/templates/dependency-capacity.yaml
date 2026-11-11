@@ -127,8 +127,8 @@
 {{- if has $env.name (list "WEB_CONCURRENCY" "UVICORN_WORKERS" "DELTALLM_DB_POOL_SIZE" "DELTALLM_TELEMETRY_DB_POOL_SIZE") -}}
 {{- fail (printf "%s is owned by dependencyCapacity and rendered pool settings" $env.name) -}}
 {{- end -}}
-{{- if eq $env.name "DELTALLM_DATABASE_POOLER_URL" -}}
-{{- fail "DELTALLM_DATABASE_POOLER_URL is owned by runtime.databasePooler" -}}
+{{- if has $env.name (list "DELTALLM_DATABASE_POOLER_URL" "DELTALLM_DATABASE_POOLER_REQUIRED") -}}
+{{- fail (printf "%s is owned by runtime.databasePooler" $env.name) -}}
 {{- end -}}
 {{- end -}}
 {{- range $argument := concat .Values.command .Values.args .Values.batchWorker.command .Values.batchWorker.args .Values.accountingWorker.command .Values.accountingWorker.args .Values.accountingRequest.command .Values.accountingRequest.args -}}

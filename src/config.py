@@ -1405,6 +1405,8 @@ class Settings(
     # Optional transaction pooler (PgBouncer) for the pod pools: a URL template
     # with {allocation}. Startup-only; migrations keep DATABASE_URL.
     database_pooler_url: str | None = None
+    # Set by the Helm chart when it counts the pod pools as pooler clients.
+    database_pooler_required: bool = False
     db_pool_size: int | None = Field(default=None, gt=0)
     db_pool_timeout: int | None = Field(default=None, ge=0)
     telemetry_db_pool_size: int | None = Field(default=None, gt=0, le=100)
@@ -1521,6 +1523,17 @@ class Settings(
     @classmethod
     def validate_database_pooler_url(cls, value: str | None) -> str | None:
         return validate_pooler_url(value)
+
+    @model_validator(mode="after")
+    def require_database_pooler_url(self) -> "Settings":
+        # A pod with an empty pooler URL would connect directly to PostgreSQL,
+        # outside the connection budget that the chart counted.
+        if self.database_pooler_required and self.database_pooler_url is None:
+            raise ValueError(
+                "DELTALLM_DATABASE_POOLER_REQUIRED is set, but DELTALLM_DATABASE_POOLER_URL "
+                "is empty"
+            )
+        return self
 
 
 @dataclass(frozen=True)

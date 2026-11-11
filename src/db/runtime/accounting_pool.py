@@ -11,7 +11,12 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import asyncpg
 
 from src.config import DatabaseConnectionSettings
-from src.database_pooler import database_schema, pooled_database_url, quoted_schema
+from src.database_pooler import (
+    POOLER_SCHEMA_CHECK_SQL,
+    database_schema,
+    pooled_database_url,
+    quoted_schema,
+)
 from src.db.runtime.telemetry_acceptance import DatabasePoolAcquisitionTimeout
 
 if TYPE_CHECKING:
@@ -196,13 +201,11 @@ class AccountingPostgresManager:
                     """,
                     timeout=statement_seconds,
                 )
-                # Behind a pooler, the alias sets search_path with connect_query.
+                # Behind a pooler, the alias sets the schema with connect_query.
                 if pooled and not await connection.fetchval(
-                    "SELECT current_setting('search_path') = quote_ident($1)",
-                    database_schema(database_settings.url),
-                    timeout=statement_seconds,
+                    POOLER_SCHEMA_CHECK_SQL, timeout=statement_seconds
                 ):
-                    raise RuntimeError("accounting PostgreSQL pool did not apply its search_path")
+                    raise RuntimeError("accounting pooler alias does not set the public schema")
             if row is None or any(
                 abs(float(row[name]) - expected) > 0.001
                 for name, expected in (

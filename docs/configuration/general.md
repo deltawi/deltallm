@@ -405,6 +405,7 @@ Environment overrides:
 
 - `DELTALLM_DATABASE_URL`
 - `DELTALLM_DATABASE_POOLER_URL` (optional, environment only: a URL template for a [transaction pooler such as PgBouncer](../deployment/database-pooler.md))
+- `DELTALLM_DATABASE_POOLER_REQUIRED` (optional, environment only: when `true`, the process does not start without `DELTALLM_DATABASE_POOLER_URL`. The Helm chart sets it when the pooler is enabled.)
 - `DELTALLM_DB_POOL_SIZE`
 - `DELTALLM_DB_POOL_TIMEOUT`
 - `DELTALLM_TELEMETRY_DB_POOL_SIZE`

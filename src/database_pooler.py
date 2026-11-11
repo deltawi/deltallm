@@ -72,22 +72,33 @@ def quoted_schema(schema: str) -> str:
     return '"' + schema.replace('"', '""') + '"'
 
 
-def pooled_database_url(direct_url: str, template: str, allocation: str) -> str:
-    """Return the pooler URL of one allocation with the schema of the direct URL.
+# Behind a pooler, the pod pools use only the public schema. Prisma sends a
+# session ``SET search_path`` when its URL has a ``schema``. A transaction
+# pooler applies it to one shared server connection only, and that server
+# connection keeps it for other clients. So the pooled URLs have no
+# ``schema``, and each alias sets the public schema with ``connect_query``.
+POOLER_SCHEMA = "public"
+POOLER_SEARCH_PATH = ("search_path", quoted_schema(POOLER_SCHEMA))
+POOLER_SCHEMA_CHECK_SQL = "SELECT current_setting('search_path') = 'public' AS matches"
 
-    Prisma qualifies its queries with the URL schema. With ``pgbouncer=true`` it
-    also sets ``search_path`` with a session ``SET`` on one server connection
-    only. Each alias sets the same ``search_path`` with ``connect_query``, so
-    every server connection uses the schema of ``DATABASE_URL``.
-    """
+
+def require_pooler_schema(direct_url: str) -> None:
+    """Refuse a pooler when ``DATABASE_URL`` uses a schema other than public."""
+    if database_schema(direct_url) != POOLER_SCHEMA:
+        raise ValueError(
+            "The database pooler supports only the public schema. Remove schema from "
+            "DATABASE_URL, or connect without DELTALLM_DATABASE_POOLER_URL."
+        )
+
+
+def pooled_database_url(direct_url: str, template: str, allocation: str) -> str:
+    """Return the pooler URL of one allocation, without a Prisma ``schema``."""
+    require_pooler_schema(direct_url)
     url = pooler_allocation_url(template, allocation)
     parsed = urlsplit(url)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    schema = database_schema(direct_url)
-    if "schema" in query and query["schema"] != schema:
-        raise ValueError("DELTALLM_DATABASE_POOLER_URL must use the schema of DATABASE_URL")
-    if "schema" in dict(parse_qsl(urlsplit(direct_url).query, keep_blank_values=True)):
-        query["schema"] = schema
+    if query.pop("schema", POOLER_SCHEMA) != POOLER_SCHEMA:
+        raise ValueError("DELTALLM_DATABASE_POOLER_URL must not set a schema other than public")
     return urlunsplit(
         (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
     )

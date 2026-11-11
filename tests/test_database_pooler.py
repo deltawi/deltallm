@@ -38,6 +38,21 @@ def test_no_pooler_url_means_no_pooler(value):
     assert validate_pooler_url(value) is None
 
 
+@pytest.mark.parametrize("value", ["", "  "])
+def test_a_required_pooler_refuses_an_empty_url(monkeypatch, value):
+    # The chart counts pooled pods against the pooler; an empty Secret value
+    # must not make them connect directly to PostgreSQL.
+    monkeypatch.setenv("DELTALLM_DATABASE_POOLER_REQUIRED", "true")
+    monkeypatch.setenv("DELTALLM_DATABASE_POOLER_URL", value)
+    with pytest.raises(ValueError, match="DELTALLM_DATABASE_POOLER_REQUIRED"):
+        Settings()
+    monkeypatch.delenv("DELTALLM_DATABASE_POOLER_URL")
+    with pytest.raises(ValueError, match="DELTALLM_DATABASE_POOLER_REQUIRED"):
+        Settings()
+    monkeypatch.setenv("DELTALLM_DATABASE_POOLER_URL", POOLER)
+    assert Settings().database_pooler_url == POOLER
+
+
 @pytest.mark.parametrize(
     ("url", "message"),
     [
@@ -85,19 +100,25 @@ def test_pooled_allocation_url_uses_its_alias_and_no_startup_options(allocation)
     assert query["application_name"] == [f"deltallm_{allocation}"]
 
 
-def test_pooled_url_uses_the_schema_of_the_direct_url():
-    pooled = pooled_database_url("postgresql://direct/db?schema=tenant", POOLER, "control")
-    assert _query(pooled)["schema"] == ["tenant"]
-    # Without a direct schema, Prisma and the aliases use public.
-    assert "schema" not in _query(pooled_database_url("postgresql://direct/db", POOLER, "control"))
-    assert (
-        pooled_database_url(
-            "postgresql://direct/db?schema=tenant", POOLER + "&schema=tenant", "control"
-        )
-        == pooled
-    )
-    with pytest.raises(ValueError, match="schema of DATABASE_URL"):
-        pooled_database_url("postgresql://direct/db", POOLER + "&schema=other", "control")
+@pytest.mark.parametrize(
+    ("direct", "template"),
+    [
+        ("postgresql://direct/db?schema=tenant", POOLER),
+        ("postgresql://direct/db", POOLER + "&schema=tenant"),
+    ],
+)
+def test_pooler_refuses_a_schema_other_than_public(direct, template):
+    # Prisma would set search_path on one shared server connection only.
+    with pytest.raises(ValueError, match="public"):
+        pooled_database_url(direct, template, "control")
+    with pytest.raises(ValueError, match="public"):
+        DatabasePolicy("control", 1, 0.2, 1.0, 0.2, 2.0).connection_url(direct, pooler_url=template)
+
+
+def test_pooled_url_never_asks_prisma_to_set_the_schema():
+    for direct in ("postgresql://direct/db", "postgresql://direct/db?schema=public"):
+        pooled = pooled_database_url(direct, POOLER + "&schema=public", "control")
+        assert "schema" not in _query(pooled)
 
 
 def test_direct_allocation_url_keeps_startup_deadlines():
@@ -157,8 +178,8 @@ async def test_pooled_accounting_pool_sends_no_session_settings_or_named_stateme
         async def fetchrow(self, *_args, **_kwargs):
             return {"statement_seconds": 0.25, "lock_seconds": 0.2}
 
-        async def fetchval(self, query, schema, **_kwargs):
-            calls["search_path"] = schema
+        async def fetchval(self, query, **_kwargs):
+            calls["schema_check"] = query
             return search_path_applied
 
         async def close(self):
@@ -181,12 +202,12 @@ async def test_pooled_accounting_pool_sends_no_session_settings_or_named_stateme
     )
     if not search_path_applied:
         # An alias without the search_path stops startup and closes the pool.
-        with pytest.raises(RuntimeError, match="search_path"):
+        with pytest.raises(RuntimeError, match="public schema"):
             await connecting
         assert closed and manager.client is None
         return
     await connecting
-    assert calls["search_path"] == "public"
+    assert "search_path" in calls["schema_check"]
     try:
         assert urlsplit(calls["dsn"]).path == "/deltallm_accounting"
         assert calls["server_settings"] == {"application_name": "deltallm_accounting_hot_path"}
@@ -262,7 +283,7 @@ def test_generator_prints_the_aliases_for_the_running_configuration(tmp_path, mo
     from src.db.runtime import pooler_config
 
     config = tmp_path / "config.yaml"
-    monkeypatch.setenv("DATABASE_URL", "postgresql://direct/deltallm?schema=tenant")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://direct/deltallm?schema=public")
     config.write_text(
         "general_settings:\n"
         "  db_statement_timeout_seconds: 1.5\n"
@@ -283,4 +304,12 @@ def test_generator_prints_the_aliases_for_the_running_configuration(tmp_path, mo
     assert "SET statement_timeout = 300;" in aliases["gw_accounting"]
     assert "SET jit = off" in aliases["gw_accounting"]
     for line in aliases.values():
-        assert 'connect_query=\'SET search_path = "tenant"; ' in line
+        assert 'connect_query=\'SET search_path = "public"; SET ' in line
+    # The pooler supports only the public schema.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://direct/deltallm?schema=tenant")
+    get_settings.cache_clear()
+    try:
+        assert pooler_config.main(["--host", "postgres", "--dbname", "deltallm"]) == 2
+    finally:
+        get_settings.cache_clear()
+    assert "public schema" in capsys.readouterr().err

@@ -45,14 +45,17 @@ def test_pooler_url_reaches_api_and_worker_pods_but_not_the_migration_job():
         env = _env(deployment)
         reference = env["DELTALLM_DATABASE_POOLER_URL"]["valueFrom"]["secretKeyRef"]
         assert reference == {"name": "deltallm-pooler", "key": "DELTALLM_DATABASE_POOLER_URL"}
+        assert env["DELTALLM_DATABASE_POOLER_REQUIRED"]["value"] == "true"
     for job in (doc for doc in docs if doc.get("kind") == "Job"):
         assert "DELTALLM_DATABASE_POOLER_URL" not in _env(job)
+        assert "DELTALLM_DATABASE_POOLER_REQUIRED" not in _env(job)
 
 
 def test_pooler_is_off_by_default():
     docs = _render()
     for deployment in (doc for doc in docs if doc.get("kind") == "Deployment"):
         assert "DELTALLM_DATABASE_POOLER_URL" not in _env(deployment)
+        assert "DELTALLM_DATABASE_POOLER_REQUIRED" not in _env(deployment)
 
 
 @pytest.mark.parametrize(
@@ -71,6 +74,7 @@ def test_pooler_is_off_by_default():
             "batchWorker.env[0].name=DELTALLM_DATABASE_POOLER_URL",
             "owned by runtime.databasePooler",
         ),
+        ("env[0].name=DELTALLM_DATABASE_POOLER_REQUIRED", "owned by runtime.databasePooler"),
     ],
 )
 def test_unsafe_pooler_profiles_fail_render(setting, message):
