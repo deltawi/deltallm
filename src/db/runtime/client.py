@@ -52,7 +52,11 @@ class PrismaClientManager:
                 raise RuntimeError("An allocated database requires an explicit database URL")
             self.allocation = DatabaseOwner(policy)
             self.client = AllocatedPrisma(
-                datasource={"url": policy.connection_url(database_settings.url)},
+                datasource={
+                    "url": policy.connection_url(
+                        database_settings.url, pooler_url=database_settings.pooler_url
+                    )
+                },
                 allocation=self.allocation,
             )
         elif database_settings is None:

@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import asyncpg
 
 from src.config import DatabaseConnectionSettings
+from src.database_pooler import pooler_allocation_url
 from src.db.runtime.telemetry_acceptance import DatabasePoolAcquisitionTimeout
 
 if TYPE_CHECKING:
@@ -22,6 +23,7 @@ _PRISMA_QUERY_PARAMETERS = frozenset(
         "application_name",
         "connection_limit",
         "options",
+        "pgbouncer",
         "pool_timeout",
         "schema",
         "socket_timeout",
@@ -46,6 +48,16 @@ async def _initialize_connection(connection: Connection) -> None:
         )
 
 
+async def _keep_pooled_session(connection: Connection) -> None:
+    """Return a connection to the pool without RESET ALL.
+
+    asyncpg still rolls back an open transaction first. Behind a transaction
+    pooler, its default reset query (RESET ALL, advisory unlock) would clear
+    the alias's connect_query deadlines on a server connection that other
+    clients share next.
+    """
+
+
 def accounting_postgres_dsn(url: str) -> str:
     """Remove Prisma-only URL options while retaining transport/TLS options."""
 
@@ -65,6 +77,23 @@ def _accounting_schema(url: str) -> str:
     if not schema or "\x00" in schema or len(schema) > 63:
         raise ValueError("accounting PostgreSQL schema must be a valid bounded identifier")
     return '"' + schema.replace('"', '""') + '"'
+
+
+def accounting_session_settings(
+    url: str, *, statement_seconds: float, lock_seconds: float
+) -> dict[str, str]:
+    """PostgreSQL session settings of the accounting hot-path pool."""
+    return {
+        "application_name": "deltallm_accounting_hot_path",
+        "search_path": _accounting_schema(url),
+        "statement_timeout": str(max(1, round(statement_seconds * 1000))),
+        "lock_timeout": str(max(1, round(lock_seconds * 1000))),
+        "idle_in_transaction_session_timeout": str(max(1, round(statement_seconds * 1000))),
+        # Hot-path statements are key-bounded and fit a sub-second budget.
+        # Stale table statistics can still push their estimated cost past
+        # jit_above_cost, and compiling the plan then consumes the budget.
+        "jit": "off",
+    }
 
 
 class AccountingPostgresClient:
@@ -125,25 +154,31 @@ class AccountingPostgresManager:
                 "accounting hot-path pool must leave at least one telemetry connection"
             )
         self._close_seconds = acquisition_seconds + statement_seconds + 1.0
-        server_settings = {
-            "application_name": "deltallm_accounting_hot_path",
-            "search_path": _accounting_schema(database_settings.url),
-            "statement_timeout": str(max(1, round(statement_seconds * 1000))),
-            "lock_timeout": str(max(1, round(lock_seconds * 1000))),
-            "idle_in_transaction_session_timeout": str(max(1, round(statement_seconds * 1000))),
-            # Hot-path statements are key-bounded and fit a sub-second budget.
-            # Stale table statistics can still push their estimated cost past
-            # jit_above_cost, and compiling the plan then consumes the budget.
-            "jit": "off",
-        }
+        session = accounting_session_settings(
+            database_settings.url, statement_seconds=statement_seconds, lock_seconds=lock_seconds
+        )
+        pooled = database_settings.pooler_url is not None
+        if pooled:
+            # A transaction pooler does not pass startup settings and cannot
+            # keep named prepared statements. Its "accounting" alias sets the
+            # session settings with connect_query; the check below still
+            # verifies the deadlines.
+            dsn = accounting_postgres_dsn(
+                pooler_allocation_url(database_settings.pooler_url, "accounting")
+            )
+            server_settings = {"application_name": session["application_name"]}
+        else:
+            dsn = accounting_postgres_dsn(database_settings.url)
+            server_settings = session
         pool = await asyncpg.create_pool(
-            dsn=accounting_postgres_dsn(database_settings.url),
+            dsn=dsn,
             min_size=1,
             max_size=pool_size,
             timeout=acquisition_seconds,
             command_timeout=statement_seconds,
             server_settings=server_settings,
             init=_initialize_connection,
+            **({"statement_cache_size": 0, "reset": _keep_pooled_session} if pooled else {}),
         )
         if pool is None:  # pragma: no cover - asyncpg's annotation permits None
             raise RuntimeError("accounting PostgreSQL pool was not created")

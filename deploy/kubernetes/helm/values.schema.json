@@ -674,6 +674,23 @@
             }
           }
         },
+        "databasePooler": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "existingSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "urlKey": { "type": "string", "minLength": 1 }
+              }
+            },
+            "serverConnections": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "maxClientConnections": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+          }
+        },
         "redis": {
           "type": "object",
           "additionalProperties": true,

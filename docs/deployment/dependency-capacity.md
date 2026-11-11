@@ -247,6 +247,14 @@ CPU and connections mean that the pod pool is too small for the work that it run
 More `caller_deadline` events and longer statement times mean that PostgreSQL is
 slow.
 
+### Use a transaction pooler
+
+Every pod pool above counts against PostgreSQL `max_connections` at peak processes.
+To make pod pools larger without more PostgreSQL connections, put PgBouncer in
+transaction mode between the pods and PostgreSQL. Each pool then connects to its own
+pooler alias, which sets the same deadlines. See
+[Database pooler (PgBouncer)](database-pooler.md).
+
 ## Redis ownership and configuration
 
 ```yaml

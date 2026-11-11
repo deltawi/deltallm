@@ -404,6 +404,7 @@ New installations do not need to change `spend_reporting_v2_enabled`. If you upg
 Environment overrides:
 
 - `DELTALLM_DATABASE_URL`
+- `DELTALLM_DATABASE_POOLER_URL` (optional, environment only: a URL template for a [transaction pooler such as PgBouncer](../deployment/database-pooler.md))
 - `DELTALLM_DB_POOL_SIZE`
 - `DELTALLM_DB_POOL_TIMEOUT`
 - `DELTALLM_TELEMETRY_DB_POOL_SIZE`

@@ -139,6 +139,15 @@
 {{- if $databaseEnv }}
 {{ $databaseEnv }}
 {{- end }}
+{{- with $root.Values.runtime.databasePooler }}
+{{- if .enabled }}
+- name: DELTALLM_DATABASE_POOLER_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .existingSecret.name }}
+      key: {{ .existingSecret.urlKey }}
+{{- end }}
+{{- end }}
 {{- if and (not $minimal) $redisEnv }}
 {{ $redisEnv }}
 {{- end }}

@@ -26,6 +26,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from src.auth.roles import TeamRole, validate_team_role
 from src.accounting_settings import AccountingProtocolSettings
 from src.database_settings import DatabaseAllocationSettings
+from src.database_pooler import validate_pooler_url
 from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
 from src.lifecycle_settings import LifecycleSettings
@@ -1401,6 +1402,9 @@ class Settings(
     openai_api_key: str | None = None
     master_key: str | None = None
     database_url: str | None = None
+    # Optional transaction pooler (PgBouncer) for the pod pools: a URL template
+    # with {allocation}. Startup-only; migrations keep DATABASE_URL.
+    database_pooler_url: str | None = None
     db_pool_size: int | None = Field(default=None, gt=0)
     db_pool_timeout: int | None = Field(default=None, ge=0)
     telemetry_db_pool_size: int | None = Field(default=None, gt=0, le=100)
@@ -1513,12 +1517,20 @@ class Settings(
     def validate_master_key(cls, value: str | None) -> str | None:
         return _validate_master_key_strength(value)
 
+    @field_validator("database_pooler_url")
+    @classmethod
+    def validate_database_pooler_url(cls, value: str | None) -> str | None:
+        return validate_pooler_url(value)
+
 
 @dataclass(frozen=True)
 class DatabaseConnectionSettings:
     url: str
     pool_size: int
     pool_timeout: int
+    # Pooler URL template (src/database_pooler.py). The pod pools connect
+    # through it when set; ``url`` stays the direct PostgreSQL URL.
+    pooler_url: str | None = None
 
 
 def resolve_salt_key(config: AppConfig, settings: Settings) -> str:
@@ -1576,6 +1588,7 @@ def resolve_database_settings(
         ),
         pool_size=pool_size,
         pool_timeout=pool_timeout,
+        pooler_url=settings.database_pooler_url,
     )
 
 
@@ -1620,6 +1633,7 @@ def resolve_telemetry_database_settings(
         ),
         pool_size=pool_size,
         pool_timeout=pool_timeout,
+        pooler_url=settings.database_pooler_url,
     )
 
 
