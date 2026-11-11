@@ -141,6 +141,9 @@ async def test_provider_ceiling_violation_keeps_full_provisional_debit(native):
     terminal = service.finalize_operation.call_args.args[1]
     assert terminal.outcome is AccountingOutcome.UNCERTAIN
     assert terminal.uncertainty_reason == "selector_ceiling_exceeded"
+    audit = terminal.audit_envelope["payload"]["event"]
+    assert audit["error_type"] == "selector_ceiling_exceeded"
+    assert audit["metadata"]["uncertainty_reason"] == "selector_ceiling_exceeded"
     await store.close()
     service.finalize_operation.assert_awaited_once()
 

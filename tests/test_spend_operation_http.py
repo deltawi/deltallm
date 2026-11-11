@@ -423,3 +423,48 @@ async def test_provider_pool_refusal_releases_native_allowance(client, test_app)
     assert audit["error_type"] == "AccountingProviderNotDispatched"
     assert audit["request_id"] == str(terminal.operation_id)
     assert audit["correlation_id"] == response.headers["x-request-id"] == "test-correlation"
+
+
+async def test_provider_failure_after_send_shows_its_reason_in_audit(client, test_app):
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+    from src.billing.accounting.accounting_service import AccountingProtocolService
+    import httpx
+    from tests.test_accounting_request_path import _AccountingRepository
+
+    repository = _AccountingRepository()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    test_app.state.accounting_protocol_enabled = True
+    test_app.state.accounting_protocol_service = accounting
+    test_app.state.spend_tracking_service = ReadySpend(
+        db_client=None,
+        writer=SpendTrackingService(None),
+        config=SpendIngestionConfig(enabled=True),
+        accounting=accounting,
+    )
+
+    async def post(url, **kwargs):
+        return httpx.Response(
+            503,
+            json={"error": {"message": "model server down"}},
+            request=httpx.Request("POST", url),
+        )
+
+    test_app.state.http_client.post = post
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers=headers(test_app),
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+        )
+    finally:
+        await accounting.close()
+
+    assert response.status_code == 503, response.text
+    (terminal,) = repository.finalizations
+    assert terminal.outcome is AccountingOutcome.UNCERTAIN
+    assert terminal.uncertainty_reason == "service_unavailable"
+    audit = terminal.audit_envelope["payload"]["event"]
+    assert audit["status"] == "error"
+    assert audit["error_type"] == "service_unavailable"
+    assert audit["metadata"]["uncertainty_reason"] == "service_unavailable"

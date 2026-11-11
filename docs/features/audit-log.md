@@ -131,6 +131,39 @@ Common event fields include:
 
 When you fetch one event directly, DeltaLLM also returns any stored `payloads`.
 
+### Failed provider calls with accounting v2
+
+With accounting v2, each accounting operation writes one `ACCOUNTING_PROVIDER_FINALIZATION`
+event when it closes. One operation can include more than one provider call, for example a
+retry, a failover to another deployment, or the model calls of one MCP tool request. They
+share one event. When the operation fails, the event has `status` `error`, and `error_type`
+tells why:
+
+- `AccountingProviderNotDispatched`: the gateway sent none of the calls, so it released
+  the reserved amount.
+- `AccountingOutcomeUnknown`: the gateway sent a call, and it does not know the reason,
+  for example for a batch item whose result is unknown. It keeps the reserved amount as a
+  provisional charge.
+- Any other value: the gateway sent a call, and the call failed or its charge could not be
+  proven. The value is the reason, for example `service_unavailable` for a provider 503,
+  and `metadata.uncertainty_reason` has the same value. The gateway cannot prove whether
+  the provider charged for the call, so it keeps the reserved amount as a provisional
+  charge.
+
+If a pod stops after it sent a call and before it records the result, the operation has no
+`ACCOUNTING_PROVIDER_FINALIZATION` event:
+
+- For a stored operation, the gateway closes it when its reservation expires, with an
+  `ACCOUNTING_PROVIDER_OUTCOME_UNKNOWN` event whose `error_type` is
+  `AccountingReservationExpired`. It keeps the reserved amount as a provisional charge.
+- With `accounting_execution_mode: local_journal`, the operation can exist only in the
+  stopped pod. Then the gateway closes its budget grant, keeps the remainder in the
+  grant's `unknown_provisional_exact`, and writes no audit event. See
+  [Provisional reconciliation](../deployment/accounting-v2.md#provisional-reconciliation).
+
+So the two actions show the failed calls that the gateway stored, but not these grant
+remainders.
+
 ## Payload Storage and Redaction
 
 Audit payloads are handled differently depending on the event type:

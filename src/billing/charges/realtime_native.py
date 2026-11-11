@@ -265,6 +265,7 @@ def _uncertain(
             operation,
             event_id=event_id,
             status="error",
+            error_type=reason,
             metadata={"attempt_count": 1, "uncertainty_reason": reason, "realtime": True},
         ),
     )
