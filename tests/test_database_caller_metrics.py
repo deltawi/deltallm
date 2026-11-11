@@ -237,6 +237,77 @@ async def test_abandoned_transaction_start_is_counted_until_rollback():
     assert allocation.gate.active == 0
 
 
+def _transaction_native(allocation, name):
+    native_client = AllocatedPrisma(allocation=allocation)
+    native_client._tx_id = name
+    native = AsyncMock()
+    native.start = AsyncMock(return_value=native_client)
+    return native
+
+
+async def test_transaction_results_are_counted_once_per_caller(monkeypatch):
+    allocation = owner("caller_tx_results")
+    execute = AsyncMock(return_value={})
+    monkeypatch.setattr(Prisma, "_execute", execute)
+
+    with database_caller("spend"):
+        async with AllocatedTransaction(
+            allocation, _transaction_native(allocation, "committed")
+        ) as tx:
+            await tx._execute(method="query_raw", arguments={})
+
+        execute.side_effect = RuntimeError("constraint")
+        with pytest.raises(RuntimeError):
+            async with AllocatedTransaction(
+                allocation, _transaction_native(allocation, "failed")
+            ) as tx:
+                await tx._execute(method="query_raw", arguments={})
+
+        execute.side_effect = None
+        with pytest.raises(LookupError):
+            async with AllocatedTransaction(
+                allocation, _transaction_native(allocation, "rolled-back")
+            ) as tx:
+                await tx._execute(method="query_raw", arguments={})
+                raise LookupError("application rollback")
+
+    assert caller_event("caller_tx_results", "spend", "acquired") == 3
+    assert caller_event("caller_tx_results", "spend", "completed") == 1
+    assert caller_event("caller_tx_results", "spend", "error") == 1
+    assert caller_event("caller_tx_results", "spend", "rolled_back") == 1
+    assert allocation.gate.active == 0
+    await allocation.close()
+
+
+async def test_caller_that_stops_waiting_for_commit_leaves_an_abandoned_slot(monkeypatch):
+    allocation = owner("caller_tx_commit_wait")
+    monkeypatch.setattr(Prisma, "_execute", AsyncMock(return_value={}))
+    native = _transaction_native(allocation, "slow-commit")
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def commit():
+        entered.set()
+        await finish.wait()
+
+    native.commit = AsyncMock(side_effect=commit)
+    with database_caller("audit"):
+        with pytest.raises(DatabaseUnavailableError):
+            async with AllocatedTransaction(allocation, native, transaction_seconds=0.1) as tx:
+                await tx._execute(method="query_raw", arguments={})
+    # The caller's deadline expired during COMMIT; the native commit still runs.
+    await entered.wait()
+    assert allocation.gate.active == 1
+    assert sample("deltallm_database_allocation_abandoned", allocation="caller_tx_commit_wait") == 1
+    assert caller_event("caller_tx_commit_wait", "audit", "caller_deadline") == 1
+    finish.set()
+    async with asyncio.timeout(1):
+        while allocation.gate.active:
+            await asyncio.sleep(0)
+    assert sample("deltallm_database_allocation_abandoned", allocation="caller_tx_commit_wait") == 0
+    assert caller_event("caller_tx_commit_wait", "audit", "completed") == 1
+    await allocation.close()
+
+
 async def test_marks_nest_and_follow_started_tasks():
     seen: list[str] = []
 

@@ -448,6 +448,7 @@ class AllocatedTransaction:
         self._owns_slot = False
         self._slot: DatabaseSlot | None = None
         self._abandoned = False
+        self._result_recorded = False
         self.failed = False
         self._deadline = None
         self._expiration_task = None
@@ -483,6 +484,9 @@ class AllocatedTransaction:
         except (asyncio.CancelledError, TimeoutError) as exc:
             self._finishing = True
             self._mark_abandoned()
+            self._caller_event(
+                "caller_deadline" if isinstance(exc, TimeoutError) else "caller_cancelled"
+            )
             self.owner.spawn(self._abandon_start(task))
             if isinstance(exc, TimeoutError):
                 raise DatabaseUnavailableError() from None
@@ -497,6 +501,7 @@ class AllocatedTransaction:
             return client
         except BaseException:
             self._mark_abandoned()
+            self._record_result("error")
             self.owner.spawn(self._expire_and_release())
             raise
 
@@ -546,9 +551,22 @@ class AllocatedTransaction:
             self._abandoned = True
             self.owner.abandoned_slots.inc()
 
+    def _caller_event(self, outcome: str) -> None:
+        if self._slot is not None:
+            self._slot.series.event(outcome)
+
+    def _record_result(self, outcome: str) -> None:
+        # One native result per transaction: completed (committed),
+        # rolled_back (rollback without a failed statement) or error.
+        if not self._result_recorded:
+            self._result_recorded = True
+            self._caller_event(outcome)
+
     async def _release(self):
         if self._owns_slot:
             self._owns_slot = False
+            # A slot that expired without a commit or rollback result failed.
+            self._record_result("error")
             if self._abandoned:
                 self.owner.abandoned_slots.dec()
             if (
@@ -577,9 +595,13 @@ class AllocatedTransaction:
             )
         except BaseException:
             self._mark_abandoned()
+            self._record_result("error")
             self.owner.spawn(self._expire_and_release())
             raise
         else:
+            self._record_result(
+                "completed" if commit else ("error" if self.failed else "rolled_back")
+            )
             await self._release()
         finally:
             _duration.labels(self.owner.policy.allocation, "finish").observe(monotonic() - started)
@@ -588,11 +610,24 @@ class AllocatedTransaction:
 
     async def commit(self):
         self._begin_finish()
-        await asyncio.shield(self.owner.spawn(self._finish(commit=True)))
+        await self._wait_finish(self.owner.spawn(self._finish(commit=True)))
 
     async def rollback(self):
         self._begin_finish()
-        await asyncio.shield(self.owner.spawn(self._finish(commit=False)))
+        await self._wait_finish(self.owner.spawn(self._finish(commit=False)))
+
+    async def _wait_finish(self, task: asyncio.Task) -> None:
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # The caller stopped waiting (transaction deadline or
+            # cancellation). The native commit or rollback keeps the slot
+            # until it ends.
+            if not task.done():
+                self._mark_abandoned()
+                expired = self._deadline is not None and self._deadline.expired()
+                self._caller_event("caller_deadline" if expired else "caller_cancelled")
+            raise
 
     def _begin_finish(self):
         if not self._ready or not self._owns_slot or self._finishing or self.closed:

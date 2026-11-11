@@ -179,9 +179,9 @@ pool, use these metrics. Each one has the `allocation` label (`control`,
 | `deltallm_database_caller_slots{caller}` | Slots that each kind of work holds now |
 | `deltallm_database_caller_hold_seconds{caller}` | How long each kind of work holds a slot. A transaction holds one slot from `BEGIN` to `COMMIT`. |
 | `deltallm_database_caller_wait_seconds{caller}` | How long each kind of work waited for a slot |
-| `deltallm_database_caller_events_total{caller,outcome}` | `acquired`, `completed`, `error`, `full`, `queue_timeout`, `caller_deadline` and `caller_cancelled`, by kind of work |
+| `deltallm_database_caller_events_total{caller,outcome}` | `acquired`, `completed`, `rolled_back`, `error`, `full`, `queue_timeout`, `caller_deadline` and `caller_cancelled`, by kind of work. A transaction records one result: `completed` (committed), `rolled_back` (no statement failed) or `error`. |
 | `deltallm_database_allocation_waiters` | Callers that wait for a slot now |
-| `deltallm_database_allocation_abandoned` | Slots that are still held for a query or transaction whose caller stopped waiting. The slot stays held until PostgreSQL finishes the work or its timeout expires. |
+| `deltallm_database_allocation_abandoned` | Slots that are still held for a query or transaction whose caller stopped waiting, also during `COMMIT`. The slot stays held until PostgreSQL finishes the work or its timeout expires. |
 
 The `caller` label has a fixed set of values:
 
