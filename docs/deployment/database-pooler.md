@@ -42,13 +42,13 @@ The gateway does not use session-level advisory locks, `LISTEN`/`NOTIFY` or sess
 
 ## Set up PgBouncer
 
-1. Use PgBouncer 1.21 or later in `pool_mode = transaction`. Do not set
+1. Run PgBouncer in `pool_mode = transaction` (CI tests PgBouncer 1.22). Do not set
    `server_reset_query_always = 1`: `DISCARD ALL` clears the alias settings.
 2. Generate the aliases from the gateway's own configuration. Run this where the
    gateway's configuration and environment are available, for example in an API pod:
 
    ```bash
-   python -m src.db.pooler_config --host postgres.internal --port 5432 --dbname deltallm
+   python -m src.db.runtime.pooler_config --host postgres.internal --port 5432 --dbname deltallm
    ```
 
    The output is the `[databases]` section, for example:

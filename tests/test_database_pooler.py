@@ -209,7 +209,7 @@ def test_pgbouncer_lines_refuse_unsafe_names(change):
 
 def test_generator_prints_the_aliases_for_the_running_configuration(tmp_path, monkeypatch, capsys):
     from src.config import get_settings
-    from src.db import pooler_config
+    from src.db.runtime import pooler_config
 
     config = tmp_path / "config.yaml"
     config.write_text(

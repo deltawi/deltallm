@@ -65,6 +65,8 @@
 {{- $_ := set $pools "accountingHttp" 0 -}}
 {{- if $minimal -}}
 {{- $db = int $g.accounting_hot_path_db_pool_size -}}
+{{- /* Accounting-only roles have no external-auth pool. */ -}}
+{{- $direct = 0 -}}
 {{- $pools = dict "postgresql" $db "redisCritical" 0 "redisCache" 0 "upstreamHttp" 0 "controlHttp" 0 "auxiliaryHttp" 0 "accountingHttp" 0 -}}
 {{- else if $native -}}
 {{- /* Count the pooled client and the fresh connections for rollout retries. */ -}}

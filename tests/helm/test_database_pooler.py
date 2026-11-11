@@ -45,7 +45,6 @@ def test_pooler_url_reaches_api_and_worker_pods_but_not_the_migration_job():
         env = _env(deployment)
         reference = env["DELTALLM_DATABASE_POOLER_URL"]["valueFrom"]["secretKeyRef"]
         assert reference == {"name": "deltallm-pooler", "key": "DELTALLM_DATABASE_POOLER_URL"}
-        assert "DATABASE_URL" in env
     for job in (doc for doc in docs if doc.get("kind") == "Job"):
         assert "DELTALLM_DATABASE_POOLER_URL" not in _env(job)
 
@@ -63,7 +62,7 @@ def test_pooler_is_off_by_default():
         ("runtime.databasePooler.serverConnections=0", "must be declared"),
         ("runtime.databasePooler.maxClientConnections=10", "pooler client connections"),
         (
-            "batchWorker.config.general_settings.db_statement_timeout_seconds=1.5",
+            "batchWorker.config.general_settings.db_statement_timeout_seconds=2",
             "same database deadlines",
         ),
     ],

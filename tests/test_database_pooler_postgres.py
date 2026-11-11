@@ -1,6 +1,6 @@
 """Pod pools work through a real PgBouncer in transaction mode.
 
-CI starts PgBouncer with the aliases from ``python -m src.db.pooler_config``
+CI starts PgBouncer with the aliases from ``python -m src.db.runtime.pooler_config``
 and sets ``DELTALLM_TEST_PGBOUNCER_URL`` to the pooler URL template. It also
 declares one alias without ``connect_query`` (``deltallm_test_raw``) to prove
 that startup refuses a pooler that does not apply the deadlines.

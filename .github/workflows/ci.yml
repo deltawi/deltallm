@@ -262,7 +262,7 @@ jobs:
         run: |
           mkdir -p /tmp/pgbouncer-ci
           printf 'general_settings: {}\n' > /tmp/pgbouncer-ci/config.yaml
-          uv run python -m src.db.pooler_config --host 127.0.0.1 --port 5432 \
+          uv run python -m src.db.runtime.pooler_config --host 127.0.0.1 --port 5432 \
             --dbname deltallm_test > /tmp/pgbouncer-ci/databases.ini
           echo 'deltallm_test_raw = host=127.0.0.1 port=5432 dbname=deltallm_test' \
             >> /tmp/pgbouncer-ci/databases.ini
