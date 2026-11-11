@@ -6,7 +6,7 @@ from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from src.database_settings import DatabaseAllocationSettings
-from src.database_pooler import pooler_allocation_url
+from src.database_pooler import pooled_database_url
 
 DatabaseAllocation = Literal[
     "control", "foreground", "telemetry", "telemetry_worker", "telemetry_settlement"
@@ -69,9 +69,9 @@ class DatabasePolicy:
     def connection_url(self, url: str, *, pooler_url: str | None = None) -> str:
         if pooler_url is not None:
             # A transaction pooler does not pass startup options. The pooler
-            # alias sets the same deadlines with connect_query, and startup
-            # checks that they apply.
-            url = pooler_allocation_url(pooler_url, self.allocation)
+            # alias sets the same deadlines and search_path with connect_query,
+            # and startup checks that they apply.
+            url = pooled_database_url(url, pooler_url, self.allocation)
         parsed = urlsplit(url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         query.update(

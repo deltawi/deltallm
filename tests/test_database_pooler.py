@@ -16,6 +16,7 @@ from src.config import (
 from src.database_pooler import (
     POOLER_ALLOCATIONS,
     pgbouncer_database_lines,
+    pooled_database_url,
     pooler_allocation_url,
     validate_pooler_url,
 )
@@ -84,6 +85,21 @@ def test_pooled_allocation_url_uses_its_alias_and_no_startup_options(allocation)
     assert query["application_name"] == [f"deltallm_{allocation}"]
 
 
+def test_pooled_url_uses_the_schema_of_the_direct_url():
+    pooled = pooled_database_url("postgresql://direct/db?schema=tenant", POOLER, "control")
+    assert _query(pooled)["schema"] == ["tenant"]
+    # Without a direct schema, Prisma and the aliases use public.
+    assert "schema" not in _query(pooled_database_url("postgresql://direct/db", POOLER, "control"))
+    assert (
+        pooled_database_url(
+            "postgresql://direct/db?schema=tenant", POOLER + "&schema=tenant", "control"
+        )
+        == pooled
+    )
+    with pytest.raises(ValueError, match="schema of DATABASE_URL"):
+        pooled_database_url("postgresql://direct/db", POOLER + "&schema=other", "control")
+
+
 def test_direct_allocation_url_keeps_startup_deadlines():
     policy = DatabasePolicy("foreground", 8, 0.2, 1.0, 0.2, 2.0)
     query = _query(policy.connection_url("postgresql://direct/deltallm"))
@@ -118,8 +134,12 @@ def test_accounting_dsn_drops_the_prisma_pooler_flag():
     assert _query(dsn) == {"sslmode": ["require"]}
 
 
-async def test_pooled_accounting_pool_sends_no_session_settings_or_named_statements(monkeypatch):
+@pytest.mark.parametrize("search_path_applied", [True, False])
+async def test_pooled_accounting_pool_sends_no_session_settings_or_named_statements(
+    monkeypatch, search_path_applied
+):
     calls = {}
+    closed = []
 
     class Pool:
         def acquire(self, timeout):
@@ -137,8 +157,12 @@ async def test_pooled_accounting_pool_sends_no_session_settings_or_named_stateme
         async def fetchrow(self, *_args, **_kwargs):
             return {"statement_seconds": 0.25, "lock_seconds": 0.2}
 
+        async def fetchval(self, query, schema, **_kwargs):
+            calls["search_path"] = schema
+            return search_path_applied
+
         async def close(self):
-            return None
+            closed.append(True)
 
     async def create_pool(**kwargs):
         calls.update(kwargs)
@@ -148,13 +172,21 @@ async def test_pooled_accounting_pool_sends_no_session_settings_or_named_stateme
     manager = AccountingPostgresManager()
     settings = Settings(database_url="postgresql://direct/deltallm", database_pooler_url=POOLER)
     database = resolve_database_settings(AppConfig(), settings)
-    await manager.connect(
+    connecting = manager.connect(
         database,
         pool_size=2,
         acquisition_seconds=0.2,
         statement_seconds=0.25,
         lock_seconds=0.2,
     )
+    if not search_path_applied:
+        # An alias without the search_path stops startup and closes the pool.
+        with pytest.raises(RuntimeError, match="search_path"):
+            await connecting
+        assert closed and manager.client is None
+        return
+    await connecting
+    assert calls["search_path"] == "public"
     try:
         assert urlsplit(calls["dsn"]).path == "/deltallm_accounting"
         assert calls["server_settings"] == {"application_name": "deltallm_accounting_hot_path"}
@@ -207,11 +239,30 @@ def test_pgbouncer_lines_refuse_unsafe_names(change):
         pgbouncer_database_lines(**arguments)
 
 
+def test_capacity_contract_refuses_a_pooler_mode_that_helm_did_not_count():
+    from types import SimpleNamespace
+
+    from src.bootstrap.capacity_contract import DeploymentCapacityContract
+
+    def contract(pooler_clients):
+        report = SimpleNamespace(postgresql_pooler_client_connections=pooler_clients)
+        return DeploymentCapacityContract(settings=None, report=report, policy=None)
+
+    direct, pooled = Settings(database_pooler_url=None), Settings(database_pooler_url=POOLER)
+    contract(0)._validate_pooler(direct)
+    contract(40)._validate_pooler(pooled)
+    # An empty or missing pooler URL connects directly: Helm did not count that.
+    for report_clients, settings in ((40, direct), (0, pooled)):
+        with pytest.raises(RuntimeError, match="pooler mode"):
+            contract(report_clients)._validate_pooler(settings)
+
+
 def test_generator_prints_the_aliases_for_the_running_configuration(tmp_path, monkeypatch, capsys):
     from src.config import get_settings
     from src.db.runtime import pooler_config
 
     config = tmp_path / "config.yaml"
+    monkeypatch.setenv("DATABASE_URL", "postgresql://direct/deltallm?schema=tenant")
     config.write_text(
         "general_settings:\n"
         "  db_statement_timeout_seconds: 1.5\n"
@@ -231,3 +282,5 @@ def test_generator_prints_the_aliases_for_the_running_configuration(tmp_path, mo
     assert "SET statement_timeout = 5000;" in aliases["gw_control"]
     assert "SET statement_timeout = 300;" in aliases["gw_accounting"]
     assert "SET jit = off" in aliases["gw_accounting"]
+    for line in aliases.values():
+        assert 'connect_query=\'SET search_path = "tenant"; ' in line

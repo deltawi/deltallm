@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from src.config import DatabaseConnectionSettings
+from src.database_pooler import database_schema
 from src.db.runtime.allocation_config import DatabasePolicy
 
 if TYPE_CHECKING:
@@ -80,6 +81,14 @@ class PrismaClientManager:
                 )
             ):
                 raise RuntimeError("Database server did not apply the required native deadlines")
+            if database_settings is not None and database_settings.pooler_url is not None:
+                # Behind a pooler, the alias sets search_path with connect_query.
+                rows = await self.client.query_raw(
+                    "SELECT current_setting('search_path') = quote_ident($1) AS matches",
+                    database_schema(database_settings.url),
+                )
+                if not rows or rows[0]["matches"] is not True:
+                    raise RuntimeError("Database pooler did not apply the required search_path")
 
     async def disconnect(self) -> None:
         if self.allocation is not None:

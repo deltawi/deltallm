@@ -52,6 +52,7 @@ class DeploymentCapacityContract:
             raise RuntimeError("Deployment capacity settings require a restart")
         if CapacityRuntimePolicy.from_general(config.general_settings) != self.policy:
             raise RuntimeError("Deployment capacity policy requires a restart")
+        self._validate_pooler(settings)
         proxies = environment_proxy_pool_count()
         if proxies != self.report.proxy_pools_per_client:
             raise RuntimeError("Proxy transport count differs from deployment capacity allocation")
@@ -90,6 +91,7 @@ class DeploymentCapacityContract:
             not in {"accountingRequest", "accountingWorker"}
         ):
             raise RuntimeError("Minimal allocation requires a native accounting role")
+        self._validate_pooler(settings)
         self._validate_pools(
             PoolAllocation(
                 postgresql=database,
@@ -105,6 +107,13 @@ class DeploymentCapacityContract:
         if role.file_descriptors.engine_processes != 0:
             raise RuntimeError("Native accounting role must not allocate a Prisma engine")
         self._validate_descriptors()
+
+    def _validate_pooler(self, settings: Settings) -> None:
+        # Helm counts pooled pod pools against the pooler, not PostgreSQL. A
+        # process that connects directly would exceed the PostgreSQL budget.
+        pooled = self.report.postgresql_pooler_client_connections > 0
+        if pooled != (settings.database_pooler_url is not None):
+            raise RuntimeError("Database pooler mode differs from deployment capacity allocation")
 
     def _validate_pools(self, actual: PoolAllocation) -> None:
         role = self.report.roles[self.settings.deployment_capacity_role]

@@ -16,7 +16,7 @@ Migrations and the external-auth pool keep the direct ``DATABASE_URL``.
 from __future__ import annotations
 
 from typing import Literal, get_args
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 PoolerAllocation = Literal[
     "control",
@@ -57,6 +57,40 @@ def pooler_allocation_url(template: str, allocation: str) -> str:
     if allocation not in POOLER_ALLOCATIONS:
         raise ValueError(f"Unknown pooler allocation: {allocation}")
     return template.replace(POOLER_PLACEHOLDER, allocation)
+
+
+def database_schema(url: str) -> str:
+    """Return the PostgreSQL schema of a Prisma URL (``schema``, default ``public``)."""
+    schema = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True)).get("schema", "public")
+    if not schema or "\x00" in schema or len(schema) > 63:
+        raise ValueError("PostgreSQL schema must be a valid bounded identifier")
+    return schema
+
+
+def quoted_schema(schema: str) -> str:
+    """Return the schema as a quoted identifier for ``search_path``."""
+    return '"' + schema.replace('"', '""') + '"'
+
+
+def pooled_database_url(direct_url: str, template: str, allocation: str) -> str:
+    """Return the pooler URL of one allocation with the schema of the direct URL.
+
+    Prisma qualifies its queries with the URL schema. With ``pgbouncer=true`` it
+    also sets ``search_path`` with a session ``SET`` on one server connection
+    only. Each alias sets the same ``search_path`` with ``connect_query``, so
+    every server connection uses the schema of ``DATABASE_URL``.
+    """
+    url = pooler_allocation_url(template, allocation)
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    schema = database_schema(direct_url)
+    if "schema" in query and query["schema"] != schema:
+        raise ValueError("DELTALLM_DATABASE_POOLER_URL must use the schema of DATABASE_URL")
+    if "schema" in dict(parse_qsl(urlsplit(direct_url).query, keep_blank_values=True)):
+        query["schema"] = schema
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
 
 
 def pgbouncer_database_lines(

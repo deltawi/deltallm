@@ -65,6 +65,12 @@ def test_pooler_is_off_by_default():
             "batchWorker.config.general_settings.db_statement_timeout_seconds=2",
             "same database deadlines",
         ),
+        # An empty override would make pods connect directly outside the budget.
+        ("env[0].name=DELTALLM_DATABASE_POOLER_URL", "owned by runtime.databasePooler"),
+        (
+            "batchWorker.env[0].name=DELTALLM_DATABASE_POOLER_URL",
+            "owned by runtime.databasePooler",
+        ),
     ],
 )
 def test_unsafe_pooler_profiles_fail_render(setting, message):

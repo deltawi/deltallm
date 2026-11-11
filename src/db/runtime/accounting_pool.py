@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import asyncpg
 
 from src.config import DatabaseConnectionSettings
-from src.database_pooler import pooler_allocation_url
+from src.database_pooler import database_schema, pooled_database_url, quoted_schema
 from src.db.runtime.telemetry_acceptance import DatabasePoolAcquisitionTimeout
 
 if TYPE_CHECKING:
@@ -73,10 +73,12 @@ def accounting_postgres_dsn(url: str) -> str:
 
 
 def _accounting_schema(url: str) -> str:
-    schema = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True)).get("schema", "public")
-    if not schema or "\x00" in schema or len(schema) > 63:
-        raise ValueError("accounting PostgreSQL schema must be a valid bounded identifier")
-    return '"' + schema.replace('"', '""') + '"'
+    try:
+        return quoted_schema(database_schema(url))
+    except ValueError:
+        raise ValueError(
+            "accounting PostgreSQL schema must be a valid bounded identifier"
+        ) from None
 
 
 def accounting_session_settings(
@@ -164,7 +166,9 @@ class AccountingPostgresManager:
             # session settings with connect_query; the check below still
             # verifies the deadlines.
             dsn = accounting_postgres_dsn(
-                pooler_allocation_url(database_settings.pooler_url, "accounting")
+                pooled_database_url(
+                    database_settings.url, database_settings.pooler_url, "accounting"
+                )
             )
             server_settings = {"application_name": session["application_name"]}
         else:
@@ -192,6 +196,13 @@ class AccountingPostgresManager:
                     """,
                     timeout=statement_seconds,
                 )
+                # Behind a pooler, the alias sets search_path with connect_query.
+                if pooled and not await connection.fetchval(
+                    "SELECT current_setting('search_path') = quote_ident($1)",
+                    database_schema(database_settings.url),
+                    timeout=statement_seconds,
+                ):
+                    raise RuntimeError("accounting PostgreSQL pool did not apply its search_path")
             if row is None or any(
                 abs(float(row[name]) - expected) > 0.001
                 for name, expected in (

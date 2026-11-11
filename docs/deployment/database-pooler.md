@@ -21,11 +21,11 @@ startup options. A transaction pooler does not send startup options to PostgreSQ
 
 - Each pool connects to its own pooler database (an alias): `control`, `foreground`,
   `telemetry`, `telemetry_worker`, `telemetry_settlement` and `accounting`.
-- Each alias sets the deadlines of its pool with `connect_query` when PgBouncer opens a
-  server connection.
-- At startup, each pool reads the deadlines from the server. If they are not correct,
-  the process does not start. A pooler with a stale configuration cannot make the
-  gateway run without deadlines.
+- Each alias sets the schema (`search_path`) and the deadlines of its pool with
+  `connect_query` when PgBouncer opens a server connection.
+- At startup, each pool reads the deadlines and the schema from the server. If they are
+  not correct, the process does not start. A pooler with a stale configuration cannot
+  make the gateway run without deadlines.
 - Prisma pools add `pgbouncer=true`, and the accounting pool turns off its prepared
   statement cache. Neither keeps named prepared statements between transactions.
 - The accounting pool does not send `RESET ALL` when it returns a connection. In
@@ -37,8 +37,11 @@ These connections do not use the pooler:
   `DATABASE_URL`.
 - The external-auth pool (5 connections per API process). It keeps `DATABASE_URL`.
 
-The gateway does not use session-level advisory locks, `LISTEN`/`NOTIFY` or session
-`SET` commands, so transaction pooling is safe for all pools.
+The gateway does not use session-level advisory locks or `LISTEN`/`NOTIFY`. Prisma sends
+two session commands when it connects: `SET NAMES 'UTF8'`, which PgBouncer keeps for
+each client, and `SET search_path` when the URL has a `schema`. This `SET search_path`
+applies to one server connection only, so each alias sets the same schema on all of its
+server connections. Thus transaction pooling is safe for all pools.
 
 ## Set up PgBouncer
 
@@ -56,8 +59,8 @@ The gateway does not use session-level advisory locks, `LISTEN`/`NOTIFY` or sess
 
    ```ini
    [databases]
-   deltallm_control = host=postgres.internal port=5432 dbname=deltallm connect_query='SET statement_timeout = 5000; SET lock_timeout = 1000; SET idle_in_transaction_session_timeout = 10000'
-   deltallm_foreground = host=postgres.internal port=5432 dbname=deltallm connect_query='SET statement_timeout = 1000; SET lock_timeout = 200; SET idle_in_transaction_session_timeout = 2000'
+   deltallm_control = host=postgres.internal port=5432 dbname=deltallm connect_query='SET search_path = "public"; SET statement_timeout = 5000; SET lock_timeout = 1000; SET idle_in_transaction_session_timeout = 10000'
+   deltallm_foreground = host=postgres.internal port=5432 dbname=deltallm connect_query='SET search_path = "public"; SET statement_timeout = 1000; SET lock_timeout = 200; SET idle_in_transaction_session_timeout = 2000'
    ...
    deltallm_accounting = host=postgres.internal port=5432 dbname=deltallm connect_query='SET search_path = "public"; SET statement_timeout = 250; SET lock_timeout = 200; SET idle_in_transaction_session_timeout = 250; SET jit = off'
    ```
@@ -68,9 +71,9 @@ The gateway does not use session-level advisory locks, `LISTEN`/`NOTIFY` or sess
    line) and `max_db_connections`. The sum over all aliases and all PgBouncer replicas
    is the number of PostgreSQL connections that the gateway can use.
 4. Generate the aliases again after you change a database deadline setting
-   (`db_*_timeout_seconds` or `accounting_statement_timeout_ms`). All API, batch and
-   accounting pods must use the same deadline settings, because they share the
-   aliases.
+   (`db_*_timeout_seconds` or `accounting_statement_timeout_ms`) or the `schema` of
+   `DATABASE_URL`. All API, batch and accounting pods must use the same deadline
+   settings, because they share the aliases.
 
 ## Configure the gateway
 
@@ -84,6 +87,8 @@ DELTALLM_DATABASE_POOLER_URL='postgresql://deltallm:<password>@pgbouncer:6432/de
 - The gateway replaces `{allocation}` with the pool name.
 - Do not put `options` in this URL. The gateway refuses it at startup, because
   PgBouncer does not pass it to PostgreSQL.
+- The pools use the `schema` of `DATABASE_URL`. If this URL sets a different `schema`,
+  the gateway does not start.
 - Keep `DATABASE_URL` set to the direct PostgreSQL URL for migrations.
 - The setting is read only at startup. Restart the pods after you change it.
 
@@ -111,8 +116,12 @@ With the pooler enabled, the chart changes the PostgreSQL budget:
   shows the peak.
 - PostgreSQL counts `serverConnections` once, plus the direct pools (migrations, the
   external-auth pool, reserved and other connections).
-- The render fails if the peak pod pools are more than `maxClientConnections`, or if
-  roles have different database deadline settings.
+- The render fails if the peak pod pools are more than `maxClientConnections`, if
+  roles have different database deadline settings, or if `env` sets
+  `DELTALLM_DATABASE_POOLER_URL`.
+- A pod does not start if its pooler URL is empty or not set while the capacity report
+  counts its pools as pooler clients, or the other way around. Thus a pod cannot connect
+  directly to PostgreSQL outside the budget.
 
 The migration Job keeps `runtime.database`.
 

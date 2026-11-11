@@ -73,6 +73,30 @@ async def test_each_allocation_gets_its_alias_deadlines_through_the_pooler(poole
             await manager.disconnect()
 
 
+async def test_every_server_connection_of_an_alias_uses_its_search_path(pooler_url):
+    # Two overlapping transactions hold both server connections of the alias
+    # (default_pool_size = 2 in CI). Each must use the alias search_path, not
+    # the PostgreSQL default "$user", public.
+    manager = await _connect(pooler_url, "control", connections=2, background=True, queue=5.0)
+    both = asyncio.Barrier(2)
+
+    async def read():
+        async with manager.client.tx() as tx:
+            await tx.query_raw("SELECT 1 AS started")
+            await asyncio.wait_for(both.wait(), 5)
+            rows = await tx.query_raw(
+                "SELECT current_setting('search_path') AS path, pg_backend_pid() AS pid"
+            )
+            return rows[0]
+
+    try:
+        first, second = await asyncio.gather(read(), read())
+        assert first["pid"] != second["pid"]
+        assert first["path"] == second["path"] == "public"
+    finally:
+        await manager.disconnect()
+
+
 async def test_statement_deadline_applies_through_the_pooler(pooler_url):
     manager = await _connect(pooler_url, "foreground")
     try:

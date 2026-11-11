@@ -18,7 +18,12 @@ from urllib.parse import urlsplit
 
 from src.bootstrap.accounting_config import read_accounting_settings
 from src.config import resolve_database_settings
-from src.database_pooler import POOLER_ALLOCATIONS, pgbouncer_database_lines
+from src.database_pooler import (
+    POOLER_ALLOCATIONS,
+    database_schema,
+    pgbouncer_database_lines,
+    quoted_schema,
+)
 from src.db.runtime.accounting_pool import accounting_session_settings
 from src.db.runtime.allocation_config import DatabasePolicy, resolve_allocation_settings
 from src.startup_config import StartupConfig
@@ -48,13 +53,18 @@ def main(argv: list[str] | None = None) -> int:
     accounting = read_accounting_settings(general, settings)
     database = resolve_database_settings(startup.app_config, settings)
     statement_seconds = accounting.accounting_statement_timeout_ms / 1000
+    direct_url = database.url if database is not None else "postgresql://localhost/deltallm"
     session = accounting_session_settings(
-        database.url if database is not None else "postgresql://localhost/deltallm",
+        direct_url,
         statement_seconds=statement_seconds,
         lock_seconds=min(allocation.db_lock_timeout_seconds, statement_seconds),
     )
+    # Every alias sets the schema of DATABASE_URL: a server connection that
+    # PgBouncer opens later must not fall back to the default search_path.
+    search_path = ("search_path", quoted_schema(database_schema(direct_url)))
     session_settings: dict[str, tuple[tuple[str, str], ...]] = {
-        name: tuple(
+        name: (search_path,)
+        + tuple(
             (setting, str(value))
             for setting, value in DatabasePolicy.build(allocation, name, 1).server_deadlines()
         )
