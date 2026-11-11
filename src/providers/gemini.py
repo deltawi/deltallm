@@ -304,10 +304,11 @@ class GeminiAdapter(ProviderAdapter):
         *,
         details: ProviderErrorDetails | None = None,
     ) -> ProxyError:
-        classification = _classify_gemini_failure(details or provider_error_details(provider_error))
+        details = details or provider_error_details(provider_error)
         return map_standard_provider_error(
             provider_error,
-            failure_classification=classification,
+            failure_classification=_classify_gemini_failure(details),
+            details=details,
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:

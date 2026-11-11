@@ -1,5 +1,6 @@
 """Ordinary HTTP admission/finalization ordering through real application routes."""
 
+import gzip
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -470,10 +471,24 @@ async def test_provider_failure_after_send_shows_its_reason_in_audit(client, tes
     assert audit["metadata"]["uncertainty_reason"] == "service_unavailable"
 
 
-async def _chat_with_provider_answer(client, test_app, status_code, body):
-    from src.billing.accounting.accounting_service import AccountingProtocolService
+async def _chat_with_provider_answer(client, test_app, status_code, body, response_headers=None):
+    import json
+
     import httpx
+
+    from src.billing.accounting.accounting_service import AccountingProtocolService
+    from src.providers.error_body import bound_provider_error_response_body
     from tests.test_accounting_request_path import _AccountingRepository
+
+    class ErrorBody(httpx.AsyncByteStream):
+        def __init__(self, content):
+            self._content = content
+
+        async def __aiter__(self):
+            yield self._content
+
+        async def aclose(self):
+            return None
 
     repository = _AccountingRepository()
     accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
@@ -487,8 +502,19 @@ async def _chat_with_provider_answer(client, test_app, status_code, body):
         accounting=accounting,
     )
 
+    content = body if isinstance(body, bytes) else json.dumps(body).encode()
+
     async def post(url, **kwargs):
-        return httpx.Response(status_code, json=body, request=httpx.Request("POST", url))
+        # Run the shared upstream client's response hook, as a real call does.
+        response = httpx.Response(
+            status_code,
+            headers=response_headers or {"content-type": "application/json"},
+            stream=ErrorBody(content),
+            request=httpx.Request("POST", url),
+        )
+        await bound_provider_error_response_body(response)
+        await response.aread()
+        return response
 
     test_app.state.http_client.post = post
     try:
@@ -539,6 +565,38 @@ async def test_provider_error_that_may_be_billed_stays_provisional(
     from src.billing.accounting.accounting_protocol import AccountingOutcome
 
     response, finalizations = await _chat_with_provider_answer(client, test_app, status_code, body)
+
+    assert response.status_code >= 400, response.text
+    (terminal,) = finalizations
+    assert terminal.outcome is AccountingOutcome.UNCERTAIN
+    assert terminal.audit_envelope["payload"]["event"]["error_type"] != "AccountingProviderRefused"
+
+
+_CONTENT_FILTER_BODY = b'{"error":{"message":"filtered","code":"content_filter"}}'
+
+
+@pytest.mark.parametrize(
+    ("body", "response_headers"),
+    [
+        (
+            gzip.compress(_CONTENT_FILTER_BODY),
+            {"content-type": "application/json", "content-encoding": "gzip"},
+        ),
+        (_CONTENT_FILTER_BODY[:-1] + b" " * 70_000 + b"}", None),
+        (b"Bad Request", {"content-type": "text/plain"}),
+    ],
+    ids=["compressed", "oversized", "not-json"],
+)
+async def test_provider_400_with_an_unreadable_body_stays_provisional(
+    client, test_app, body, response_headers
+):
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+
+    # The gateway cannot tell whether this 400 is a content-filter refusal, which
+    # Azure OpenAI can bill, so it keeps the reservation.
+    response, finalizations = await _chat_with_provider_answer(
+        client, test_app, 400, body, response_headers
+    )
 
     assert response.status_code >= 400, response.text
     (terminal,) = finalizations

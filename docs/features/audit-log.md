@@ -142,10 +142,13 @@ tells why:
 - `AccountingProviderNotDispatched`: the gateway sent none of the calls, so it released
   the reserved amount.
 - `AccountingProviderRefused`: the provider refused each call that the gateway sent,
-  with status 400, 401, 403, 404 or 422. The provider did no work, so the gateway
-  released the reserved amount. `metadata.failure_reason` tells why, for example
-  `invalid_request_error`, and `metadata.refused_attempts` is the number of refused
-  calls. A content-policy refusal is not in this group. See
+  with status 400, 401, 403, 404 or 422, and the gateway read each error body. The
+  provider did no work, so the gateway released the reserved amount.
+  `metadata.failure_reason` tells why, for example `invalid_request_error`, and
+  `metadata.refused_attempts` is the number of refused calls. A content-policy
+  refusal is not in this group. An error whose body the gateway could not read (for
+  example a compressed or oversized body) is not in this group either, because the
+  gateway cannot rule out a content-policy refusal. See
   [Failure semantics](../deployment/accounting-v2.md#failure-semantics).
 - `AccountingOutcomeUnknown`: the gateway sent a call, and it does not know the reason,
   for example for a batch item whose result is unknown. It keeps the reserved amount as a

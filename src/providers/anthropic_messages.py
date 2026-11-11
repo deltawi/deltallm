@@ -348,6 +348,7 @@ class AnthropicNativeMessagesAdapter(ProviderAdapter):
             routing_failure_action=mapped.routing_failure_action,
         )
         forwarded.provider_status_code = mapped.provider_status_code
+        forwarded.provider_error_body_parsed = mapped.provider_error_body_parsed
         return forwarded
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:

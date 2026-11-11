@@ -618,17 +618,21 @@ async def test_provider_pool_proof_cannot_release_an_earlier_ambiguous_attempt(a
         await accounting.close()
 
 
-def _provider_status_error(status_code, body=None):
+def _provider_status_error(status_code, body=None, *, content=None):
     import httpx
 
     from src.providers.openai import OpenAIAdapter
 
     request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
-    response = httpx.Response(
-        status_code,
-        json=body or {"error": {"message": "refused", "type": "invalid_request_error"}},
-        request=request,
-    )
+    if content is not None:
+        # A body the gateway cannot parse, so it cannot rule out a content-policy refusal.
+        response = httpx.Response(status_code, content=content, request=request)
+    else:
+        response = httpx.Response(
+            status_code,
+            json=body or {"error": {"message": "refused", "type": "invalid_request_error"}},
+            request=request,
+        )
     error = httpx.HTTPStatusError("provider error", request=request, response=response)
     return OpenAIAdapter(MagicMock()).map_error(error)
 
@@ -645,7 +649,7 @@ async def _attempt(request, error):
         )
 
 
-@pytest.mark.parametrize("first", ["refused", "pool", "ambiguous"])
+@pytest.mark.parametrize("first", ["refused", "pool", "ambiguous", "unreadable"])
 async def test_provider_refusal_releases_the_allowance_only_when_no_attempt_can_be_charged(first):
     import httpx
 
@@ -656,6 +660,7 @@ async def test_provider_refusal_releases_the_allowance_only_when_no_attempt_can_
         "refused": _provider_status_error(401),
         "pool": pool,
         "ambiguous": httpx.ReadTimeout("provider may have received the call"),
+        "unreadable": _provider_status_error(400, content=b"Bad Request"),
     }[first]
     try:
         await _attempt(request, earlier)
@@ -668,7 +673,7 @@ async def test_provider_refusal_releases_the_allowance_only_when_no_attempt_can_
         )
         (terminal,) = repository.finalizations
         audit = terminal.audit_envelope["payload"]["event"]
-        if first == "ambiguous":
+        if first in {"ambiguous", "unreadable"}:
             assert terminal.outcome is AccountingOutcome.UNCERTAIN
             assert audit["error_type"] == "invalid_request_error"
         else:
@@ -690,6 +695,19 @@ async def test_refused_attempt_before_a_success_leaves_nothing_provisional():
         (terminal,) = repository.finalizations
         assert terminal.outcome is AccountingOutcome.COMPLETED
         assert terminal.unresolved_attempts == 0
+    finally:
+        await accounting.close()
+
+
+async def test_unreadable_refusal_before_a_success_stays_unresolved():
+    repository, accounting, ingestion, request = await _accounted_mcp_request()
+    try:
+        await _attempt(request, _provider_status_error(400, content=b"Bad Request"))
+        await _hop(request)
+        await _finalize(ingestion, request, 1.3)
+        (terminal,) = repository.finalizations
+        assert terminal.outcome is AccountingOutcome.COMPLETED
+        assert terminal.unresolved_attempts == 1
     finally:
         await accounting.close()
 
