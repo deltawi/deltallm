@@ -80,6 +80,8 @@ def caller_priority(caller: str) -> int:
 def background_slots(connections: int) -> int:
     """Slots that background callers may hold at the same time in a pool."""
     return max(1, min(4, int(connections) // 8))
+
+
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 _current: ContextVar[str] = ContextVar("deltallm_database_caller", default="other")

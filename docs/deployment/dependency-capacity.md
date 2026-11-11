@@ -209,10 +209,10 @@ after a random part (half to all) of `embeddings_batch_poll_interval_seconds`, o
 soon as a running slice ends. The deadlines do not change: each call still waits up to
 `db_capacity_wait_seconds` plus `db_acquisition_timeout_seconds` for its slot.
 
-Billing checkpoint writes and, with write grouping, result saves each use up to
-`embeddings_batch_accounting_write_concurrency` slots (0, the default, means half of
-`db_pool_size`). A batch worker does not start when these shares add up to more than
-`db_pool_size`.
+Billing checkpoint writes (accounting v2) and, with write grouping, result saves each
+use up to `embeddings_batch_accounting_write_concurrency` slots (0, the default, means
+half of `db_pool_size`). A batch worker does not start when the shares of the writers
+that run add up to more than `db_pool_size`.
 
 ### Find which work holds the database slots
 

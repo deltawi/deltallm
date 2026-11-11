@@ -79,9 +79,12 @@ def start_batch_workers(
     core: BatchCoreComponents,
 ) -> BatchWebhookCipher | None:
     settings = getattr(app.state, "settings", None)
-    require_batch_write_budget(cfg.general_settings, settings)
-    warn_if_batch_db_pool_is_small(cfg.general_settings, settings)
     native_billing = build_native_batch_billing(app.state, cfg.general_settings, repository)
+    # Only accounting v2 writes billing checkpoints.
+    require_batch_write_budget(
+        cfg.general_settings, settings, checkpoint_writes=native_billing is not None
+    )
+    warn_if_batch_db_pool_is_small(cfg.general_settings, settings)
     _start_executor_worker(app, cfg, repository, runtime, core, native_billing=native_billing)
     _start_runtime_summary_worker(cfg, repository, runtime)
     _start_completion_outbox_worker(

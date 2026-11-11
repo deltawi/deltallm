@@ -8,9 +8,11 @@ import pytest
 from src.batch import worker as worker_module
 from src.batch.retry import jittered_busy_wait
 from src.batch.worker import BatchExecutorWorker
+from src.batch.worker_persistence import WorkerPersistenceMixin
 from src.batch.worker_types import BatchWorkerConfig
 from src.bootstrap.batch_runtime.pool_sizing import require_batch_write_budget
 from src.config import GeneralSettings
+from src.database_caller import caller_priority, current_database_caller, database_caller
 
 pytestmark = pytest.mark.hermetic
 
@@ -85,15 +87,16 @@ _NO_OVERRIDE = SimpleNamespace(db_pool_size=None)
 
 
 @pytest.mark.parametrize(
-    ("overrides", "settings"),
+    ("overrides", "settings", "checkpoint_writes"),
     [
-        ({}, _NO_OVERRIDE),
+        ({}, _NO_OVERRIDE, True),
         (
             {
                 "embeddings_batch_accounting_write_concurrency": 20,
                 "embeddings_batch_write_grouping_enabled": False,
             },
             _NO_OVERRIDE,
+            True,
         ),
         (
             {
@@ -101,6 +104,7 @@ _NO_OVERRIDE = SimpleNamespace(db_pool_size=None)
                 "embeddings_batch_write_grouping_enabled": True,
             },
             _NO_OVERRIDE,
+            True,
         ),
         (
             {
@@ -108,6 +112,7 @@ _NO_OVERRIDE = SimpleNamespace(db_pool_size=None)
                 "embeddings_batch_worker_enabled": False,
             },
             _NO_OVERRIDE,
+            True,
         ),
         (
             {
@@ -115,15 +120,35 @@ _NO_OVERRIDE = SimpleNamespace(db_pool_size=None)
                 "embeddings_batch_write_grouping_enabled": True,
             },
             SimpleNamespace(db_pool_size=30),
+            True,
+        ),
+        # Without accounting v2 no checkpoint writer runs: only result saves
+        # use the share.
+        (
+            {
+                "embeddings_batch_accounting_write_concurrency": 15,
+                "embeddings_batch_write_grouping_enabled": True,
+            },
+            _NO_OVERRIDE,
+            False,
+        ),
+        # With neither writer running, no share is used.
+        (
+            {
+                "embeddings_batch_accounting_write_concurrency": 30,
+                "embeddings_batch_write_grouping_enabled": False,
+            },
+            _NO_OVERRIDE,
+            False,
         ),
     ],
 )
-def test_write_budget_accepts_shares_that_fit_the_pool(overrides, settings):
-    require_batch_write_budget(_general(**overrides), settings)
+def test_write_budget_accepts_shares_that_fit_the_pool(overrides, settings, checkpoint_writes):
+    require_batch_write_budget(_general(**overrides), settings, checkpoint_writes=checkpoint_writes)
 
 
 @pytest.mark.parametrize(
-    ("overrides", "settings", "message"),
+    ("overrides", "settings", "checkpoint_writes", "message"),
     [
         (
             {
@@ -131,6 +156,7 @@ def test_write_budget_accepts_shares_that_fit_the_pool(overrides, settings):
                 "embeddings_batch_write_grouping_enabled": False,
             },
             _NO_OVERRIDE,
+            True,
             "gives billing checkpoints 21 slots, more than db_pool_size 20. Set it to at most 20",
         ),
         (
@@ -139,6 +165,7 @@ def test_write_budget_accepts_shares_that_fit_the_pool(overrides, settings):
                 "embeddings_batch_write_grouping_enabled": True,
             },
             _NO_OVERRIDE,
+            True,
             "checkpoints and result saves 22 slots, more than db_pool_size 20. "
             "Set it to at most 10",
         ),
@@ -148,10 +175,48 @@ def test_write_budget_accepts_shares_that_fit_the_pool(overrides, settings):
                 "embeddings_batch_write_grouping_enabled": True,
             },
             SimpleNamespace(db_pool_size=28),
+            True,
             "30 slots, more than db_pool_size 28. Set it to at most 14",
+        ),
+        (
+            {
+                "embeddings_batch_accounting_write_concurrency": 21,
+                "embeddings_batch_write_grouping_enabled": True,
+            },
+            _NO_OVERRIDE,
+            False,
+            "gives result saves 21 slots, more than db_pool_size 20. Set it to at most 20",
         ),
     ],
 )
-def test_write_budget_refuses_shares_past_the_pool(overrides, settings, message):
+def test_write_budget_refuses_shares_past_the_pool(overrides, settings, checkpoint_writes, message):
     with pytest.raises(ValueError, match=message):
-        require_batch_write_budget(_general(**overrides), settings)
+        require_batch_write_budget(
+            _general(**overrides), settings, checkpoint_writes=checkpoint_writes
+        )
+
+
+async def test_ownership_read_after_a_skipped_save_waits_with_the_result_saves():
+    # After a save that skipped a locked row, this read decides if the paid
+    # answer is saved again or dropped. A claim must not displace it.
+    callers: list[str] = []
+
+    async def list_items_by_ids(item_ids):
+        callers.append(current_database_caller())
+        return [
+            SimpleNamespace(item_id=item_id, status="in_progress", locked_by="w1", claim_epoch=3)
+            for item_id in item_ids
+        ]
+
+    engine = SimpleNamespace(
+        repository=SimpleNamespace(list_items_by_ids=list_items_by_ids),
+        config=SimpleNamespace(worker_id="w1"),
+    )
+    with database_caller("batch_claim"):
+        assert await WorkerPersistenceMixin._items_still_claimed(
+            engine,  # type: ignore[arg-type]
+            [{"item_id": "i1", "claim_epoch": 3}],
+        )
+
+    assert callers == ["batch_result_save"]
+    assert caller_priority(callers[0]) < caller_priority("batch_claim")

@@ -81,14 +81,15 @@ def batch_result_save_concurrency(general: Any, settings: object) -> int:
     return batch_write_concurrency(general, settings)
 
 
-def require_batch_write_budget(general: Any, settings: object) -> None:
+def require_batch_write_budget(general: Any, settings: object, *, checkpoint_writes: bool) -> None:
     """Refuse write limits whose shares add up to more than the batch pool.
 
-    Billing checkpoint writes and, with write grouping, result saves each get
+    Billing checkpoint writes (accounting v2, ``checkpoint_writes``) and, with
+    write grouping, result saves each get
     ``embeddings_batch_accounting_write_concurrency`` slots of the control
     pool. Lease renewals, claims and the completion outbox need slots too, so
-    these two shares together must fit in the pool. The default (0, half of
-    the pool each) always fits.
+    the shares of the writers that run must fit in the pool together. The
+    default (0, half of the pool each) always fits.
     """
     if not getattr(general, "embeddings_batch_worker_enabled", False):
         return
@@ -96,14 +97,19 @@ def require_batch_write_budget(general: Any, settings: object) -> None:
     pool_size = getattr(settings, "db_pool_size", None) or getattr(general, "db_pool_size", None)
     if configured <= 0 or not pool_size:
         return
-    shares = 2 if getattr(general, "embeddings_batch_write_grouping_enabled", False) else 1
-    if shares * configured > int(pool_size):
-        raise ValueError(
-            f"embeddings_batch_accounting_write_concurrency {configured} gives billing "
-            f"checkpoints{' and result saves' if shares == 2 else ''} {shares * configured} "
-            f"slots, more than db_pool_size {pool_size}. Set it to at most "
-            f"{int(pool_size) // shares}, or to 0 for half of the pool."
-        )
+    writers = []
+    if checkpoint_writes:
+        writers.append("billing checkpoints")
+    if getattr(general, "embeddings_batch_write_grouping_enabled", False):
+        writers.append("result saves")
+    if not writers or len(writers) * configured <= int(pool_size):
+        return
+    raise ValueError(
+        f"embeddings_batch_accounting_write_concurrency {configured} gives "
+        f"{' and '.join(writers)} {len(writers) * configured} slots, more than "
+        f"db_pool_size {pool_size}. Set it to at most {int(pool_size) // len(writers)}, "
+        "or to 0 for half of the pool."
+    )
 
 
 def warn_if_batch_db_pool_is_small(general: Any, settings: object) -> int | None:

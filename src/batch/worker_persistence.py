@@ -32,6 +32,7 @@ from src.billing.pricing.tier_pricing import (
     resolve_deployment_tier_pricing,
     resolve_token_billing_result,
 )
+from src.database_caller import with_database_caller
 from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
 
 logger = logging.getLogger(__name__)
@@ -510,6 +511,9 @@ class WorkerPersistenceMixin:
         waits.lease_renewed(started_at)
         return True
 
+    # This read decides if a provider answer is saved or dropped, so it waits
+    # for a database slot with the result saves.
+    @with_database_caller("batch_result_save")
     async def _items_still_claimed(self, items: list[dict[str, Any]]) -> bool:
         """True when this worker still holds every item at its claim epoch.
 
