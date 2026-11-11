@@ -151,10 +151,18 @@ tells why:
   charge.
 
 If a pod stops after it sent a call and before it records the result, the operation has no
-`ACCOUNTING_PROVIDER_FINALIZATION` event. When its reservation expires, the gateway closes
-it with an `ACCOUNTING_PROVIDER_OUTCOME_UNKNOWN` event whose `error_type` is
-`AccountingReservationExpired`, and keeps the reserved amount as a provisional charge. To
-find all failed provider calls, filter on both actions.
+`ACCOUNTING_PROVIDER_FINALIZATION` event:
+
+- For a stored operation, the gateway closes it when its reservation expires, with an
+  `ACCOUNTING_PROVIDER_OUTCOME_UNKNOWN` event whose `error_type` is
+  `AccountingReservationExpired`. It keeps the reserved amount as a provisional charge.
+- With `accounting_execution_mode: local_journal`, the operation can exist only in the
+  stopped pod. Then the gateway closes its budget grant, keeps the remainder in the
+  grant's `unknown_provisional_exact`, and writes no audit event. See
+  [Provisional reconciliation](../deployment/accounting-v2.md#provisional-reconciliation).
+
+So the two actions show the failed calls that the gateway stored, but not these grant
+remainders.
 
 ## Payload Storage and Redaction
 
