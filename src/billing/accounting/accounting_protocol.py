@@ -169,9 +169,23 @@ class AccountingOperationHandle(FrozenBillingContract):
     settled_attempts: int = Field(default=0, ge=0, le=127)
     # HTTP connection-pool evidence belongs to this request, not stored proofs.
     not_dispatched_attempts: int = Field(default=0, ge=0, le=128, exclude=True)
+    # Attempts the provider refused with an error status that proves it did no
+    # work (provider_refused_request). Request evidence too, never stored.
+    provider_refused_attempts: int = Field(default=0, ge=0, le=128, exclude=True)
 
     def unresolved_attempts(self) -> int:
-        return max(0, len(self.attempts) - 1 - self.settled_attempts - self.not_dispatched_attempts)
+        return max(
+            0,
+            len(self.attempts)
+            - 1
+            - self.settled_attempts
+            - self.not_dispatched_attempts
+            - self.provider_refused_attempts,
+        )
+
+    def charged_nothing(self) -> bool:
+        """Whether no attempt can have been charged: each one was never sent or refused."""
+        return self.not_dispatched_attempts + self.provider_refused_attempts == len(self.attempts)
 
 
 class AccountingFinalization(FrozenBillingContract):

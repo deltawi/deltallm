@@ -49,6 +49,17 @@ conflicting records for the same issue independently.
   stream frame is released.
 - Provider failure or lost acknowledgement after dispatch keeps the remaining
   allowance as a provisional debit. It is never silently released.
+- There is one exception. A provider error response with status 400, 401, 403, 404
+  or 422 shows that the provider refused the call before it did work, so the provider
+  did not charge for it. If the provider refused each call of an operation in this
+  way, or the gateway did not send the call, the gateway releases the full allowance
+  and writes an `AccountingProviderRefused` audit event. A refused call before a call
+  that succeeds does not keep allowance provisional either. These errors stay
+  provisional:
+    - A content-policy refusal. Azure OpenAI bills a prompt that its content filter
+      rejects with a 400.
+    - An error in a stream or a response body after a success status.
+    - A failure in a batch item, a realtime session or a Model Selector call.
 - Process crashes are recovered by converting expired dispatched reservations to
   provisional debits without resending requests.
 - A draining accounting request pod refuses new calls with `gateway_draining` and

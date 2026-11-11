@@ -44,6 +44,8 @@ from src.billing.spend.spend_operations import (
 )
 from src.billing.spend.spend_ingestion import SpendIngestionService
 from src.billing.pricing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
+from src.models.errors import ProxyError
+from src.providers.base import provider_refused_request
 from src.providers.http_transport import provider_pool_refused_before_send
 from src.providers.resolution import resolve_provider
 from src.models.responses import UserAPIKeyAuth
@@ -276,6 +278,13 @@ async def _execute_accounted_attempt(request: Request, execute: Callable[[], Awa
             handle = request.state.spend_operation_handle
             request.state.spend_operation_handle = handle.model_copy(
                 update={"not_dispatched_attempts": handle.not_dispatched_attempts + 1}
+            )
+        raise
+    except ProxyError as exc:
+        if provider_refused_request(exc):
+            handle = request.state.spend_operation_handle
+            request.state.spend_operation_handle = handle.model_copy(
+                update={"provider_refused_attempts": handle.provider_refused_attempts + 1}
             )
         raise
 

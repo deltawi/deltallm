@@ -383,12 +383,14 @@ class OpenAINativeResponsesAdapter(ProviderAdapter):
             return mapped
         # Coding agents recover from request errors (for example a context overflow) by
         # reading this text, and the text only describes the client's own request.
-        return InvalidRequestError(
+        forwarded = InvalidRequestError(
             message=message,
             affects_deployment_health=mapped.affects_deployment_health,
             failure_classification=mapped.failure_classification,
             routing_failure_action=mapped.routing_failure_action,
         )
+        forwarded.provider_status_code = mapped.provider_status_code
+        return forwarded
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
         return await self._inner.health_check(provider_config)

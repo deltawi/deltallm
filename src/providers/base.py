@@ -287,16 +287,38 @@ def map_standard_provider_error(
         )
 
     if isinstance(provider_error, httpx.HTTPStatusError):
-        return map_standard_provider_status_error(
-            provider_error.response.status_code,
+        status_code = provider_error.response.status_code
+        mapped = map_standard_provider_status_error(
+            status_code,
             retry_after_header=provider_error.response.headers.get("retry-after"),
             failure_classification=failure_classification,
         )
+        mapped.provider_status_code = status_code
+        return mapped
 
     return ServiceUnavailableError(
         message="Provider unavailable",
         affects_deployment_health=True,
         failure_classification=failure_classification or FailureClassification.GENERIC,
+    )
+
+
+# A provider error response with one of these statuses refused the request
+# before doing any work, so the provider did not charge for it. 408, 409, 429 and
+# 5xx are left out: the provider may have started the work.
+PROVIDER_REFUSAL_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
+
+
+def provider_refused_request(error: BaseException) -> bool:
+    """Whether the provider answered with an error status that proves it did no work.
+
+    A content-policy refusal does not count: Azure OpenAI bills a prompt that
+    its content filter rejects with a 400.
+    """
+    return (
+        isinstance(error, ProxyError)
+        and error.provider_status_code in PROVIDER_REFUSAL_STATUS_CODES
+        and error.failure_classification is not FailureClassification.CONTENT_POLICY
     )
 
 

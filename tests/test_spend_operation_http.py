@@ -468,3 +468,79 @@ async def test_provider_failure_after_send_shows_its_reason_in_audit(client, tes
     assert audit["status"] == "error"
     assert audit["error_type"] == "service_unavailable"
     assert audit["metadata"]["uncertainty_reason"] == "service_unavailable"
+
+
+async def _chat_with_provider_answer(client, test_app, status_code, body):
+    from src.billing.accounting.accounting_service import AccountingProtocolService
+    import httpx
+    from tests.test_accounting_request_path import _AccountingRepository
+
+    repository = _AccountingRepository()
+    accounting = AccountingProtocolService(repository, generation=7, dwell_seconds=0)
+    accounting.start()
+    test_app.state.accounting_protocol_enabled = True
+    test_app.state.accounting_protocol_service = accounting
+    test_app.state.spend_tracking_service = ReadySpend(
+        db_client=None,
+        writer=SpendTrackingService(None),
+        config=SpendIngestionConfig(enabled=True),
+        accounting=accounting,
+    )
+
+    async def post(url, **kwargs):
+        return httpx.Response(status_code, json=body, request=httpx.Request("POST", url))
+
+    test_app.state.http_client.post = post
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers=headers(test_app),
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+        )
+    finally:
+        await accounting.close()
+    return response, repository.finalizations
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+async def test_provider_refusal_releases_native_allowance(client, test_app, status_code):
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+
+    response, finalizations = await _chat_with_provider_answer(
+        client,
+        test_app,
+        status_code,
+        {"error": {"message": "refused", "type": "invalid_request_error"}},
+    )
+
+    assert response.status_code >= 400, response.text
+    (terminal,) = finalizations
+    assert terminal.outcome is AccountingOutcome.NOT_DISPATCHED
+    assert terminal.uncertainty_reason is None
+    audit = terminal.audit_envelope["payload"]["event"]
+    assert audit["error_type"] == "AccountingProviderRefused"
+    assert audit["metadata"]["outcome_unknown"] is False
+    assert audit["metadata"]["reason"] == "provider_refused"
+    assert audit["metadata"]["refused_attempts"] == audit["metadata"]["attempt_count"]
+
+
+@pytest.mark.parametrize(
+    ("status_code", "body"),
+    [
+        (400, {"error": {"message": "filtered", "code": "content_filter"}}),
+        (408, {"error": {"message": "timed out"}}),
+        (429, {"error": {"message": "slow down"}}),
+        (500, {"error": {"message": "crashed"}}),
+    ],
+)
+async def test_provider_error_that_may_be_billed_stays_provisional(
+    client, test_app, status_code, body
+):
+    from src.billing.accounting.accounting_protocol import AccountingOutcome
+
+    response, finalizations = await _chat_with_provider_answer(client, test_app, status_code, body)
+
+    assert response.status_code >= 400, response.text
+    (terminal,) = finalizations
+    assert terminal.outcome is AccountingOutcome.UNCERTAIN
+    assert terminal.audit_envelope["payload"]["event"]["error_type"] != "AccountingProviderRefused"

@@ -56,6 +56,9 @@ class ProxyError(Exception):
     status_code: int = 500
     error_type: str = "server_error"
     message: str = "Internal server error"
+    # The HTTP status of the provider's own error response, when this error was
+    # built from one. Errors read from a stream or a payload never set it.
+    provider_status_code: int | None = None
 
     def __init__(
         self,

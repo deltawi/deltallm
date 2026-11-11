@@ -143,25 +143,6 @@ class AccountingSpendFinalizer:
         service = self._require_accounting(operation, event_id=event_id)
         final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
         occurred_at = datetime.now(UTC)
-        if operation.not_dispatched_attempts == len(operation.attempts):
-            finalization = prepare_accounting_not_dispatched(
-                operation,
-                occurred_at=occurred_at,
-                audit_envelope=accounting_audit_envelope(
-                    operation,
-                    event_id=final_event_id,
-                    status="error",
-                    error_type="AccountingProviderNotDispatched",
-                    correlation_id=payload.get("request_id"),
-                    metadata={
-                        "attempt_count": len(operation.attempts),
-                        "outcome_unknown": False,
-                        "reason": "provider_pool_timeout",
-                    },
-                ),
-            )
-            await service.finalize_operation(operation, finalization)
-            return
         exc = payload.get("exc")
         reason = (
             str(
@@ -171,6 +152,35 @@ class AccountingSpendFinalizer:
             ).strip()[:256]
             or "provider_outcome_unknown"
         )
+        if operation.charged_nothing():
+            # No attempt can carry a provider charge, so the whole allowance is released.
+            refused = operation.provider_refused_attempts
+            metadata: dict[str, object] = {
+                "attempt_count": len(operation.attempts),
+                "outcome_unknown": False,
+                "reason": "provider_refused" if refused else "provider_pool_timeout",
+            }
+            if refused:
+                metadata["refused_attempts"] = refused
+                metadata["failure_reason"] = reason
+            finalization = prepare_accounting_not_dispatched(
+                operation,
+                occurred_at=occurred_at,
+                audit_envelope=accounting_audit_envelope(
+                    operation,
+                    event_id=final_event_id,
+                    status="error",
+                    error_type=(
+                        "AccountingProviderRefused"
+                        if refused
+                        else "AccountingProviderNotDispatched"
+                    ),
+                    correlation_id=payload.get("request_id"),
+                    metadata=metadata,
+                ),
+            )
+            await service.finalize_operation(operation, finalization)
+            return
         finalization = prepare_accounting_uncertain(
             operation,
             reason=reason,

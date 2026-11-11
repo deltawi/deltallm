@@ -616,3 +616,99 @@ async def test_provider_pool_proof_cannot_release_an_earlier_ambiguous_attempt(a
         )
     finally:
         await accounting.close()
+
+
+def _provider_status_error(status_code, body=None):
+    import httpx
+
+    from src.providers.openai import OpenAIAdapter
+
+    request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+    response = httpx.Response(
+        status_code,
+        json=body or {"error": {"message": "refused", "type": "invalid_request_error"}},
+        request=request,
+    )
+    error = httpx.HTTPStatusError("provider error", request=request, response=response)
+    return OpenAIAdapter(MagicMock()).map_error(error)
+
+
+async def _attempt(request, error):
+    with pytest.raises(type(error)):
+        await durable_provider_call(
+            request,
+            model="gpt-test",
+            call_type="completion",
+            deployment=_deployment(),
+            bounds=ProviderRequestBounds(max_output_tokens=10),
+            execute=AsyncMock(side_effect=error),
+        )
+
+
+@pytest.mark.parametrize("first", ["refused", "pool", "ambiguous"])
+async def test_provider_refusal_releases_the_allowance_only_when_no_attempt_can_be_charged(first):
+    import httpx
+
+    repository, accounting, ingestion, request = await _accounted_mcp_request()
+    pool = httpx.PoolTimeout("pool busy")
+    setattr(pool, "_provider_pool_refused_before_send", True)
+    earlier = {
+        "refused": _provider_status_error(401),
+        "pool": pool,
+        "ambiguous": httpx.ReadTimeout("provider may have received the call"),
+    }[first]
+    try:
+        await _attempt(request, earlier)
+        await _attempt(request, _provider_status_error(400))
+        handle = operation_handle(request)
+        await ingestion.log_request_failure(
+            event_id=str(handle.reservation.operation_id),
+            operation=handle,
+            error_type="invalid_request_error",
+        )
+        (terminal,) = repository.finalizations
+        audit = terminal.audit_envelope["payload"]["event"]
+        if first == "ambiguous":
+            assert terminal.outcome is AccountingOutcome.UNCERTAIN
+            assert audit["error_type"] == "invalid_request_error"
+        else:
+            assert terminal.outcome is AccountingOutcome.NOT_DISPATCHED
+            assert audit["error_type"] == "AccountingProviderRefused"
+            assert audit["metadata"]["reason"] == "provider_refused"
+            assert audit["metadata"]["refused_attempts"] == (2 if first == "refused" else 1)
+            assert audit["metadata"]["failure_reason"] == "invalid_request_error"
+    finally:
+        await accounting.close()
+
+
+async def test_refused_attempt_before_a_success_leaves_nothing_provisional():
+    repository, accounting, ingestion, request = await _accounted_mcp_request()
+    try:
+        await _attempt(request, _provider_status_error(404))
+        await _hop(request)
+        await _finalize(ingestion, request, 1.3)
+        (terminal,) = repository.finalizations
+        assert terminal.outcome is AccountingOutcome.COMPLETED
+        assert terminal.unresolved_attempts == 0
+    finally:
+        await accounting.close()
+
+
+async def test_refused_hop_after_a_settled_mcp_hop_stays_provisional():
+    repository, accounting, ingestion, request = await _accounted_mcp_request()
+    try:
+        reserve_mcp_tool_hops(request, 4)
+        await _hop(request)
+        settle_mcp_hop(request)
+        await _attempt(request, _provider_status_error(400))
+        handle = operation_handle(request)
+        await ingestion.log_request_failure(
+            event_id=str(handle.reservation.operation_id),
+            operation=handle,
+            error_type="invalid_request_error",
+        )
+        (terminal,) = repository.finalizations
+        # The settled hop's usage was never committed, so the allowance stays provisional.
+        assert terminal.outcome is AccountingOutcome.UNCERTAIN
+    finally:
+        await accounting.close()
