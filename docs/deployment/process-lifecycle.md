@@ -20,9 +20,10 @@ health callers. Timed-out work retains its allocation until it actually stops.
 Each database owner allows one business operation to wait behind its single
 readiness probe, within the existing acquisition deadline. This prevents a probe
 from immediately rejecting settlement on a one-connection allocation. There are
-no extra connections. Telemetry acceptance and settlement each reserve one waiting
-position per configured connection for overlapping required writes; other business
-saturation still has zero waiters. All waits consume the same acquisition deadline.
+no extra connections. The control, foreground and telemetry acceptance pools each
+reserve one waiting position per configured connection, and settlement reserves more,
+for overlapping writes. Only the telemetry worker pool has no waiting position of its
+own. All waits consume the same acquisition deadline.
 No provider request or new client pool is created for a probe. Optional callback,
 notification and cache failures do not withdraw otherwise usable inference pods;
 inspect their feature metrics for degradation.
