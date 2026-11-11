@@ -202,6 +202,100 @@ jobs:
           grep -E '^(FAILED|ERROR) ' pytest-output.txt | head -n 50
           | sed 's/^/::error title=pytest::/' || true
 
+  pgbouncer-tests:
+    name: Python tests (PgBouncer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deltallm_test
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        continue-on-error: true
+        with:
+          version: '0.9.28'
+      - name: Install uv from PyPI if the GitHub download failed
+        run: |
+          command -v uv >/dev/null && exit 0
+          python3 -m pip install --user --break-system-packages "uv==0.9.28"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Generate Prisma client
+        run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Install PgBouncer
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pgbouncer
+          # The package starts its own service on port 6432; this job runs its own.
+          sudo systemctl stop pgbouncer || true
+          pgbouncer --version
+
+      - name: Start PgBouncer with the generated aliases
+        # The aliases come from the same generator that operators use. One more
+        # alias has no connect_query, to prove that startup refuses it.
+        env:
+          DELTALLM_CONFIG_PATH: /tmp/pgbouncer-ci/config.yaml
+          DELTALLM_DATABASE_POOLER_URL: postgresql://postgres:postgres@127.0.0.1:6432/deltallm_test_{allocation}
+        run: |
+          mkdir -p /tmp/pgbouncer-ci
+          printf 'general_settings: {}\n' > /tmp/pgbouncer-ci/config.yaml
+          uv run python -m src.db.runtime.pooler_config --host 127.0.0.1 --port 5432 \
+            --dbname deltallm_test > /tmp/pgbouncer-ci/databases.ini
+          echo 'deltallm_test_raw = host=127.0.0.1 port=5432 dbname=deltallm_test' \
+            >> /tmp/pgbouncer-ci/databases.ini
+          echo '"postgres" "postgres"' > /tmp/pgbouncer-ci/userlist.txt
+          cat > /tmp/pgbouncer-ci/pgbouncer.ini <<'EOF'
+          %include /tmp/pgbouncer-ci/databases.ini
+
+          [pgbouncer]
+          listen_addr = 127.0.0.1
+          listen_port = 6432
+          auth_type = md5
+          auth_file = /tmp/pgbouncer-ci/userlist.txt
+          pool_mode = transaction
+          max_client_conn = 200
+          default_pool_size = 2
+          logfile = /tmp/pgbouncer-ci/pgbouncer.log
+          pidfile = /tmp/pgbouncer-ci/pgbouncer.pid
+          EOF
+          cat /tmp/pgbouncer-ci/databases.ini
+          pgbouncer -d /tmp/pgbouncer-ci/pgbouncer.ini
+
+      - name: Run PgBouncer tests
+        env:
+          CI: 'true'
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
+          DELTALLM_TEST_PGBOUNCER_URL: postgresql://postgres:postgres@127.0.0.1:6432/deltallm_test_{allocation}
+          DELTALLM_TEST_PGBOUNCER_REQUIRED: 'true'
+        run: uv run pytest -q -m postgres -rs tests/test_database_pooler_postgres.py
+
+      - name: Print the PgBouncer log
+        if: failure()
+        run: cat /tmp/pgbouncer-ci/pgbouncer.log || true
+
   redis-tests:
     name: Python tests (redis)
     runs-on: ubuntu-latest
@@ -532,7 +626,7 @@ jobs:
   test:
     name: test
     if: ${{ always() }}
-    needs: [python-tests, postgres-tests, redis-tests, cluster-changes, migration-paths, helm, lifecycle-acceptance, capacity-acceptance]
+    needs: [python-tests, postgres-tests, pgbouncer-tests, redis-tests, cluster-changes, migration-paths, helm, lifecycle-acceptance, capacity-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -540,6 +634,7 @@ jobs:
         env:
           APP_AND_HERMETIC: ${{ needs.python-tests.result }}
           POSTGRES: ${{ needs.postgres-tests.result }}
+          PGBOUNCER: ${{ needs.pgbouncer-tests.result }}
           REDIS: ${{ needs.redis-tests.result }}
           CHANGES: ${{ needs.cluster-changes.result }}
           MIGRATIONS: ${{ needs.migration-paths.result }}
@@ -549,7 +644,7 @@ jobs:
           RUN_RUNTIME: ${{ needs.cluster-changes.outputs.runtime }}
           RUN_MIGRATIONS: ${{ needs.cluster-changes.outputs.migrations }}
         run: |
-          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$CHANGES" "$HELM"; do
+          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$PGBOUNCER" "$REDIS" "$CHANGES" "$HELM"; do
             if [ "$result" != success ]; then
               echo "Required test job finished with status: $result"
               exit 1

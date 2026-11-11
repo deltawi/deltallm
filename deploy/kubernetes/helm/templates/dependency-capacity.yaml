@@ -22,6 +22,10 @@
 {{- end -}}
 {{- $extended := $capacity.extended -}}
 {{- $dbTotal := add $capacity.postgresqlReservedConnections $extended.postgresqlMigrationConnections $extended.postgresqlOtherConnections -}}
+{{- $pooler := .Values.runtime.databasePooler -}}
+{{- $pooled := and $pooler $pooler.enabled -}}
+{{- $poolerClientTotal := 0 -}}
+{{- $deadlineProfile := "" -}}
 {{- $roleReports := dict -}}
 {{- $criticalTotal := 0 -}}
 {{- $cacheTotal := 0 -}}
@@ -42,7 +46,10 @@
 {{- end -}}
 {{- end -}}
 {{- $db := add $g.db_pool_size $g.db_foreground_pool_size -}}
+{{- /* The external-auth pool always connects directly to PostgreSQL. */ -}}
+{{- $direct := 0 -}}
 {{- if (default (dict) (get $g "external_auth")).enabled -}}
+{{- $direct = 5 -}}
 {{- $db = add $db 5 -}}
 {{- end -}}
 {{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") (and $g.accounting_protocol_enabled (not $native)) -}}
@@ -58,6 +65,8 @@
 {{- $_ := set $pools "accountingHttp" 0 -}}
 {{- if $minimal -}}
 {{- $db = int $g.accounting_hot_path_db_pool_size -}}
+{{- /* Accounting-only roles have no external-auth pool. */ -}}
+{{- $direct = 0 -}}
 {{- $pools = dict "postgresql" $db "redisCritical" 0 "redisCache" 0 "upstreamHttp" 0 "controlHttp" 0 "auxiliaryHttp" 0 "accountingHttp" 0 -}}
 {{- else if $native -}}
 {{- /* Count the pooled client and the fresh connections for rollout retries. */ -}}
@@ -66,13 +75,37 @@
 {{- $report := dict "maxReplicas" $role.replicas "processesPerPod" $role.processes "steadyProcesses" (mul $role.replicas $role.processes) "peakProcesses" $processes "pools" $pools -}}
 {{- $_ := set $roleReports $role.name $report -}}
 {{- $processTotal = add $processTotal $processes -}}
+{{- if $pooled -}}
+{{- /* Pooled pod pools are pooler clients; PostgreSQL counts the pooler's server connections once, below. */ -}}
+{{- $poolerClientTotal = add $poolerClientTotal (mul $processes (sub $db $direct)) -}}
+{{- $dbTotal = add $dbTotal (mul $processes $direct) -}}
+{{- /* All roles share one pooler alias per allocation, so they need the same deadlines. */ -}}
+{{- $profile := printf "%v/%v/%v/%v/%v/%v/%v" $g.db_statement_timeout_seconds $g.db_lock_timeout_seconds $g.db_transaction_timeout_seconds $g.db_background_statement_timeout_seconds $g.db_background_lock_timeout_seconds $g.db_background_transaction_timeout_seconds (default 250 $g.accounting_statement_timeout_ms) -}}
+{{- if and $deadlineProfile (ne $deadlineProfile $profile) -}}
+{{- fail "runtime.databasePooler requires the same database deadlines in every role: each allocation shares one pooler alias" -}}
+{{- end -}}
+{{- $deadlineProfile = $profile -}}
+{{- else -}}
 {{- $dbTotal = add $dbTotal (mul $processes $db) -}}
+{{- end -}}
 {{- $criticalTotal = add $criticalTotal (mul $processes $pools.redisCritical) -}}
 {{- $cacheTotal = add $cacheTotal (mul $processes $pools.redisCache) -}}
 {{- range $prefix := list "db_" "db_background_" -}}
 {{- if or (gt (float64 (get $g (printf "%slock_timeout_seconds" $prefix))) (float64 (get $g (printf "%sstatement_timeout_seconds" $prefix)))) (gt (float64 (get $g (printf "%sstatement_timeout_seconds" $prefix))) (float64 (get $g (printf "%stransaction_timeout_seconds" $prefix)))) -}}
 {{- fail "Database deadlines require lock <= statement <= transaction" -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $pooled -}}
+{{- if not $pooler.existingSecret.name -}}
+{{- fail "runtime.databasePooler.existingSecret.name is required when the database pooler is enabled" -}}
+{{- end -}}
+{{- if or (lt (int $pooler.serverConnections) 1) (lt (int $pooler.maxClientConnections) 1) -}}
+{{- fail "runtime.databasePooler.serverConnections and maxClientConnections must be declared when the database pooler is enabled" -}}
+{{- end -}}
+{{- $dbTotal = add $dbTotal $pooler.serverConnections -}}
+{{- if gt $poolerClientTotal (int $pooler.maxClientConnections) -}}
+{{- fail (printf "Peak database pooler client connections %d exceed declared maximum %d" $poolerClientTotal (int $pooler.maxClientConnections)) -}}
 {{- end -}}
 {{- end -}}
 {{- include "deltallm.validateProductionCapacity" . -}}
@@ -94,13 +127,16 @@
 {{- if has $env.name (list "WEB_CONCURRENCY" "UVICORN_WORKERS" "DELTALLM_DB_POOL_SIZE" "DELTALLM_TELEMETRY_DB_POOL_SIZE") -}}
 {{- fail (printf "%s is owned by dependencyCapacity and rendered pool settings" $env.name) -}}
 {{- end -}}
+{{- if has $env.name (list "DELTALLM_DATABASE_POOLER_URL" "DELTALLM_DATABASE_POOLER_REQUIRED") -}}
+{{- fail (printf "%s is owned by runtime.databasePooler" $env.name) -}}
+{{- end -}}
 {{- end -}}
 {{- range $argument := concat .Values.command .Values.args .Values.batchWorker.command .Values.batchWorker.args .Values.accountingWorker.command .Values.accountingWorker.args .Values.accountingRequest.command .Values.accountingRequest.args -}}
 {{- if or (eq $argument "--workers") (eq $argument "-w") (hasPrefix "--workers=" $argument) -}}
 {{- fail "Worker count flags are owned by dependencyCapacity; set the declared process counts" -}}
 {{- end -}}
 {{- end -}}
-{{- $report := dict "schemaVersion" 1 "extended" $extended.enabled "production" .Values.managedLifecycle.production "roles" $roleReports "peakProcesses" $processTotal "postgresqlConnections" $dbTotal "redisCriticalConnections" $criticalTotal "redisCacheConnections" $cacheTotal "redisConnections" $redisTotal "postgresqlMaximum" $capacity.postgresqlMaxConnections "redisMaximum" $capacity.redisMaxClients "proxyPoolsPerClient" $extended.proxyPoolsPerClient "cacheRedis" $extended.cacheRedis -}}
+{{- $report := dict "schemaVersion" 1 "extended" $extended.enabled "production" .Values.managedLifecycle.production "roles" $roleReports "peakProcesses" $processTotal "postgresqlConnections" $dbTotal "postgresqlPoolerClientConnections" $poolerClientTotal "redisCriticalConnections" $criticalTotal "redisCacheConnections" $cacheTotal "redisConnections" $redisTotal "postgresqlMaximum" $capacity.postgresqlMaxConnections "redisMaximum" $capacity.redisMaxClients "proxyPoolsPerClient" $extended.proxyPoolsPerClient "cacheRedis" $extended.cacheRedis -}}
 {{- include "deltallm.extendedCapacity" (dict "root" . "report" $report) -}}
 {{- toJson $report -}}
 {{- end -}}
@@ -114,6 +150,7 @@ metadata:
 data:
   peak-processes: {{ $report.peakProcesses | quote }}
   postgresql-connections-including-reserve: {{ $report.postgresqlConnections | quote }}
+  postgresql-pooler-client-connections: {{ $report.postgresqlPoolerClientConnections | quote }}
   redis-critical-connections: {{ $report.redisCriticalConnections | quote }}
   redis-cache-connections: {{ $report.redisCacheConnections | quote }}
   redis-connections-including-reserve: {{ $report.redisConnections | quote }}

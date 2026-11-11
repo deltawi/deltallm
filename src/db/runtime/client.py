@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from src.config import DatabaseConnectionSettings
+from src.database_pooler import POOLER_SCHEMA_CHECK_SQL
 from src.db.runtime.allocation_config import DatabasePolicy
 
 if TYPE_CHECKING:
@@ -52,7 +53,11 @@ class PrismaClientManager:
                 raise RuntimeError("An allocated database requires an explicit database URL")
             self.allocation = DatabaseOwner(policy)
             self.client = AllocatedPrisma(
-                datasource={"url": policy.connection_url(database_settings.url)},
+                datasource={
+                    "url": policy.connection_url(
+                        database_settings.url, pooler_url=database_settings.pooler_url
+                    )
+                },
                 allocation=self.allocation,
             )
         elif database_settings is None:
@@ -76,6 +81,11 @@ class PrismaClientManager:
                 )
             ):
                 raise RuntimeError("Database server did not apply the required native deadlines")
+            if database_settings is not None and database_settings.pooler_url is not None:
+                # Behind a pooler, the alias sets the schema with connect_query.
+                rows = await self.client.query_raw(POOLER_SCHEMA_CHECK_SQL)
+                if not rows or rows[0]["matches"] is not True:
+                    raise RuntimeError("Database pooler alias does not set the public schema")
 
     async def disconnect(self) -> None:
         if self.allocation is not None:

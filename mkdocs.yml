@@ -205,6 +205,7 @@ nav:
           - Measure gateway concurrency: deployment/concurrency-measurement.md
           - Gateway ingress admission: deployment/ingress-admission.md
           - Dependency capacity: deployment/dependency-capacity.md
+          - Database pooler (PgBouncer): deployment/database-pooler.md
           - Concurrency runtime design: design/concurrency-runtime.md
           - Process lifecycle: deployment/process-lifecycle.md
           - Saturation autoscaling: deployment/saturation-autoscaling.md

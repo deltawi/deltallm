@@ -78,6 +78,8 @@ class CapacityReport(ReportModel):
     roles: dict[Role, RoleAllocation] = Field(min_length=1, max_length=4)
     peak_processes: Count
     postgresql_connections: Count
+    # Pod pool connections to the optional transaction pooler (0 without one).
+    postgresql_pooler_client_connections: Count = 0
     redis_critical_connections: Count
     redis_cache_connections: Count
     redis_connections: Count

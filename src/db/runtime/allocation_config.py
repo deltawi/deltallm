@@ -6,6 +6,7 @@ from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from src.database_settings import DatabaseAllocationSettings
+from src.database_pooler import pooled_database_url
 
 DatabaseAllocation = Literal[
     "control", "foreground", "telemetry", "telemetry_worker", "telemetry_settlement"
@@ -54,7 +55,23 @@ class DatabasePolicy:
         # after caller cancellation until native work has finished or expired.
         return 2 * math.ceil(self.acquisition_seconds) + math.ceil(self.statement_seconds) + 2
 
-    def connection_url(self, url: str) -> str:
+    def server_deadlines(self) -> tuple[tuple[str, int], ...]:
+        """PostgreSQL settings (milliseconds) that bound this allocation's work."""
+        return tuple(
+            (name, max(1, math.ceil(seconds * 1000)))
+            for name, seconds in (
+                ("statement_timeout", self.statement_seconds),
+                ("lock_timeout", self.lock_seconds),
+                ("idle_in_transaction_session_timeout", self.transaction_seconds),
+            )
+        )
+
+    def connection_url(self, url: str, *, pooler_url: str | None = None) -> str:
+        if pooler_url is not None:
+            # A transaction pooler does not pass startup options. The pooler
+            # alias sets the same deadlines and search_path with connect_query,
+            # and startup checks that they apply.
+            url = pooled_database_url(url, pooler_url, self.allocation)
         parsed = urlsplit(url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         query.update(
@@ -64,20 +81,19 @@ class DatabasePolicy:
             socket_timeout=str(math.ceil(self.statement_seconds) + 1),
             application_name="deltallm_" + self.allocation,
         )
-        # Last occurrence wins at PostgreSQL startup. Preserve unrelated TLS,
-        # schema and operator options, but do not allow URL overrides of bounds.
-        query["options"] = (
-            query.get("options", "")
-            + " "
-            + " ".join(
-                f"-c {name}={max(1, math.ceil(seconds * 1000))}"
-                for name, seconds in (
-                    ("statement_timeout", self.statement_seconds),
-                    ("lock_timeout", self.lock_seconds),
-                    ("idle_in_transaction_session_timeout", self.transaction_seconds),
-                )
-            )
-        ).strip()
+        if pooler_url is not None:
+            # Prisma then uses no named prepared statements, which a
+            # transaction pooler cannot keep across transactions.
+            query["pgbouncer"] = "true"
+        else:
+            # Last occurrence wins at PostgreSQL startup. Preserve unrelated
+            # TLS, schema and operator options, but do not allow URL overrides
+            # of bounds.
+            query["options"] = (
+                query.get("options", "")
+                + " "
+                + " ".join(f"-c {name}={value}" for name, value in self.server_deadlines())
+            ).strip()
         return urlunsplit(
             (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
         )

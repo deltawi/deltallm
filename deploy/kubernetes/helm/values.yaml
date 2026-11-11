@@ -298,6 +298,23 @@ runtime:
     existingSecret:
       name: ""
       urlKey: DATABASE_URL
+  # Optional transaction pooler (PgBouncer) for the pod database pools. The
+  # Secret holds a URL template with {allocation}, for example
+  # postgresql://deltallm:<password>@pgbouncer:6432/deltallm_{allocation}.
+  # Migrations and the external-auth pool keep runtime.database. See
+  # docs/deployment/database-pooler.md.
+  databasePooler:
+    enabled: false
+    existingSecret:
+      name: ""
+      urlKey: DELTALLM_DATABASE_POOLER_URL
+    # PostgreSQL connections that the pooler opens in total: the sum of its
+    # alias pool sizes for every pooler replica. With the pooler enabled, the
+    # PostgreSQL budget counts this number instead of the pod pools.
+    serverConnections: 0
+    # Client connections that the pooler accepts in total (max_client_conn for
+    # every pooler replica). The peak pod pools must fit in this number.
+    maxClientConnections: 0
   redis:
     url: ""
     existingSecret:
