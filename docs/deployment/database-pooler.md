@@ -42,7 +42,8 @@ The gateway does not use session-level advisory locks, `LISTEN`/`NOTIFY` or sess
 
 ## Set up PgBouncer
 
-1. Run PgBouncer in `pool_mode = transaction` (CI tests PgBouncer 1.22). Do not set
+1. Run PgBouncer in `pool_mode = transaction`. CI tests the PgBouncer package of the
+   Ubuntu runner (1.25.1 when this page was written). Do not set
    `server_reset_query_always = 1`: `DISCARD ALL` clears the alias settings.
 2. Generate the aliases from the gateway's own configuration. Run this where the
    gateway's configuration and environment are available, for example in an API pod:
