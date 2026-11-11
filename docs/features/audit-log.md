@@ -150,6 +150,12 @@ tells why:
   the provider charged for the call, so it keeps the reserved amount as a provisional
   charge.
 
+If a pod stops after it sent a call and before it records the result, the operation has no
+`ACCOUNTING_PROVIDER_FINALIZATION` event. When its reservation expires, the gateway closes
+it with an `ACCOUNTING_PROVIDER_OUTCOME_UNKNOWN` event whose `error_type` is
+`AccountingReservationExpired`, and keeps the reserved amount as a provisional charge. To
+find all failed provider calls, filter on both actions.
+
 ## Payload Storage and Redaction
 
 Audit payloads are handled differently depending on the event type:
