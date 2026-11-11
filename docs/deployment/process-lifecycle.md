@@ -23,7 +23,8 @@ from immediately rejecting settlement on a one-connection allocation. There are
 no extra connections. The control, foreground and telemetry acceptance pools each
 reserve one waiting position per configured connection, and settlement reserves more,
 for overlapping writes. Only the telemetry worker pool has no waiting position of its
-own. All waits consume the same acquisition deadline.
+own. Each wait uses the acquisition deadline. A transaction then gets the same deadline
+again to start, so it can take up to twice that deadline before its body runs.
 No provider request or new client pool is created for a probe. Optional callback,
 notification and cache failures do not withdraw otherwise usable inference pods;
 inspect their feature metrics for degradation.
