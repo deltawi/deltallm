@@ -66,8 +66,8 @@ acceptance; the background budgets apply to control and telemetry workers. Repos
 transaction options can shorten the configured transaction/acquisition ceilings.
 
 Capacity admission happens before Prisma: each pool permits at most its configured
-number of operations or transactions and normally has zero capacity waiters. Excess work
-returns a controlled HTTP 503 with code `database_unavailable`. Native connection,
+number of operations or transactions, plus a bounded number of waiting callers (see
+below). Excess work returns a controlled HTTP 503 with code `database_unavailable`. Native connection,
 lock and statement timeouts use the same response; record/constraint errors retain
 their repository semantics. Local dependency failures never mark a provider unhealthy
 or trigger provider retries. A transaction owns one slot through
@@ -75,13 +75,29 @@ commit or rollback, and permits only one outstanding native query on that transa
 Model queries, raw SQL and generated batch execution share this owner. There are no
 new per-request SQL calls or client retries.
 
-`db_capacity_wait_seconds` lets control and foreground work wait for a free slot
-instead of failing at once. It gives each of those pools one waiting position per
-connection, and a waiting call may take up to this many seconds plus the acquisition
-deadline before it fails with `database_unavailable`. Keep it at `0` on API pods so
-request latency stays bounded. Batch worker pods have no caller waiting on each query,
-and a busy pool there used to fail whole batch items, so the Helm chart sets `2` for
-the batch worker unless you set the value yourself. Waits on these pools show up as
+The control, foreground and telemetry pools each have one waiting position per
+connection. When all connections are busy, a call waits for a free one inside its
+acquisition deadline (`db_acquisition_timeout_seconds`, default 0.2 seconds). It does
+not fail at once. Most queries take a few milliseconds, so a short burst that is
+larger than the pool waits a few milliseconds instead of returning HTTP 503. The
+deadline does not change: a call that gets no slot in that time still fails with
+`database_unavailable`, and a call that finds every waiting position taken fails at
+once. Only the background telemetry worker pool fails at once when it is busy.
+
+A query has one budget: the wait for its slot, then its statement deadline. A
+transaction has two budgets before its body runs. First it waits up to
+`db_acquisition_timeout_seconds` (plus `db_capacity_wait_seconds`, if set) for its
+slot. Then it has up to `db_acquisition_timeout_seconds` again to start the native
+transaction. With the defaults on API pods, a transaction can take up to 0.4 seconds
+before its body runs: 0.2 seconds to get a slot and 0.2 seconds to start. Starting
+usually takes a few milliseconds, because a slot always has a free connection.
+
+`db_capacity_wait_seconds` adds a longer wait for control and foreground work: a
+waiting call may take up to this many seconds plus the acquisition deadline before it
+fails. Keep it at `0` on API pods so request latency stays bounded. Batch worker pods
+have no caller waiting on each query, and a busy pool there used to fail whole batch
+items, so the Helm chart sets `2` for the batch worker unless you set the value
+yourself. Waits on these pools show up as
 `deltallm_database_allocation_events_total{outcome="queue_timeout"}` when they expire,
 and `outcome="full"` when every waiting position is taken.
 
@@ -105,19 +121,22 @@ releases several requests together, and each takes a few milliseconds, so they
 queue instead of turning a paid answer into a 503. With ordinary operation intents
 enabled, the default telemetry total of five connections splits into four acceptance
 connections/waiters and one settlement connection with 64 waiters.
-Waits consume the existing acquisition deadline, including transaction startup;
-overflow and expired waits return the same explicit unavailable result. No native
+Each wait uses the acquisition deadline; a transaction then gets the same deadline
+again to start. Overflow and expired waits return the same explicit unavailable result. No native
 slot is freed while a cancelled operation is still running.
 
 A readiness probe borrows one existing slot and temporarily permits one business
 waiter, bounded by the same acquisition deadline. Each allocation permits only one
 probe; cancellation retains its slot until native work ends. This prevents health
 traffic from immediately shedding settlement on a one-connection allocation.
-No extra connection is added. With all allocations enabled and no capacity wait, there
-are at most `3 + telemetry_db_pool_size` waiting operations per process (a batch worker
-with `db_capacity_wait_seconds` adds `db_pool_size + db_foreground_pool_size`), or 352 with
-the default telemetry total at the illustrative 44-process
-rollout ceiling below, within the existing bounded request/worker allocations.
+No extra connection is added. With all allocations enabled, the waiting operations per
+process are at most `db_pool_size + db_foreground_pool_size` (control and foreground),
+plus the telemetry acceptance connections, plus the larger of 64 and the settlement
+connections, plus one during a telemetry worker probe. With the defaults (20, 8, four
+acceptance connections and one settlement connection) that is 96, or 97 during a probe:
+4,268 at most at the illustrative 44-process rollout ceiling below. A waiting operation
+is a suspended coroutine, not a connection or a thread. `db_capacity_wait_seconds`
+makes control and foreground waits longer, but it does not add waiting positions.
 `deltallm_database_allocation_seconds{operation="readiness"}` measures probe time;
 `deltallm_database_allocation_events_total{outcome="queue_timeout"}` records
 business acquisition deadlines exceeded in these bounded queues.

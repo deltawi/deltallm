@@ -479,3 +479,103 @@ def test_deadline_validation_does_not_expose_unrelated_credentials(settings_type
     assert "PR3CANARY" not in message
     assert "redis://" not in message
     assert "lock <= statement <= transaction" in message
+
+
+@pytest.mark.parametrize("name", ["foreground", "control"])
+async def test_request_pool_waits_for_a_slot_inside_the_acquisition_deadline(name):
+    allocation = DatabaseOwner(DatabasePolicy(name, 1, 0.5, 1, 0.05, 2))
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+        return "first"
+
+    first = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+    second = asyncio.create_task(allocation.query(AsyncMock(return_value="second")))
+    await asyncio.sleep(0.02)
+    assert allocation.gate.waiters == 1
+    # One waiting position per connection: the next caller fails at once.
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(DatabaseUnavailableError):
+        await allocation.query(AsyncMock())
+    assert asyncio.get_running_loop().time() - started < 0.1
+    finish.set()
+    assert await asyncio.gather(first, second) == ["first", "second"]
+    await allocation.close()
+
+
+async def test_request_pool_wait_never_grows_past_the_acquisition_deadline():
+    allocation = DatabaseOwner(DatabasePolicy("foreground", 1, 0.05, 1, 0.05, 2))
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+
+    holder = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(DatabaseUnavailableError):
+        await allocation.query(AsyncMock())
+    waited = asyncio.get_running_loop().time() - started
+    assert 0.04 <= waited < 0.5
+    assert allocation.gate.waiters == 0
+    finish.set()
+    await holder
+    await allocation.close()
+
+
+async def test_telemetry_worker_pool_still_sheds_at_once():
+    allocation = owner("telemetry_worker", acquisition=0.5)
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+
+    holder = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(DatabaseUnavailableError):
+        await allocation.query(AsyncMock())
+    assert asyncio.get_running_loop().time() - started < 0.1
+    finish.set()
+    await holder
+    await allocation.close()
+
+
+async def test_transaction_that_waited_for_its_slot_gets_the_full_start_deadline(monkeypatch):
+    allocation = DatabaseOwner(DatabasePolicy("foreground", 1, 0.2, 1, 0.05, 2))
+    native = NativeTransaction(allocation)
+    native.client._tx_id = "waited-transaction"
+    monkeypatch.setattr(Prisma, "_execute", AsyncMock(return_value={}))
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        entered.set()
+        await finish.wait()
+
+    async def slow_start():
+        # Together with the wait below, longer than one acquisition deadline.
+        await asyncio.sleep(0.12)
+        return native.client
+
+    native.start.side_effect = slow_start
+    holder = asyncio.create_task(allocation.query(blocked))
+    await entered.wait()
+
+    async def run_transaction():
+        async with AllocatedTransaction(allocation, native) as tx:
+            await tx._execute(method="query_raw", arguments={})
+        return "committed"
+
+    transaction = asyncio.create_task(run_transaction())
+    await asyncio.sleep(0.12)
+    finish.set()
+    assert await transaction == "committed"
+    await holder
+    native.commit.assert_awaited_once()
+    assert allocation.gate.active == 0
+    await allocation.close()

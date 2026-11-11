@@ -48,6 +48,8 @@ _duration = Histogram(
 
 # Waiting positions on the receipt (settlement) allocation, whatever its size.
 SETTLEMENT_MIN_WAITERS = 64
+# Allocations whose callers may wait for a slot within the acquisition deadline.
+_REQUEST_ALLOCATIONS = frozenset({"control", "foreground", "telemetry"})
 
 
 class DatabaseUnavailableError(ServiceUnavailableError):
@@ -92,9 +94,10 @@ async def _native_call(operation: Callable[[], Awaitable[T]], seconds: float) ->
 class DatabaseOwner:
     def __init__(self, policy: DatabasePolicy):
         self.policy = policy
-        # Required acceptance and receipts need a finite burst buffer, as do
-        # allocations given a queue wait (batch workers). Others keep immediate
-        # shedding; health may borrow one waiter.
+        # Request pools, required acceptance and receipts need a finite burst
+        # buffer, as do allocations given a queue wait (batch workers). Only the
+        # background telemetry consumer sheds at once; health may borrow one
+        # waiter there.
         if policy.allocation == "telemetry_settlement":
             # Receipts follow provider work that already ran, so shedding one
             # turns a paid answer into a 503. They arrive in bursts (requests
@@ -102,7 +105,12 @@ class DatabaseOwner:
             # few milliseconds, so a small pool queues them within the same
             # acquisition deadline instead of rejecting the third at once.
             self._business_waiters = max(policy.connections, SETTLEMENT_MIN_WAITERS)
-        elif policy.allocation == "telemetry" or policy.queue_seconds > 0:
+        elif policy.allocation in _REQUEST_ALLOCATIONS or policy.queue_seconds > 0:
+            # A query that finds the pool busy waits for a slot inside its
+            # existing acquisition deadline (0.2 s by default) instead of
+            # failing at once. Most queries take milliseconds, so a burst one
+            # larger than the pool no longer turns into 503s. The deadline does
+            # not grow: a caller still fails after the same acquisition time.
             self._business_waiters = policy.connections
         else:
             self._business_waiters = 0
@@ -162,8 +170,8 @@ class DatabaseOwner:
     async def readiness_query(self, operation: Callable[[], Awaitable[T]]) -> T:
         # Borrow one existing slot. A business operation may wait behind this
         # probe within its existing acquisition deadline instead of being shed
-        # by health traffic. One probe uses the existing telemetry queue or
-        # borrows one waiter; other business saturation still has zero waiters.
+        # by health traffic. One probe uses the pool's existing queue, or
+        # borrows one waiter on a pool that has none.
         if self._probe_active or self.gate.waiters or self.gate.active >= self.policy.connections:
             raise DatabaseUnavailableError()
         deadline = monotonic() + self.policy.acquisition_seconds + self.policy.statement_seconds
@@ -332,10 +340,9 @@ class AllocatedTransaction:
         acquisition_deadline = monotonic() + self.acquisition_seconds
         await self.owner.acquire(timeout_seconds=self.acquisition_seconds)
         self._owns_slot = True
-        if self.owner.policy.queue_seconds:
-            # A caller that queued for its slot still gets the full native
-            # acquisition deadline to start the transaction.
-            acquisition_deadline = max(acquisition_deadline, monotonic() + self.acquisition_seconds)
+        # A caller that waited for its slot still gets the full native
+        # acquisition deadline to start the transaction.
+        acquisition_deadline = max(acquisition_deadline, monotonic() + self.acquisition_seconds)
         self.expires_at = (
             monotonic() + self.owner.policy.native_query_seconds + self.transaction_seconds
         )
