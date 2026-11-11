@@ -247,10 +247,16 @@ jobs:
 
       - name: Install PgBouncer
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq pgbouncer
+          # A failing Ubuntu mirror can hang apt for minutes, so bound each call and
+          # fall back to a pinned container image from ghcr.io.
+          if ! { timeout 180 sudo apt-get update -qq \
+            && timeout 180 sudo apt-get install -y -qq pgbouncer; }; then
+            echo "::warning::apt could not install pgbouncer; using the container image"
+            sudo install -m 0755 scripts/ci/pgbouncer_container.sh /usr/local/bin/pgbouncer
+          fi
           # The package starts its own service on port 6432; this job runs its own.
-          sudo systemctl stop pgbouncer || true
+          # A partial install can also leave that service running.
+          sudo systemctl stop pgbouncer 2>/dev/null || true
           pgbouncer --version
 
       - name: Start PgBouncer with the generated aliases
@@ -294,7 +300,9 @@ jobs:
 
       - name: Print the PgBouncer log
         if: failure()
-        run: cat /tmp/pgbouncer-ci/pgbouncer.log || true
+        run: |
+          cat /tmp/pgbouncer-ci/pgbouncer.log || true
+          docker logs pgbouncer-ci 2>&1 || true
 
   redis-tests:
     name: Python tests (redis)
