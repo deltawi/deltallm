@@ -23,8 +23,11 @@ from immediately rejecting settlement on a one-connection allocation. There are
 no extra connections. The control, foreground and telemetry acceptance pools each
 reserve one waiting position per configured connection, and settlement reserves more,
 for overlapping writes. Only the telemetry worker pool has no waiting position of its
-own. Each wait uses the acquisition deadline. A transaction then gets the same deadline
-again to start, so it can take up to twice that deadline before its body runs.
+own. Each wait uses the acquisition deadline, plus `db_capacity_wait_seconds` for
+control and foreground work when it is set. A transaction then gets the acquisition
+deadline again to start. Thus a transaction can take up to `db_capacity_wait_seconds`
+plus twice the acquisition deadline before its body runs: 0.4 seconds on API pods and
+2.4 seconds on batch-worker pods with the chart defaults.
 No provider request or new client pool is created for a probe. Optional callback,
 notification and cache failures do not withdraw otherwise usable inference pods;
 inspect their feature metrics for degradation.
