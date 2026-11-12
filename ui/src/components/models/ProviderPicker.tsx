@@ -90,7 +90,8 @@ export default function ProviderPicker({ id, presets, value, mode, onChange, dis
   }, [open, activeOption]);
 
   const pick = (provider: string) => {
-    onChange(provider);
+    // Picking the current provider again must not reset its API base and other connection fields.
+    if (provider !== value) onChange(provider);
     close(true);
   };
 

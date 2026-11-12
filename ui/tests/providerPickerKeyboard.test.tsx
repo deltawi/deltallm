@@ -88,6 +88,14 @@ test('provider picker filters, moves with arrow keys, selects with Enter and ret
     assert.equal(document.querySelector('input[role="combobox"]'), null);
     assert.equal(document.activeElement, trigger);
     assert.ok(trigger.textContent?.includes('Anthropic'));
+
+    // Picking the current provider again does not report a change.
+    act(() => trigger.click());
+    const reopened = document.querySelector<HTMLInputElement>('input[role="combobox"]');
+    assert.ok(reopened);
+    act(() => { key(reopened, 'Enter'); });
+    assert.deepEqual(picked, ['anthropic']);
+    assert.equal(document.querySelector('input[role="combobox"]'), null);
   } finally {
     await act(async () => { root.unmount(); });
     restore();
@@ -121,7 +129,9 @@ test('provider picker hides providers without the model type and offers the gene
     assert.ok(again);
     await act(async () => { type(again, 'cohere'); });
     act(() => key(again, 'Enter'));
-    assert.deepEqual(picked, ['openai_compatible', 'openai_compatible']);
+    // It is already the selected provider, so the list closes without a second change.
+    assert.deepEqual(picked, ['openai_compatible']);
+    assert.equal(document.querySelector('input[role="combobox"]'), null);
     assert.equal(document.activeElement, trigger);
 
     act(() => trigger.click());
