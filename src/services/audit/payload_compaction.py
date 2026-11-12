@@ -36,6 +36,12 @@ ENTRY_OVERHEAD = 4
 MIN_VALUE_SIZE = 2
 # The longest JSON text of a finite float, such as -1.7976931348623157e+308.
 MAX_FLOAT_CHARS = 24
+# The shortest inline-data placeholder: the shortest media type ("a/b"), the
+# shortest length and a SHA-256. A string can be no smaller than this or its own
+# length, so a string with less room than that is over the limit without a scan.
+_MIN_PLACEHOLDER_CHARS = len(
+    f"[omitted inline data: a/b, {_INLINE_DATA_MIN_CHARS} chars, sha256={'0' * 64}]"
+)
 
 
 def compact_audit_content(content: Any, *, max_bytes: int) -> tuple[Any, bool]:
@@ -63,10 +69,16 @@ def _compact(value: Any, *, stop: int) -> tuple[Any, int, bool]:
     its container has not used yet. So the whole traversal ends as soon as the payload
     is known to be over its limit, and no later string is scanned, hashed or measured.
     The caller then replaces the payload, so the value returned with a size over
-    ``stop`` is not used, and that size is only a lower bound.
+    ``stop`` is not used, and that size is only a lower bound. A size is over ``stop``
+    exactly when the full count would be.
     """
 
     if isinstance(value, str):
+        # A lower bound of its size, kept or replaced: a string that cannot fit is
+        # never scanned or hashed.
+        floor = min(len(value), _MIN_PLACEHOLDER_CHARS) + 2
+        if floor > stop:
+            return value, floor, False
         placeholder = _inline_data_placeholder(value)
         if placeholder is not None:
             return placeholder, len(placeholder) + 2, True
@@ -96,6 +108,8 @@ def _compact(value: Any, *, stop: int) -> tuple[Any, int, bool]:
         changed = False
         for item in value:
             size += 1
+            if size > stop:
+                return value, size, changed
             compacted, item_size, item_changed = _compact(item, stop=stop - size)
             size += item_size
             changed = changed or item_changed
@@ -140,7 +154,8 @@ def _text_size(value: str, *, stop: int) -> int:
     exact size check of each record covers them.
     """
 
-    if value.isascii():
+    if value.isascii() or len(value) + 2 > stop:
+        # Escapes only make the text longer, so the length is a lower bound.
         return len(value) + 2
     size = 2
     for position in range(0, len(value), _SCAN_CHUNK_CHARS):
