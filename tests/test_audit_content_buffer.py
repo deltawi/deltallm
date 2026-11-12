@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 import gc
 from hashlib import sha256
 import json
 from time import perf_counter
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -44,8 +46,9 @@ from src.services.audit.content_buffer import (
     AuditContentBuffer,
     AuditContentItem,
     AuditRequestSnapshot,
+    _json_text,
     _measure,
-    _wire_size,
+    _with_request_body,
     approximate_chars,
     audit_request_snapshot,
 )
@@ -62,14 +65,16 @@ class _Ingestion:
     def __init__(self, service: _Service) -> None:
         self.service = service
 
-    async def enqueue_bundle(self, *, envelopes, max_pending_events, required_reserve):
+    async def enqueue_bundle(
+        self, *, envelopes, max_pending_events, required_reserve, serialized_envelopes=None
+    ):
         service = self.service
         service.reserves.append(required_reserve)
         if service.enqueue_delay:
             await asyncio.sleep(service.enqueue_delay)
         if service.enqueue_error is not None:
             raise service.enqueue_error
-        service.bundles.append(list(envelopes))
+        service.sent.append((serialized_envelopes, list(envelopes)))
         return AuditBundleEnqueueResult(
             statuses={envelope.event_id: "accepted" for envelope in envelopes},
             pending_count=len(envelopes),
@@ -90,11 +95,32 @@ class _Service(AuditService):
         )
         self.policies = dict(policies or {})
         self.policy_reads: list[set[str]] = []
-        self.bundles: list[list[AuditOutboxEnvelope]] = []
+        # Each statement sent: its text, and the envelopes that name its records.
+        self.sent: list[tuple[str | None, list[AuditOutboxEnvelope]]] = []
         self.reserves: list[int] = []
         self.enqueue_error: Exception | None = None
         self.enqueue_delay = 0.0
         self.fake_ingestion = _Ingestion(self)
+
+    @property
+    def statements(self) -> list[str]:
+        return [text for text, _ in self.sent if text is not None]
+
+    @property
+    def bundles(self) -> list[list[AuditOutboxEnvelope]]:
+        """The records as stored, read back from each statement's text.
+
+        Read when a test looks, so the test's own parse is not part of a flush.
+        """
+
+        bundles = []
+        for text, envelopes in self.sent:
+            if text is not None:
+                stored = [AuditOutboxEnvelope(**wire) for wire in json.loads(text)]
+                assert [item.event_id for item in stored] == [item.event_id for item in envelopes]
+                envelopes = stored
+            bundles.append(envelopes)
+        return bundles
 
     @property
     def worker_ingestion_repository(self):
@@ -196,8 +222,12 @@ async def test_large_bodies_count_until_their_send_ends():
 
 
 def test_size_estimate_adds_up_string_lengths_and_a_little_per_value():
-    assert approximate_chars({"a": ["xy", 1, None]}) == 2 + (1 + 4) + (2 + 3) + 4 + 8 + 8
-    assert approximate_chars({"data": "A" * 1_000_000}) == 2 + 4 + 4 + 1_000_002
+    # Braces, the key with its quotes and separators, brackets and ", " for three items,
+    # the string with its quotes, and 8 for each other scalar.
+    assert approximate_chars({"a": ["xy", 1, None]}) == 2 + (1 + 6) + (2 + 6) + 4 + 8 + 8
+    assert approximate_chars({"data": "A" * 1_000_000}) == 2 + (4 + 6) + 1_000_002
+    # A float counts its longest text.
+    assert approximate_chars([0.5]) == (2 + 2) + 24
 
 
 class _NeverWalked(list):
@@ -368,12 +398,8 @@ async def test_a_full_queue_stops_the_flush_after_one_statement():
     service = _Service({"org-1": True, "org-2": True})
     original = service.fake_ingestion.enqueue_bundle
 
-    async def full(*, envelopes, max_pending_events, required_reserve):
-        await original(
-            envelopes=envelopes,
-            max_pending_events=max_pending_events,
-            required_reserve=required_reserve,
-        )
+    async def full(*, envelopes, **kwargs):
+        await original(envelopes=envelopes, **kwargs)
         return AuditBundleEnqueueResult(
             statuses={envelope.event_id: "full" for envelope in envelopes}, pending_count=10
         )
@@ -870,6 +896,19 @@ async def test_a_request_snapshot_is_a_text_only_when_its_parse_is_short():
     assert snapshot.text is None
     assert snapshot.body == {"omitted": "payload_too_many_values", "max_values": 16_384}
     assert snapshot.values_limited
+    # Numbers are slow to parse, so digits count too: 40,000 floats or 250 integers of
+    # 4,001 digits fit the length limit, but they are copied now (or replaced).
+    floats = {"enum": [1.2345678901234567e-300] * 40_000}
+    floats_text = json_text(floats)
+    assert len(floats_text) < AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS
+    assert audit_request_snapshot(request, "org-1", floats_text, floats).text is None
+    integers = {"enum": [10**4_000 + 7] * 250}
+    integers_text = json_text(integers)
+    assert len(integers_text) < AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS
+    snapshot = audit_request_snapshot(request, "org-1", integers_text, integers)
+    assert snapshot.text is None
+    assert snapshot.body == integers
+    assert snapshot.chars >= len(integers_text)
     # Long prose: few values, over the length limit. It is copied now.
     prose = {"messages": [{"role": "user", "content": "word " * 250_000}]}
     prose_text = json_text(prose)
@@ -960,17 +999,23 @@ async def test_a_large_request_does_not_stop_the_event_loop_during_the_flush(mon
     assert response_payload["content_json"] == {"reply": "hello"}
 
 
-@pytest.mark.parametrize("valid_base64", [False, True], ids=["text", "base64"])
-async def test_a_large_string_does_not_stop_the_event_loop_during_the_flush(
-    monkeypatch, valid_base64
-):
+@pytest.mark.parametrize("kind", ["text", "base64", "data_url_header", "data_url_parameter"])
+async def test_a_large_string_does_not_stop_the_event_loop_during_the_flush(monkeypatch, kind):
     """Compaction scans and hashes a long string in slices, never in one long C call."""
 
     monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
     service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
     buffer = AuditContentBuffer(service)
-    # 24 MiB of base64 characters; one more character makes it plain text.
-    content = "A" * (24 * 1024 * 1024) + ("" if valid_base64 else "!")
+    # 24 MiB of base64 characters; one more character makes it plain text. A data URL
+    # header that never ends is read only at the start of the string.
+    long = 24 * 1024 * 1024
+    content = {
+        "text": "A" * long + "!",
+        "base64": "A" * long,
+        "data_url_header": "data:" + "a" * long + "!",
+        "data_url_parameter": "data:a/b;x=" + "y" * long,
+    }[kind]
+    valid_base64 = kind == "base64"
     request_data = {"model": "m", "messages": [{"role": "user", "content": content}]}
     request = _request(buffer=buffer, operation=accounting_operation())
     text = json_text(request_data)
@@ -1010,12 +1055,30 @@ async def test_a_large_string_does_not_stop_the_event_loop_during_the_flush(
     assert response_payload["content_json"] == {"reply": "hello"}
 
 
-def test_the_record_size_is_measured_body_by_body_exactly():
+@pytest.mark.parametrize("chunk", [1, 2, 3, 1024])
+def test_records_are_encoded_in_short_calls_with_the_same_text(monkeypatch, chunk):
+    """The flusher writes a record in parts of at most a few values; the text is exact."""
+
+    monkeypatch.setattr("src.services.audit.content_buffer._ENCODE_CHUNK_VALUES", chunk)
+    calls: list[Any] = []
+    real_dumps = json.dumps
+
+    def counting_dumps(value, **kwargs):
+        calls.append(value)
+        return real_dumps(value, **kwargs)
+
+    monkeypatch.setattr(
+        "src.services.audit.content_buffer.json",
+        SimpleNamespace(dumps=counting_dumps, loads=json.loads),
+    )
     service = _Service({"org-1": True})
     buffer = AuditContentBuffer(service)
     bodies = [
         {"messages": [{"role": "user", "content": 'quote " backslash \\ é 中文 😀'}]},
         {"reply": "مرحبا " * 100, "n": [1, 2.5, None, True], "nan": float("nan")},
+        {1: "int key", 2.5: "float key", None: "null key", False: [[], {}, ()]},
+        {"enum": [-1.7976931348623157e308] * 50, "nested": [[1, [2, [3, {"a": (4, 5)}]]]]},
+        {"when": datetime(2026, 11, 12, tzinfo=UTC), "id": uuid4()},
         "a plain string body",
     ]
     for request_body, response_body in zip(bodies, [*bodies[1:], None], strict=True):
@@ -1028,17 +1091,158 @@ def test_the_record_size_is_measured_body_by_body_exactly():
             payloads=payloads,
             enqueued_at=datetime.now(UTC),
         )
-        envelope = buffer._envelope(item)
-        assert _wire_size(envelope) == len(json.dumps(audit_envelope_wire(envelope), default=str))
-    empty = buffer._envelope(
-        AuditContentItem(
-            target_event_id=str(uuid4()),
-            event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
-            payloads=[],
-            enqueued_at=datetime.now(UTC),
+        wire = audit_envelope_wire(buffer._envelope(item))
+        calls.clear()
+        assert _json_text(wire) == real_dumps(wire, default=str)
+        # A part is at most ``chunk`` values, plus the list or object that holds them.
+        assert max(_count_values(value) for value in calls if not _is_key_probe(value)) <= (
+            chunk + 1
+        )
+    empty = audit_envelope_wire(
+        buffer._envelope(
+            AuditContentItem(
+                target_event_id=str(uuid4()),
+                event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
+                payloads=[],
+                enqueued_at=datetime.now(UTC),
+            )
         )
     )
-    assert _wire_size(empty) == len(json.dumps(audit_envelope_wire(empty), default=str))
+    assert _json_text(empty) == real_dumps(empty, default=str)
+
+
+def _count_values(value: Any) -> int:
+    if isinstance(value, dict):
+        return 1 + sum(_count_values(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return 1 + sum(_count_values(item) for item in value)
+    return 1
+
+
+def _is_key_probe(value: Any) -> bool:
+    # ``{key: None}``, written to get one key's text.
+    return isinstance(value, dict) and len(value) == 1 and next(iter(value.values())) is None
+
+
+async def test_the_statement_is_the_text_of_its_records():
+    """The flusher sends the text it measured; the outbox does not encode it again."""
+
+    service = _Service({"org-1": True})
+    buffer = AuditContentBuffer(service)
+    items = [_item(text=text) for text in ("hello", 'é 😀 "quoted"', "x" * 300)]
+    for item in items:
+        assert buffer.offer(item)
+    await buffer.flush()
+
+    assert len(service.statements) == 1
+    expected = [audit_envelope_wire(buffer._envelope(_with_request_body(item))) for item in items]
+    assert service.statements[0] == json.dumps(expected, default=str)
+    # The records that wait for the send keep only their text, not their payloads.
+    assert [len(bundle) for bundle in service.bundles] == [3]
+
+
+async def test_a_record_that_cannot_be_encoded_does_not_stop_the_flush(monkeypatch):
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "src.services.audit.content_buffer.increment_audit_content_dropped",
+        lambda *, reason, count=1: dropped.extend([reason] * count),
+    )
+    service = _Service({"org-1": True})
+    buffer = AuditContentBuffer(service)
+    bad = _item()
+    # JSON has no tuple keys, so this body cannot be written.
+    bad = replace(bad, payloads=[AuditPayloadInput(kind="request", content_json={(1, 2): "x"})])
+    good = _item(text="kept")
+    assert buffer.offer(bad)
+    assert buffer.offer(good)
+    await buffer.flush()
+
+    assert dropped == ["invalid_record"]
+    assert [item.event_id for bundle in service.bundles for item in bundle] == [
+        audit_content_record_id(good.target_event_id)
+    ]
+
+
+async def test_floats_are_counted_by_their_longest_text(monkeypatch):
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service, max_held_chars=1_048_576)
+    # Its text is not kept (too many separators), so the request is copied: 15,000
+    # floats of 24 characters each are counted as such, not as 8.
+    request_data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": ",:" * 25_000}],
+        "tools": [{"enum": [-1.7976931348623157e308] * 15_000}],
+    }
+    text = json_text(request_data)
+    for _ in range(5):
+        request = _request(buffer=buffer, operation=accounting_operation())
+        request.state.prepared_text_request = TextPreflightResult(
+            auth=None,
+            payload=None,
+            request_data=request_data,
+            callback_manager=None,
+            guardrail_middleware=None,
+            token_estimate=len(text) // 4,
+            audit_request=audit_request_snapshot(request, "org-1", text, request_data),
+        )
+        assert request.state.prepared_text_request.audit_request.text is None
+        await emit_text_audit_event(
+            request=request,
+            auth=_auth(),
+            action="CHAT_COMPLETION_REQUEST",
+            model="m",
+            status="success",
+            request_start=perf_counter(),
+            request_data=request_data,
+            response_data={"reply": "hello"},
+        )
+    assert buffer.pending_items == 2
+    assert buffer._waiting_chars >= 2 * len(text)
+
+
+async def test_a_body_of_many_floats_does_not_stop_the_event_loop_during_the_flush():
+    """A float takes up to about 1.2 us to write, so records are written in parts."""
+
+    limit = 8 * 1024 * 1024
+    service = _Service({"org-1": True}, payload_max_bytes=limit)
+    buffer = AuditContentBuffer(service, bundle_max_bytes=limit, max_size_values=200_000)
+    floats = [-1.7976931348623157e308] * 100_000
+    item = replace(
+        _item(),
+        payloads=[
+            AuditPayloadInput(kind="request", content_json={"enum": floats}),
+            AuditPayloadInput(kind="response", content_json={"reply": "hello"}),
+        ],
+    )
+    assert buffer.offer(item)
+
+    # In one json.dumps call, these floats take about 115 ms.
+    assert await _longest_loop_pause(buffer.flush()) < 0.05
+    request_payload, response_payload = service.bundles[0][0].payload["payloads"]
+    assert request_payload["content_json"] == {"enum": floats}
+    assert response_payload["content_json"] == {"reply": "hello"}
+
+
+async def test_a_long_arabic_body_is_replaced_and_the_rest_of_the_record_is_kept():
+    """JSON writes each Arabic letter as a six-character escape; compaction counts it."""
+
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service)
+    # 200,000 letters: 1.2 MB as sent, though the string is 200,000 characters.
+    item = replace(
+        _item(),
+        payloads=[
+            AuditPayloadInput(kind="request", content_json={"messages": ["ع" * 200_000]}),
+            AuditPayloadInput(kind="response", content_json={"reply": "مرحبا"}),
+        ],
+    )
+    assert buffer.offer(item)
+    await buffer.flush()
+
+    request_payload, response_payload = service.bundles[0][0].payload["payloads"]
+    assert request_payload["content_json"]["omitted"] == "payload_too_large"
+    assert response_payload["content_json"] == {"reply": "مرحبا"}
 
 
 async def test_later_changes_to_the_bodies_do_not_reach_the_buffer(monkeypatch):

@@ -29,6 +29,12 @@ audit pool. Every statement, measured as it is sent, is at most
 a smaller payload limit, or dropped. A database error or a full audit queue drops
 the rest of that flush; there is no retry loop.
 
+Event loop cost: the flusher compacts and encodes records in a worker thread, but a
+C call there holds the GIL, so every step is short: long strings are scanned 256 KiB
+at a time, a kept request text has a short parse, and records are written as JSON
+in parts of at most ``_ENCODE_CHUNK_VALUES`` values. The statement is the text of
+its records, so the event loop only joins them.
+
 Memory: at most ``AUDIT_CONTENT_MAX_ITEMS`` items wait between flushes. Each item
 holds a snapshot that later changes to the request's objects (for example by a
 post-call hook) cannot reach: the preflight's JSON text of the request, and copies
@@ -68,6 +74,7 @@ from src.services.audit.content_attachment import (
 )
 from src.services.audit.payload_compaction import (
     ENTRY_OVERHEAD,
+    MAX_FLOAT_CHARS,
     MIN_VALUE_SIZE,
     oversize_placeholder,
 )
@@ -94,12 +101,19 @@ AUDIT_CONTENT_SHUTDOWN_FLUSH_SECONDS = 2.0
 # containers. Request bodies that the preflight serialized are not walked.
 AUDIT_CONTENT_MAX_SIZE_VALUES = 16_384
 # Largest preflight JSON text of a request that the buffer keeps. The flusher parses
-# it back in one call that holds the GIL, so its cost must stay small: the parse
-# takes up to about 0.1 us for each separator (``,`` or ``:``), so 49,152 of them
-# take at most about 5 ms. A larger request is measured and copied like any other
-# body instead.
+# it back in one call that holds the GIL, so its cost must stay small. The parse takes
+# up to about 0.1 us for each separator (``,`` or ``:``) and up to about 0.03 us for
+# each digit (numbers are the slow values: 40,000 floats near 1e-300 take about
+# 21 ms, 250 integers of 4,000 digits about 16 ms). So a text is kept when its
+# separators plus a quarter of its digits are at most 49,152: a parse of at most about
+# 5 ms. A larger request is measured and copied like any other body instead.
 AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS = 1024 * 1024
-AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS = 49_152
+AUDIT_CONTENT_MAX_REQUEST_TEXT_PARSE_COST = 49_152
+_DIGITS = b"0123456789"
+# Values that one ``json.dumps`` call writes at most when the flusher encodes a
+# record. The slowest values are floats (up to about 1.2 us each), so a call takes
+# at most about 1.2 ms; strings are bounded by the statement limit.
+_ENCODE_CHUNK_VALUES = 1024
 # Attempts to compact a record into one statement before it is dropped.
 _FIT_ATTEMPTS = 3
 
@@ -139,8 +153,13 @@ class AuditContentItem:
 
 @dataclass(frozen=True, slots=True)
 class _SizedEnvelope:
+    # The record without its payloads; ``wire`` is its JSON text as sent.
     envelope: AuditOutboxEnvelope
-    size: int
+    wire: str
+
+    @property
+    def size(self) -> int:
+        return len(self.wire)
 
 
 class AuditContentBuffer:
@@ -205,17 +224,20 @@ class AuditContentBuffer:
 
         ``text`` is the JSON text the preflight already made of ``data`` for its token
         estimate. It is kept when it is at most ``AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS``
-        characters and ``AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS`` separators, so the
-        flusher's parse stays short; counting them is a fast scan of the text (about
-        0.4 ms per MiB). Otherwise ``data`` is measured and copied within the work
-        limit, now, so later changes to it do not reach the buffer.
+        characters, and its separators plus a quarter of its digits are at most
+        ``AUDIT_CONTENT_MAX_REQUEST_TEXT_PARSE_COST``, so the flusher's parse stays short.
+        Counting them is a few fast passes over the text (about 2 ms per MiB). Otherwise
+        ``data`` is measured and copied within the work limit, now, so later changes to
+        it do not reach the buffer.
         """
 
-        if (
-            len(text) <= AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS
-            and text.count(",") + text.count(":") <= AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS
-        ):
-            return AuditRequestSnapshot(chars=len(text), text=text)
+        if len(text) <= AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS:
+            separators = text.count(",") + text.count(":")
+            if separators <= AUDIT_CONTENT_MAX_REQUEST_TEXT_PARSE_COST:
+                encoded = text.encode()
+                digits = len(encoded) - len(encoded.translate(None, _DIGITS))
+                if separators + digits // 4 <= AUDIT_CONTENT_MAX_REQUEST_TEXT_PARSE_COST:
+                    return AuditRequestSnapshot(chars=len(text), text=text)
         body, chars, values_limited = self._bounded_body(data)
         return AuditRequestSnapshot(chars=chars, body=body, values_limited=values_limited)
 
@@ -359,7 +381,7 @@ class AuditContentBuffer:
     ) -> tuple[list[_SizedEnvelope], dict[str, int]]:
         sized: list[_SizedEnvelope] = []
         total = 0
-        dropped = {"duplicate": 0, "flush_bytes": 0, "record_bytes": 0}
+        dropped = {"duplicate": 0, "flush_bytes": 0, "invalid_record": 0, "record_bytes": 0}
         seen: set[str] = set()
         for item in items:
             # One accounting event takes one content record. A bundle with the same
@@ -368,7 +390,14 @@ class AuditContentBuffer:
                 dropped["duplicate"] += 1
                 continue
             seen.add(item.target_event_id)
-            fitted = self._fitted_envelope(item)
+            try:
+                fitted = self._fitted_envelope(item)
+            except Exception:
+                # One record that cannot be encoded (for example nested too deeply)
+                # does not cost the rest of the flush.
+                logger.warning("audit content record could not be encoded", exc_info=True)
+                dropped["invalid_record"] += 1
+                continue
             if fitted is None:
                 dropped["record_bytes"] += 1
                 continue
@@ -395,9 +424,12 @@ class AuditContentBuffer:
         limit: int | None = None if payload_max <= self.bundle_max_bytes else self.bundle_max_bytes
         for _ in range(_FIT_ATTEMPTS):
             envelope = self._envelope(item, max_payload_bytes=limit)
-            size = _wire_size(envelope)
+            wire = _json_text(audit_envelope_wire(envelope))
+            size = len(wire)
             if size <= record_max:
-                return _SizedEnvelope(envelope=envelope, size=size)
+                # The text is sent as is, so the payloads are not kept twice.
+                slim = replace(envelope, payload={}, redacted_payload={})
+                return _SizedEnvelope(envelope=slim, wire=wire)
             current = limit or self.audit_service.ingestion_config.payload_max_bytes
             limit = max(1, current * record_max // (2 * size))
         return None
@@ -423,13 +455,16 @@ class AuditContentBuffer:
         )
 
     @with_database_caller("audit")
-    async def _enqueue_bundle(self, bundle: list[AuditOutboxEnvelope]) -> dict[str, str]:
+    async def _enqueue_bundle(self, bundle: list[_SizedEnvelope]) -> dict[str, str]:
         # Best-effort capacity only: required_reserve stays free for required events.
         # The worker is not woken: the accounting event is usually not written yet,
         # and the worker's own poll (at most 1 s when idle) is soon enough.
+        # The statement is the records' text, encoded in the flusher's thread: joining
+        # them is the only encoding work on the event loop.
         config = self.audit_service.ingestion_config
         result = await self.audit_service.worker_ingestion_repository.enqueue_bundle(
-            envelopes=bundle,
+            envelopes=[entry.envelope for entry in bundle],
+            serialized_envelopes="[" + ", ".join(entry.wire for entry in bundle) + "]",
             max_pending_events=config.max_pending_events,
             required_reserve=config.required_reserve,
         )
@@ -554,11 +589,12 @@ def _measure(value: Any, budget: int) -> _Size:
             chars += 2
             floor += 2
             for item_key, item in current.items():
+                # The key's quotes and ": ", and ", " before the next entry.
                 if isinstance(item_key, str):
-                    chars += len(item_key) + 4
+                    chars += len(item_key) + 6
                     floor += len(item_key) + ENTRY_OVERHEAD
                 else:
-                    chars += 12
+                    chars += 14
                     floor += ENTRY_OVERHEAD
                 if isinstance(item, str):
                     visited += 1
@@ -568,8 +604,13 @@ def _measure(value: Any, budget: int) -> _Size:
                     push((item, copy, item_key))
                 else:
                     visited += 1
+                    kind = type(item)
                     chars += (
-                        8 if type(item) is not int or -_INT8 < item < _INT8 else _int_chars(item)
+                        MAX_FLOAT_CHARS
+                        if kind is float
+                        else 8
+                        if kind is not int or -_INT8 < item < _INT8
+                        else _scalar_chars(item)
                     )
                     floor += ENTRY_OVERHEAD
         elif isinstance(current, (list, tuple)):
@@ -580,7 +621,8 @@ def _measure(value: Any, budget: int) -> _Size:
             items = list(current)
             parent[key] = items
             visited += 1  # the copy costs about one more value
-            chars += 2 + len(current)
+            # Brackets, and ", " between items.
+            chars += 2 + 2 * len(current)
             floor += 2 + len(current)
             for index, item in enumerate(current):
                 if isinstance(item, str):
@@ -591,8 +633,13 @@ def _measure(value: Any, budget: int) -> _Size:
                     push((item, items, index))
                 else:
                     visited += 1
+                    kind = type(item)
                     chars += (
-                        8 if type(item) is not int or -_INT8 < item < _INT8 else _int_chars(item)
+                        MAX_FLOAT_CHARS
+                        if kind is float
+                        else 8
+                        if kind is not int or -_INT8 < item < _INT8
+                        else _scalar_chars(item)
                     )
                     floor += ENTRY_OVERHEAD
         elif isinstance(current, str):
@@ -600,7 +647,7 @@ def _measure(value: Any, budget: int) -> _Size:
             floor += MIN_VALUE_SIZE
             parent[key] = current
         else:
-            chars += _int_chars(current) if type(current) is int else 8
+            chars += _scalar_chars(current)
             floor += ENTRY_OVERHEAD
             parent[key] = current
     return _Size(
@@ -614,13 +661,19 @@ def _measure(value: Any, budget: int) -> _Size:
 
 # Other scalars count 8 characters, and so do integers below this size. A larger
 # integer counts an upper bound of its digits, from its bit length, because its text
-# has no bound (compaction omits an integer over 1,024 bits).
+# has no bound (compaction omits an integer over 1,024 bits). A float counts the
+# longest text of a finite float (``MAX_FLOAT_CHARS``).
 _INT8 = 1 << 23
 
 
-def _int_chars(value: int) -> int:
-    bits = value.bit_length()
-    return (bits * 31) // 100 + 3 if bits > 23 else 8
+def _scalar_chars(value: Any) -> int:
+    kind = type(value)
+    if kind is float:
+        return MAX_FLOAT_CHARS
+    if kind is int and not -_INT8 < value < _INT8:
+        bits = value.bit_length()
+        return (bits * 31) // 100 + 3
+    return 8
 
 
 def _with_request_body(item: AuditContentItem) -> AuditContentItem:
@@ -674,44 +727,99 @@ _BUNDLE_BRACKETS = 2
 _BUNDLE_SEPARATOR = 2
 
 
-def _wire_size(envelope: AuditOutboxEnvelope) -> int:
-    """Return the exact size of one record in the statement that sends it.
+def _json_text(value: Any) -> str:
+    """Return ``json.dumps(value, default=str)``, written in short calls.
 
-    Each body is encoded on its own, so no single ``json.dumps`` call (which holds the
-    GIL) works on more than one body. JSON encoding is compositional: the record with
-    its bodies set to ``null``, plus each body's own text less the 4 characters of
-    ``null``, is exactly the text of the whole record.
+    One ``json.dumps`` call holds the GIL for its whole length, and some values are
+    slow to write (a float takes up to about 1.2 us). So a container with more than
+    ``_ENCODE_CHUNK_VALUES`` values is written in parts of at most that many values,
+    and the parts are joined with the separators ``json.dumps`` uses. The text is
+    the same.
     """
 
-    payload = envelope.payload
-    items = payload.get("payloads")
-    if not isinstance(items, list) or not any(
-        isinstance(item, dict) and item.get("content_json") is not None for item in items
-    ):
-        return len(json.dumps(audit_envelope_wire(envelope), default=str))
-    size = 0
-    skeleton_items = []
-    for item in items:
-        body = item.get("content_json") if isinstance(item, dict) else None
-        if body is None:
-            skeleton_items.append(item)
+    pieces: list[str] = []
+    _write_json(value, pieces)
+    return "".join(pieces)
+
+
+def _write_json(value: Any, out: list[str]) -> None:
+    if not isinstance(value, (dict, list, tuple)) or _value_count(value) <= _ENCODE_CHUNK_VALUES:
+        out.append(json.dumps(value, default=str))
+        return
+    is_dict = isinstance(value, dict)
+    entries = value.items() if is_dict else value
+    out.append("{" if is_dict else "[")
+    first = True
+    run: list[Any] = []
+    run_values = 0
+
+    def write_run() -> None:
+        nonlocal first
+        if not run:
+            return
+        text = json.dumps(dict(run) if is_dict else run, default=str)
+        if not first:
+            out.append(", ")
+        out.append(text[1:-1])
+        first = False
+
+    for entry in entries:
+        item = entry[1] if is_dict else entry
+        count = _value_count(item)
+        if count > _ENCODE_CHUNK_VALUES:
+            # A large value is written in its own parts.
+            write_run()
+            run, run_values = [], 0
+            if not first:
+                out.append(", ")
+            first = False
+            if is_dict:
+                # The key as json.dumps writes it (keys can be numbers or None).
+                out.append(json.dumps({entry[0]: None})[1:-7])
+                out.append(": ")
+            _write_json(item, out)
             continue
-        size += len(json.dumps(body, default=str)) - len("null")
-        skeleton_items.append({**item, "content_json": None})
-    skeleton = replace(envelope, payload={**payload, "payloads": skeleton_items})
-    return size + len(json.dumps(audit_envelope_wire(skeleton), default=str))
+        if run_values + count > _ENCODE_CHUNK_VALUES:
+            write_run()
+            run, run_values = [], 0
+        run.append(entry)
+        run_values += count
+    write_run()
+    out.append("}" if is_dict else "]")
+
+
+def _value_count(value: Any) -> int:
+    """Return the number of values in ``value``, or more than ``_ENCODE_CHUNK_VALUES``."""
+
+    count = 0
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        count += 1
+        if isinstance(current, dict):
+            children: Any = current.values()
+        elif isinstance(current, (list, tuple)):
+            children = current
+        else:
+            continue
+        # Each value that waits adds at least one, so a long container stops the count
+        # before it is copied onto the stack.
+        if count + len(stack) + len(children) > _ENCODE_CHUNK_VALUES:
+            return _ENCODE_CHUNK_VALUES + 1
+        stack.extend(children)
+    return count
 
 
 def _bundles(
     entries: Iterable[_SizedEnvelope], max_bytes: int, max_items: int
-) -> list[list[AuditOutboxEnvelope]]:
+) -> list[list[_SizedEnvelope]]:
     """Group records so that each statement is at most ``max_bytes`` as sent.
 
     Every record already fits alone (see ``_fitted_envelope``).
     """
 
-    bundles: list[list[AuditOutboxEnvelope]] = []
-    current: list[AuditOutboxEnvelope] = []
+    bundles: list[list[_SizedEnvelope]] = []
+    current: list[_SizedEnvelope] = []
     current_bytes = _BUNDLE_BRACKETS
     for entry in entries:
         if current and (
@@ -721,7 +829,7 @@ def _bundles(
             current, current_bytes = [], _BUNDLE_BRACKETS
         if current:
             current_bytes += _BUNDLE_SEPARATOR
-        current.append(entry.envelope)
+        current.append(entry)
         current_bytes += entry.size
     if current:
         bundles.append(current)
