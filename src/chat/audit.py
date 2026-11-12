@@ -8,6 +8,7 @@ from fastapi import Request
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
 from src.client_address import request_client_ip
+from src.chat.stream_reply import AUDIT_REPLY_MEMORY, StreamReplyAccumulator
 from src.routers.audit_helpers import (
     accounting_audit_content_wanted,
     accounting_operation,
@@ -19,6 +20,39 @@ from src.services.audit.audit_service import (
     AuditService,
     enqueue_audit_event,
 )
+from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
+
+
+# Room for the fields around the reply text (ids, model, usage, JSON keys), so a
+# reply at the limit is cut and marked ``truncated`` and not replaced as a whole
+# when the payload is compacted.
+_REPLY_HEADROOM_BYTES = 16 * 1024
+
+
+def stream_reply_accumulator(request: Request, auth: Any) -> StreamReplyAccumulator | None:
+    """Return a bounded reply accumulator when the reply of this stream can be stored.
+
+    It returns None when no text audit event follows, or when the pod already
+    knows that the organization has content storage off. Those streams keep no
+    reply in memory.
+    """
+    organization_id = getattr(auth, "organization_id", None)
+    audit_service: AuditService | None
+    if accounting_operation(request) is not None:
+        # Accounting v2: the reply goes to the content buffer, see emit_text_audit_event.
+        if not accounting_audit_content_wanted(request, organization_id):
+            return None
+        audit_service = request.app.state.audit_content_buffer.audit_service
+    else:
+        audit_service = getattr(request.app.state, "audit_service", None)
+        if audit_service is None:
+            return None
+        if audit_service.peek_content_storage_policy(organization_id) is False:
+            return None
+    config = getattr(audit_service, "ingestion_config", None)
+    max_bytes = int(getattr(config, "payload_max_bytes", DEFAULT_AUDIT_PAYLOAD_MAX_BYTES))
+    headroom = min(_REPLY_HEADROOM_BYTES, max_bytes // 2)
+    return StreamReplyAccumulator(max_chars=max(1, max_bytes - headroom), memory=AUDIT_REPLY_MEMORY)
 
 
 def audit_action_for_path(path: str) -> str:

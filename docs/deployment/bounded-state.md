@@ -24,6 +24,7 @@ within 5 minutes, on every pod, without a restart.**
 | Batch execution slots | Batch pods | `embeddings_batch_worker_concurrency` | Each work unit frees its slot when it ends, fails or is cancelled; each slice closes its tracker | Not needed: per process | `deltallm_batch_worker_saturation_ratio` | `test_bounded_state_drain.py` |
 | Batch completion outbox | PostgreSQL table, any batch pod | Rows are durable; each claim holds a lease (`lease_seconds`, 30 s) | The pod that claimed the row marks it sent, retrying or failed | **Yes.** A row whose lease expires goes back to the queue and any pod claims it | `deltallm_batch_completion_outbox_delivery_lag_seconds`, `deltallm_batch_completion_outbox_failures_total` | `tests/batch/test_bounded_state_outbox_postgres.py` |
 | Audit content buffer | Pods with durable audit ingestion; only accounting v2 requests fill it | 2,000 items and about 128 MiB of body characters (waiting and in flight); one send is at most 64 MiB and one statement at most 1 MiB; the size estimate visits at most 16,384 values for each request | The pod's flusher task, every second or at 500 items. A failed send is dropped, not retried. A full buffer drops new content and never fails the request | Not needed: per process | `deltallm_audit_content_buffer_items`, `deltallm_audit_content_dropped_total` | `test_audit_content_buffer.py` |
+| Audit stream reply memory | Pods that stream text replies whose content can be stored | 64 MiB of reply characters for all streams of the pod, and the audit payload limit minus 16 KiB for one stream | Each stream gives its share back when its reply body is built, or when the stream object is freed after a failure or cancellation. A full budget cuts the reply (`truncated`) and never fails the stream | Not needed: per process | None | `test_stream_reply.py` |
 | Gateway preflight capacity | Redis lease set shared by API pods, when `gateway_preflight_capacity_enabled` is on | `gateway_preflight_global_max_parallel` (300), `gateway_preflight_org_max_parallel` (100) | The response's end releases its leases; a lease that is never released expires after `gateway_preflight_lease_ttl_seconds` (30 s) | **Yes.** Leases expire in Redis, so a dead pod's capacity comes back | None | `test_bounded_state_preflight_redis.py` |
 
 ### How the drain tests work
@@ -56,8 +57,9 @@ them. The cross-pod drain test now passes without a marker. See
 
 ### Stores with no fill metric
 
-The cursor store, the write slots and preflight capacity have no gauge for how
-full they are. The receipt store has one,
+The cursor store, the write slots, preflight capacity and the audit stream
+reply memory have no gauge for how full they are. A full reply memory only cuts
+audit replies, which show `truncated: true`. The receipt store has one,
 `deltallm_accounting_local_receipt_fill_ratio`; the others are listed for the
 alerting work.
 
