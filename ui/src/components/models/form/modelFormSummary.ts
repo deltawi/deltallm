@@ -10,10 +10,16 @@ const ENDPOINTS: Record<ModelMode, { path: string; body: (model: string) => stri
   rerank: { path: 'POST /v1/rerank', body: (model) => `{\n  "model": "${model}",\n  "query": "...",\n  "documents": [...]\n}` },
 };
 
-/** A short example request that calls the model by its API model ID. */
-export function modelCallSnippet(mode: ModelMode, apiModelId: string): string {
+/**
+ * A short example request that calls the model by its API model ID. A live
+ * transcription Realtime model needs intent=transcription, or the gateway asks
+ * for a conversation session and routing rejects the model.
+ */
+export function modelCallSnippet(mode: ModelMode, apiModelId: string, realtimeProfile?: 'realtime' | 'transcription'): string {
   const endpoint = ENDPOINTS[mode] || ENDPOINTS.chat;
-  return `${endpoint.path}\n${endpoint.body(apiModelId.trim() || '<api-model-id>')}`;
+  const body = endpoint.body(apiModelId.trim() || '<api-model-id>');
+  const intent = mode === 'realtime' && realtimeProfile === 'transcription' ? '&intent=transcription' : '';
+  return `${endpoint.path}\n${body}${intent}`;
 }
 
 export interface ChecklistItem {

@@ -872,6 +872,7 @@ export default function ModelForm({
           model={form.model}
           mode={mode}
           apiModelId={apiModelIdPreview}
+          realtimeProfile={form.realtime_profile}
           checklist={checklist}
         />
       </div>

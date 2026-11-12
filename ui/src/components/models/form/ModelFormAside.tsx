@@ -12,11 +12,12 @@ interface ModelFormAsideProps {
   model: string;
   mode: ModelMode;
   apiModelId: string;
+  realtimeProfile?: 'realtime' | 'transcription';
   checklist: ChecklistItem[];
 }
 
-export default function ModelFormAside({ name, provider, model, mode, apiModelId, checklist }: ModelFormAsideProps) {
-  const snippet = modelCallSnippet(mode, apiModelId);
+export default function ModelFormAside({ name, provider, model, mode, apiModelId, realtimeProfile, checklist }: ModelFormAsideProps) {
+  const snippet = modelCallSnippet(mode, apiModelId, realtimeProfile);
   return (
     <div className="min-w-0 space-y-6 lg:sticky lg:top-6 lg:self-start">
       <PanelCard>

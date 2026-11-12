@@ -176,6 +176,8 @@ test('validateModelForm rejects a provider without the model type, bad prices an
 test('the summary shows a call example for the model type and the required steps', () => {
   assert.equal(modelCallSnippet('embedding', 'docs'), 'POST /v1/embeddings\n{\n  "model": "docs",\n  "input": "..."\n}');
   assert.match(modelCallSnippet('chat', ''), /"model": "<api-model-id>"/);
+  assert.equal(modelCallSnippet('realtime', 'live', 'realtime'), 'WebSocket /v1/realtime\n?model=live');
+  assert.equal(modelCallSnippet('realtime', 'live', 'transcription'), 'WebSocket /v1/realtime\n?model=live&intent=transcription');
   const checklist = modelFormChecklist({ modelName: 'A', apiModelId: 'a', provider: 'openai', model: '', credentialReady: true, hasPrice: false });
   assert.deepEqual(checklist.filter((item) => !item.done).map((item) => item.label), ['Provider model', 'Pricing']);
   assert.equal(checklist.find((item) => item.label === 'Pricing')?.optional, true);
