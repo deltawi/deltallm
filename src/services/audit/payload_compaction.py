@@ -48,13 +48,23 @@ def compact_audit_content(content: Any, *, max_bytes: int) -> tuple[Any, bool]:
 
 
 def oversize_placeholder(size: int, *, max_bytes: int) -> dict[str, Any]:
-    """Return what replaces a payload whose compacted size is over ``max_bytes``."""
+    """Return what replaces a payload whose compacted size is over ``max_bytes``.
+
+    ``size`` is counted only until it is over ``max_bytes``, so it is a lower bound.
+    """
 
     return {"omitted": "payload_too_large", "approx_size_bytes": size, "max_bytes": max_bytes}
 
 
-def _compact(value: Any, *, stop: int | None = None) -> tuple[Any, int, bool]:
-    """Return (value, size, changed); a size over ``stop`` may be counted only in part."""
+def _compact(value: Any, *, stop: int) -> tuple[Any, int, bool]:
+    """Return (value, size, changed), and stop counting once the size is over ``stop``.
+
+    ``stop`` is what is left of the payload limit for this value: each child gets what
+    its container has not used yet. So the whole traversal ends as soon as the payload
+    is known to be over its limit, and no later string is scanned, hashed or measured.
+    The caller then replaces the payload, so the value returned with a size over
+    ``stop`` is not used, and that size is only a lower bound.
+    """
 
     if isinstance(value, str):
         placeholder = _inline_data_placeholder(value)
@@ -66,21 +76,32 @@ def _compact(value: Any, *, stop: int | None = None) -> tuple[Any, int, bool]:
         size = 2
         changed = False
         for key, item in value.items():
-            compacted, item_size, item_changed = _compact(item, stop=stop)
-            result[key] = compacted
-            key_size = _text_size(key, stop=stop) - 2 if isinstance(key, str) else len(str(key))
-            size += key_size + item_size + ENTRY_OVERHEAD
+            if isinstance(key, str):
+                size += _text_size(key, stop=stop - size) - 2
+            else:
+                size += len(str(key))
+            size += ENTRY_OVERHEAD
+            if size > stop:
+                return value, size, changed
+            compacted, item_size, item_changed = _compact(item, stop=stop - size)
+            size += item_size
             changed = changed or item_changed
+            if size > stop:
+                return value, size, changed
+            result[key] = compacted
         return (result if changed else value), size, changed
     if isinstance(value, (list, tuple)):
         items: list[Any] = []
         size = 2
         changed = False
         for item in value:
-            compacted, item_size, item_changed = _compact(item, stop=stop)
-            items.append(compacted)
-            size += item_size + 1
+            size += 1
+            compacted, item_size, item_changed = _compact(item, stop=stop - size)
+            size += item_size
             changed = changed or item_changed
+            if size > stop:
+                return value, size, changed
+            items.append(compacted)
         return (items if changed else value), size, changed
     if type(value) is int:
         bits = value.bit_length()
@@ -109,7 +130,7 @@ def _inline_data_placeholder(value: str) -> str | None:
     return f"[omitted inline data: {media_type}, {len(value)} chars, sha256={_sha256(value)}]"
 
 
-def _text_size(value: str, *, stop: int | None = None) -> int:
+def _text_size(value: str, *, stop: int) -> int:
     """Return the length of ``value`` as JSON text, as ``json.dumps`` writes it.
 
     ``json.dumps`` writes each non-ASCII character as a ``\\uXXXX`` escape (six
@@ -124,7 +145,7 @@ def _text_size(value: str, *, stop: int | None = None) -> int:
     size = 2
     for position in range(0, len(value), _SCAN_CHUNK_CHARS):
         size += len(encode_basestring_ascii(value[position : position + _SCAN_CHUNK_CHARS])) - 2
-        if stop is not None and size > stop:
+        if size > stop:
             break
     return size
 

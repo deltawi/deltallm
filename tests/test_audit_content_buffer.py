@@ -1360,7 +1360,7 @@ def _floor_cases() -> list:
 @pytest.mark.parametrize("budget", [1, 5, 100, 10_000, 1_000_000])
 def test_the_size_floor_never_exceeds_the_compacted_size(budget):
     for body in _floor_cases():
-        compacted_size = _compact(body)[1]
+        compacted_size = _compact(body, stop=1 << 40)[1]
         size = _measure(body, budget)
         assert size.floor <= compacted_size
         # The work stays within about twice the limit.
