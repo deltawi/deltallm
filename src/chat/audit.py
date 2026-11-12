@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
 from fastapi import Request
 
+from src.audit.actions import AuditAction
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
 from src.client_address import request_client_ip
@@ -95,3 +97,55 @@ async def emit_text_audit_event(
         payloads=payloads,
         delivery_class=AuditDeliveryClass.REQUIRED,
     )
+
+
+def offer_cache_hit_audit_content(
+    request: Request,
+    *,
+    auth: Any,
+    endpoint: str,
+    model: str,
+    response_data: Any,
+    started_at: datetime,
+) -> None:
+    """Hand the bodies of a cache hit to the content buffer (accounting v2 only).
+
+    A cache hit returns from the cache middleware, so no endpoint emits its audit
+    event. With accounting v2 the cached charge records that event; this adds its
+    request (as the preflight left it) and the cached response. Synchronous, no I/O.
+    """
+
+    operation = accounting_operation(request)
+    organization_id = getattr(auth, "organization_id", None)
+    if operation is None or not accounting_audit_content_wanted(request, organization_id):
+        return
+    embeddings = endpoint == "/v1/embeddings"
+    prepared = getattr(
+        request.state, "prepared_embedding_request" if embeddings else "prepared_text_request", None
+    )
+    payloads: list[AuditPayloadInput] = []
+    request_data = getattr(prepared, "request_data", None)
+    if isinstance(request_data, dict):
+        payloads.append(AuditPayloadInput(kind="request", content_json=request_data))
+    if isinstance(response_data, dict):
+        payloads.append(AuditPayloadInput(kind="response", content_json=response_data))
+    request_id = request.headers.get("x-request-id")
+    event = AuditEventInput(
+        action=AuditAction.EMBEDDING_REQUEST.value
+        if embeddings
+        else audit_action_for_path(endpoint),
+        organization_id=organization_id,
+        actor_type="api_key",
+        actor_id=getattr(auth, "user_id", None) or getattr(auth, "api_key", None),
+        api_key=getattr(auth, "api_key", None),
+        resource_type="model",
+        resource_id=model,
+        request_id=request_id,
+        correlation_id=request_id,
+        ip=request_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        status="success",
+        latency_ms=int((datetime.now(tz=UTC) - started_at).total_seconds() * 1000),
+        metadata={"route": endpoint, "cache_hit": True},
+    )
+    offer_accounting_audit_content(request, operation, event=event, payloads=payloads)

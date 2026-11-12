@@ -228,18 +228,27 @@ database:
 - The request only adds its bodies to the buffer. It does no database I/O for this step, and this step
   never fails the request. When the pod already knows that the organization has content storage off, the
   bodies do not go into the buffer.
-- The buffer counts the size of every body it keeps, without slowing the request. For chat,
-  completions, Responses, Messages and embeddings requests, it uses the size that the request
-  checks already measured for the token estimate, after prompt templates, pre-call hooks and
-  guardrails. So a large request (many tools, a long conversation, a long system prompt added by a
-  template) is counted at its real size and costs no extra work. Other bodies, for example
-  responses, are estimated by visiting at most 16,384 values (strings, numbers and other JSON
-  values) for each body, which takes at most a few milliseconds.
+- The stored request is the request as the gateway sent it to the provider: after prompt
+  templates, pre-call hooks and guardrails. For chat, completions, Responses, Messages and
+  embeddings requests, the request checks already turn this request into JSON text for the token
+  estimate; the buffer keeps that text and counts its length. So a large request (many tools, a long
+  conversation, a long system prompt added by a template) is counted at its real size and costs no
+  extra work.
+- The buffer keeps its own copy of the bodies. A post-call hook or guardrail that changes the request
+  or response after the hand-off (with streaming, post-call hooks run after it) does not change what
+  is stored or how much memory is counted. Other bodies, for example responses, are measured and
+  copied in one pass that visits at most 16,384 values (strings, numbers and other JSON values; a
+  copied list or object counts twice) for each body. Strings are shared, not copied. This takes about
+  2 to 3 ms for large real bodies (embeddings responses, long document lists), and at most about 5 ms
+  for a body made only of empty lists or objects.
 - A body with more values than that is replaced by a placeholder, and the other body is kept. When
   the lengths of its lists and objects show that the body is surely larger than the payload limit
   (1 MiB by default), for example an embeddings response with many vectors, it gets the same
   placeholder that compaction would write. Otherwise it gets
   `{"omitted": "payload_too_many_values", "max_values": 16384}`.
+- Response cache hits send content too: the request as the request checks left it, and the cached
+  response (for a replayed stream, the complete chat completion that the cache stored). The audit
+  worker attaches them to the event of the cached charge.
 - One background task per pod sends the buffer every second, or earlier when 500 items wait. It reads the
   content policy of uncached organizations in one query, then writes one statement for each organization
   (at most 100 records or 1 MiB each). The 1 MiB limit applies to the statement as it is sent. When the
@@ -258,7 +267,7 @@ Content is dropped, and the audit event stays without bodies, in these cases. Ea
 | `buffer_bytes` | The bodies that wait or are being sent on this pod already have about 128 MiB of characters, measured before compaction. |
 | `flush_bytes` | One send is larger than 64 MiB after compaction. |
 | `record_bytes` | The record of one request does not fit in one 1 MiB statement, even after the pod compacts it again. |
-| `payload_values` | A body that the request checks did not measure has more than 16,384 values. Only this body is replaced by a placeholder; the rest of the content is sent. |
+| `payload_values` | A body that the request checks did not turn into JSON text has more than 16,384 values. Only this body is replaced by a placeholder; the rest of the content is sent. |
 | `policy_unavailable` | The policy read failed. |
 | `enqueue_failed` | The database write failed, for example because the database is busy. The pod drops the rest of the send. |
 | `queue_full` | The audit queue has no best-effort capacity. The pod then stops the send and drops the rest of it. |

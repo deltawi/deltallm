@@ -480,44 +480,84 @@ async def test_chat_rate_limit_estimate_uses_final_transformed_payload(
     assert rewriter.calls == 1
 
 
+class _GrowingPostCallCallback(RewritingPreCallCallback):
+    """Adds a system prompt before the call, and grows the request after it."""
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):  # noqa: ANN001
+        del user_api_key_dict, response
+        data["model"] = "changed-after-the-call"
+        data["messages"].append({"role": "system", "content": "y" * 800_000})
+
+
+class _ContentStoredAuditService:
+    """Content storage on for every organization; no flush."""
+
+    def __init__(self) -> None:
+        from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
+
+        self.ingestion_config = SimpleNamespace(payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+
+    def peek_content_storage_policy(self, organization_id):  # noqa: ANN001, ANN201
+        del organization_id
+        return True
+
+
 @pytest.mark.asyncio
-async def test_chat_audit_request_size_is_measured_after_pre_call_transformation(
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+async def test_chat_audit_content_keeps_the_request_as_sent_upstream(
     client,
     test_app,
     monkeypatch,
+    stream,
 ):
-    """The audit content buffer counts the request as the hooks left it, not as received."""
+    """The buffer keeps the request after pre-call hooks, and post-call hooks cannot change it.
 
-    from src.routers.audit_helpers import _measured_request_chars
-    from src.services.audit.audit_service import AuditPayloadInput
+    Without streaming, post-call hooks run before the hand-off; with streaming, after it.
+    """
+
+    from src.chat import telemetry
+    from src.services.audit.content_buffer import AuditContentBuffer
+    from tests.test_accounting_request_ids import _operation
 
     system_message = "x" * 20_000
-    rewriter = RewritingPreCallCallback(system_message=system_message)
     manager = CallbackManager()
-    manager.register_callback(rewriter, callback_type="success")
+    manager.register_callback(_GrowingPostCallCallback(system_message=system_message))
     test_app.state.callback_manager = manager
-    measured: list[tuple[int | None, int]] = []
+    buffer = AuditContentBuffer(_ContentStoredAuditService())
+    monkeypatch.setattr(test_app.state, "audit_content_buffer", buffer, raising=False)
+    emit = telemetry.emit_text_audit_event
 
-    async def capture_audit(*, request, request_data, **_kwargs):  # noqa: ANN001, ANN003, ANN202
-        payloads = [AuditPayloadInput(kind="request", content_json=request_data)]
-        measured.append(
-            (
-                _measured_request_chars(request, payloads),
-                len(jsonlib.dumps(request_data, default=str)),
-            )
-        )
+    async def emit_with_accounting_v2(*, request, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        request.state.spend_operation_handle = _operation()
+        try:
+            await emit(request=request, **kwargs)
+        finally:
+            del request.state.spend_operation_handle
 
-    monkeypatch.setattr("src.chat.telemetry.emit_text_audit_event", capture_audit)
+    monkeypatch.setattr(telemetry, "emit_text_audit_event", emit_with_accounting_v2)
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": stream,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
     assert response.status_code == 200
-    assert len(measured) == 1
-    chars, actual = measured[0]
-    assert chars == actual
-    assert chars > len(system_message)
+    assert buffer.pending_items == 1
+    item = buffer._items[0]
+    sent = jsonlib.loads(item.request_json)
+    assert sent["model"] == "gpt-4o-mini"
+    assert sent["messages"] == [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": "hello"},
+    ]
+    # The text is the only copy of the request, and it is what the buffer counts.
+    assert [payload.content_json for payload in item.payloads if payload.kind == "request"] == [
+        None
+    ]
+    assert len(item.request_json) <= buffer._waiting_chars < 100_000
 
 
 @pytest.mark.asyncio

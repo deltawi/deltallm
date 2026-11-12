@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -20,7 +21,7 @@ from src.services.audit.audit_service import (
     AuditService,
     enqueue_audit_event,
 )
-from src.services.audit.content_buffer import AuditContentItem
+from src.services.audit.content_buffer import AuditContentItem, audit_content_may_be_stored
 
 
 def accounting_operation(request: Request) -> AccountingOperationHandle | None:
@@ -33,10 +34,7 @@ def accounting_operation(request: Request) -> AccountingOperationHandle | None:
 def accounting_audit_content_wanted(request: Request, organization_id: str | None) -> bool:
     """Return False when the content of this request is surely not stored. No I/O."""
 
-    buffer = getattr(request.app.state, "audit_content_buffer", None)
-    if buffer is None:
-        return False
-    return buffer.audit_service.peek_content_storage_policy(organization_id) is not False
+    return audit_content_may_be_stored(request, organization_id)
 
 
 def offer_accounting_audit_content(
@@ -59,24 +57,31 @@ def offer_accounting_audit_content(
         return
     operation_id = operation.reservation.operation_id
     event.metadata = {**(event.metadata or {}), "accounting_operation_id": str(operation_id)}
+    request_json = _preflight_request_json(request, payloads)
+    if request_json is not None:
+        # The buffer keeps the text, not the request object.
+        payloads = [
+            replace(payload, content_json=None) if payload.kind == "request" else payload
+            for payload in payloads
+        ]
     buffer.offer(
         AuditContentItem(
             target_event_id=accounting_finalization_audit_event_id(operation_id),
             event=event,
             payloads=payloads,
             enqueued_at=datetime.now(UTC),
-            request_chars=_measured_request_chars(request, payloads),
+            request_json=request_json,
         )
     )
 
 
-def _measured_request_chars(request: Request, payloads: list[AuditPayloadInput]) -> int | None:
-    """Return the JSON size of the request body, when the preflight measured this very object.
+def _preflight_request_json(request: Request, payloads: list[AuditPayloadInput]) -> str | None:
+    """Return the JSON text the preflight kept for the request body, if this is that body.
 
-    The text and embeddings preflights measure the request after prompt resolution,
-    hooks and guardrails, for their token estimate. The buffer counts the request by
-    that size, so a large request (many tools, a long conversation) is not walked
-    value by value on the request path. Any other object is measured by the buffer.
+    The text and embeddings preflights serialize the request after prompt resolution,
+    hooks and guardrails, for their token estimate, and keep that text when content
+    may be stored. It is the request as sent upstream, and unlike the request object
+    it cannot change later (post-call hooks get the same object).
     """
 
     body = next((payload.content_json for payload in payloads if payload.kind == "request"), None)
@@ -85,8 +90,8 @@ def _measured_request_chars(request: Request, payloads: list[AuditPayloadInput])
     for name in ("prepared_text_request", "prepared_embedding_request"):
         prepared = getattr(request.state, name, None)
         if prepared is not None and getattr(prepared, "request_data", None) is body:
-            chars = getattr(prepared, "request_data_chars", 0)
-            return chars if isinstance(chars, int) and chars > 0 else None
+            text = getattr(prepared, "audit_request_json", None)
+            return text if isinstance(text, str) else None
     return None
 
 

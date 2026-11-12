@@ -9,12 +9,14 @@ records. The audit worker attaches them to the accounting event.
 Request path cost: ``offer`` is synchronous. It does one cached policy lookup, a
 size estimate, and one list append. It never waits for the database, and it never
 fails a request. A request body that the text or embeddings preflight already
-measured (after prompt resolution, hooks and guardrails) is counted by that size,
-without visiting its values. Other bodies are measured with a work limit of
-``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is replaced by a
-placeholder: the one of compaction when its size surely exceeds the payload limit
-(for example a large embeddings response), or ``payload_too_many_values``. So every
-body that is kept is counted by a measured size.
+serialized for its token estimate (after prompt resolution, hooks and guardrails)
+is kept as that JSON text, the request as sent upstream: it is counted by its
+length and not visited again. Other bodies are measured and copied with a work
+limit of ``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is
+replaced by a placeholder: the one of compaction when its size surely exceeds the
+payload limit (for example a large embeddings response), or
+``payload_too_many_values``. So every body that is kept is counted by a measured
+size.
 
 Database cost: the flusher runs once per second (or earlier when many items wait),
 reads uncached policies in one query, and writes one statement per organization
@@ -25,9 +27,11 @@ a smaller payload limit, or dropped. A database error or a full audit queue drop
 the rest of that flush; there is no retry loop.
 
 Memory: at most ``AUDIT_CONTENT_MAX_ITEMS`` items wait between flushes. Each item
-holds references to the request and response objects that the request already
-built, for about one more second. The bodies that wait or are in flight hold at
-most ``AUDIT_CONTENT_MAX_HELD_CHARS`` characters, measured before compaction (an
+holds a snapshot that later changes to the request's objects (for example by a
+post-call hook) cannot reach: the preflight's JSON text of the request, and copies
+of the containers of the other bodies (strings and numbers are shared, so a copy
+costs about one reference per value). The bodies that wait or are in flight hold
+at most ``AUDIT_CONTENT_MAX_HELD_CHARS`` characters, measured before compaction (an
 image request can carry megabytes of base64). A flush sends at most
 ``AUDIT_CONTENT_MAX_FLUSH_BYTES`` and drops the rest.
 """
@@ -82,8 +86,9 @@ AUDIT_CONTENT_MAX_FLUSH_BYTES = 64 * 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_BYTES = 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_ITEMS = 100
 AUDIT_CONTENT_SHUTDOWN_FLUSH_SECONDS = 2.0
-# Work limit of the size estimate on the request path, for each body (about 3 ms
-# in the worst case). Request bodies that the preflight measured are not walked.
+# Work limit of the measure and copy on the request path, for each body: about 2 to
+# 3 ms for large real bodies, at most about 5 ms for a body made only of empty
+# containers. Request bodies that the preflight serialized are not walked.
 AUDIT_CONTENT_MAX_SIZE_VALUES = 16_384
 # Attempts to compact a record into one statement before it is dropped.
 _FIT_ATTEMPTS = 3
@@ -95,8 +100,10 @@ class AuditContentItem:
     event: AuditEventInput
     payloads: list[AuditPayloadInput]
     enqueued_at: datetime
-    # JSON size of the request body, when the preflight measured this very object.
-    request_chars: int | None = None
+    # JSON text of the request body as sent upstream, taken by the preflight. When it
+    # is set, the request payload has no content_json: the text is the only copy,
+    # so later changes to the request object cannot change what the buffer holds.
+    request_json: str | None = None
 
     @property
     def organization_id(self) -> str | None:
@@ -173,19 +180,17 @@ class AuditContentBuffer:
         characters it counts. Every body that is kept has a measured size.
         """
 
-        total = 0
-        payloads: list[AuditPayloadInput] | None = None
-        for index, payload in enumerate(item.payloads):
+        total = len(item.request_json) if item.request_json is not None else 0
+        payloads = list(item.payloads)
+        for index, payload in enumerate(payloads):
             if payload.content_json is None:
                 continue
-            if payload.kind == "request" and item.request_chars is not None:
-                # Measured by the preflight on this very object: not visited again.
-                total += item.request_chars
-                continue
             # Each body has its own limit, so a large request does not cost the
-            # response its content.
+            # response its content. A body that fits is copied while it is measured,
+            # so later changes to the caller's object do not reach the buffer.
             size = _measure(payload.content_json, self.max_size_values)
             if size.complete:
+                payloads[index] = replace(payload, content_json=size.copy)
                 total += size.chars
                 continue
             payload_limit = self.audit_service.ingestion_config.payload_max_bytes
@@ -198,13 +203,9 @@ class AuditContentBuffer:
                     "max_values": self.max_size_values,
                 }
                 increment_audit_content_dropped(reason="payload_values")
-            if payloads is None:
-                payloads = list(item.payloads)
             payloads[index] = replace(payload, content_json=placeholder)
             total += _PLACEHOLDER_CHARS
-        if payloads is not None:
-            item = replace(item, payloads=payloads)
-        return item, total
+        return replace(item, payloads=payloads), total
 
     # Lifecycle ----------------------------------------------------------------
 
@@ -328,6 +329,7 @@ class AuditContentBuffer:
         together be larger than a statement. JSON escaping can add more.
         """
 
+        item = _with_request_body(item)
         record_max = self.bundle_max_bytes - _BUNDLE_BRACKETS
         limit: int | None = None
         for _ in range(_FIT_ATTEMPTS):
@@ -442,6 +444,8 @@ class _Size:
     visited: int
     # False when some container was not expanded (over the work limit).
     complete: bool
+    # A copy of the body (containers copied, strings and numbers shared) when complete.
+    copy: Any = None
 
 
 # Characters counted for a placeholder that replaces a body.
@@ -449,13 +453,16 @@ _PLACEHOLDER_CHARS = 96
 
 
 def _measure(value: Any, budget: int) -> _Size:
-    """Measure a body with a work limit.
+    """Measure and copy a body with a work limit.
 
     A container is expanded only when all its values fit in what is left of the
-    budget, so a long list is never iterated. A container that does not fit adds
+    budget, so a long list is never iterated. A copied container counts as two
+    values, so bodies made of many small containers cost about as much as bodies
+    made of many numbers or strings. A container that does not fit adds
     only its length to the floor (each of its values has a compacted size of at
-    least ``MIN_VALUE_SIZE``). The work is at most about twice the budget: the
-    values visited, plus the values that wait when the budget is reached.
+    least ``MIN_VALUE_SIZE``), and no copy is returned. The work is at most about
+    twice the budget: the values visited, plus the values that wait when the budget
+    is reached.
 
     The floor follows ``compact_audit_content``: a string counts only its quotes,
     because compaction can shorten inline data.
@@ -465,40 +472,104 @@ def _measure(value: Any, budget: int) -> _Size:
     floor = 0
     visited = 0
     complete = True
-    stack = [value]
+    root: list[Any] = [None]
+    # Containers that wait: (value, container of its copy, key or index in it).
+    # Strings and scalars are counted where they are found, and their copy shares them.
+    stack: list[tuple[Any, Any, Any]] = [(value, root, 0)]
+    push = stack.append
+    pop = stack.pop
+    containers = (dict, list, tuple)
     while stack:
-        current = stack.pop()
+        current, parent, key = pop()
         visited += 1
-        if isinstance(current, str):
-            chars += len(current) + 2
-            floor += MIN_VALUE_SIZE
-        elif isinstance(current, dict):
+        if isinstance(current, dict):
             if visited + len(stack) + len(current) > budget:
                 complete = False
                 floor += 2 + len(current) * (ENTRY_OVERHEAD + MIN_VALUE_SIZE)
                 continue
+            copy = dict(current)
+            parent[key] = copy
+            visited += 1  # the copy costs about one more value
             chars += 2
             floor += 2
-            for key, item in current.items():
-                if isinstance(key, str):
-                    chars += len(key) + 4
-                    floor += len(key) + ENTRY_OVERHEAD
+            for item_key, item in current.items():
+                if isinstance(item_key, str):
+                    chars += len(item_key) + 4
+                    floor += len(item_key) + ENTRY_OVERHEAD
                 else:
                     chars += 12
                     floor += ENTRY_OVERHEAD
-                stack.append(item)
+                if isinstance(item, str):
+                    visited += 1
+                    chars += len(item) + 2
+                    floor += MIN_VALUE_SIZE
+                elif isinstance(item, containers):
+                    push((item, copy, item_key))
+                else:
+                    visited += 1
+                    chars += 8
+                    floor += ENTRY_OVERHEAD
         elif isinstance(current, (list, tuple)):
             if visited + len(stack) + len(current) > budget:
                 complete = False
                 floor += 2 + len(current) * (1 + MIN_VALUE_SIZE)
                 continue
+            items = list(current)
+            parent[key] = items
+            visited += 1  # the copy costs about one more value
             chars += 2 + len(current)
             floor += 2 + len(current)
-            stack.extend(current)
+            for index, item in enumerate(current):
+                if isinstance(item, str):
+                    visited += 1
+                    chars += len(item) + 2
+                    floor += MIN_VALUE_SIZE
+                elif isinstance(item, containers):
+                    push((item, items, index))
+                else:
+                    visited += 1
+                    chars += 8
+                    floor += ENTRY_OVERHEAD
+        elif isinstance(current, str):
+            chars += len(current) + 2
+            floor += MIN_VALUE_SIZE
+            parent[key] = current
         else:
             chars += 8
             floor += ENTRY_OVERHEAD
-    return _Size(chars=chars, floor=floor, visited=visited, complete=complete)
+            parent[key] = current
+    return _Size(
+        chars=chars,
+        floor=floor,
+        visited=visited,
+        complete=complete,
+        copy=root[0] if complete else None,
+    )
+
+
+def _with_request_body(item: AuditContentItem) -> AuditContentItem:
+    """Parse the request text that the preflight kept (in the flusher's thread)."""
+
+    if item.request_json is None:
+        return item
+    body = json.loads(item.request_json)
+    payloads = [
+        replace(payload, content_json=body)
+        if payload.kind == "request" and payload.content_json is None
+        else payload
+        for payload in item.payloads
+    ]
+    return replace(item, payloads=payloads, request_json=None)
+
+
+def audit_content_may_be_stored(request: Any, organization_id: str | None) -> bool:
+    """Return False when the content of this request is surely not stored. No I/O."""
+
+    state = getattr(getattr(request, "app", None), "state", None)
+    buffer = getattr(state, "audit_content_buffer", None)
+    if buffer is None:
+        return False
+    return buffer.audit_service.peek_content_storage_policy(organization_id) is not False
 
 
 # The statement sends a JSON list: "[" and "]", and ", " between records.
