@@ -399,6 +399,47 @@ class AuditIngestionRepository:
         )
         return len(rows)
 
+    async def defer_claimed(
+        self,
+        *,
+        event_ids: list[str],
+        worker_id: str,
+        claim_token: str,
+        delay_seconds: float,
+        reason: str,
+    ) -> int:
+        """Put fenced claims back in the queue without using up an attempt.
+
+        A record that waits for another record is not failing. The claim added one
+        attempt, so the deferral removes it. The record keeps its queue capacity.
+        """
+        if self.prisma is None or not event_ids:
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_audit_ingestion_outbox
+            SET status = 'retry',
+                attempt_count = GREATEST(0, attempt_count - 1),
+                next_attempt_at = NOW() + make_interval(secs => $4),
+                last_error = $5,
+                locked_by = NULL,
+                claim_token = NULL,
+                lease_expires_at = NULL,
+                updated_at = NOW()
+            WHERE event_id = ANY($1::text[])
+              AND status = 'processing'
+              AND locked_by = $2
+              AND claim_token = $3
+            RETURNING event_id
+            """,
+            event_ids,
+            worker_id,
+            claim_token,
+            max(0.0, float(delay_seconds)),
+            str(reason)[:2000],
+        )
+        return len(rows)
+
     async def mark_retry(
         self,
         *,

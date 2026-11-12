@@ -47,6 +47,13 @@ deltallm_audit_events_dropped_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_audit_content_records_metric = Counter(
+    "deltallm_audit_content_records_total",
+    "Audit content records that the audit worker processed, by outcome",
+    ["outcome"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_audit_ingestion_latency_metric = Histogram(
     "deltallm_audit_ingestion_latency_seconds",
     "Audit write latency",
@@ -94,3 +101,8 @@ def observe_audit_ingestion_latency(*, path: str, latency_seconds: float) -> Non
     deltallm_audit_ingestion_latency_metric.labels(path=sanitize_label(path)).observe(
         max(0.0, float(latency_seconds))
     )
+
+
+def increment_audit_content_records(*, outcome: str, count: int = 1) -> None:
+    if count > 0:
+        deltallm_audit_content_records_metric.labels(outcome=sanitize_label(outcome)).inc(count)

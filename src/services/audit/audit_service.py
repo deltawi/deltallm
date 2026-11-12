@@ -10,6 +10,7 @@ import inspect
 import logging
 import random
 from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, datetime
 from enum import StrEnum
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -43,6 +44,14 @@ from src.metrics.audit import (
 from src.models.errors import ServiceUnavailableError
 from src.redis_namespace import build_redis_channel
 from src.services.audit.audit_policy_invalidation import AuditPolicyInvalidation
+from src.services.audit.content_attachment import (
+    AUDIT_CONTENT_DEFER_SECONDS,
+    AUDIT_CONTENT_RECORD_TYPE,
+    AUDIT_CONTENT_WAITING_REASON,
+    PendingAuditContent,
+    apply_audit_content,
+    audit_content_target,
+)
 from src.services.audit.payload_compaction import (
     DEFAULT_AUDIT_PAYLOAD_MAX_BYTES,
     compact_audit_content,
@@ -930,6 +939,11 @@ class AuditService:
             PromptRenderEvent.from_persistence_payload(record.payload)
             PromptRenderEvent.from_persistence_payload(record.redacted_payload)
             return
+        if record.record_type == AUDIT_CONTENT_RECORD_TYPE:
+            _deserialize_audit_item(record.payload, event_id=record.event_id)
+            _deserialize_audit_item(record.redacted_payload, event_id=record.event_id)
+            audit_content_target(record.payload)
+            return
         raise ValueError(f"unsupported audit outbox record type: {record.record_type}")
 
     async def _commit_durable_with_isolation(
@@ -991,6 +1005,7 @@ class AuditService:
                 audit_events: list[AuditEventRecord] = []
                 audit_payloads: list[AuditPayloadRecord] = []
                 prompt_renders: list[dict[str, Any]] = []
+                pending_content: list[PendingAuditContent] = []
                 for record in records:
                     content_enabled = bool(
                         record.organization_id and policies.get(record.organization_id, False)
@@ -1003,6 +1018,11 @@ class AuditService:
                         )
                         audit_events.append(event_record)
                         audit_payloads.extend(payload_records)
+                    elif record.record_type == AUDIT_CONTENT_RECORD_TYPE:
+                        # Content of an organization without content storage is not
+                        # written at all; the target event already records the request.
+                        if content_enabled:
+                            pending_content.append(_pending_audit_content(record))
                     else:
                         render_event = PromptRenderEvent.from_persistence_payload(payload)
                         prompt_renders.append(render_event.render_log_payload())
@@ -1011,21 +1031,42 @@ class AuditService:
                 await audit_repository.create_events_batch(audit_events)
                 await audit_repository.create_payloads_batch(audit_payloads)
                 await prompt_repository.create_render_logs_batch(prompt_renders)
+                # After the events of this batch, so content can attach to them.
+                content = await apply_audit_content(
+                    audit_repository, pending_content, now=datetime.now(UTC)
+                )
                 observe_audit_ingestion_latency(
                     path=AuditIngestionPath.QUEUE.value,
                     latency_seconds=perf_counter() - started,
                 )
 
+                deferred = set(content.deferred_event_ids)
+                completed_ids = [
+                    record.event_id for record in records if record.event_id not in deferred
+                ]
+                if deferred:
+                    deferred_count = await ingestion_repository.defer_claimed(
+                        event_ids=sorted(deferred),
+                        worker_id=self.ingestion_config.worker_id,
+                        claim_token=claim_token,
+                        delay_seconds=AUDIT_CONTENT_DEFER_SECONDS,
+                        reason=AUDIT_CONTENT_WAITING_REASON,
+                    )
+                    if deferred_count != len(deferred):
+                        raise RuntimeError(
+                            f"audit batch lease ownership changed: deferred={deferred_count} "
+                            f"expected={len(deferred)}"
+                        )
                 completed = await ingestion_repository.mark_completed(
-                    event_ids=[record.event_id for record in records],
+                    event_ids=completed_ids,
                     worker_id=self.ingestion_config.worker_id,
                     claim_token=claim_token,
                     release_capacity=False,
                 )
-                if completed != len(records):
+                if completed != len(completed_ids):
                     raise RuntimeError(
                         f"audit batch lease ownership changed: completed={completed} "
-                        f"expected={len(records)}"
+                        f"expected={len(completed_ids)}"
                     )
         finally:
             heartbeat.cancel()
@@ -1363,6 +1404,37 @@ def _redact_audit_item(item: _QueueItem) -> _QueueItem:
         critical=item.critical,
         event_id=item.event_id,
         use_policy_cache=item.use_policy_cache,
+    )
+
+
+def _pending_audit_content(record: AuditOutboxRecord) -> PendingAuditContent:
+    """Prepare a content record for both the attach and the fallback event."""
+
+    target = audit_content_target(record.payload)
+    _, built_payloads = _build_audit_records(
+        _deserialize_audit_item(record.payload, event_id=target.event_id),
+        content_enabled=True,
+    )
+    # Own ID space, so attached content never collides with the event's own payloads.
+    attached_payloads = [
+        replace(
+            payload,
+            payload_id=str(
+                uuid5(NAMESPACE_URL, f"deltallm:audit:{target.event_id}:content:{index}")
+            ),
+        )
+        for index, payload in enumerate(built_payloads)
+    ]
+    fallback_event, fallback_payloads = _build_audit_records(
+        _deserialize_audit_item(record.payload, event_id=record.event_id),
+        content_enabled=True,
+    )
+    return PendingAuditContent(
+        outbox_event_id=record.event_id,
+        target=target,
+        attached_payloads=attached_payloads,
+        fallback_event=fallback_event,
+        fallback_payloads=fallback_payloads,
     )
 
 

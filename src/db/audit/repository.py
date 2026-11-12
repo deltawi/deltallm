@@ -228,6 +228,38 @@ class AuditRepository:
         )
         return len(rows)
 
+    async def existing_event_ids(self, event_ids: list[str]) -> set[str]:
+        """Return the IDs in ``event_ids`` that have an audit event row."""
+
+        if self.prisma is None or not event_ids:
+            return set()
+        rows = await self.prisma.query_raw(
+            """
+            SELECT event_id::text AS event_id
+            FROM deltallm_auditevent
+            WHERE event_id = ANY($1::uuid[])
+            """,
+            sorted(set(event_ids)),
+        )
+        return {str(row["event_id"]) for row in rows}
+
+    async def mark_content_stored(self, event_ids: list[str]) -> int:
+        """Set ``content_stored`` on events that received stored content later."""
+
+        if self.prisma is None or not event_ids:
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_auditevent
+            SET content_stored = TRUE
+            WHERE event_id = ANY($1::uuid[])
+              AND content_stored = FALSE
+            RETURNING event_id
+            """,
+            sorted(set(event_ids)),
+        )
+        return len(rows)
+
     async def is_content_storage_enabled_for_org(self, organization_id: str | None) -> bool:
         if self.prisma is None or not organization_id:
             return False

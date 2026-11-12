@@ -188,6 +188,23 @@ Audit payloads are handled differently depending on the event type:
 - Redis invalidation removes stale policy-cache entries across replicas, but privacy correctness does not depend on Pub/Sub availability
 - when content storage is disabled, the event is still recorded but request and response bodies are omitted or marked redacted
 
+### Content that arrives after its event
+
+With accounting v2, the accounting worker writes the audit event of a data-plane request, and that event
+has no request or response body. The bodies arrive separately as an `audit_content` outbox record that
+names the event. The audit worker processes this record in the same batched transaction as other audit
+records:
+
+- If the event exists, the worker adds the bodies to it as payloads and sets `content_stored` to `true`.
+- If the event does not exist yet, the worker puts the record back in the queue for 2 seconds. This wait
+  does not use up a delivery attempt.
+- If the event does not exist after 5 minutes, the worker writes the bodies as a separate event with the
+  record's own ID, so the content is not lost.
+- If the organization does not have `audit_content_storage_enabled = true`, the worker writes nothing.
+
+`deltallm_audit_content_records_total{outcome}` counts the records by `attached`, `deferred` and
+`fallback_event`. A high `deferred` count means that the accounting projection is slow.
+
 ### Inline files and large payloads
 
 Before an audit event is accepted, DeltaLLM shrinks its request and response payloads. This keeps the
