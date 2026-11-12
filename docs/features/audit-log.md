@@ -228,18 +228,18 @@ database:
 - The request only adds its bodies to the buffer. It does no database I/O for this step, and this step
   never fails the request. When the pod already knows that the organization has content storage off, the
   bodies do not go into the buffer.
-- The buffer counts the size of the bodies without slowing the request. A JSON request body is counted
-  by its size as received (its `Content-Length`), so a large chat, Responses or Messages request (many
-  tools, a long conversation) costs no extra work. Other bodies, for example responses, are estimated by
-  visiting at most 16,384 values (strings, numbers and other JSON values) for all bodies of the request
-  together, which takes at most a few milliseconds.
-- When a body has more values than that, the pod looks at the lengths of its lists and objects. If the
-  body is surely larger than the payload limit (1 MiB by default), for example an embeddings response
-  with many vectors, it is replaced at once by the same placeholder that compaction would write. Otherwise
-  the body is kept and the background task measures it. At most 8 such bodies wait or are being sent on
-  a pod at the same time, and each one counts as at least 1 MiB toward the memory limit below. When all
-  8 are in use, a new body of this kind is replaced by
-  `{"omitted": "payload_too_many_values", "max_values": 16384}`. The other body is kept.
+- The buffer counts the size of every body it keeps, without slowing the request. For chat,
+  completions, Responses, Messages and embeddings requests, it uses the size that the request
+  checks already measured for the token estimate, after prompt templates, pre-call hooks and
+  guardrails. So a large request (many tools, a long conversation, a long system prompt added by a
+  template) is counted at its real size and costs no extra work. Other bodies, for example
+  responses, are estimated by visiting at most 16,384 values (strings, numbers and other JSON
+  values) for each body, which takes at most a few milliseconds.
+- A body with more values than that is replaced by a placeholder, and the other body is kept. When
+  the lengths of its lists and objects show that the body is surely larger than the payload limit
+  (1 MiB by default), for example an embeddings response with many vectors, it gets the same
+  placeholder that compaction would write. Otherwise it gets
+  `{"omitted": "payload_too_many_values", "max_values": 16384}`.
 - One background task per pod sends the buffer every second, or earlier when 500 items wait. It reads the
   content policy of uncached organizations in one query, then writes one statement for each organization
   (at most 100 records or 1 MiB each). The 1 MiB limit applies to the statement as it is sent. When the
@@ -258,7 +258,7 @@ Content is dropped, and the audit event stays without bodies, in these cases. Ea
 | `buffer_bytes` | The bodies that wait or are being sent on this pod already have about 128 MiB of characters, measured before compaction. |
 | `flush_bytes` | One send is larger than 64 MiB after compaction. |
 | `record_bytes` | The record of one request does not fit in one 1 MiB statement, even after the pod compacts it again. |
-| `payload_values` | A body has more values than the size estimate visits, its size is not known, and 8 such bodies already wait on this pod. Only this body is replaced by a placeholder; the rest of the content is sent. |
+| `payload_values` | A body that the request checks did not measure has more than 16,384 values. Only this body is replaced by a placeholder; the rest of the content is sent. |
 | `policy_unavailable` | The policy read failed. |
 | `enqueue_failed` | The database write failed, for example because the database is busy. The pod drops the rest of the send. |
 | `queue_full` | The audit queue has no best-effort capacity. The pod then stops the send and drops the rest of it. |

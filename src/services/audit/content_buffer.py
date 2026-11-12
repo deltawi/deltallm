@@ -8,13 +8,13 @@ records. The audit worker attaches them to the accounting event.
 
 Request path cost: ``offer`` is synchronous. It does one cached policy lookup, a
 size estimate, and one list append. It never waits for the database, and it never
-fails a request. A JSON request body is counted by its size as received, without
-visiting its values. Other bodies are measured with a work limit of
-``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is replaced by
-the placeholder of compaction when its size surely exceeds the payload limit (for
-example a large embeddings response). Otherwise it is kept unmeasured and the
-flusher measures it off the event loop; at most ``AUDIT_CONTENT_MAX_UNMEASURED``
-such bodies are held at once.
+fails a request. A request body that the text or embeddings preflight already
+measured (after prompt resolution, hooks and guardrails) is counted by that size,
+without visiting its values. Other bodies are measured with a work limit of
+``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is replaced by a
+placeholder: the one of compaction when its size surely exceeds the payload limit
+(for example a large embeddings response), or ``payload_too_many_values``. So every
+body that is kept is counted by a measured size.
 
 Database cost: the flusher runs once per second (or earlier when many items wait),
 reads uncached policies in one query, and writes one statement per organization
@@ -82,13 +82,9 @@ AUDIT_CONTENT_MAX_FLUSH_BYTES = 64 * 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_BYTES = 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_ITEMS = 100
 AUDIT_CONTENT_SHUTDOWN_FLUSH_SECONDS = 2.0
-# Work limit of the size estimate on the request path, for all bodies of one item
-# (about 3 ms in the worst case). JSON request bodies are not walked: they are
-# counted by their size as received.
+# Work limit of the size estimate on the request path, for each body (about 3 ms
+# in the worst case). Request bodies that the preflight measured are not walked.
 AUDIT_CONTENT_MAX_SIZE_VALUES = 16_384
-# Bodies over the work limit whose size is unknown, held at once (waiting and in
-# flight). Each counts as the payload limit (1 MiB by default) or more.
-AUDIT_CONTENT_MAX_UNMEASURED = 8
 # Attempts to compact a record into one statement before it is dropped.
 _FIT_ATTEMPTS = 3
 
@@ -99,8 +95,8 @@ class AuditContentItem:
     event: AuditEventInput
     payloads: list[AuditPayloadInput]
     enqueued_at: datetime
-    # Size of the JSON request body as received, when the request path knows it.
-    request_body_bytes: int | None = None
+    # JSON size of the request body, when the preflight measured this very object.
+    request_chars: int | None = None
 
     @property
     def organization_id(self) -> str | None:
@@ -128,7 +124,6 @@ class AuditContentBuffer:
         bundle_max_bytes: int = AUDIT_CONTENT_BUNDLE_MAX_BYTES,
         bundle_max_items: int = AUDIT_CONTENT_BUNDLE_MAX_ITEMS,
         max_size_values: int = AUDIT_CONTENT_MAX_SIZE_VALUES,
-        max_unmeasured: int = AUDIT_CONTENT_MAX_UNMEASURED,
     ) -> None:
         self.audit_service = audit_service
         self.flush_interval_seconds = max(0.01, float(flush_interval_seconds))
@@ -139,14 +134,10 @@ class AuditContentBuffer:
         self.bundle_max_bytes = max(1, int(bundle_max_bytes))
         self.bundle_max_items = max(1, int(bundle_max_items))
         self.max_size_values = max(1, int(max_size_values))
-        self.max_unmeasured = max(0, int(max_unmeasured))
         self._items: list[AuditContentItem] = []
         # Approximate characters of the bodies that wait, and of those in flight.
         self._waiting_chars = 0
         self._in_flight_chars = 0
-        # Bodies kept without a measured size, waiting and in flight.
-        self._waiting_unmeasured = 0
-        self._in_flight_unmeasured = 0
         self._wake = asyncio.Event()
         self._closed = False
         self._task: asyncio.Task[None] | None = None
@@ -165,49 +156,42 @@ class AuditContentBuffer:
         if len(self._items) >= self.max_items:
             increment_audit_content_dropped(reason="buffer_full")
             return False
-        item, size, unmeasured = self._bounded_size(item)
+        item, size = self._bounded_size(item)
         if self._waiting_chars + self._in_flight_chars + size > self.max_held_chars:
             increment_audit_content_dropped(reason="buffer_bytes")
             return False
         self._items.append(item)
         self._waiting_chars += size
-        self._waiting_unmeasured += unmeasured
         if len(self._items) >= self.early_flush_items:
             self._wake.set()
         return True
 
-    def _bounded_size(self, item: AuditContentItem) -> tuple[AuditContentItem, int, int]:
-        """Size the bodies with one shared work limit.
+    def _bounded_size(self, item: AuditContentItem) -> tuple[AuditContentItem, int]:
+        """Size each body with the work limit.
 
-        Returns the item (with a placeholder for each body it cannot keep), the
-        characters it counts, and how many of its bodies are kept unmeasured.
+        Returns the item, with a placeholder for each body over the limit, and the
+        characters it counts. Every body that is kept has a measured size.
         """
 
-        budget = self.max_size_values
-        payload_limit = self.audit_service.ingestion_config.payload_max_bytes
         total = 0
-        unmeasured = 0
         payloads: list[AuditPayloadInput] | None = None
         for index, payload in enumerate(item.payloads):
             if payload.content_json is None:
                 continue
-            if payload.kind == "request" and item.request_body_bytes is not None:
-                # The JSON body as received: its size is known without visiting it.
-                total += item.request_body_bytes
+            if payload.kind == "request" and item.request_chars is not None:
+                # Measured by the preflight on this very object: not visited again.
+                total += item.request_chars
                 continue
-            size = _measure(payload.content_json, budget)
-            budget = max(0, budget - size.visited)
+            # Each body has its own limit, so a large request does not cost the
+            # response its content.
+            size = _measure(payload.content_json, self.max_size_values)
             if size.complete:
                 total += size.chars
                 continue
+            payload_limit = self.audit_service.ingestion_config.payload_max_bytes
             if size.floor > payload_limit:
                 # Compaction would replace it later, so the placeholder is made now.
                 placeholder = oversize_placeholder(size.floor, max_bytes=payload_limit)
-            elif self._unmeasured() + unmeasured < self.max_unmeasured:
-                # Bounded hand-off: the flusher measures it in its worker thread.
-                unmeasured += 1
-                total += max(size.chars, payload_limit)
-                continue
             else:
                 placeholder = {
                     "omitted": "payload_too_many_values",
@@ -220,10 +204,7 @@ class AuditContentBuffer:
             total += _PLACEHOLDER_CHARS
         if payloads is not None:
             item = replace(item, payloads=payloads)
-        return item, total, unmeasured
-
-    def _unmeasured(self) -> int:
-        return self._waiting_unmeasured + self._in_flight_unmeasured
+        return item, total
 
     # Lifecycle ----------------------------------------------------------------
 
@@ -255,7 +236,6 @@ class AuditContentBuffer:
             increment_audit_content_dropped(reason="shutdown", count=len(self._items))
             self._items = []
             self._waiting_chars = 0
-            self._waiting_unmeasured = 0
         set_audit_content_buffer_items(0)
 
     @property
@@ -280,19 +260,16 @@ class AuditContentBuffer:
     async def flush(self) -> None:
         items, self._items = self._items, []
         held, self._waiting_chars = self._waiting_chars, 0
-        unmeasured, self._waiting_unmeasured = self._waiting_unmeasured, 0
         # The items that waited for this flush; at most max_items.
         set_audit_content_buffer_items(len(items))
         if not items:
             return
         # The bodies stay in memory until the send ends, so they still count.
         self._in_flight_chars += held
-        self._in_flight_unmeasured += unmeasured
         try:
             await self._flush(items)
         finally:
             self._in_flight_chars -= held
-            self._in_flight_unmeasured -= unmeasured
 
     async def _flush(self, items: list[AuditContentItem]) -> None:
         organization_ids = {item.organization_id for item in items if item.organization_id}
