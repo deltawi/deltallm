@@ -236,14 +236,16 @@ database:
   extra work. The background task parses the text back in one step that pauses the pod's other
   work, so the text is kept only when it is at most 1 MiB and has at most 49,152 separators (`,` and
   `:`), which parse in about 5 ms at most. A larger request is measured and copied like the other
-  bodies below, when the request ends.
+  bodies below, but by the request checks, before the provider call, so the stored request is still
+  the request as sent.
 - The buffer keeps its own copy of the bodies. A post-call hook or guardrail that changes the request
   or response after the hand-off (with streaming, post-call hooks run after it) does not change what
   is stored or how much memory is counted. Other bodies, for example responses, are measured and
   copied in one pass that visits at most 16,384 values (strings, numbers and other JSON values; a
-  copied list or object counts twice) for each body. Strings are shared, not copied. This takes about
-  2 to 3 ms for large real bodies (embeddings responses, long document lists), and at most about 5 ms
-  for a body made only of empty lists or objects.
+  copied list or object counts twice) for each body. Strings are shared, not copied. Integers count
+  their number of digits, and an integer over 1,024 bits is stored as a short placeholder. This takes
+  about 2 to 3 ms for large real bodies (embeddings responses, long document lists), and at most about
+  5 ms for a body made only of empty lists or objects.
 - A body with more values than that is replaced by a placeholder, and the other body is kept. When
   the lengths of its lists and objects show that the body is surely larger than the payload limit
   (1 MiB by default), for example an embeddings response with many vectors, it gets the same
@@ -252,12 +254,14 @@ database:
 - Response cache hits send content too: the request as the request checks left it, and the cached
   response (for a replayed stream, the complete chat completion that the cache stored). The audit
   worker attaches them to the event of the cached charge.
-- One background task per pod sends the buffer every second, or earlier when 500 items wait. It reads the
-  content policy of uncached organizations in one query, then writes one statement for each organization
-  (at most 100 records or 1 MiB each). The 1 MiB limit applies to the statement as it is sent. When the
-  bodies of one request are together too large for one statement, the pod compacts them again with a
-  smaller limit, so a large body becomes a placeholder. It runs one statement at a time, so it uses at
-  most one connection of the audit pool.
+- One background task per pod sends the buffer every second, or earlier when 500 items wait. It
+  prepares the records in a worker thread, in short steps, so it never holds up the pod's requests
+  for long: long strings are checked for inline data 256 KiB at a time, and each body is encoded on
+  its own. It reads the content policy of uncached organizations in one query, then writes one
+  statement for each organization (at most 100 records or 1 MiB each). The 1 MiB limit applies to
+  the statement as it is sent. When the bodies of one request are together too large for one
+  statement, the pod compacts them again with a smaller limit, so a large body becomes a
+  placeholder. It runs one statement at a time, so it uses at most one connection of the audit pool.
 - The content is best effort. It uses the best-effort queue capacity, which keeps the required reserve
   free for required audit events. The pod does not retry a failed send.
 
