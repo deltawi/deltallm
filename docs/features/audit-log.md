@@ -136,8 +136,14 @@ When you fetch one event directly, DeltaLLM also returns any stored `payloads`.
 With accounting v2, each accounting operation writes one `ACCOUNTING_PROVIDER_FINALIZATION`
 event when it closes. One operation can include more than one provider call, for example a
 retry, a failover to another deployment, or the model calls of one MCP tool request. They
-share one event. When the operation fails, the event has `status` `error`, and `error_type`
-tells why:
+share one event.
+
+When the operation succeeds, the event has `status` `success`. Its `input_tokens` and
+`output_tokens` are the `prompt_tokens` and `completion_tokens` of the charge, from the
+response usage or, if the usage does not have them, from the billing usage snapshot. A count
+that the charge does not have stays empty (`null`). It is not shown as 0.
+
+When the operation fails, the event has `status` `error`, and `error_type` tells why:
 
 - `AccountingProviderNotDispatched`: the gateway sent none of the calls, so it released
   the reserved amount.
