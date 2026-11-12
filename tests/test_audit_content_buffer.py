@@ -31,7 +31,11 @@ from src.services.audit.content_attachment import (
     audit_content_record_id,
     audit_content_target,
 )
-from src.services.audit.content_buffer import AuditContentBuffer, AuditContentItem
+from src.services.audit.content_buffer import (
+    AuditContentBuffer,
+    AuditContentItem,
+    approximate_chars,
+)
 from tests.test_accounting_request_ids import _operation as accounting_operation
 
 pytestmark = pytest.mark.hermetic
@@ -154,6 +158,29 @@ async def test_full_buffer_drops_new_items():
 
     assert [buffer.offer(_item()) for _ in range(3)] == [True, True, False]
     assert buffer.pending_items == 2
+
+
+async def test_large_bodies_count_until_their_send_ends():
+    service = _Service({"org-1": True})
+    service.enqueue_delay = 0.05
+    image = "A" * 1_000_000  # base64 data, before compaction
+    size = sum(approximate_chars(payload.content_json) for payload in _item(text=image).payloads)
+    buffer = AuditContentBuffer(service, max_held_chars=size * 2)
+
+    assert buffer.offer(_item(text=image)) is True
+    assert buffer.offer(_item(text=image)) is True
+    assert buffer.offer(_item(text=image)) is False  # buffer_bytes
+    sending = asyncio.create_task(buffer.flush())
+    await asyncio.sleep(0.01)
+    # The first two are in flight and still in memory, so there is no room yet.
+    assert buffer.offer(_item(text=image)) is False
+    await sending
+    assert buffer.offer(_item(text=image)) is True
+
+
+def test_size_estimate_adds_up_string_lengths_and_a_little_per_value():
+    assert approximate_chars({"a": ["xy", 1, None]}) == 2 + (1 + 4) + (2 + 3) + 4 + 8 + 8
+    assert approximate_chars({"data": "A" * 1_000_000}) == 2 + 4 + 4 + 1_000_002
 
 
 async def test_bundles_respect_the_byte_and_item_limits():

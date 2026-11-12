@@ -241,6 +241,7 @@ Content is dropped, and the audit event stays without bodies, in these cases. Ea
 | Reason | Cause |
 | --- | --- |
 | `buffer_full` | 2,000 items already wait in the buffer of this pod. |
+| `buffer_bytes` | The bodies that wait or are being sent on this pod already have about 128 MiB of characters, measured before compaction. |
 | `flush_bytes` | One send is larger than 64 MiB after compaction. |
 | `policy_unavailable` | The policy read failed. |
 | `enqueue_failed` | The database write failed, for example because the database is busy. The pod drops the rest of the send. |
