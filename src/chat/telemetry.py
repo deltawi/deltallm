@@ -36,6 +36,13 @@ from src.routers.routing_decision import attach_route_decision, resolve_failure_
 from src.routers.response_cost import record_response_cost
 
 
+def _usage_tokens(usage: dict[str, Any], key: str) -> int | None:
+    value = usage.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
 def _append_route_decision_metadata(request: Request, metadata: dict[str, Any]) -> dict[str, Any]:
     return attach_route_decision(metadata, request)
 
@@ -113,6 +120,7 @@ async def emit_stream_success(
     params: dict[str, Any],
     usage: dict[str, Any] | None = None,
     usage_metadata: dict[str, Any] | None = None,
+    reply: dict[str, Any] | None = None,
 ) -> AsyncIterator[None]:
     """Await configured accounting and required audit before the terminal frame.
 
@@ -207,7 +215,10 @@ async def emit_stream_success(
         status="success",
         request_start=request_start,
         request_data=request_data,
-        response_data={"object": stream_response_object},
+        # Without a rebuilt reply, the audit keeps the earlier placeholder.
+        response_data=reply or {"object": stream_response_object},
+        input_tokens=_usage_tokens(usage_data, "prompt_tokens"),
+        output_tokens=_usage_tokens(usage_data, "completion_tokens"),
         metadata=_append_route_decision_metadata(
             request,
             {
