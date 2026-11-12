@@ -228,10 +228,16 @@ database:
 - The request only adds its bodies to the buffer. It does no database I/O for this step, and this step
   never fails the request. When the pod already knows that the organization has content storage off, the
   bodies do not go into the buffer.
+- To estimate the size of the bodies, the request visits at most 16,384 values (strings, numbers and
+  other JSON values) for all its bodies together. A body with more values, for example an embeddings
+  response with many vectors, is replaced by a placeholder:
+  `{"omitted": "payload_too_many_values", "max_values": 16384}`. The other body is kept.
 - One background task per pod sends the buffer every second, or earlier when 500 items wait. It reads the
   content policy of uncached organizations in one query, then writes one statement for each organization
-  (at most 100 records or 1 MiB each). It runs one statement at a time, so it uses at most one connection
-  of the audit pool.
+  (at most 100 records or 1 MiB each). The 1 MiB limit applies to the statement as it is sent. When the
+  bodies of one request are together too large for one statement, the pod compacts them again with a
+  smaller limit, so a large body becomes a placeholder. It runs one statement at a time, so it uses at
+  most one connection of the audit pool.
 - The content is best effort. It uses the best-effort queue capacity, which keeps the required reserve
   free for required audit events. The pod does not retry a failed send.
 
@@ -243,6 +249,8 @@ Content is dropped, and the audit event stays without bodies, in these cases. Ea
 | `buffer_full` | 2,000 items already wait in the buffer of this pod. |
 | `buffer_bytes` | The bodies that wait or are being sent on this pod already have about 128 MiB of characters, measured before compaction. |
 | `flush_bytes` | One send is larger than 64 MiB after compaction. |
+| `record_bytes` | The record of one request does not fit in one 1 MiB statement, even after the pod compacts it again. |
+| `payload_values` | A body has more values than the size estimate visits. Only this body is replaced by a placeholder; the rest of the content is sent. |
 | `policy_unavailable` | The policy read failed. |
 | `enqueue_failed` | The database write failed, for example because the database is busy. The pod drops the rest of the send. |
 | `queue_full` | The audit queue has no best-effort capacity. The pod then stops the send and drops the rest of it. |

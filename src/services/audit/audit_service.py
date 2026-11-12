@@ -799,14 +799,13 @@ class AuditService:
             )
 
     def _compact_payloads(
-        self, payloads: list[AuditPayloadInput] | None
+        self, payloads: list[AuditPayloadInput] | None, *, max_bytes: int | None = None
     ) -> list[AuditPayloadInput]:
+        limit = self.ingestion_config.payload_max_bytes if max_bytes is None else max_bytes
         result: list[AuditPayloadInput] = []
         for payload in payloads or []:
             if payload.content_json is not None:
-                content, changed = compact_audit_content(
-                    payload.content_json, max_bytes=self.ingestion_config.payload_max_bytes
-                )
+                content, changed = compact_audit_content(payload.content_json, max_bytes=limit)
                 if changed:
                     payload = replace(payload, content_json=content)
             result.append(payload)
@@ -1343,13 +1342,21 @@ class AuditService:
         return result
 
     def serialize_outbox_payloads(
-        self, event: AuditEventInput, payloads: list[AuditPayloadInput]
+        self,
+        event: AuditEventInput,
+        payloads: list[AuditPayloadInput],
+        *,
+        max_payload_bytes: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Compact the payloads and return the full and the redacted outbox payload.
 
         CPU work only, with no I/O, so a caller can run it in a worker thread.
+        ``max_payload_bytes`` replaces the configured payload limit, for a caller
+        that must fit all payloads of one record into a smaller limit.
         """
-        item = _QueueItem(event=event, payloads=self._compact_payloads(payloads))
+        item = _QueueItem(
+            event=event, payloads=self._compact_payloads(payloads, max_bytes=max_payload_bytes)
+        )
         return _serialize_audit_item(item), _serialize_audit_item(_redact_audit_item(item))
 
     def invalidate_content_storage_policy(self, organization_id: str) -> None:

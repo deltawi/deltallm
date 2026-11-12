@@ -66,6 +66,20 @@ class AuditOutboxEnvelope:
         )
 
 
+def audit_envelope_wire(item: AuditOutboxEnvelope) -> dict[str, Any]:
+    """Return one envelope as ``enqueue_bundle`` sends it (``json.dumps`` with ``default=str``)."""
+
+    return {
+        "event_id": item.event_id,
+        "record_type": item.record_type,
+        "organization_id": item.organization_id,
+        "delivery_class": item.delivery_class.value,
+        "payload": item.payload,
+        "redacted_payload": item.redacted_payload,
+        "max_attempts": max(1, int(item.max_attempts)),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class AuditBundleEnqueueResult:
     statuses: dict[str, AuditEnqueueStatus]
@@ -142,18 +156,7 @@ class AuditIngestionRepository:
                     raise ValueError("audit enqueue bundle event IDs must be unique")
                 organization_id = next(iter(organization_ids))
                 serialized_envelopes = json.dumps(
-                    [
-                        {
-                            "event_id": item.event_id,
-                            "record_type": item.record_type,
-                            "organization_id": item.organization_id,
-                            "delivery_class": item.delivery_class.value,
-                            "payload": item.payload,
-                            "redacted_payload": item.redacted_payload,
-                            "max_attempts": max(1, int(item.max_attempts)),
-                        }
-                        for item in envelopes
-                    ],
+                    [audit_envelope_wire(item) for item in envelopes],
                     default=str,
                 )
                 observation.retain_serialized(serialized_envelopes)

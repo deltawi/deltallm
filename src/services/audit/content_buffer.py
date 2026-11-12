@@ -6,14 +6,19 @@ organizations with content storage on, this buffer keeps the bodies in memory fo
 a short time and a background task sends them as best-effort ``audit_content``
 records. The audit worker attaches them to the accounting event.
 
-Request path cost: ``offer`` is synchronous. It does one cached policy lookup and
-one list append. It never waits for the database, and it never fails a request.
+Request path cost: ``offer`` is synchronous. It does one cached policy lookup, a
+size estimate that visits at most ``AUDIT_CONTENT_MAX_SIZE_VALUES`` values, and one
+list append. It never waits for the database, and it never fails a request. A body
+with more values (for example an embeddings response) is replaced by a short
+placeholder, as compaction would do later.
 
 Database cost: the flusher runs once per second (or earlier when many items wait),
 reads uncached policies in one query, and writes one statement per organization
 bundle. It runs one statement at a time, so it holds at most one connection of the
-audit pool. A database error or a full audit queue drops the rest of that flush;
-there is no retry loop.
+audit pool. Every statement, measured as it is sent, is at most
+``AUDIT_CONTENT_BUNDLE_MAX_BYTES``: a record that is larger is compacted again with
+a smaller payload limit, or dropped. A database error or a full audit queue drops
+the rest of that flush; there is no retry loop.
 
 Memory: at most ``AUDIT_CONTENT_MAX_ITEMS`` items wait between flushes. Each item
 holds references to the request and response objects that the request already
@@ -29,7 +34,7 @@ import asyncio
 from collections import defaultdict
 from collections.abc import Iterable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 import logging
@@ -37,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.audit.delivery import AuditDeliveryClass
 from src.database_caller import with_database_caller
-from src.db.audit.audit_ingestion import AuditOutboxEnvelope
+from src.db.audit.audit_ingestion import AuditOutboxEnvelope, audit_envelope_wire
 from src.metrics.audit import (
     increment_audit_content_dropped,
     increment_audit_enqueue,
@@ -68,6 +73,11 @@ AUDIT_CONTENT_MAX_FLUSH_BYTES = 64 * 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_BYTES = 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_ITEMS = 100
 AUDIT_CONTENT_SHUTDOWN_FLUSH_SECONDS = 2.0
+# Work limit of the size estimate on the request path, for all bodies of one item
+# (about 2 ms in the worst case). A large chat request has a few thousand values.
+AUDIT_CONTENT_MAX_SIZE_VALUES = 16_384
+# Attempts to compact a record into one statement before it is dropped.
+_FIT_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +112,7 @@ class AuditContentBuffer:
         max_flush_bytes: int = AUDIT_CONTENT_MAX_FLUSH_BYTES,
         bundle_max_bytes: int = AUDIT_CONTENT_BUNDLE_MAX_BYTES,
         bundle_max_items: int = AUDIT_CONTENT_BUNDLE_MAX_ITEMS,
+        max_size_values: int = AUDIT_CONTENT_MAX_SIZE_VALUES,
     ) -> None:
         self.audit_service = audit_service
         self.flush_interval_seconds = max(0.01, float(flush_interval_seconds))
@@ -111,6 +122,7 @@ class AuditContentBuffer:
         self.max_flush_bytes = max(1, int(max_flush_bytes))
         self.bundle_max_bytes = max(1, int(bundle_max_bytes))
         self.bundle_max_items = max(1, int(bundle_max_items))
+        self.max_size_values = max(1, int(max_size_values))
         self._items: list[AuditContentItem] = []
         # Approximate characters of the bodies that wait, and of those in flight.
         self._waiting_chars = 0
@@ -133,7 +145,7 @@ class AuditContentBuffer:
         if len(self._items) >= self.max_items:
             increment_audit_content_dropped(reason="buffer_full")
             return False
-        size = sum(approximate_chars(payload.content_json) for payload in item.payloads)
+        item, size = self._bounded_size(item)
         if self._waiting_chars + self._in_flight_chars + size > self.max_held_chars:
             increment_audit_content_dropped(reason="buffer_bytes")
             return False
@@ -142,6 +154,31 @@ class AuditContentBuffer:
         if len(self._items) >= self.early_flush_items:
             self._wake.set()
         return True
+
+    def _bounded_size(self, item: AuditContentItem) -> tuple[AuditContentItem, int]:
+        """Estimate the bodies with one shared work limit; replace a body that is over it."""
+
+        budget = self.max_size_values
+        total = 0
+        payloads: list[AuditPayloadInput] | None = None
+        for index, payload in enumerate(item.payloads):
+            if payload.content_json is None:
+                continue
+            walked = _walk(payload.content_json, budget)
+            if walked is not None:
+                chars, visited = walked
+                total += chars
+                budget -= visited
+                continue
+            if payloads is None:
+                payloads = list(item.payloads)
+            placeholder = {"omitted": "payload_too_many_values", "max_values": self.max_size_values}
+            payloads[index] = replace(payload, content_json=placeholder)
+            total += 64
+            increment_audit_content_dropped(reason="payload_values")
+        if payloads is None:
+            return item, total
+        return replace(item, payloads=payloads), total
 
     # Lifecycle ----------------------------------------------------------------
 
@@ -238,7 +275,7 @@ class AuditContentBuffer:
     ) -> tuple[list[_SizedEnvelope], dict[str, int]]:
         sized: list[_SizedEnvelope] = []
         total = 0
-        dropped = {"duplicate": 0, "flush_bytes": 0}
+        dropped = {"duplicate": 0, "flush_bytes": 0, "record_bytes": 0}
         seen: set[str] = set()
         for item in items:
             # One accounting event takes one content record. A bundle with the same
@@ -247,18 +284,42 @@ class AuditContentBuffer:
                 dropped["duplicate"] += 1
                 continue
             seen.add(item.target_event_id)
-            envelope = self._envelope(item)
-            size = len(json.dumps(envelope.payload, default=str))
-            if total + size > self.max_flush_bytes:
+            fitted = self._fitted_envelope(item)
+            if fitted is None:
+                dropped["record_bytes"] += 1
+                continue
+            if total + fitted.size > self.max_flush_bytes:
                 dropped["flush_bytes"] += 1
                 continue
-            total += size
-            sized.append(_SizedEnvelope(envelope=envelope, size=size))
+            total += fitted.size
+            sized.append(fitted)
         return sized, dropped
 
-    def _envelope(self, item: AuditContentItem) -> AuditOutboxEnvelope:
+    def _fitted_envelope(self, item: AuditContentItem) -> _SizedEnvelope | None:
+        """Return the record if it fits one statement, compacting it harder if needed.
+
+        Compaction limits each body on its own, so the bodies of one record can
+        together be larger than a statement. JSON escaping can add more.
+        """
+
+        record_max = self.bundle_max_bytes - _BUNDLE_BRACKETS
+        limit: int | None = None
+        for _ in range(_FIT_ATTEMPTS):
+            envelope = self._envelope(item, max_payload_bytes=limit)
+            size = _wire_size(envelope)
+            if size <= record_max:
+                return _SizedEnvelope(envelope=envelope, size=size)
+            current = limit or self.audit_service.ingestion_config.payload_max_bytes
+            limit = max(1, current * record_max // (2 * size))
+        return None
+
+    def _envelope(
+        self, item: AuditContentItem, *, max_payload_bytes: int | None = None
+    ) -> AuditOutboxEnvelope:
         # Compacts like every other audit write; the redacted copy has no content.
-        payload, redacted = self.audit_service.serialize_outbox_payloads(item.event, item.payloads)
+        payload, redacted = self.audit_service.serialize_outbox_payloads(
+            item.event, item.payloads, max_payload_bytes=max_payload_bytes
+        )
         fields = audit_content_fields(
             target_event_id=item.target_event_id, enqueued_at=item.enqueued_at
         )
@@ -335,42 +396,80 @@ class AuditContentBuffer:
         increment_audit_content_dropped(reason=reason, count=len(items))
 
 
-def approximate_chars(value: Any) -> int:
-    """Return a rough JSON size of a body without copying or scanning its strings.
+def approximate_chars(value: Any, *, max_values: int = AUDIT_CONTENT_MAX_SIZE_VALUES) -> int | None:
+    """Return a rough JSON size of a body, or ``None`` if it has more than ``max_values`` values.
 
-    It only adds up string lengths and a few characters for each other value,
-    so its cost depends on the number of values, not on their size.
+    It only adds up string lengths and a few characters for each other value, so
+    its cost depends on the number of values, not on their size, and it visits at
+    most ``max_values`` values.
+    """
+
+    walked = _walk(value, max_values)
+    return None if walked is None else walked[0]
+
+
+def _walk(value: Any, budget: int) -> tuple[int, int] | None:
+    """Return (approximate characters, values visited), or ``None`` over the budget.
+
+    A container is only expanded when all its values fit in what is left of the
+    budget, so a long list is never iterated.
     """
 
     total = 0
+    visited = 0
     stack = [value]
     while stack:
         current = stack.pop()
+        visited += 1
         if isinstance(current, str):
             total += len(current) + 2
         elif isinstance(current, dict):
+            if visited + len(stack) + len(current) > budget:
+                return None
             total += 2
             for key, item in current.items():
                 total += (len(key) if isinstance(key, str) else 8) + 4
                 stack.append(item)
         elif isinstance(current, (list, tuple)):
+            if visited + len(stack) + len(current) > budget:
+                return None
             total += 2 + len(current)
             stack.extend(current)
         else:
             total += 8
-    return total
+    return total, visited
+
+
+# The statement sends a JSON list: "[" and "]", and ", " between records.
+_BUNDLE_BRACKETS = 2
+_BUNDLE_SEPARATOR = 2
+
+
+def _wire_size(envelope: AuditOutboxEnvelope) -> int:
+    """Return the exact size of one record in the statement that sends it."""
+
+    return len(json.dumps(audit_envelope_wire(envelope), default=str))
 
 
 def _bundles(
     entries: Iterable[_SizedEnvelope], max_bytes: int, max_items: int
 ) -> list[list[AuditOutboxEnvelope]]:
+    """Group records so that each statement is at most ``max_bytes`` as sent.
+
+    Every record already fits alone (see ``_fitted_envelope``).
+    """
+
     bundles: list[list[AuditOutboxEnvelope]] = []
     current: list[AuditOutboxEnvelope] = []
-    current_bytes = 0
+    current_bytes = _BUNDLE_BRACKETS
     for entry in entries:
-        if current and (current_bytes + entry.size > max_bytes or len(current) >= max_items):
+        if current and (
+            current_bytes + _BUNDLE_SEPARATOR + entry.size > max_bytes or len(current) >= max_items
+        ):
             bundles.append(current)
-            current, current_bytes = [], 0
+            current, current_bytes = [], _BUNDLE_BRACKETS
+        if current:
+            current_bytes += _BUNDLE_SEPARATOR
         current.append(entry.envelope)
         current_bytes += entry.size
     if current:
