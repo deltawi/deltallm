@@ -47,7 +47,11 @@ def stream_reply_accumulator(request: Request, auth: Any) -> StreamReplyAccumula
         audit_service = getattr(request.app.state, "audit_service", None)
         if audit_service is None:
             return None
-        if audit_service.peek_content_storage_policy(organization_id) is False:
+        # Any object with record_event can be the audit service here, so the
+        # policy peek is optional. Without it the reply is collected and the
+        # worker applies the policy.
+        peek = getattr(audit_service, "peek_content_storage_policy", None)
+        if peek is not None and peek(organization_id) is False:
             return None
     config = getattr(audit_service, "ingestion_config", None)
     max_bytes = int(getattr(config, "payload_max_bytes", DEFAULT_AUDIT_PAYLOAD_MAX_BYTES))
