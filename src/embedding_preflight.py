@@ -15,7 +15,7 @@ from src.middleware.rate_limit import (
 from src.models.errors import InvalidRequestError
 from src.models.requests import EmbeddingRequest
 from src.rate_limit_policy import estimate_tokens_for_json_size, json_text
-from src.services.audit.content_buffer import audit_request_text
+from src.services.audit.content_buffer import AuditRequestSnapshot, audit_request_snapshot
 from src.router.context_policy import estimate_embedding_context_input_tokens
 from src.routers.utils import enforce_budget_if_configured
 from src.router.runtime_generation import RoutingRuntimeGeneration
@@ -39,10 +39,10 @@ class EmbeddingPreflightResult:
     callback_manager: CallbackManager
     token_estimate: int
     context_input_tokens: int
-    # JSON text of request_data as sent upstream, kept from the token estimate only
-    # when the audit content buffer may store it and its parse is short. It cannot
-    # change later.
-    audit_request_json: str | None = None
+    # Snapshot of request_data as sent upstream, for the audit content buffer: the
+    # JSON text of the token estimate, or a bounded copy. None when content is surely
+    # not stored. It cannot change later.
+    audit_request: AuditRequestSnapshot | None = None
 
 
 async def run_embedding_preflight(
@@ -131,8 +131,8 @@ async def run_embedding_preflight(
         callback_manager=callback_manager,
         token_estimate=token_estimate,
         context_input_tokens=context_input_tokens,
-        audit_request_json=audit_request_text(
-            request, getattr(auth, "organization_id", None), request_json
+        audit_request=audit_request_snapshot(
+            request, getattr(auth, "organization_id", None), request_json, transformed_data
         ),
     )
     request.state.prepared_embedding_request = result

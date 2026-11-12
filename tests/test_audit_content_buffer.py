@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 import gc
+from hashlib import sha256
 import json
 from time import perf_counter
 from types import SimpleNamespace
@@ -26,7 +27,7 @@ from src.db.audit.audit_ingestion import (
     audit_envelope_wire,
 )
 from src.db.audit.repository import AuditRepository
-from src.routers.audit_helpers import _preflight_request_json, emit_audit_event
+from src.routers.audit_helpers import _preflight_request_snapshot, emit_audit_event
 from src.services.audit.audit_service import (
     AuditEventInput,
     AuditIngestionConfig,
@@ -42,9 +43,11 @@ from src.services.audit.content_buffer import (
     AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS,
     AuditContentBuffer,
     AuditContentItem,
+    AuditRequestSnapshot,
     _measure,
+    _wire_size,
     approximate_chars,
-    audit_request_text,
+    audit_request_snapshot,
 )
 from src.rate_limit_policy import json_text
 from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES, _compact
@@ -701,7 +704,7 @@ def _preflight(request_data: dict, *, text: str | None = None) -> TextPreflightR
         callback_manager=None,
         guardrail_middleware=None,
         token_estimate=max(1, len(text) // 4),
-        audit_request_json=text,
+        audit_request=AuditRequestSnapshot(chars=len(text), text=text),
     )
 
 
@@ -742,7 +745,7 @@ async def test_a_large_measured_request_keeps_its_body(monkeypatch, request_data
     # Kept as the preflight's JSON text and counted by its length: its values are
     # not visited again.
     assert buffer.pending_items == 1
-    assert buffer._items[0].request_json == json_text(request_data)
+    assert buffer._items[0].request_snapshot.text == json_text(request_data)
     expected = len(json_text(request_data)) + approximate_chars({"reply": "hello"})
     assert buffer._waiting_chars == expected
     await buffer.flush()
@@ -781,11 +784,11 @@ def test_the_preflight_text_is_used_only_for_its_own_request_object():
     request.state.prepared_text_request = _preflight(request_data)
 
     measured = [AuditPayloadInput(kind="request", content_json=request_data)]
-    assert _preflight_request_json(request, measured) == json_text(request_data)
+    assert _preflight_request_snapshot(request, measured).text == json_text(request_data)
     # Another request object (for example one an endpoint built itself) is walked.
     other = [AuditPayloadInput(kind="request", content_json=dict(request_data))]
-    assert _preflight_request_json(request, other) is None
-    assert _preflight_request_json(_request(buffer=None, operation=None), measured) is None
+    assert _preflight_request_snapshot(request, other) is None
+    assert _preflight_request_snapshot(_request(buffer=None, operation=None), measured) is None
 
 
 class _NeverWalkedDict(dict):
@@ -820,24 +823,91 @@ async def test_a_request_body_serialized_by_the_preflight_is_not_walked(monkeypa
     assert response_payload["content_json"] == {"reply": "hello"}
 
 
-async def test_only_a_request_text_with_a_short_parse_is_kept():
-    service = _Service({"org-1": True})
+async def _longest_loop_pause(work) -> float:
+    """Run ``work`` while a 1 ms probe runs on the event loop; return its longest gap."""
+
+    gaps: list[float] = []
+    done = asyncio.Event()
+
+    async def probe() -> None:
+        last = perf_counter()
+        while not done.is_set():
+            await asyncio.sleep(0.001)
+            now = perf_counter()
+            gaps.append(now - last)
+            last = now
+
+    # The test's own large objects are left out of garbage collection pauses.
+    gc.collect()
+    gc.freeze()
+    try:
+        task = asyncio.create_task(probe())
+        await asyncio.sleep(0.005)
+        await work
+        done.set()
+        await task
+    finally:
+        gc.unfreeze()
+    return max(gaps)
+
+
+async def test_a_request_snapshot_is_a_text_only_when_its_parse_is_short():
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
     buffer = AuditContentBuffer(service)
     request = _request(buffer=buffer, operation=None)
-    tools = json_text(_tool_schema_request("chat"))
+    tools = _tool_schema_request("chat")
+    tools_text = json_text(tools)
 
-    assert audit_request_text(request, "org-1", tools) == tools
-    # Many small values: under the length limit, but a long parse.
-    small_values = json_text({"p": {f"field_{n}": {"type": "string"} for n in range(20_000)}})
-    assert len(small_values) < AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS
-    assert audit_request_text(request, "org-1", small_values) is None
-    # Long prose: few values, over the length limit (it is walked instead).
-    prose = json_text({"messages": [{"role": "user", "content": "word " * 250_000}]})
-    assert audit_request_text(request, "org-1", prose) is None
-    # Content storage known to be off, or no buffer: nothing is kept.
+    snapshot = audit_request_snapshot(request, "org-1", tools_text, tools)
+    assert snapshot.text == tools_text
+    assert snapshot.chars == len(tools_text)
+    # Many small values: under the length limit, but a long parse. The request is
+    # measured now instead; it is over the work limit, so it becomes a placeholder.
+    small_values = {"p": {f"field_{n}": {"type": "string"} for n in range(20_000)}}
+    small_text = json_text(small_values)
+    assert len(small_text) < AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS
+    snapshot = audit_request_snapshot(request, "org-1", small_text, small_values)
+    assert snapshot.text is None
+    assert snapshot.body == {"omitted": "payload_too_many_values", "max_values": 16_384}
+    assert snapshot.values_limited
+    # Long prose: few values, over the length limit. It is copied now.
+    prose = {"messages": [{"role": "user", "content": "word " * 250_000}]}
+    prose_text = json_text(prose)
+    snapshot = audit_request_snapshot(request, "org-1", prose_text, prose)
+    assert snapshot.text is None
+    assert snapshot.body == prose
+    assert snapshot.body["messages"] is not prose["messages"]
+    assert snapshot.chars > len(prose["messages"][0]["content"])
+    # Content storage known to be off, or no buffer: no snapshot.
     service.cache_policy("org-2", False)
-    assert audit_request_text(request, "org-2", tools) is None
-    assert audit_request_text(_request(buffer=None, operation=None), "org-1", tools) is None
+    assert audit_request_snapshot(request, "org-2", tools_text, tools) is None
+    no_buffer = _request(buffer=None, operation=None)
+    assert audit_request_snapshot(no_buffer, "org-1", tools_text, tools) is None
+
+
+async def test_large_integers_are_counted_by_size_and_omitted(monkeypatch):
+    monkeypatch.setattr("src.routers.audit_helpers.enqueue_audit_event", AsyncMock())
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service, max_held_chars=1_048_576)
+    huge = 10**4_000
+
+    # Counted by digits, not as 8 characters each: only the first fits the cap.
+    for _ in range(3):
+        await emit_audit_event(
+            request=_request(buffer=buffer, operation=accounting_operation()),
+            request_start=perf_counter(),
+            action="IMAGE_GENERATION_REQUEST",
+            status="success",
+            actor_type="api_key",
+            organization_id="org-1",
+            request_payload={"enum": [huge] * 200},
+        )
+    assert buffer.pending_items == 1
+    assert buffer._waiting_chars > 200 * 4_000
+
+    assert await _longest_loop_pause(buffer.flush()) < 0.05
+    stored = service.bundles[0][0].payload["payloads"][0]["content_json"]
+    assert stored["enum"][0] == f"[omitted large integer: {huge.bit_length()} bits]"
 
 
 async def test_a_large_request_does_not_stop_the_event_loop_during_the_flush(monkeypatch):
@@ -869,7 +939,7 @@ async def test_a_large_request_does_not_stop_the_event_loop_during_the_flush(mon
         callback_manager=None,
         guardrail_middleware=None,
         token_estimate=len(text) // 4,
-        audit_request_json=audit_request_text(request, "org-1", text),
+        audit_request=audit_request_snapshot(request, "org-1", text, request_data),
     )
     await emit_text_audit_event(
         request=request,
@@ -882,35 +952,93 @@ async def test_a_large_request_does_not_stop_the_event_loop_during_the_flush(mon
         response_data={"reply": "hello"},
     )
     assert buffer.pending_items == 1
-    assert buffer._items[0].request_json is None
+    assert buffer._items[0].request_snapshot.text is None
 
-    gaps: list[float] = []
-    done = asyncio.Event()
-
-    async def probe() -> None:
-        last = perf_counter()
-        while not done.is_set():
-            await asyncio.sleep(0.001)
-            now = perf_counter()
-            gaps.append(now - last)
-            last = now
-
-    # The test's own large objects are left out of garbage collection pauses.
-    gc.collect()
-    gc.freeze()
-    try:
-        task = asyncio.create_task(probe())
-        await asyncio.sleep(0.005)
-        await buffer.flush()
-        done.set()
-        await task
-    finally:
-        gc.unfreeze()
-
-    assert max(gaps) < 0.05
+    assert await _longest_loop_pause(buffer.flush()) < 0.05
     request_payload, response_payload = service.bundles[0][0].payload["payloads"]
     assert request_payload["content_json"]["omitted"] == "payload_too_large"
     assert response_payload["content_json"] == {"reply": "hello"}
+
+
+@pytest.mark.parametrize("valid_base64", [False, True], ids=["text", "base64"])
+async def test_a_large_string_does_not_stop_the_event_loop_during_the_flush(
+    monkeypatch, valid_base64
+):
+    """Compaction scans and hashes a long string in slices, never in one long C call."""
+
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service)
+    # 24 MiB of base64 characters; one more character makes it plain text.
+    content = "A" * (24 * 1024 * 1024) + ("" if valid_base64 else "!")
+    request_data = {"model": "m", "messages": [{"role": "user", "content": content}]}
+    request = _request(buffer=buffer, operation=accounting_operation())
+    text = json_text(request_data)
+    request.state.prepared_text_request = TextPreflightResult(
+        auth=None,
+        payload=None,
+        request_data=request_data,
+        callback_manager=None,
+        guardrail_middleware=None,
+        token_estimate=len(text) // 4,
+        audit_request=audit_request_snapshot(request, "org-1", text, request_data),
+    )
+    await emit_text_audit_event(
+        request=request,
+        auth=_auth(),
+        action="CHAT_COMPLETION_REQUEST",
+        model="m",
+        status="success",
+        request_start=perf_counter(),
+        request_data=request_data,
+        response_data={"reply": "hello"},
+    )
+    # The text is too long to keep, and the few values of the body are copied.
+    assert buffer._items[0].request_snapshot.text is None
+    assert buffer._waiting_chars > len(content)
+
+    assert await _longest_loop_pause(buffer.flush()) < 0.05
+    request_payload, response_payload = service.bundles[0][0].payload["payloads"]
+    stored = request_payload["content_json"]
+    if valid_base64:
+        digest = sha256(content.encode()).hexdigest()
+        assert stored["messages"][0]["content"] == (
+            f"[omitted inline data: base64, {len(content)} chars, sha256={digest}]"
+        )
+    else:
+        assert stored["omitted"] == "payload_too_large"
+    assert response_payload["content_json"] == {"reply": "hello"}
+
+
+def test_the_record_size_is_measured_body_by_body_exactly():
+    service = _Service({"org-1": True})
+    buffer = AuditContentBuffer(service)
+    bodies = [
+        {"messages": [{"role": "user", "content": 'quote " backslash \\ é 中文 😀'}]},
+        {"reply": "مرحبا " * 100, "n": [1, 2.5, None, True], "nan": float("nan")},
+        "a plain string body",
+    ]
+    for request_body, response_body in zip(bodies, [*bodies[1:], None], strict=True):
+        payloads = [AuditPayloadInput(kind="request", content_json=request_body)]
+        if response_body is not None:
+            payloads.append(AuditPayloadInput(kind="response", content_json=response_body))
+        item = AuditContentItem(
+            target_event_id=str(uuid4()),
+            event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
+            payloads=payloads,
+            enqueued_at=datetime.now(UTC),
+        )
+        envelope = buffer._envelope(item)
+        assert _wire_size(envelope) == len(json.dumps(audit_envelope_wire(envelope), default=str))
+    empty = buffer._envelope(
+        AuditContentItem(
+            target_event_id=str(uuid4()),
+            event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
+            payloads=[],
+            enqueued_at=datetime.now(UTC),
+        )
+    )
+    assert _wire_size(empty) == len(json.dumps(audit_envelope_wire(empty), default=str))
 
 
 async def test_later_changes_to_the_bodies_do_not_reach_the_buffer(monkeypatch):

@@ -22,8 +22,8 @@ from src.services.audit.audit_service import (
     enqueue_audit_event,
 )
 from src.services.audit.content_buffer import (
-    AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS,
     AuditContentItem,
+    AuditRequestSnapshot,
     audit_content_may_be_stored,
 )
 
@@ -61,11 +61,11 @@ def offer_accounting_audit_content(
         return
     operation_id = operation.reservation.operation_id
     event.metadata = {**(event.metadata or {}), "accounting_operation_id": str(operation_id)}
-    request_json = _preflight_request_json(request, payloads)
-    if request_json is not None:
-        # The buffer keeps the text, not the request object.
+    snapshot = _preflight_request_snapshot(request, payloads)
+    if snapshot is not None:
+        # The buffer keeps the snapshot (a text, or a copy), not the request object.
         payloads = [
-            replace(payload, content_json=None) if payload.kind == "request" else payload
+            replace(payload, content_json=snapshot.body) if payload.kind == "request" else payload
             for payload in payloads
         ]
     buffer.offer(
@@ -74,18 +74,19 @@ def offer_accounting_audit_content(
             event=event,
             payloads=payloads,
             enqueued_at=datetime.now(UTC),
-            request_json=request_json,
+            request_snapshot=snapshot,
         )
     )
 
 
-def _preflight_request_json(request: Request, payloads: list[AuditPayloadInput]) -> str | None:
-    """Return the JSON text the preflight kept for the request body, if this is that body.
+def _preflight_request_snapshot(
+    request: Request, payloads: list[AuditPayloadInput]
+) -> AuditRequestSnapshot | None:
+    """Return the snapshot the preflight took of the request body, if this is that body.
 
-    The text and embeddings preflights serialize the request after prompt resolution,
-    hooks and guardrails, for their token estimate, and keep that text when content
-    may be stored. It is the request as sent upstream, and unlike the request object
-    it cannot change later (post-call hooks get the same object).
+    The text and embeddings preflights take it after prompt resolution, hooks and
+    guardrails, when content may be stored: the request as sent upstream. Unlike the
+    request object it cannot change later (post-call hooks get the same object).
     """
 
     body = next((payload.content_json for payload in payloads if payload.kind == "request"), None)
@@ -94,10 +95,8 @@ def _preflight_request_json(request: Request, payloads: list[AuditPayloadInput])
     for name in ("prepared_text_request", "prepared_embedding_request"):
         prepared = getattr(request.state, name, None)
         if prepared is not None and getattr(prepared, "request_data", None) is body:
-            text = getattr(prepared, "audit_request_json", None)
-            if not isinstance(text, str) or len(text) > AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS:
-                return None
-            return text
+            snapshot = getattr(prepared, "audit_request", None)
+            return snapshot if isinstance(snapshot, AuditRequestSnapshot) else None
     return None
 
 

@@ -126,7 +126,7 @@ async def test_cache_hit_hands_its_content_to_the_audit_buffer(
         assert item.target_event_id == repository.finalizations[1].audit_envelope["event_id"]
         assert item.event.metadata["cache_hit"] is True
         assert item.event.metadata["route"] == "/v1/chat/completions"
-        sent = json.loads(item.request_json)
+        sent = json.loads(item.request_snapshot.text)
         assert sent["model"] == "gpt-4o-mini"
         assert sent["messages"] == body["messages"]
         cached = next(iter(backend._cache.values())).response

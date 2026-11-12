@@ -504,22 +504,35 @@ class _ContentStoredAuditService:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+@pytest.mark.parametrize(
+    "system_message",
+    [
+        pytest.param("x" * 20_000, id="text"),
+        # Over the separator limit (lowered below): the text would parse slowly, so
+        # the preflight copies the request instead.
+        pytest.param(",:" * 1_000, id="copy"),
+    ],
+)
 async def test_chat_audit_content_keeps_the_request_as_sent_upstream(
     client,
     test_app,
     monkeypatch,
     stream,
+    system_message,
 ):
     """The buffer keeps the request after pre-call hooks, and post-call hooks cannot change it.
 
     Without streaming, post-call hooks run before the hand-off; with streaming, after it.
+    The preflight takes the snapshot before the call: its JSON text, or a copy.
     """
 
     from src.chat import telemetry
     from src.services.audit.content_buffer import AuditContentBuffer
     from tests.test_accounting_request_ids import _operation
 
-    system_message = "x" * 20_000
+    monkeypatch.setattr(
+        "src.services.audit.content_buffer.AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS", 1_000
+    )
     manager = CallbackManager()
     manager.register_callback(_GrowingPostCallCallback(system_message=system_message))
     test_app.state.callback_manager = manager
@@ -547,17 +560,21 @@ async def test_chat_audit_content_keeps_the_request_as_sent_upstream(
     assert response.status_code == 200
     assert buffer.pending_items == 1
     item = buffer._items[0]
-    sent = jsonlib.loads(item.request_json)
+    snapshot = item.request_snapshot
+    sent = jsonlib.loads(snapshot.text) if snapshot.text is not None else snapshot.body
+    assert (snapshot.text is None) == system_message.startswith(",")
     assert sent["model"] == "gpt-4o-mini"
     assert sent["messages"] == [
         {"role": "system", "content": system_message},
         {"role": "user", "content": "hello"},
     ]
-    # The text is the only copy of the request, and it is what the buffer counts.
-    assert [payload.content_json for payload in item.payloads if payload.kind == "request"] == [
-        None
+    # The snapshot is the only copy of the request, and it is what the buffer counts.
+    request_bodies = [
+        payload.content_json for payload in item.payloads if payload.kind == "request"
     ]
-    assert len(item.request_json) <= buffer._waiting_chars < 100_000
+    assert request_bodies == [snapshot.body]
+    assert snapshot.chars >= len(system_message)
+    assert snapshot.chars <= buffer._waiting_chars < 100_000
 
 
 @pytest.mark.asyncio

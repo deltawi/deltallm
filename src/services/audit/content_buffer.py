@@ -11,10 +11,11 @@ bounded measure and copy, and one list append. It never waits for the database,
 and it never fails a request. A request body that the text or embeddings preflight
 already serialized for its token estimate (after prompt resolution, hooks and
 guardrails) is kept as that JSON text, the request as sent upstream, when it is
-small enough for a short parse (see ``audit_request_text``): it is counted by its
-length and not visited again. Other bodies, and larger
-requests, are measured and copied with a work limit of
-``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is
+small enough for a short parse (see ``AuditContentBuffer.snapshot_request``): it is
+counted by its length and not visited again. A larger request is measured and
+copied by the preflight, before the provider call. Other bodies are measured and
+copied at the hand-off. Both use a work limit of ``AUDIT_CONTENT_MAX_SIZE_VALUES``
+values. A body over that limit is
 replaced by a placeholder: the one of compaction when its size surely exceeds the
 payload limit (for example a large embeddings response), or
 ``payload_too_many_values``. So every body that is kept is counted by a measured
@@ -104,15 +105,32 @@ _FIT_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
+class AuditRequestSnapshot:
+    """The request as sent upstream, taken by a preflight before the provider call.
+
+    ``text`` is its JSON text, which the flusher parses back; it is kept only when that
+    parse is short. Otherwise ``body`` is a copy measured within the work limit, or the
+    placeholder that replaces it. Later changes to the request object (post-call
+    hooks and guardrails get the same object) reach neither.
+    """
+
+    chars: int
+    text: str | None = None
+    body: Any = None
+    # The body is the payload_too_many_values placeholder (counted when offered).
+    values_limited: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class AuditContentItem:
     target_event_id: str
     event: AuditEventInput
     payloads: list[AuditPayloadInput]
     enqueued_at: datetime
-    # JSON text of the request body as sent upstream, taken by the preflight. When it
-    # is set, the request payload has no content_json: the text is the only copy,
-    # so later changes to the request object cannot change what the buffer holds.
-    request_json: str | None = None
+    # The preflight's snapshot of the request body. When it is set, the request
+    # payload holds only ``snapshot.body`` (None for a text), it is counted by
+    # ``snapshot.chars``, and it is not measured again.
+    request_snapshot: AuditRequestSnapshot | None = None
 
     @property
     def organization_id(self) -> str | None:
@@ -182,6 +200,25 @@ class AuditContentBuffer:
             self._wake.set()
         return True
 
+    def snapshot_request(self, text: str, data: Any) -> AuditRequestSnapshot:
+        """Return the snapshot of a request that a preflight sends upstream. No I/O.
+
+        ``text`` is the JSON text the preflight already made of ``data`` for its token
+        estimate. It is kept when it is at most ``AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS``
+        characters and ``AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS`` separators, so the
+        flusher's parse stays short; counting them is a fast scan of the text (about
+        0.4 ms per MiB). Otherwise ``data`` is measured and copied within the work
+        limit, now, so later changes to it do not reach the buffer.
+        """
+
+        if (
+            len(text) <= AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS
+            and text.count(",") + text.count(":") <= AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS
+        ):
+            return AuditRequestSnapshot(chars=len(text), text=text)
+        body, chars, values_limited = self._bounded_body(data)
+        return AuditRequestSnapshot(chars=chars, body=body, values_limited=values_limited)
+
     def _bounded_size(self, item: AuditContentItem) -> tuple[AuditContentItem, int]:
         """Size each body with the work limit.
 
@@ -189,32 +226,43 @@ class AuditContentBuffer:
         characters it counts. Every body that is kept has a measured size.
         """
 
-        total = len(item.request_json) if item.request_json is not None else 0
+        snapshot = item.request_snapshot
+        total = 0
+        if snapshot is not None:
+            total = snapshot.chars
+            if snapshot.values_limited:
+                increment_audit_content_dropped(reason="payload_values")
         payloads = list(item.payloads)
         for index, payload in enumerate(payloads):
-            if payload.content_json is None:
+            if payload.content_json is None or (snapshot is not None and payload.kind == "request"):
                 continue
             # Each body has its own limit, so a large request does not cost the
-            # response its content. A body that fits is copied while it is measured,
-            # so later changes to the caller's object do not reach the buffer.
-            size = _measure(payload.content_json, self.max_size_values)
-            if size.complete:
-                payloads[index] = replace(payload, content_json=size.copy)
-                total += size.chars
-                continue
-            payload_limit = self.audit_service.ingestion_config.payload_max_bytes
-            if size.floor > payload_limit:
-                # Compaction would replace it later, so the placeholder is made now.
-                placeholder = oversize_placeholder(size.floor, max_bytes=payload_limit)
-            else:
-                placeholder = {
-                    "omitted": "payload_too_many_values",
-                    "max_values": self.max_size_values,
-                }
+            # response its content.
+            body, chars, values_limited = self._bounded_body(payload.content_json)
+            if values_limited:
                 increment_audit_content_dropped(reason="payload_values")
-            payloads[index] = replace(payload, content_json=placeholder)
-            total += _PLACEHOLDER_CHARS
+            payloads[index] = replace(payload, content_json=body)
+            total += chars
         return replace(item, payloads=payloads), total
+
+    def _bounded_body(self, content: Any) -> tuple[Any, int, bool]:
+        """Measure and copy one body within the work limit.
+
+        Returns the copy and its size, or a placeholder when the body is over the limit,
+        and whether that placeholder is ``payload_too_many_values``. The copy shares
+        only strings and numbers, so later changes to ``content`` do not reach it.
+        """
+
+        size = _measure(content, self.max_size_values)
+        if size.complete:
+            return size.copy, size.chars, False
+        payload_limit = self.audit_service.ingestion_config.payload_max_bytes
+        if size.floor > payload_limit:
+            # Compaction would replace it later, so the placeholder is made now.
+            placeholder = oversize_placeholder(size.floor, max_bytes=payload_limit)
+            return placeholder, _PLACEHOLDER_CHARS, False
+        placeholder = {"omitted": "payload_too_many_values", "max_values": self.max_size_values}
+        return placeholder, _PLACEHOLDER_CHARS, True
 
     # Lifecycle ----------------------------------------------------------------
 
@@ -340,7 +388,11 @@ class AuditContentBuffer:
 
         item = _with_request_body(item)
         record_max = self.bundle_max_bytes - _BUNDLE_BRACKETS
-        limit: int | None = None
+        # A body larger than a statement can never fit, so a higher configured
+        # payload limit is not used: compaction replaces such a body before it is
+        # encoded, and no encoding works on more than one statement per body.
+        payload_max = self.audit_service.ingestion_config.payload_max_bytes
+        limit: int | None = None if payload_max <= self.bundle_max_bytes else self.bundle_max_bytes
         for _ in range(_FIT_ATTEMPTS):
             envelope = self._envelope(item, max_payload_bytes=limit)
             size = _wire_size(envelope)
@@ -516,7 +568,9 @@ def _measure(value: Any, budget: int) -> _Size:
                     push((item, copy, item_key))
                 else:
                     visited += 1
-                    chars += 8
+                    chars += (
+                        8 if type(item) is not int or -_INT8 < item < _INT8 else _int_chars(item)
+                    )
                     floor += ENTRY_OVERHEAD
         elif isinstance(current, (list, tuple)):
             if visited + len(stack) + len(current) > budget:
@@ -537,14 +591,16 @@ def _measure(value: Any, budget: int) -> _Size:
                     push((item, items, index))
                 else:
                     visited += 1
-                    chars += 8
+                    chars += (
+                        8 if type(item) is not int or -_INT8 < item < _INT8 else _int_chars(item)
+                    )
                     floor += ENTRY_OVERHEAD
         elif isinstance(current, str):
             chars += len(current) + 2
             floor += MIN_VALUE_SIZE
             parent[key] = current
         else:
-            chars += 8
+            chars += _int_chars(current) if type(current) is int else 8
             floor += ENTRY_OVERHEAD
             parent[key] = current
     return _Size(
@@ -556,52 +612,61 @@ def _measure(value: Any, budget: int) -> _Size:
     )
 
 
+# Other scalars count 8 characters, and so do integers below this size. A larger
+# integer counts an upper bound of its digits, from its bit length, because its text
+# has no bound (compaction omits an integer over 1,024 bits).
+_INT8 = 1 << 23
+
+
+def _int_chars(value: int) -> int:
+    bits = value.bit_length()
+    return (bits * 31) // 100 + 3 if bits > 23 else 8
+
+
 def _with_request_body(item: AuditContentItem) -> AuditContentItem:
     """Parse the request text that the preflight kept (in the flusher's thread).
 
-    The parse holds the GIL for its whole length, which is why only a small text is
-    kept (see ``audit_request_text``).
+    The parse holds the GIL for its whole length, which is why only a text with a
+    short parse is kept (see ``AuditContentBuffer.snapshot_request``).
     """
 
-    if item.request_json is None:
+    snapshot = item.request_snapshot
+    if snapshot is None or snapshot.text is None:
         return item
-    body = json.loads(item.request_json)
+    body = json.loads(snapshot.text)
     payloads = [
         replace(payload, content_json=body)
         if payload.kind == "request" and payload.content_json is None
         else payload
         for payload in item.payloads
     ]
-    return replace(item, payloads=payloads, request_json=None)
+    return replace(item, payloads=payloads, request_snapshot=None)
 
 
-def audit_request_text(request: Any, organization_id: str | None, text: str) -> str | None:
-    """Return the preflight's JSON text of a request if the buffer may keep it. No I/O.
+def audit_request_snapshot(
+    request: Any, organization_id: str | None, text: str, data: Any
+) -> AuditRequestSnapshot | None:
+    """Return a preflight's snapshot of its request, or None when its content is surely
+    not stored. No I/O. See ``AuditContentBuffer.snapshot_request``."""
 
-    Only a text of at most ``AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS`` characters and
-    ``AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS`` separators is kept, so the flusher's
-    parse stays short. Counting the separators is a fast scan of the text (about
-    0.4 ms per MiB). A larger request is measured and copied at the hand-off, within
-    the work limit, like any other body.
-    """
-
-    if len(text) > AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS:
+    buffer = _content_buffer(request)
+    if buffer is None or buffer.audit_service.peek_content_storage_policy(organization_id) is False:
         return None
-    if not audit_content_may_be_stored(request, organization_id):
-        return None
-    if text.count(",") + text.count(":") > AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS:
-        return None
-    return text
+    return buffer.snapshot_request(text, data)
 
 
 def audit_content_may_be_stored(request: Any, organization_id: str | None) -> bool:
     """Return False when the content of this request is surely not stored. No I/O."""
 
-    state = getattr(getattr(request, "app", None), "state", None)
-    buffer = getattr(state, "audit_content_buffer", None)
+    buffer = _content_buffer(request)
     if buffer is None:
         return False
     return buffer.audit_service.peek_content_storage_policy(organization_id) is not False
+
+
+def _content_buffer(request: Any) -> AuditContentBuffer | None:
+    state = getattr(getattr(request, "app", None), "state", None)
+    return getattr(state, "audit_content_buffer", None)
 
 
 # The statement sends a JSON list: "[" and "]", and ", " between records.
@@ -610,9 +675,31 @@ _BUNDLE_SEPARATOR = 2
 
 
 def _wire_size(envelope: AuditOutboxEnvelope) -> int:
-    """Return the exact size of one record in the statement that sends it."""
+    """Return the exact size of one record in the statement that sends it.
 
-    return len(json.dumps(audit_envelope_wire(envelope), default=str))
+    Each body is encoded on its own, so no single ``json.dumps`` call (which holds the
+    GIL) works on more than one body. JSON encoding is compositional: the record with
+    its bodies set to ``null``, plus each body's own text less the 4 characters of
+    ``null``, is exactly the text of the whole record.
+    """
+
+    payload = envelope.payload
+    items = payload.get("payloads")
+    if not isinstance(items, list) or not any(
+        isinstance(item, dict) and item.get("content_json") is not None for item in items
+    ):
+        return len(json.dumps(audit_envelope_wire(envelope), default=str))
+    size = 0
+    skeleton_items = []
+    for item in items:
+        body = item.get("content_json") if isinstance(item, dict) else None
+        if body is None:
+            skeleton_items.append(item)
+            continue
+        size += len(json.dumps(body, default=str)) - len("null")
+        skeleton_items.append({**item, "content_json": None})
+    skeleton = replace(envelope, payload={**payload, "payloads": skeleton_items})
+    return size + len(json.dumps(audit_envelope_wire(skeleton), default=str))
 
 
 def _bundles(

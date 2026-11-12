@@ -19,6 +19,13 @@ DEFAULT_AUDIT_PAYLOAD_MAX_BYTES = 1_048_576
 _INLINE_DATA_MIN_CHARS = 1024
 _DATA_URL = re.compile(r"data:([\w.+-]+/[\w.+-]+)?(?:;[\w.+-]+=[^;,]*)*;base64,", re.ASCII)
 _BASE64 = re.compile(r"[A-Za-z0-9+/=_\-\r\n]+", re.ASCII)
+# Long strings are scanned and hashed in slices of this many characters. Each slice
+# is one C call that holds the GIL, so compaction in a worker thread never stops the
+# serving event loop for long (a whole 24 MiB string took about 200 ms).
+_SCAN_CHUNK_CHARS = 256 * 1024
+# Larger integers are replaced: their decimal text has no bound and costs time
+# quadratic in its length (a 4,096-digit integer takes about 0.15 ms to print).
+_MAX_INTEGER_BITS = 1024
 # Rough JSON overhead per container entry and per scalar.
 ENTRY_OVERHEAD = 4
 # The smallest size this module gives a value: an empty string, list or dict.
@@ -66,6 +73,13 @@ def _compact(value: Any) -> tuple[Any, int, bool]:
             size += item_size + 1
             changed = changed or item_changed
         return (items if changed else value), size, changed
+    if type(value) is int:
+        bits = value.bit_length()
+        if bits > _MAX_INTEGER_BITS:
+            placeholder = f"[omitted large integer: {bits} bits]"
+            return placeholder, len(placeholder) + 2, True
+        # An upper bound of its digits and sign.
+        return value, max(ENTRY_OVERHEAD, (bits * 31) // 100 + 3), False
     return value, ENTRY_OVERHEAD, False
 
 
@@ -75,11 +89,29 @@ def _inline_data_placeholder(value: str) -> str | None:
     match = _DATA_URL.match(value)
     if match is not None:
         media_type = match.group(1) or "application/octet-stream"
-        if _BASE64.fullmatch(value, match.end()) is None:
+        if not _is_base64(value, match.end()):
             return None
-    elif _BASE64.fullmatch(value) is not None:
+    elif _is_base64(value, 0):
         media_type = "base64"
     else:
         return None
-    digest = sha256(value.encode()).hexdigest()
-    return f"[omitted inline data: {media_type}, {len(value)} chars, sha256={digest}]"
+    return f"[omitted inline data: {media_type}, {len(value)} chars, sha256={_sha256(value)}]"
+
+
+def _is_base64(value: str, start: int) -> bool:
+    """Return True if ``value[start:]`` is one or more base64 characters, slice by slice."""
+
+    end = len(value)
+    for position in range(start, end, _SCAN_CHUNK_CHARS):
+        if _BASE64.fullmatch(value, position, min(position + _SCAN_CHUNK_CHARS, end)) is None:
+            return False
+    return start < end
+
+
+def _sha256(value: str) -> str:
+    """Return the SHA-256 of the UTF-8 text, encoded slice by slice (the same digest)."""
+
+    digest = sha256()
+    for position in range(0, len(value), _SCAN_CHUNK_CHARS):
+        digest.update(value[position : position + _SCAN_CHUNK_CHARS].encode())
+    return digest.hexdigest()
