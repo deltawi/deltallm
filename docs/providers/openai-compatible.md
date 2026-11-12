@@ -19,7 +19,7 @@ The provider has no default address. You always enter the API base URL.
 6. Optional: change **Auth Header Name** and **Auth Header Format** when the
    service does not use `Authorization: Bearer <key>`.
 
-After you add the key and URL, **Refresh provider models** reads the service's
+After you add the key and URL, **Load live models** reads the service's
 `GET /models` list. Context windows are filled when the service reports them.
 
 ## Configure it in YAML

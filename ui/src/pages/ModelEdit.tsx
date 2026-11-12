@@ -6,7 +6,7 @@ import { modelDetailPath } from '../lib/modelRoutes';
 import ModelForm from '../components/ModelForm';
 import { PageShell } from '../components/admin/shells';
 import { formFromModel, type ModelPayload } from '../components/modelFormShared';
-import { ArrowLeft, Box } from 'lucide-react';
+import { ArrowLeft, Box, Info } from 'lucide-react';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
 import { navTrail } from '../lib/navigation';
@@ -89,9 +89,8 @@ export default function ModelEdit() {
         { label: model.display_name || model.model_name, to: modelDetailPath(deploymentId!) },
         { label: 'Edit' },
       ]}
-      title="Edit Model Deployment"
+      title="Edit model"
       icon={Box}
-      width="form"
     >
       {model.access?.governance_source === 'creator' ? (
         <ManagedAssetAccessPanel
@@ -107,11 +106,9 @@ export default function ModelEdit() {
           className="mb-6"
         />
       ) : model.access?.governance_source === 'platform' ? (
-        <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 shadow-sm">
-          <div className="font-semibold">Availability is managed by tiers</div>
-          <p className="mt-1 text-xs text-blue-700">
-            Organization access, pricing, and rate limits for this platform model are configured in Tiers.
-          </p>
+        <div className="mb-6 flex items-start gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden="true" />
+          <span>Tiers set organization access, pricing and rate limits for this platform model.</span>
         </div>
       ) : null}
       <ModelForm

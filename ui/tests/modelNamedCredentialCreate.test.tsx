@@ -187,13 +187,20 @@ test('model form creates and selects a provider-matched named credential in plac
       );
     });
 
-    await waitFor(() => Boolean(selectWithOption('OpenAI')));
-    const providerSelect = selectWithOption('OpenAI');
-    assert.ok(providerSelect);
+    const providerButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]'))
+      .find((button) => button.textContent?.includes('Select provider'));
+    assert.ok(providerButton);
+    act(() => providerButton.click());
+    await waitFor(() => Boolean(document.querySelector('[role="option"]')));
+    const openaiOption = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+      .find((option) => option.textContent?.includes('OpenAI'));
+    assert.ok(openaiOption);
     await act(async () => {
-      changeValue(providerSelect, 'openai');
+      openaiOption.click();
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
+    assert.equal(document.querySelector('[role="listbox"][aria-label="Providers"]'), null);
+    assert.ok(providerButton.textContent?.includes('OpenAI'));
 
     await waitFor(() => Boolean(selectWithOption('Create new credential')));
     const credentialSelect = selectWithOption('Create new credential');

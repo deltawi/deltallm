@@ -11,7 +11,7 @@ import ModelForm from '../components/ModelForm';
 import { PageShell } from '../components/admin/shells';
 import ManagedAssetAccessFields from '../components/ManagedAssetAccessFields';
 import { EMPTY_FORM, type ModelPayload } from '../components/modelFormShared';
-import { Box } from 'lucide-react';
+import { Box, Info } from 'lucide-react';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
 import { navTrail } from '../lib/navigation';
@@ -85,20 +85,17 @@ export default function ModelCreate() {
         ...navTrail('/models'),
         { label: 'Add model' },
       ]}
-      title="Add Model Deployment"
+      title="Add model"
       icon={Box}
-      width="form"
-      description="Configure a new model deployment with provider connection, routing, and pricing settings."
+      description="Connect a provider model and choose the name clients call it by."
     >
       {isPlatformAdmin ? (
-        <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 shadow-sm">
-          <div className="font-semibold">Availability is managed by tiers</div>
-          <p className="mt-1 text-xs text-blue-700">
-            After creating this platform model, add it to one or more tiers to make it available to organizations with the appropriate pricing and rate limits.
-          </p>
+        <div className="mb-6 flex items-start gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden="true" />
+          <span>After you create this platform model, add it to one or more tiers so organizations can use it.</span>
         </div>
       ) : (
-        <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
           <ManagedAssetAccessFields
             grants={grants}
             teamOptions={teamOptions}

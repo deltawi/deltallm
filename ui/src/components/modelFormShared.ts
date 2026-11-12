@@ -240,7 +240,9 @@ export const EMPTY_FORM: ModelFormValues = {
 };
 
 function numOrUndef(val: string): number | undefined {
-  return val ? Number(val) : undefined;
+  // Text fields can hold only spaces; treat that as empty, not as 0.
+  const text = val.trim();
+  return text ? Number(text) : undefined;
 }
 
 export type OptionalPositiveIntegerResult =

@@ -29,8 +29,8 @@ python -m sglang.launch_server \
 
 Admin UI: **Models > Add model**, provider **SGLang**:
 
-- **Upstream model**: the model ID the server reports, for example
-  `meta-llama/Llama-3.1-8B-Instruct`. **Refresh provider models** reads it from
+- **Provider model**: the model ID the server reports, for example
+  `meta-llama/Llama-3.1-8B-Instruct`. **Load live models** reads it from
   `{api_base}/models`.
 - **API Base URL**: the server address with `/v1`, for example `http://sglang:30000/v1`.
 - **API Key**: the server's `--api-key`. DeltaLLM needs a key for every
