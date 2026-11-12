@@ -100,4 +100,3 @@ export function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayl
     payload.auth_header_format || '',
   ].join('::');
 }
-

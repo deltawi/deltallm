@@ -70,6 +70,12 @@ export const REALTIME_TOKEN_PRICES = [
   ['input_cost_per_audio_token_cache_hit', 'Cached input audio'],
 ] as const satisfies readonly (readonly [PriceField, string])[];
 
+/** Every realtime price that the payload sends, for all session types. */
+export const REALTIME_PAYLOAD_PRICES: readonly (readonly [PriceField, string])[] = [
+  ...REALTIME_TOKEN_PRICES,
+  ['input_cost_per_second', 'Input audio per second'],
+];
+
 /** The realtime price fields for the session type and usage format. */
 export function realtimePriceFields(form: Pick<ModelFormValues, 'realtime_profile' | 'realtime_usage_type'>): PriceField[] {
   if (form.realtime_profile === 'transcription' && form.realtime_usage_type === 'duration') return ['input_cost_per_second'];

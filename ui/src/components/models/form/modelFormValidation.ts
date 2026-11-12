@@ -7,8 +7,8 @@ import {
   type ModelFormValues,
 } from '../../modelFormShared';
 import { validateRequestShaping, type RequestShapingForm } from '../requestShaping';
-import { firstInvalidPriceField } from '../pricingUnits';
-import { visiblePriceFields } from './priceFieldSpecs';
+import { firstInvalidPriceField, isPriceText } from '../pricingUnits';
+import { REALTIME_PAYLOAD_PRICES, visiblePriceFields } from './priceFieldSpecs';
 
 export type RequiredField =
   | 'model_name'
@@ -144,8 +144,19 @@ export function validateModelForm(
     );
   }
 
-  const invalidPrice = firstInvalidPriceField(form, visiblePriceFields(form));
+  const visiblePrices = visiblePriceFields(form);
+  const invalidPrice = firstInvalidPriceField(form, visiblePrices);
   if (invalidPrice) return fail('Enter prices as numbers, for example 2.50.', 'pricing');
+  if (form.mode === 'realtime') {
+    // Realtime sends the prices of every session type, so a hidden one must be valid too.
+    const hidden = REALTIME_PAYLOAD_PRICES.find(([field]) => !visiblePrices.includes(field) && !isPriceText(form[field]));
+    if (hidden) {
+      return fail(
+        `The hidden ${hidden[1]} price is not a number. Change the session type or usage format to show it, then fix or clear it.`,
+        'pricing',
+      );
+    }
+  }
 
   const capacityErrors = validateContextCapacityFields(form);
   if (Object.keys(capacityErrors).length > 0) {

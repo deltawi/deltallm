@@ -606,3 +606,11 @@ test('chat cache-write prices round-trip and clear when blank', () => {
   assert.equal(cleared.model_info.input_cost_per_token_cache_write, undefined);
   assert.equal(cleared.model_info.input_cost_per_token_cache_write_1h, undefined);
 });
+
+test('buildModelPayload leaves a price that holds only spaces unset', () => {
+  const payload = buildModelPayload(
+    chatForm({ mode: 'image_generation', input_cost_per_image: '   ' }),
+    EMPTY_REQUEST_SHAPING,
+  );
+  assert.equal((payload.model_info as Record<string, unknown>).input_cost_per_image, undefined);
+});

@@ -158,6 +158,14 @@ test('validateModelForm rejects a provider without the model type, bad prices an
   );
   assert.ok(!realtime.ok);
   assert.equal(realtime.section, 'pricing');
+  // Realtime sends every rate, so a hidden bad rate still blocks Save with a clear message.
+  const hiddenRealtime = validateModelForm(
+    { ...VALID, mode: 'realtime', realtime_profile: 'transcription', realtime_usage_type: 'duration', input_cost_per_audio_token: 'bad' },
+    EMPTY_REQUEST_SHAPING,
+    CONTEXT,
+  );
+  assert.ok(!hiddenRealtime.ok);
+  assert.match(hiddenRealtime.message, /hidden Input audio price/);
 
   const limits = validateModelForm({ ...VALID, max_input_tokens: '0' }, EMPTY_REQUEST_SHAPING, CONTEXT);
   assert.ok(!limits.ok);
