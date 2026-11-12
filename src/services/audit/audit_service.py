@@ -1297,6 +1297,10 @@ class AuditService:
         if cached is not None:
             self._content_policy_cache.pop(organization_id, None)
         enabled = await repository.is_content_storage_enabled_for_org(organization_id)
+        self._remember_content_policy(organization_id, enabled, now=now)
+        return enabled
+
+    def _remember_content_policy(self, organization_id: str, enabled: bool, *, now: float) -> None:
         self._content_policy_cache[organization_id] = (
             now + self._content_policy_cache_ttl_seconds,
             enabled,
@@ -1304,7 +1308,49 @@ class AuditService:
         self._content_policy_cache.move_to_end(organization_id)
         while len(self._content_policy_cache) > self._content_policy_cache_max_entries:
             self._content_policy_cache.popitem(last=False)
-        return enabled
+
+    def peek_content_storage_policy(self, organization_id: str | None) -> bool | None:
+        """Return the cached content policy without I/O, or None when it is not cached.
+
+        Callers use it only as a pre-filter. The audit worker applies the
+        authoritative policy under the policy lock.
+        """
+        if not organization_id:
+            return False
+        cached = self._content_policy_cache.get(organization_id)
+        if cached is None or cached[0] <= asyncio.get_running_loop().time():
+            return None
+        return cached[1]
+
+    @with_database_caller("audit")
+    async def content_storage_policies(self, organization_ids: set[str]) -> dict[str, bool]:
+        """Resolve content policies, reading the uncached ones in one query."""
+        result: dict[str, bool] = {}
+        missing: list[str] = []
+        for organization_id in organization_ids:
+            cached = self.peek_content_storage_policy(organization_id)
+            if cached is None:
+                missing.append(organization_id)
+            else:
+                result[organization_id] = cached
+        if missing:
+            snapshots = await self.worker_ingestion_repository.get_content_policies(missing)
+            now = asyncio.get_running_loop().time()
+            for organization_id in missing:
+                enabled = snapshots.get(organization_id, (False, 0))[0]
+                self._remember_content_policy(organization_id, enabled, now=now)
+                result[organization_id] = enabled
+        return result
+
+    def serialize_outbox_payloads(
+        self, event: AuditEventInput, payloads: list[AuditPayloadInput]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Compact the payloads and return the full and the redacted outbox payload.
+
+        CPU work only, with no I/O, so a caller can run it in a worker thread.
+        """
+        item = _QueueItem(event=event, payloads=self._compact_payloads(payloads))
+        return _serialize_audit_item(item), _serialize_audit_item(_redact_audit_item(item))
 
     def invalidate_content_storage_policy(self, organization_id: str) -> None:
         self._content_policy_cache.pop(str(organization_id), None)

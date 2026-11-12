@@ -100,6 +100,8 @@ Core metrics include:
 | `deltallm_audit_enqueue_total` | Counter | Durable audit enqueue outcomes by record type and delivery class |
 | `deltallm_audit_cleanup_deleted_total` | Counter | Terminal audit outbox rows removed by cleanup |
 | `deltallm_audit_content_records_total` | Counter | Audit content records by outcome: `attached`, `deferred`, `fallback_event` or `organization_mismatch` (also counted as `fallback_event`) |
+| `deltallm_audit_content_dropped_total` | Counter | Accounting v2 request bodies that were not sent to the audit queue, by `reason` (see the audit log page) |
+| `deltallm_audit_content_buffer_items` | Gauge | Items that waited in this pod's audit content buffer for the last send (at most 2,000) |
 | `deltallm_spend_ingestion_backlog` | Gauge | Active durable spend outbox records |
 | `deltallm_spend_ingestion_oldest_event_age_seconds` | Gauge | Age of the oldest active spend record |
 | `deltallm_spend_ingestion_capacity_utilization` | Gauge | Fraction of the configured spend capacity in use |

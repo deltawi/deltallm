@@ -22,6 +22,17 @@ from src.request_identity import valid_request_id
 logger = logging.getLogger(__name__)
 
 
+def accounting_finalization_audit_event_id(operation_id: UUID) -> str:
+    """Return the ID of the audit event that the provider finalization writes.
+
+    Success and failure finalizations of one operation use the same event ID,
+    so other writers can attach content to it before it exists.
+    """
+
+    final_event_id = uuid5(operation_id, "provider-finalization:v2")
+    return str(uuid5(final_event_id, "accounting-audit:v1"))
+
+
 def accounting_audit_envelope(
     operation: AccountingOperationHandle,
     *,

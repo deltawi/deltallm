@@ -15,6 +15,7 @@ from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.redis_namespace import build_redis_channel
 from src.services.audit.audit_retention import AuditRetentionConfig, AuditRetentionWorker
 from src.services.audit.audit_service import AuditIngestionConfig, AuditService
+from src.services.audit.content_buffer import AuditContentBuffer
 from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
 
 
@@ -46,6 +47,7 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
 async def _init_audit_runtime(app: Any, cfg: Any, runtime: AuditRuntime) -> AuditRuntime:
     app.state.audit_repository = None
     app.state.audit_service = None
+    app.state.audit_content_buffer = None
 
     if not cfg.general_settings.audit_enabled:
         return runtime
@@ -193,6 +195,12 @@ async def _init_audit_runtime(app: Any, cfg: Any, runtime: AuditRuntime) -> Audi
     )
     app.state.audit_service = service
     await service.start()
+    if service.durable_ingestion_enabled:
+        # Accounting v2 requests send their bodies through this buffer. It is idle
+        # until such a request arrives for an organization with content storage on.
+        content_buffer = AuditContentBuffer(service)
+        content_buffer.start()
+        app.state.audit_content_buffer = content_buffer
 
     app.state.audit_repository = AuditRepository(app.state.prisma_manager.client)
     app.state.audit_service = service
@@ -228,6 +236,11 @@ async def shutdown_audit_runtime(app: Any, runtime: AuditRuntime) -> None:
         await stop_tasks_before_deadline(
             [runtime.retention_task], deadline=cleanup_deadline(5), cancel_first=True
         )
+
+    content_buffer: AuditContentBuffer | None = getattr(app.state, "audit_content_buffer", None)
+    if content_buffer is not None:
+        app.state.audit_content_buffer = None
+        await content_buffer.stop()
 
     audit_service: AuditService | None = getattr(app.state, "audit_service", None)
     if audit_service is not None:
