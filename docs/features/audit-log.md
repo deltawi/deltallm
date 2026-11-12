@@ -195,6 +195,35 @@ Audit payloads are handled differently depending on the event type:
 - Redis invalidation removes stale policy-cache entries across replicas, but privacy correctness does not depend on Pub/Sub availability
 - when content storage is disabled, the event is still recorded but request and response bodies are omitted or marked redacted
 
+### Content that arrives after its event
+
+With accounting v2, the accounting worker writes the audit event of a data-plane request, and that event
+has no request or response body. The bodies can arrive separately as an `audit_content` outbox record that
+names the event. This section describes how the audit worker processes such a record. The request side
+that sends these records is a separate change. Until it is deployed, accounting v2 requests send no
+`audit_content` records, so their audit events stay without bodies.
+
+The audit worker processes the record in the same batched transaction as other audit records:
+
+- If the event exists and belongs to the record's organization, the worker adds the bodies to it as
+  payloads and sets `content_stored` to `true`.
+- If the event does not exist yet, the worker puts the record back in the queue. This wait does not use
+  up a delivery attempt. The first wait is 2 seconds. Each later wait is half the age of the record, at
+  most 30 seconds, so a record whose event never arrives is claimed about 18 times.
+- If the event does not exist after 5 minutes, the worker writes the bodies as a separate event with the
+  record's own ID, so the content is not lost.
+- If the event belongs to a different organization, the worker never adds the bodies to it. It writes
+  them at once as a separate event in the record's organization.
+- If the organization does not have `audit_content_storage_enabled = true`, the worker writes nothing.
+- If the event stored in the record names an organization other than the record's organization, the
+  worker rejects the record before it writes anything. The record goes back to the queue with an error
+  and fails after its delivery attempts. Bodies never go into an organization whose content policy the
+  worker did not check.
+
+`deltallm_audit_content_records_total{outcome}` counts the records by `attached`, `deferred`,
+`fallback_event` and `organization_mismatch`. A high `deferred` count means that the accounting
+projection is slow. An `organization_mismatch` count is not expected; it shows a defect in the sender.
+
 ### Inline files and large payloads
 
 Before an audit event is accepted, DeltaLLM shrinks its request and response payloads. This keeps the
