@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from src.chat.stream_reply import StreamReplyAccumulator
 from src.models.requests import AssistantChatMessage, ChatCompletionRequest
 from src.providers.openai_stream_contract import OpenAIStreamDeltaField
 
@@ -44,7 +45,9 @@ class _CompletionDeltaUsage:
 
 
 class StreamUsageTracker:
-    def __init__(self) -> None:
+    def __init__(self, *, reply: StreamReplyAccumulator | None = None) -> None:
+        # The audit reply reuses this parse, so a stream line is decoded once.
+        self.reply = reply
         self._provider_usage: dict[str, Any] | None = None
         self._completion_chars = 0
         self._reasoning_chars = 0
@@ -68,6 +71,8 @@ class StreamUsageTracker:
         usage = chunk.get("usage")
         if isinstance(usage, dict) and _is_provider_token_usage(usage):
             self._provider_usage = dict(usage)
+        if self.reply is not None:
+            self.reply.add_chunk(chunk)
 
         delta_usage = _completion_delta_usage(chunk)
         self._completion_chars += delta_usage.ordinary_chars
