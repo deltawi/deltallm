@@ -302,7 +302,9 @@ with `audit_persistence_unavailable`:
   an approximate JSON size), it is replaced by
   `{"omitted": "payload_too_large", "approx_size_bytes": ..., "max_bytes": ...}`. JSON writes each
   character outside ASCII as a six-character escape (for example `\u0639`), and the size counts these
-  escapes, so a body of Arabic text reaches the limit at about 170,000 characters.
+  escapes, so a body of Arabic text reaches the limit at about 170,000 characters. Counting stops as
+  soon as the payload is over the limit, so `approx_size_bytes` is a lower bound, and the rest of a
+  large body is never scanned, hashed or measured.
 
 The audit event itself (actor, model, status, tokens, latency) is always recorded.
 

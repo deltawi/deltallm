@@ -6,6 +6,8 @@ from hashlib import sha256
 from src.services.audit.payload_compaction import compact_audit_content
 
 _MAX = 1_048_576
+# A limit no test value reaches.
+_NO_LIMIT = 1 << 40
 
 
 def _image_data_url(size: int = 4096) -> str:
@@ -181,10 +183,11 @@ def test_non_ascii_text_is_counted_by_its_json_size(monkeypatch) -> None:
     for chunk in (7, payload_compaction._SCAN_CHUNK_CHARS):
         monkeypatch.setattr(payload_compaction, "_SCAN_CHUNK_CHARS", chunk)
         for value in samples:
-            assert payload_compaction._compact(value)[1] == len(json.dumps(value))
+            assert payload_compaction._compact(value, stop=_NO_LIMIT)[1] == len(json.dumps(value))
         # A non-ASCII key is counted like its value would be.
         assert (
-            payload_compaction._compact({"clé": 1})[1] - payload_compaction._compact({"cle": 1})[1]
+            payload_compaction._compact({"clé": 1}, stop=_NO_LIMIT)[1]
+            - payload_compaction._compact({"cle": 1}, stop=_NO_LIMIT)[1]
             == 5
         )
     # The count stops once a string is surely over the limit.
@@ -205,9 +208,94 @@ def test_floats_count_their_longest_text() -> None:
     from src.services.audit import payload_compaction
 
     for value in (-1.7976931348623157e308, 2.2250738585072014e-308, 0.1, 1e-300, -0.0):
-        assert payload_compaction._compact(value)[1] >= len(json.dumps(value))
+        assert payload_compaction._compact(value, stop=_NO_LIMIT)[1] >= len(json.dumps(value))
     # 50,000 floats of 24 characters: over 1 MiB, so the body is replaced.
     floats = [-1.7976931348623157e308] * 50_000
     compacted, changed = compact_audit_content({"enum": floats}, max_bytes=_MAX)
     assert changed is True
     assert compacted["omitted"] == "payload_too_large"
+
+
+def test_size_work_stops_once_the_whole_payload_is_over_its_limit(monkeypatch) -> None:
+    """Many strings that are each small: the limit applies to the whole traversal."""
+
+    from src.services.audit import payload_compaction
+
+    encoded: list[int] = []
+    real_encode = payload_compaction.encode_basestring_ascii
+
+    def counting_encode(value: str) -> str:
+        encoded.append(len(value))
+        return real_encode(value)
+
+    monkeypatch.setattr(payload_compaction, "encode_basestring_ascii", counting_encode)
+    # A tool enum of 10,000 Arabic strings: each is about 9 KB of JSON, so the
+    # payload is over 1 MiB after about 117 of them.
+    word = "ع" * 1500
+    tool = {"type": "function", "function": {"parameters": {"enum": [word] * 10_000}}}
+    compacted, changed = compact_audit_content({"tools": [tool]}, max_bytes=_MAX)
+    assert changed is True
+    assert compacted["omitted"] == "payload_too_large"
+    assert compacted["approx_size_bytes"] > _MAX
+    assert len(encoded) <= _MAX // (6 * len(word)) + 1
+
+    # One large string stops after the slice that takes it over the limit.
+    encoded.clear()
+    compacted, _ = compact_audit_content({"text": "ع" * 2_000_000}, max_bytes=_MAX)
+    assert compacted["omitted"] == "payload_too_large"
+    assert encoded == [payload_compaction._SCAN_CHUNK_CHARS]
+
+    # Keys count against the same limit.
+    encoded.clear()
+    keyed = {f"{word}{index}": 1 for index in range(10_000)}
+    compacted, _ = compact_audit_content(keyed, max_bytes=_MAX)
+    assert compacted["omitted"] == "payload_too_large"
+    assert len(encoded) <= _MAX // (6 * len(word)) + 1
+
+
+def test_inline_data_after_the_limit_is_not_scanned_or_hashed(monkeypatch) -> None:
+    from src.services.audit import payload_compaction
+
+    hashed: list[int] = []
+    real_hash = payload_compaction._sha256
+
+    def counting_hash(value: str) -> str:
+        hashed.append(len(value))
+        return real_hash(value)
+
+    monkeypatch.setattr(payload_compaction, "_sha256", counting_hash)
+    data = base64.b64encode(b"\x00" * 1500).decode()
+    placeholder = payload_compaction._inline_data_placeholder(data)
+    assert placeholder is not None
+    hashed.clear()
+    content = {"images": [data] * 10_000}
+    compacted, _ = compact_audit_content(content, max_bytes=10_000)
+    assert compacted["omitted"] == "payload_too_large"
+    # Each image becomes a placeholder of about 120 characters: the payload is over
+    # 10,000 bytes after about 80 of them, and the rest are never read.
+    assert len(hashed) <= 10_000 // (len(placeholder) + 3) + 1
+
+    # Under the limit, every image is still replaced.
+    hashed.clear()
+    compacted, changed = compact_audit_content({"images": [data] * 50}, max_bytes=_MAX)
+    assert changed is True
+    assert len(hashed) == 50
+    assert compacted["images"] == [placeholder] * 50
+
+
+def test_the_limit_applies_to_the_whole_payload_at_its_edge() -> None:
+    """A payload of exactly the limit is kept; one byte more is replaced."""
+
+    from src.services.audit import payload_compaction
+
+    content = {"a": ["é" * 10, "x" * 20], "b": {"c": "ü" * 5}}
+    _, size, _ = payload_compaction._compact(content, stop=_NO_LIMIT)
+    assert compact_audit_content(content, max_bytes=size) == (content, False)
+    compacted, changed = compact_audit_content(content, max_bytes=size - 1)
+    assert changed is True
+    assert compacted["omitted"] == "payload_too_large"
+    # A count that stops early is over its limit exactly when the whole count is.
+    for stop in range(size):
+        assert payload_compaction._compact(content, stop=stop)[1] > stop
+    for stop in (size, size + 1, _MAX):
+        assert payload_compaction._compact(content, stop=stop)[1] == size
