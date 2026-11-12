@@ -13,7 +13,8 @@ from src.chat.audit import request_client_ip
 from src.models.errors import InvalidRequestError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
-from src.rate_limit_policy import estimate_tokens_for_json_size, json_text_size
+from src.rate_limit_policy import estimate_tokens_for_json_size, json_text
+from src.services.audit.content_buffer import audit_content_may_be_stored
 from src.services.admission.output_admission import prepare_output_policy
 from src.middleware.rate_limit import (
     _release_rate_limits,
@@ -47,9 +48,9 @@ class TextPreflightResult:
     callback_manager: CallbackManager
     guardrail_middleware: Any
     token_estimate: int
-    # Length of the JSON text of request_data (after prompt resolution, hooks and
-    # guardrails), measured once for the token estimate.
-    request_data_chars: int = 0
+    # JSON text of request_data as sent upstream, kept from the token estimate only
+    # when the audit content buffer may store it. It cannot change later.
+    audit_request_json: str | None = None
 
 
 async def run_text_preflight(
@@ -189,8 +190,8 @@ async def run_text_preflight(
             message="Request data was invalid after pre-call policy processing"
         ) from exc
     transformed_data = dump_request_for_preflight(transformed_payload)
-    request_data_chars = json_text_size(transformed_data)
-    token_estimate = estimate_tokens_for_json_size(request_data_chars)
+    request_json = json_text(transformed_data)
+    token_estimate = estimate_tokens_for_json_size(len(request_json))
 
     authorization_started = perf_counter()
     try:
@@ -314,7 +315,11 @@ async def run_text_preflight(
         callback_manager=callback_manager,
         guardrail_middleware=guardrail_middleware,
         token_estimate=token_estimate,
-        request_data_chars=request_data_chars,
+        audit_request_json=(
+            request_json
+            if audit_content_may_be_stored(request, getattr(auth, "organization_id", None))
+            else None
+        ),
     )
     request.state.prepared_text_request = result
     return result

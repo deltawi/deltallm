@@ -21,6 +21,7 @@ from src.billing.pricing.tier_pricing import (
     resolve_tier_pricing,
     resolve_token_billing_result,
 )
+from src.chat.audit import offer_cache_hit_audit_content
 from src.chat.preflight import run_text_preflight
 from src.chat.response_validation import RESPONSE_VALIDATION_HEADER
 from src.embedding_preflight import run_embedding_preflight
@@ -569,6 +570,14 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 start_time=started_at,
                 end_time=datetime.now(tz=UTC),
             ),
+        )
+        offer_cache_hit_audit_content(
+            request,
+            auth=auth,
+            endpoint=endpoint,
+            model=model,
+            response_data=payload,
+            started_at=started_at,
         )
 
     def _scoped_cache_key(self, cache_key: str, request: Request) -> str | None:

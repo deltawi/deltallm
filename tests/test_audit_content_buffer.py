@@ -25,7 +25,7 @@ from src.db.audit.audit_ingestion import (
     audit_envelope_wire,
 )
 from src.db.audit.repository import AuditRepository
-from src.routers.audit_helpers import _measured_request_chars, emit_audit_event
+from src.routers.audit_helpers import _preflight_request_json, emit_audit_event
 from src.services.audit.audit_service import (
     AuditEventInput,
     AuditIngestionConfig,
@@ -43,7 +43,7 @@ from src.services.audit.content_buffer import (
     _measure,
     approximate_chars,
 )
-from src.rate_limit_policy import json_text_size
+from src.rate_limit_policy import json_text
 from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES, _compact
 from tests.test_accounting_request_ids import _operation as accounting_operation
 
@@ -687,18 +687,18 @@ def _value_count(value) -> int:
     return 1
 
 
-def _preflight(request_data: dict) -> TextPreflightResult:
+def _preflight(request_data: dict, *, text: str | None = None) -> TextPreflightResult:
     """What run_text_preflight leaves on request.state for this request body."""
 
-    chars = json_text_size(request_data)
+    text = json_text(request_data) if text is None else text
     return TextPreflightResult(
         auth=None,
         payload=None,
         request_data=request_data,
         callback_manager=None,
         guardrail_middleware=None,
-        token_estimate=max(1, chars // 4),
-        request_data_chars=chars,
+        token_estimate=max(1, len(text) // 4),
+        audit_request_json=text,
     )
 
 
@@ -730,16 +730,17 @@ async def _emit_chat(buffer: AuditContentBuffer, request_data: dict, *, measured
 async def test_a_large_measured_request_keeps_its_body(monkeypatch, request_data):
     monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
     assert _value_count(request_data) > 16_384
-    assert json_text_size(request_data) < DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
+    assert len(json_text(request_data)) < DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
     service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
     buffer = AuditContentBuffer(service)
 
     await _emit_chat(buffer, request_data, measured=True)
 
-    # Counted by the size the preflight measured: its values are not visited again.
+    # Kept as the preflight's JSON text and counted by its length: its values are
+    # not visited again.
     assert buffer.pending_items == 1
-    assert buffer._items[0].request_chars == json_text_size(request_data)
-    expected = json_text_size(request_data) + approximate_chars({"reply": "hello"})
+    assert buffer._items[0].request_json == json_text(request_data)
+    expected = len(json_text(request_data)) + approximate_chars({"reply": "hello"})
     assert buffer._waiting_chars == expected
     await buffer.flush()
     request, response = service.bundles[0][0].payload["payloads"]
@@ -771,37 +772,106 @@ async def test_a_request_grown_by_the_preflight_counts_its_grown_size(monkeypatc
     assert buffer._waiting_chars > 800_000
 
 
-def test_the_measured_size_is_used_only_for_the_measured_object():
+def test_the_preflight_text_is_used_only_for_its_own_request_object():
     request_data = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
     request = _request(buffer=None, operation=None)
     request.state.prepared_text_request = _preflight(request_data)
 
     measured = [AuditPayloadInput(kind="request", content_json=request_data)]
-    assert _measured_request_chars(request, measured) == json_text_size(request_data)
-    # An equal dict that is another object (for example one changed later) is walked.
-    copy = [AuditPayloadInput(kind="request", content_json=dict(request_data))]
-    assert _measured_request_chars(request, copy) is None
-    assert _measured_request_chars(_request(buffer=None, operation=None), measured) is None
+    assert _preflight_request_json(request, measured) == json_text(request_data)
+    # Another request object (for example one an endpoint built itself) is walked.
+    other = [AuditPayloadInput(kind="request", content_json=dict(request_data))]
+    assert _preflight_request_json(request, other) is None
+    assert _preflight_request_json(_request(buffer=None, operation=None), measured) is None
 
 
 class _NeverWalkedDict(dict):
     def items(self):
-        raise AssertionError("a request body measured by the preflight was walked")
+        raise AssertionError("a request body serialized by the preflight was walked")
 
 
-async def test_a_request_body_measured_by_the_preflight_is_not_walked():
+async def test_a_request_body_serialized_by_the_preflight_is_not_walked(monkeypatch):
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
     service = _Service({"org-1": True})
     buffer = AuditContentBuffer(service)
-    item = AuditContentItem(
-        target_event_id=str(uuid4()),
-        event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
-        payloads=[AuditPayloadInput(kind="request", content_json=_NeverWalkedDict(a=1))],
-        enqueued_at=datetime.now(UTC),
-        request_chars=1_234,
+    request_data = _NeverWalkedDict(a=1)
+    request = _request(buffer=buffer, operation=accounting_operation())
+    request.state.prepared_text_request = _preflight(request_data, text='{"a": 1}')
+
+    await emit_text_audit_event(
+        request=request,
+        auth=_auth(),
+        action="CHAT_COMPLETION_REQUEST",
+        model="m",
+        status="success",
+        request_start=perf_counter(),
+        request_data=request_data,
+        response_data={"reply": "hello"},
     )
 
-    assert buffer.offer(item) is True
-    assert buffer._waiting_chars == 1_234
+    assert buffer.pending_items == 1
+    assert buffer._waiting_chars == len('{"a": 1}') + approximate_chars({"reply": "hello"})
+    await buffer.flush()
+    request_payload, response_payload = service.bundles[0][0].payload["payloads"]
+    assert request_payload["content_json"] == {"a": 1}
+    assert response_payload["content_json"] == {"reply": "hello"}
+
+
+async def test_later_changes_to_the_bodies_do_not_reach_the_buffer(monkeypatch):
+    """Post-call hooks get the same objects; with streaming they run after the hand-off."""
+
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
+    monkeypatch.setattr("src.routers.audit_helpers.enqueue_audit_event", AsyncMock())
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service)
+    chat_request = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+    chat_response = {"choices": [{"message": {"content": "hello"}}]}
+    request = _request(buffer=buffer, operation=accounting_operation())
+    request.state.prepared_text_request = _preflight(chat_request)
+    await emit_text_audit_event(
+        request=request,
+        auth=_auth(),
+        action="CHAT_COMPLETION_REQUEST",
+        model="m",
+        status="success",
+        request_start=perf_counter(),
+        request_data=chat_request,
+        response_data=chat_response,
+    )
+    # A body without preflight text (images here) is copied while it is measured.
+    image_request = {"prompt": "cat", "options": {"size": "small"}}
+    image_response = {"data": [{"url": "https://example.test/cat.png"}]}
+    await emit_audit_event(
+        request=_request(buffer=buffer, operation=accounting_operation()),
+        request_start=perf_counter(),
+        action="IMAGE_GENERATION_REQUEST",
+        status="success",
+        actor_type="api_key",
+        organization_id="org-1",
+        request_payload=image_request,
+        response_payload=image_response,
+    )
+    counted = buffer._waiting_chars
+    expected = [
+        [json.loads(json.dumps(chat_request)), json.loads(json.dumps(chat_response))],
+        [json.loads(json.dumps(image_request)), json.loads(json.dumps(image_response))],
+    ]
+
+    # What a post-call hook or guardrail could do after the hand-off.
+    for body in (chat_request, image_request):
+        body["model"] = "changed"
+        body.setdefault("messages", []).append({"role": "system", "content": "y" * 800_000})
+    chat_response["choices"][0]["message"]["content"] = "z" * 800_000
+    image_response["data"].append({"b64_json": "A" * 800_000})
+    image_request["options"]["size"] = "huge"
+
+    assert buffer._waiting_chars == counted < 1_000
+    await buffer.flush()
+    stored = [
+        [payload["content_json"] for payload in envelope.payload["payloads"]]
+        for envelope in service.bundles[0]
+    ]
+    assert stored == expected
 
 
 async def test_an_unmeasured_body_over_the_work_limit_is_replaced(monkeypatch):
@@ -828,6 +898,23 @@ async def test_an_unmeasured_body_over_the_work_limit_is_replaced(monkeypatch):
         "max_values": buffer.max_size_values,
     }
     assert response["content_json"] == {"reply": "hello"}
+
+
+def test_a_measured_body_is_copied_and_shares_only_strings_and_numbers():
+    text = "x" * 1_000
+    body = {"a": [text, 1, None, {"b": (2.5, "y")}], "c": {}}
+
+    size = _measure(body, 100)
+
+    assert size.complete
+    assert size.copy == {"a": [text, 1, None, {"b": [2.5, "y"]}], "c": {}}
+    assert size.copy is not body
+    assert size.copy["a"] is not body["a"]
+    assert size.copy["a"][3] is not body["a"][3]
+    assert size.copy["c"] is not body["c"]
+    assert size.copy["a"][0] is text
+    # A body over the limit has no copy: it is replaced by a placeholder.
+    assert _measure(body, 3).copy is None
 
 
 def _floor_cases() -> list:
