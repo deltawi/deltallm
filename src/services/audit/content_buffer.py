@@ -17,7 +17,9 @@ there is no retry loop.
 
 Memory: at most ``AUDIT_CONTENT_MAX_ITEMS`` items wait between flushes. Each item
 holds references to the request and response objects that the request already
-built, for about one more second. A flush sends at most
+built, for about one more second. The bodies that wait or are in flight hold at
+most ``AUDIT_CONTENT_MAX_HELD_CHARS`` characters, measured before compaction (an
+image request can carry megabytes of base64). A flush sends at most
 ``AUDIT_CONTENT_MAX_FLUSH_BYTES`` and drops the rest.
 """
 
@@ -31,7 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.audit.delivery import AuditDeliveryClass
 from src.database_caller import with_database_caller
@@ -61,6 +63,7 @@ logger = logging.getLogger(__name__)
 AUDIT_CONTENT_FLUSH_INTERVAL_SECONDS = 1.0
 AUDIT_CONTENT_MAX_ITEMS = 2_000
 AUDIT_CONTENT_EARLY_FLUSH_ITEMS = 500
+AUDIT_CONTENT_MAX_HELD_CHARS = 128 * 1024 * 1024
 AUDIT_CONTENT_MAX_FLUSH_BYTES = 64 * 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_BYTES = 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_ITEMS = 100
@@ -94,6 +97,7 @@ class AuditContentBuffer:
         *,
         flush_interval_seconds: float = AUDIT_CONTENT_FLUSH_INTERVAL_SECONDS,
         max_items: int = AUDIT_CONTENT_MAX_ITEMS,
+        max_held_chars: int = AUDIT_CONTENT_MAX_HELD_CHARS,
         early_flush_items: int = AUDIT_CONTENT_EARLY_FLUSH_ITEMS,
         max_flush_bytes: int = AUDIT_CONTENT_MAX_FLUSH_BYTES,
         bundle_max_bytes: int = AUDIT_CONTENT_BUNDLE_MAX_BYTES,
@@ -102,11 +106,15 @@ class AuditContentBuffer:
         self.audit_service = audit_service
         self.flush_interval_seconds = max(0.01, float(flush_interval_seconds))
         self.max_items = max(1, int(max_items))
+        self.max_held_chars = max(1, int(max_held_chars))
         self.early_flush_items = max(1, min(int(early_flush_items), self.max_items))
         self.max_flush_bytes = max(1, int(max_flush_bytes))
         self.bundle_max_bytes = max(1, int(bundle_max_bytes))
         self.bundle_max_items = max(1, int(bundle_max_items))
         self._items: list[AuditContentItem] = []
+        # Approximate characters of the bodies that wait, and of those in flight.
+        self._waiting_chars = 0
+        self._in_flight_chars = 0
         self._wake = asyncio.Event()
         self._closed = False
         self._task: asyncio.Task[None] | None = None
@@ -125,7 +133,12 @@ class AuditContentBuffer:
         if len(self._items) >= self.max_items:
             increment_audit_content_dropped(reason="buffer_full")
             return False
+        size = sum(approximate_chars(payload.content_json) for payload in item.payloads)
+        if self._waiting_chars + self._in_flight_chars + size > self.max_held_chars:
+            increment_audit_content_dropped(reason="buffer_bytes")
+            return False
         self._items.append(item)
+        self._waiting_chars += size
         if len(self._items) >= self.early_flush_items:
             self._wake.set()
         return True
@@ -159,6 +172,7 @@ class AuditContentBuffer:
         if self._items:
             increment_audit_content_dropped(reason="shutdown", count=len(self._items))
             self._items = []
+            self._waiting_chars = 0
         set_audit_content_buffer_items(0)
 
     @property
@@ -182,10 +196,19 @@ class AuditContentBuffer:
 
     async def flush(self) -> None:
         items, self._items = self._items, []
+        held, self._waiting_chars = self._waiting_chars, 0
         # The items that waited for this flush; at most max_items.
         set_audit_content_buffer_items(len(items))
         if not items:
             return
+        # The bodies stay in memory until the send ends, so they still count.
+        self._in_flight_chars += held
+        try:
+            await self._flush(items)
+        finally:
+            self._in_flight_chars -= held
+
+    async def _flush(self, items: list[AuditContentItem]) -> None:
         organization_ids = {item.organization_id for item in items if item.organization_id}
         try:
             policies = await self.audit_service.content_storage_policies(organization_ids)
@@ -310,6 +333,32 @@ class AuditContentBuffer:
     @staticmethod
     def _drop(items: list[AuditContentItem], *, reason: str) -> None:
         increment_audit_content_dropped(reason=reason, count=len(items))
+
+
+def approximate_chars(value: Any) -> int:
+    """Return a rough JSON size of a body without copying or scanning its strings.
+
+    It only adds up string lengths and a few characters for each other value,
+    so its cost depends on the number of values, not on their size.
+    """
+
+    total = 0
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, str):
+            total += len(current) + 2
+        elif isinstance(current, dict):
+            total += 2
+            for key, item in current.items():
+                total += (len(key) if isinstance(key, str) else 8) + 4
+                stack.append(item)
+        elif isinstance(current, (list, tuple)):
+            total += 2 + len(current)
+            stack.extend(current)
+        else:
+            total += 8
+    return total
 
 
 def _bundles(
