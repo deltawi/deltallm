@@ -239,9 +239,13 @@ def test_size_work_stops_once_the_whole_payload_is_over_its_limit(monkeypatch) -
     assert compacted["approx_size_bytes"] > _MAX
     assert len(encoded) <= _MAX // (6 * len(word)) + 1
 
-    # One large string stops after the slice that takes it over the limit.
+    # A string longer than the limit is not encoded at all.
     encoded.clear()
     compacted, _ = compact_audit_content({"text": "ع" * 2_000_000}, max_bytes=_MAX)
+    assert compacted["omitted"] == "payload_too_large"
+    assert encoded == []
+    # A shorter one stops after the slice that takes it over the limit.
+    compacted, _ = compact_audit_content({"text": "ع" * 500_000}, max_bytes=_MAX)
     assert compacted["omitted"] == "payload_too_large"
     assert encoded == [payload_compaction._SCAN_CHUNK_CHARS]
 
@@ -299,3 +303,69 @@ def test_the_limit_applies_to_the_whole_payload_at_its_edge() -> None:
         assert payload_compaction._compact(content, stop=stop)[1] > stop
     for stop in (size, size + 1, _MAX):
         assert payload_compaction._compact(content, stop=stop)[1] == size
+
+
+def _counting(monkeypatch, name: str) -> list[int]:
+    from src.services.audit import payload_compaction
+
+    calls: list[int] = []
+    real = getattr(payload_compaction, name)
+
+    def counting(value: str, *args):  # noqa: ANN202
+        calls.append(len(value))
+        return real(value, *args)
+
+    monkeypatch.setattr(payload_compaction, name, counting)
+    return calls
+
+
+def test_a_long_string_after_an_exactly_full_list_is_not_scanned(monkeypatch) -> None:
+    from src.services.audit import payload_compaction
+
+    scanned = _counting(monkeypatch, "_is_base64")
+    hashed = _counting(monkeypatch, "_sha256")
+    pad = "word " * 1000
+    tail = "A" * (1024 * 1024)
+    full = payload_compaction._compact({"enum": [pad]}, stop=_NO_LIMIT)[1]
+    placeholder_size = len(payload_compaction._inline_data_placeholder(tail)) + 2
+    scanned.clear()
+    hashed.clear()
+    # No room left for the list separator, then less room than any placeholder.
+    for room in (0, 1, payload_compaction._MIN_PLACEHOLDER_CHARS + 2):
+        compacted, changed = compact_audit_content({"enum": [pad, tail]}, max_bytes=full + room)
+        assert changed is True
+        assert compacted["omitted"] == "payload_too_large"
+        assert len(tail) not in scanned and hashed == []
+    # Room for the placeholder: the string is scanned, hashed and replaced.
+    compacted, changed = compact_audit_content(
+        {"enum": [pad, tail]}, max_bytes=full + 1 + placeholder_size
+    )
+    assert changed is True
+    assert compacted["enum"][1].startswith("[omitted inline data: base64, ")
+    assert hashed == [len(tail)]
+
+
+def test_a_string_with_less_room_than_any_placeholder_is_not_scanned(monkeypatch) -> None:
+    from src.services.audit import payload_compaction
+
+    scanned = _counting(monkeypatch, "_is_base64")
+    encoded = _counting(monkeypatch, "encode_basestring_ascii")
+    shortest = "data:a/b;base64," + "A" * 1008
+    assert len(shortest) == payload_compaction._INLINE_DATA_MIN_CHARS
+    placeholder = payload_compaction._inline_data_placeholder(shortest)
+    assert len(placeholder) == payload_compaction._MIN_PLACEHOLDER_CHARS
+    scanned.clear()
+    for value in ("A" * 5000, "é" * 5000, "data:image/png;base64," + "A" * 5000):
+        for stop in (-1, 0, 50, payload_compaction._MIN_PLACEHOLDER_CHARS + 1):
+            assert payload_compaction._compact(value, stop=stop)[1] > stop
+    assert scanned == [] and encoded == []
+    # Short strings that fit are still kept as they are.
+    assert payload_compaction._compact("é" * 10, stop=100) == ("é" * 10, 62, False)
+
+
+def test_a_long_non_ascii_key_after_the_limit_is_not_encoded(monkeypatch) -> None:
+    encoded = _counting(monkeypatch, "encode_basestring_ascii")
+    content = {"a": "x" * 100, "ع" * 300_000: 1}
+    compacted, _ = compact_audit_content(content, max_bytes=200)
+    assert compacted["omitted"] == "payload_too_large"
+    assert encoded == []
