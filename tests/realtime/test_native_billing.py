@@ -10,6 +10,9 @@ from uuid import uuid4
 
 import pytest
 
+from src.billing.accounting.journal.accounting_terminal_preparation import (
+    accounting_audit_token_counts,
+)
 from src.billing.accounting.accounting_protocol import AccountingOutcome
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.accounting_snapshots import finalization_bytes
@@ -79,6 +82,10 @@ async def test_exact_receipt_uses_operation_identity_and_shared_terminal_owner(r
         terminal.spend_payload["metadata"]["realtime_session_id"] == context.attribution.session_id
     )
     assert terminal.spend_payload["metadata"]["realtime_receipt_id"] == usage.receipt_id
+    audit = terminal.audit_envelope["payload"]["event"]
+    counts = accounting_audit_token_counts(terminal.spend_payload)
+    assert counts != (None, None)
+    assert (audit["input_tokens"], audit["output_tokens"]) == counts
     assert handle.reservation.attribution.api_key == context.attribution.api_key
     assert billing.proofs.retained_bytes == ACKNOWLEDGED_BYTES
     await billing.close(context.attribution.session_id)

@@ -72,6 +72,68 @@ def _validate_reporting_counts(payload: Mapping[str, object]) -> None:
         raise UnqualifiedAccountingReceipt("provider_usage_unqualified")
 
 
+def accounting_audit_token_counts(
+    payload: Mapping[str, object],
+) -> tuple[int | None, int | None]:
+    """Return the input and output token counts of a charge for its audit event.
+
+    The source order is the same as reporting: explicit usage first, then the
+    billing usage snapshot. A count that is missing or that does not fit the
+    audit column is None, never zero, so an unknown count stays unknown.
+    """
+
+    usage = payload.get("usage")
+    metadata = payload.get("metadata")
+    billing = metadata.get("billing") if isinstance(metadata, Mapping) else None
+    snapshot = billing.get("usage_snapshot") if isinstance(billing, Mapping) else None
+    sources = [source for source in (usage, snapshot) if isinstance(source, Mapping)]
+
+    def count(field: str) -> int | None:
+        for source in sources:
+            value = source.get(field)
+            if value is None:
+                continue
+            if type(value) is int and 0 <= value < 2**31:
+                return value
+            return None
+        return None
+
+    return count("prompt_tokens"), count("completion_tokens")
+
+
+def _with_audit_token_counts(
+    audit_envelope: dict[str, object], payload: Mapping[str, object]
+) -> dict[str, object]:
+    """Add the charge's token counts to its audit event where the caller left them unset.
+
+    Every completed charge passes here (live calls, Realtime, batch and the
+    selector), so each of their audit events gets the counts. The result is a
+    pure function of its inputs, so a replay of the same charge builds the same
+    envelope. The redacted copy gets the counts too: they are not content.
+    """
+
+    input_tokens, output_tokens = accounting_audit_token_counts(payload)
+    if input_tokens is None and output_tokens is None:
+        return audit_envelope
+    result = dict(audit_envelope)
+    copies: dict[int, object] = {}
+    for key in ("payload", "redacted_payload"):
+        body = audit_envelope.get(key)
+        if id(body) in copies:
+            result[key] = copies[id(body)]
+            continue
+        event = body.get("event") if isinstance(body, Mapping) else None
+        if not isinstance(event, Mapping):
+            continue
+        event = dict(event)
+        if event.get("input_tokens") is None:
+            event["input_tokens"] = input_tokens
+        if event.get("output_tokens") is None:
+            event["output_tokens"] = output_tokens
+        result[key] = copies[id(body)] = {**body, "event": event}
+    return result
+
+
 def prepare_accounting_charge(
     operation: AccountingOperationHandle,
     *,
@@ -110,7 +172,7 @@ def prepare_accounting_charge(
         outcome=AccountingOutcome.COMPLETED,
         exact_charge=charge,
         spend_payload=accepted,
-        audit_envelope=audit_envelope,
+        audit_envelope=_with_audit_token_counts(audit_envelope, accepted),
         occurred_at=occurred_at,
         unresolved_attempts=operation.unresolved_attempts(),
     )
