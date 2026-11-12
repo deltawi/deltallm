@@ -16,5 +16,12 @@ ALTER TABLE "deltallm_audit_ingestion_outbox"
     CHECK ("record_type" IN ('audit_event', 'prompt_render', 'audit_content')) NOT VALID;
 COMMIT;
 
+-- COMMIT ends the SET LOCAL values, so the validation sets its own limits. It
+-- holds SHARE UPDATE EXCLUSIVE, which allows inserts and updates. The outbox is
+-- bounded by the audit queue capacity, so the scan is short.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '120s';
 ALTER TABLE "deltallm_audit_ingestion_outbox"
     VALIDATE CONSTRAINT "deltallm_audit_ingestion_outbox_type_check";
+COMMIT;

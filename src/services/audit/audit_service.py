@@ -45,7 +45,6 @@ from src.models.errors import ServiceUnavailableError
 from src.redis_namespace import build_redis_channel
 from src.services.audit.audit_policy_invalidation import AuditPolicyInvalidation
 from src.services.audit.content_attachment import (
-    AUDIT_CONTENT_DEFER_SECONDS,
     AUDIT_CONTENT_RECORD_TYPE,
     AUDIT_CONTENT_WAITING_REASON,
     PendingAuditContent,
@@ -1040,16 +1039,15 @@ class AuditService:
                     latency_seconds=perf_counter() - started,
                 )
 
-                deferred = set(content.deferred_event_ids)
+                deferred = content.deferred
                 completed_ids = [
                     record.event_id for record in records if record.event_id not in deferred
                 ]
                 if deferred:
                     deferred_count = await ingestion_repository.defer_claimed(
-                        event_ids=sorted(deferred),
+                        delays=deferred,
                         worker_id=self.ingestion_config.worker_id,
                         claim_token=claim_token,
-                        delay_seconds=AUDIT_CONTENT_DEFER_SECONDS,
                         reason=AUDIT_CONTENT_WAITING_REASON,
                     )
                     if deferred_count != len(deferred):
@@ -1431,6 +1429,7 @@ def _pending_audit_content(record: AuditOutboxRecord) -> PendingAuditContent:
     )
     return PendingAuditContent(
         outbox_event_id=record.event_id,
+        organization_id=record.organization_id,
         target=target,
         attached_payloads=attached_payloads,
         fallback_event=fallback_event,

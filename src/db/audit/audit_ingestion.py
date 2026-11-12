@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
-from typing import Any, Literal, Sequence, cast
+from typing import Any, Literal, Mapping, Sequence, cast
 
 from src.audit.delivery import AuditDeliveryClass, parse_audit_delivery_class
 from src.db.runtime.client import is_prisma_transaction_client
@@ -402,40 +402,42 @@ class AuditIngestionRepository:
     async def defer_claimed(
         self,
         *,
-        event_ids: list[str],
+        delays: Mapping[str, float],
         worker_id: str,
         claim_token: str,
-        delay_seconds: float,
         reason: str,
     ) -> int:
         """Put fenced claims back in the queue without using up an attempt.
 
+        ``delays`` maps each outbox event ID to the seconds until its next claim.
         A record that waits for another record is not failing. The claim added one
         attempt, so the deferral removes it. The record keeps its queue capacity.
         """
-        if self.prisma is None or not event_ids:
+        if self.prisma is None or not delays:
             return 0
+        event_ids = sorted(delays)
         rows = await self.prisma.query_raw(
             """
-            UPDATE deltallm_audit_ingestion_outbox
+            UPDATE deltallm_audit_ingestion_outbox o
             SET status = 'retry',
-                attempt_count = GREATEST(0, attempt_count - 1),
-                next_attempt_at = NOW() + make_interval(secs => $4),
+                attempt_count = GREATEST(0, o.attempt_count - 1),
+                next_attempt_at = NOW() + make_interval(secs => d.delay_seconds),
                 last_error = $5,
                 locked_by = NULL,
                 claim_token = NULL,
                 lease_expires_at = NULL,
                 updated_at = NOW()
-            WHERE event_id = ANY($1::text[])
-              AND status = 'processing'
-              AND locked_by = $2
-              AND claim_token = $3
-            RETURNING event_id
+            FROM unnest($1::text[], $2::float8[]) AS d(event_id, delay_seconds)
+            WHERE o.event_id = d.event_id
+              AND o.status = 'processing'
+              AND o.locked_by = $3
+              AND o.claim_token = $4
+            RETURNING o.event_id
             """,
             event_ids,
+            [max(0.0, float(delays[event_id])) for event_id in event_ids],
             worker_id,
             claim_token,
-            max(0.0, float(delay_seconds)),
             str(reason)[:2000],
         )
         return len(rows)

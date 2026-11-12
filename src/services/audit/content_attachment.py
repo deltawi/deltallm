@@ -6,12 +6,17 @@ response body, because large bodies stay out of the accounting write. The reques
 path sends the bodies separately, as an ``audit_content`` outbox record that names
 the target event. The audit worker then:
 
-- attaches the bodies to the target event when the event exists;
-- puts the record back in the queue for a short time when the event does not
-  exist yet, because the accounting projection writes it a little later;
+- attaches the bodies to the target event when the event exists and belongs to
+  the record's organization (the organization whose content policy it checked);
+- puts the record back in the queue when the event does not exist yet, because
+  the accounting projection writes it a little later. The wait grows with the
+  age of the record (2 s, then half the age, at most 30 s), so a target that
+  never arrives costs about 18 claims and not one every 2 s;
 - after a bounded wait, writes the content as its own audit event, so that the
   content is not lost when the target event does not arrive (for example when an
-  expired reservation closes the operation with another event).
+  expired reservation closes the operation with another event). A target of
+  another organization gets the same fallback at once: content never attaches
+  across organizations.
 
 This module has no lifecycle. The audit worker calls it inside its fenced batch
 transaction, so the attach, the event flag and the queue completion commit together.
@@ -31,6 +36,7 @@ from src.metrics.audit import increment_audit_content_records
 AUDIT_CONTENT_RECORD_TYPE = "audit_content"
 # The accounting projection usually writes the target event within a few seconds.
 AUDIT_CONTENT_DEFER_SECONDS = 2.0
+AUDIT_CONTENT_MAX_DEFER_SECONDS = 30.0
 AUDIT_CONTENT_ATTACH_WAIT_SECONDS = 300.0
 AUDIT_CONTENT_WAITING_REASON = "waiting_for_audit_event"
 
@@ -49,6 +55,8 @@ class PendingAuditContent:
     """One claimed content record, prepared for both the attach and the fallback."""
 
     outbox_event_id: str
+    # The record's organization: its content policy is the one the worker checked.
+    organization_id: str | None
     target: AuditContentTarget
     attached_payloads: list[AuditPayloadRecord]
     fallback_event: AuditEventRecord
@@ -57,9 +65,23 @@ class PendingAuditContent:
 
 @dataclass(frozen=True, slots=True)
 class AuditContentResult:
-    deferred_event_ids: list[str]
+    # Outbox event ID -> seconds until the next claim.
+    deferred: dict[str, float]
     attached: int = 0
     fallback: int = 0
+
+
+def audit_content_defer_seconds(
+    age_seconds: float, *, attach_wait_seconds: float = AUDIT_CONTENT_ATTACH_WAIT_SECONDS
+) -> float:
+    """Return the wait before the next claim of a record whose target is missing.
+
+    Half the record's age, from 2 s to 30 s, and not past the end of the attach
+    wait, so the fallback still happens on time.
+    """
+
+    delay = min(AUDIT_CONTENT_MAX_DEFER_SECONDS, max(AUDIT_CONTENT_DEFER_SECONDS, age_seconds / 2))
+    return max(AUDIT_CONTENT_DEFER_SECONDS, min(delay, attach_wait_seconds - age_seconds))
 
 
 def audit_content_record_id(target_event_id: str) -> str:
@@ -102,24 +124,32 @@ async def apply_audit_content(
     """Attach, defer or fall back for each record. Uses one read and at most three writes."""
 
     if not pending:
-        return AuditContentResult(deferred_event_ids=[])
-    existing = await repository.existing_event_ids([item.target.event_id for item in pending])
+        return AuditContentResult(deferred={})
+    owners = await repository.event_organizations([item.target.event_id for item in pending])
     payloads: list[AuditPayloadRecord] = []
     stored_targets: list[str] = []
     fallback_events: list[AuditEventRecord] = []
-    deferred: list[str] = []
-    attached = 0
+    deferred: dict[str, float] = {}
+    attached = mismatched = 0
     for item in pending:
-        if item.target.event_id in existing:
-            attached += 1
-            payloads.extend(item.attached_payloads)
-            if any(_has_stored_content(payload) for payload in item.attached_payloads):
-                stored_targets.append(item.target.event_id)
-        elif (now - item.target.enqueued_at).total_seconds() < attach_wait_seconds:
-            deferred.append(item.outbox_event_id)
-        else:
-            fallback_events.append(item.fallback_event)
-            payloads.extend(item.fallback_payloads)
+        age_seconds = (now - item.target.enqueued_at).total_seconds()
+        if item.target.event_id in owners:
+            if owners[item.target.event_id] == item.organization_id:
+                attached += 1
+                payloads.extend(item.attached_payloads)
+                if any(_has_stored_content(payload) for payload in item.attached_payloads):
+                    stored_targets.append(item.target.event_id)
+                continue
+            # Never attach across organizations: the target's organization may
+            # have content storage off, and its audit readers would see the bodies.
+            mismatched += 1
+        elif age_seconds < attach_wait_seconds:
+            deferred[item.outbox_event_id] = audit_content_defer_seconds(
+                age_seconds, attach_wait_seconds=attach_wait_seconds
+            )
+            continue
+        fallback_events.append(item.fallback_event)
+        payloads.extend(item.fallback_payloads)
 
     # A fallback event goes in before its payload rows reference it.
     await repository.create_events_batch(fallback_events)
@@ -128,8 +158,9 @@ async def apply_audit_content(
     increment_audit_content_records(outcome="attached", count=attached)
     increment_audit_content_records(outcome="deferred", count=len(deferred))
     increment_audit_content_records(outcome="fallback_event", count=len(fallback_events))
+    increment_audit_content_records(outcome="organization_mismatch", count=mismatched)
     return AuditContentResult(
-        deferred_event_ids=deferred,
+        deferred=deferred,
         attached=attached,
         fallback=len(fallback_events),
     )

@@ -228,20 +228,20 @@ class AuditRepository:
         )
         return len(rows)
 
-    async def existing_event_ids(self, event_ids: list[str]) -> set[str]:
-        """Return the IDs in ``event_ids`` that have an audit event row."""
+    async def event_organizations(self, event_ids: list[str]) -> dict[str, str | None]:
+        """Return the organization of each event in ``event_ids`` that has a row."""
 
         if self.prisma is None or not event_ids:
-            return set()
+            return {}
         rows = await self.prisma.query_raw(
             """
-            SELECT event_id::text AS event_id
+            SELECT event_id::text AS event_id, organization_id
             FROM deltallm_auditevent
             WHERE event_id = ANY($1::uuid[])
             """,
             sorted(set(event_ids)),
         )
-        return {str(row["event_id"]) for row in rows}
+        return {str(row["event_id"]): row.get("organization_id") for row in rows}
 
     async def mark_content_stored(self, event_ids: list[str]) -> int:
         """Set ``content_stored`` on events that received stored content later."""

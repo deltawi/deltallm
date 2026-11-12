@@ -366,3 +366,71 @@ async def test_content_and_its_target_in_one_batch_attach_together(audit_db):
     assert await _content_stored(db, target) is True
     for event_id in (target, record_id):
         assert (await _outbox_row(db, event_id))["status"] == "completed"
+
+
+async def test_content_never_attaches_to_an_event_of_another_organization(audit_db):
+    db, organization_id, cleanup = audit_db
+    other_organization = f"content-org-off-{uuid4().hex}"
+    await db.execute_raw(
+        """
+        INSERT INTO deltallm_organizationtable (
+            organization_id, audit_content_storage_enabled, audit_content_policy_version
+        ) VALUES ($1, FALSE, 1)
+        """,
+        other_organization,
+    )
+    try:
+        target = str(uuid4())
+        cleanup["events"].append(target)
+        await _insert_target(db, event_id=target, organization_id=other_organization)
+        record_id = await _enqueue_content(
+            db,
+            organization_id=organization_id,
+            target_event_id=target,
+            enqueued_at=datetime.now(UTC),
+        )
+        cleanup["outbox"].append(record_id)
+        cleanup["events"].append(record_id)
+
+        await _service(db)._process_durable_batch(await _claim(db, [record_id]))
+
+        # The other organization's event gets no bodies and no flag.
+        assert await _payloads(db, target) == []
+        assert await _content_stored(db, target) is False
+        # The bodies stay in their own organization, as their own event.
+        rows = await db.query_raw(
+            "SELECT organization_id FROM deltallm_auditevent WHERE event_id = $1::uuid",
+            record_id,
+        )
+        assert rows[0]["organization_id"] == organization_id
+        assert len(await _payloads(db, record_id)) == 2
+        assert (await _outbox_row(db, record_id))["status"] == "completed"
+    finally:
+        await db.execute_raw(
+            "DELETE FROM deltallm_organizationtable WHERE organization_id = $1",
+            other_organization,
+        )
+
+
+async def test_a_waiting_record_comes_back_later_as_it_gets_older(audit_db):
+    db, organization_id, cleanup = audit_db
+    record_id = await _enqueue_content(
+        db,
+        organization_id=organization_id,
+        target_event_id=str(uuid4()),
+        enqueued_at=datetime.now(UTC) - timedelta(seconds=60),
+    )
+    cleanup["outbox"].append(record_id)
+
+    await _service(db)._process_durable_batch(await _claim(db, [record_id]))
+
+    rows = await db.query_raw(
+        """
+        SELECT status, EXTRACT(EPOCH FROM (next_attempt_at - NOW()))::float8 AS wait
+        FROM deltallm_audit_ingestion_outbox WHERE event_id = $1
+        """,
+        record_id,
+    )
+    assert rows[0]["status"] == "retry"
+    # Half the 60 s age, capped at 30 s; not the 2 s of a new record.
+    assert 25 <= rows[0]["wait"] <= 30
