@@ -412,6 +412,63 @@ async def test_content_never_attaches_to_an_event_of_another_organization(audit_
         )
 
 
+async def test_content_that_names_another_organization_is_never_written(audit_db):
+    """A record checked under one organization cannot write bodies into another."""
+
+    db, organization_id, cleanup = audit_db
+    other_organization = f"content-org-off-{uuid4().hex}"
+    await db.execute_raw(
+        """
+        INSERT INTO deltallm_organizationtable (
+            organization_id, audit_content_storage_enabled, audit_content_policy_version
+        ) VALUES ($1, FALSE, 1)
+        """,
+        other_organization,
+    )
+    try:
+        target = str(uuid4())
+        cleanup["events"].append(target)
+        await _insert_target(db, event_id=target, organization_id=other_organization)
+        record_id = audit_content_record_id(target)
+        cleanup["outbox"].append(record_id)
+        cleanup["events"].append(record_id)
+        # The outbox row is in the organization with content storage on, but the
+        # stored event names the other organization.
+        payload, redacted = _content_payloads(
+            organization_id=other_organization,
+            target_event_id=target,
+            enqueued_at=datetime.now(UTC),
+        )
+        result = await AuditIngestionRepository(db).enqueue(
+            event_id=record_id,
+            record_type=AUDIT_CONTENT_RECORD_TYPE,
+            organization_id=organization_id,
+            delivery_class="best_effort",
+            payload=payload,
+            redacted_payload=redacted,
+            max_attempts=3,
+            max_pending_events=100_000,
+            required_reserve=0,
+        )
+        assert result.status == "accepted"
+
+        await _service(db)._process_durable_batch(await _claim(db, [record_id]))
+
+        # Nothing is written: no bodies on the target and no fallback event.
+        assert await _payloads(db, target) == []
+        assert await _content_stored(db, target) is False
+        assert await _content_stored(db, record_id) is None
+        assert await _payloads(db, record_id) == []
+        row = await _outbox_row(db, record_id)
+        assert row["status"] == "retry"
+        assert "another organization" in row["last_error"]
+    finally:
+        await db.execute_raw(
+            "DELETE FROM deltallm_organizationtable WHERE organization_id = $1",
+            other_organization,
+        )
+
+
 async def test_a_waiting_record_comes_back_later_as_it_gets_older(audit_db):
     db, organization_id, cleanup = audit_db
     record_id = await _enqueue_content(

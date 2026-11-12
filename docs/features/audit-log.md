@@ -208,6 +208,10 @@ The audit worker processes the record in the same batched transaction as other a
 - If the event belongs to a different organization, the worker never adds the bodies to it. It writes
   them at once as a separate event in the record's organization.
 - If the organization does not have `audit_content_storage_enabled = true`, the worker writes nothing.
+- If the event stored in the record names an organization other than the record's organization, the
+  worker rejects the record before it writes anything. The record goes back to the queue with an error
+  and fails after its delivery attempts. Bodies never go into an organization whose content policy the
+  worker did not check.
 
 `deltallm_audit_content_records_total{outcome}` counts the records by `attached`, `deferred`,
 `fallback_event` and `organization_mismatch`. A high `deferred` count means that the accounting

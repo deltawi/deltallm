@@ -939,8 +939,12 @@ class AuditService:
             PromptRenderEvent.from_persistence_payload(record.redacted_payload)
             return
         if record.record_type == AUDIT_CONTENT_RECORD_TYPE:
-            _deserialize_audit_item(record.payload, event_id=record.event_id)
-            _deserialize_audit_item(record.redacted_payload, event_id=record.event_id)
+            for stored in (record.payload, record.redacted_payload):
+                item = _deserialize_audit_item(stored, event_id=record.event_id)
+                # The worker checks the content policy of the record's organization,
+                # so the bodies (attached or as their own event) must stay in it.
+                if (item.event.organization_id or None) != (record.organization_id or None):
+                    raise ValueError("audit content record names another organization")
             audit_content_target(record.payload)
             return
         raise ValueError(f"unsupported audit outbox record type: {record.record_type}")

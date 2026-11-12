@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -239,7 +240,7 @@ def _content_record(payload: dict) -> AuditOutboxRecord:
 
 def test_worker_validation_accepts_a_content_record():
     payload = {
-        "event": {"action": "CHAT_COMPLETION_REQUEST"},
+        "event": {"action": "CHAT_COMPLETION_REQUEST", "organization_id": "org-1"},
         "payloads": [{"kind": "request", "content_json": {"messages": []}}],
         **audit_content_fields(target_event_id=str(uuid4()), enqueued_at=NOW),
     }
@@ -252,3 +253,19 @@ def test_worker_validation_rejects_a_content_record_without_target():
 
     with pytest.raises(ValueError):
         AuditService._validate_durable_record(_content_record(payload))
+
+
+@pytest.mark.parametrize("stored", ["payload", "redacted_payload"])
+def test_worker_validation_rejects_content_that_names_another_organization(stored):
+    """The record's organization is the one whose content policy the worker checks."""
+
+    payload = {
+        "event": {"action": "CHAT_COMPLETION_REQUEST", "organization_id": "org-1"},
+        "payloads": [{"kind": "request", "content_json": {"messages": []}}],
+        **audit_content_fields(target_event_id=str(uuid4()), enqueued_at=NOW),
+    }
+    other = {**payload, "event": {**payload["event"], "organization_id": "org-2"}}
+    record = replace(_content_record(payload), **{stored: other})
+
+    with pytest.raises(ValueError, match="another organization"):
+        AuditService._validate_durable_record(record)
