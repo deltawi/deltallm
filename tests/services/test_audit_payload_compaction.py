@@ -143,3 +143,71 @@ def test_long_strings_are_scanned_and_hashed_in_slices_with_the_same_result(monk
     ]
     for value in cases:
         assert payload_compaction._inline_data_placeholder(value) == _reference_placeholder(value)
+
+
+def test_a_data_url_header_is_read_only_at_the_start_of_the_string(monkeypatch) -> None:
+    from src.services.audit import payload_compaction
+
+    real = payload_compaction._DATA_URL
+    calls: list[tuple[int, int]] = []
+
+    class _Spy:
+        def match(self, value, pos=0, endpos=None):  # noqa: ANN001, ANN201
+            calls.append((pos, endpos))
+            return real.match(value, pos, endpos)
+
+    monkeypatch.setattr(payload_compaction, "_DATA_URL", _Spy())
+    data = base64.b64encode(b"\x00" * 3000).decode()
+    named = "data:application/pdf;name=report.pdf;base64," + data
+    assert compact_audit_content({"file": named}, max_bytes=_MAX)[0]["file"].startswith(
+        "[omitted inline data: application/pdf, "
+    )
+    # A header that does not end early is plain text; the regex never reads past it.
+    long_header = "data:" + "a" * 5000 + "!"
+    long_parameter = "data:a/b;x=" + "y" * 5000
+    for value in (long_header, long_parameter):
+        assert compact_audit_content({"text": value}, max_bytes=_MAX) == ({"text": value}, False)
+    assert calls and all(
+        endpos == payload_compaction._DATA_URL_MAX_HEADER_CHARS for _, endpos in calls
+    )
+
+
+def test_non_ascii_text_is_counted_by_its_json_size(monkeypatch) -> None:
+    import json
+
+    from src.services.audit import payload_compaction
+
+    samples = ["abc", "é" * 1000, "مرحبا بالعالم " * 50, "😀 a 中", "x y", "ü" + "a" * 3000]
+    for chunk in (7, payload_compaction._SCAN_CHUNK_CHARS):
+        monkeypatch.setattr(payload_compaction, "_SCAN_CHUNK_CHARS", chunk)
+        for value in samples:
+            assert payload_compaction._compact(value)[1] == len(json.dumps(value))
+        # A non-ASCII key is counted like its value would be.
+        assert (
+            payload_compaction._compact({"clé": 1})[1] - payload_compaction._compact({"cle": 1})[1]
+            == 5
+        )
+    # The count stops once a string is surely over the limit.
+    monkeypatch.setattr(payload_compaction, "_SCAN_CHUNK_CHARS", 10)
+    partial = payload_compaction._text_size("ع" * 100, stop=30)
+    assert 30 < partial < len(json.dumps("ع" * 100))
+    # So an Arabic body over the payload limit becomes the placeholder, though its
+    # length is far below it.
+    arabic = {"messages": [{"role": "user", "content": "ع" * 200_000}]}
+    compacted, changed = compact_audit_content(arabic, max_bytes=_MAX)
+    assert changed is True
+    assert compacted["omitted"] == "payload_too_large"
+
+
+def test_floats_count_their_longest_text() -> None:
+    import json
+
+    from src.services.audit import payload_compaction
+
+    for value in (-1.7976931348623157e308, 2.2250738585072014e-308, 0.1, 1e-300, -0.0):
+        assert payload_compaction._compact(value)[1] >= len(json.dumps(value))
+    # 50,000 floats of 24 characters: over 1 MiB, so the body is replaced.
+    floats = [-1.7976931348623157e308] * 50_000
+    compacted, changed = compact_audit_content({"enum": floats}, max_bytes=_MAX)
+    assert changed is True
+    assert compacted["omitted"] == "payload_too_large"

@@ -531,7 +531,7 @@ async def test_chat_audit_content_keeps_the_request_as_sent_upstream(
     from tests.test_accounting_request_ids import _operation
 
     monkeypatch.setattr(
-        "src.services.audit.content_buffer.AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS", 1_000
+        "src.services.audit.content_buffer.AUDIT_CONTENT_MAX_REQUEST_TEXT_PARSE_COST", 1_000
     )
     manager = CallbackManager()
     manager.register_callback(_GrowingPostCallCallback(system_message=system_message))

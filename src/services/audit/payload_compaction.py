@@ -10,6 +10,7 @@ is replaced as a whole.
 from __future__ import annotations
 
 from hashlib import sha256
+from json.encoder import encode_basestring_ascii
 import re
 from typing import Any
 
@@ -19,6 +20,9 @@ DEFAULT_AUDIT_PAYLOAD_MAX_BYTES = 1_048_576
 _INLINE_DATA_MIN_CHARS = 1024
 _DATA_URL = re.compile(r"data:([\w.+-]+/[\w.+-]+)?(?:;[\w.+-]+=[^;,]*)*;base64,", re.ASCII)
 _BASE64 = re.compile(r"[A-Za-z0-9+/=_\-\r\n]+", re.ASCII)
+# A data URL's header (media type and parameters, up to ";base64,") must end within
+# this many characters. The header regex then never scans a long string.
+_DATA_URL_MAX_HEADER_CHARS = 1024
 # Long strings are scanned and hashed in slices of this many characters. Each slice
 # is one C call that holds the GIL, so compaction in a worker thread never stops the
 # serving event loop for long (a whole 24 MiB string took about 200 ms).
@@ -30,12 +34,14 @@ _MAX_INTEGER_BITS = 1024
 ENTRY_OVERHEAD = 4
 # The smallest size this module gives a value: an empty string, list or dict.
 MIN_VALUE_SIZE = 2
+# The longest JSON text of a finite float, such as -1.7976931348623157e+308.
+MAX_FLOAT_CHARS = 24
 
 
 def compact_audit_content(content: Any, *, max_bytes: int) -> tuple[Any, bool]:
     """Return (content, changed) with inline binary data and oversize payloads omitted."""
 
-    compacted, size, changed = _compact(content)
+    compacted, size, changed = _compact(content, stop=max_bytes)
     if size <= max_bytes:
         return compacted, changed
     return oversize_placeholder(size, max_bytes=max_bytes), True
@@ -47,20 +53,23 @@ def oversize_placeholder(size: int, *, max_bytes: int) -> dict[str, Any]:
     return {"omitted": "payload_too_large", "approx_size_bytes": size, "max_bytes": max_bytes}
 
 
-def _compact(value: Any) -> tuple[Any, int, bool]:
+def _compact(value: Any, *, stop: int | None = None) -> tuple[Any, int, bool]:
+    """Return (value, size, changed); a size over ``stop`` may be counted only in part."""
+
     if isinstance(value, str):
         placeholder = _inline_data_placeholder(value)
         if placeholder is not None:
             return placeholder, len(placeholder) + 2, True
-        return value, len(value) + 2, False
+        return value, _text_size(value, stop=stop), False
     if isinstance(value, dict):
         result: dict[Any, Any] = {}
         size = 2
         changed = False
         for key, item in value.items():
-            compacted, item_size, item_changed = _compact(item)
+            compacted, item_size, item_changed = _compact(item, stop=stop)
             result[key] = compacted
-            size += len(str(key)) + item_size + ENTRY_OVERHEAD
+            key_size = _text_size(key, stop=stop) - 2 if isinstance(key, str) else len(str(key))
+            size += key_size + item_size + ENTRY_OVERHEAD
             changed = changed or item_changed
         return (result if changed else value), size, changed
     if isinstance(value, (list, tuple)):
@@ -68,7 +77,7 @@ def _compact(value: Any) -> tuple[Any, int, bool]:
         size = 2
         changed = False
         for item in value:
-            compacted, item_size, item_changed = _compact(item)
+            compacted, item_size, item_changed = _compact(item, stop=stop)
             items.append(compacted)
             size += item_size + 1
             changed = changed or item_changed
@@ -80,13 +89,15 @@ def _compact(value: Any) -> tuple[Any, int, bool]:
             return placeholder, len(placeholder) + 2, True
         # An upper bound of its digits and sign.
         return value, max(ENTRY_OVERHEAD, (bits * 31) // 100 + 3), False
+    if type(value) is float:
+        return value, MAX_FLOAT_CHARS, False
     return value, ENTRY_OVERHEAD, False
 
 
 def _inline_data_placeholder(value: str) -> str | None:
     if len(value) < _INLINE_DATA_MIN_CHARS:
         return None
-    match = _DATA_URL.match(value)
+    match = _DATA_URL.match(value, 0, _DATA_URL_MAX_HEADER_CHARS)
     if match is not None:
         media_type = match.group(1) or "application/octet-stream"
         if not _is_base64(value, match.end()):
@@ -96,6 +107,26 @@ def _inline_data_placeholder(value: str) -> str | None:
     else:
         return None
     return f"[omitted inline data: {media_type}, {len(value)} chars, sha256={_sha256(value)}]"
+
+
+def _text_size(value: str, *, stop: int | None = None) -> int:
+    """Return the length of ``value`` as JSON text, as ``json.dumps`` writes it.
+
+    ``json.dumps`` writes each non-ASCII character as a ``\\uXXXX`` escape (six
+    characters, twelve outside the BMP), so such a string is measured by encoding it
+    slice by slice, and only until its size is over ``stop``. ASCII text is counted by
+    its length: its escapes (quotes, backslashes, control characters) are few, and the
+    exact size check of each record covers them.
+    """
+
+    if value.isascii():
+        return len(value) + 2
+    size = 2
+    for position in range(0, len(value), _SCAN_CHUNK_CHARS):
+        size += len(encode_basestring_ascii(value[position : position + _SCAN_CHUNK_CHARS])) - 2
+        if stop is not None and size > stop:
+            break
+    return size
 
 
 def _is_base64(value: str, start: int) -> bool:

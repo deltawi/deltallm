@@ -234,16 +234,18 @@ database:
   estimate; the buffer keeps that text and counts its length. So a large request (many tools, a long
   conversation, a long system prompt added by a template) is counted at its real size and costs no
   extra work. The background task parses the text back in one step that pauses the pod's other
-  work, so the text is kept only when it is at most 1 MiB and has at most 49,152 separators (`,` and
-  `:`), which parse in about 5 ms at most. A larger request is measured and copied like the other
-  bodies below, but by the request checks, before the provider call, so the stored request is still
-  the request as sent.
+  work, so the text is kept only when it is at most 1 MiB and its separators (`,` and `:`) plus a
+  quarter of its digits are at most 49,152 (numbers are the slowest values to parse). Such a text
+  parses in about 5 ms at most. Counting them takes about 2 ms per MiB of request. A larger request
+  is measured and copied like the other bodies below, but by the request checks, before the provider
+  call, so the stored request is still the request as sent.
 - The buffer keeps its own copy of the bodies. A post-call hook or guardrail that changes the request
   or response after the hand-off (with streaming, post-call hooks run after it) does not change what
   is stored or how much memory is counted. Other bodies, for example responses, are measured and
   copied in one pass that visits at most 16,384 values (strings, numbers and other JSON values; a
   copied list or object counts twice) for each body. Strings are shared, not copied. Integers count
-  their number of digits, and an integer over 1,024 bits is stored as a short placeholder. This takes
+  their number of digits, floats count 24 characters (their longest text), and an integer over 1,024
+  bits is stored as a short placeholder. This takes
   about 2 to 3 ms for large real bodies (embeddings responses, long document lists), and at most about
   5 ms for a body made only of empty lists or objects.
 - A body with more values than that is replaced by a placeholder, and the other body is kept. When
@@ -256,12 +258,16 @@ database:
   worker attaches them to the event of the cached charge.
 - One background task per pod sends the buffer every second, or earlier when 500 items wait. It
   prepares the records in a worker thread, in short steps, so it never holds up the pod's requests
-  for long: long strings are checked for inline data 256 KiB at a time, and each body is encoded on
-  its own. It reads the content policy of uncached organizations in one query, then writes one
-  statement for each organization (at most 100 records or 1 MiB each). The 1 MiB limit applies to
+  for long: long strings are checked for inline data 256 KiB at a time (a data URL's header is read
+  only in its first 1,024 characters), and each record is written as JSON in parts of at most 1,024
+  values (a float takes up to about 1 us to write). The statement sent is that text, so the pod does
+  not encode it again. It reads the content policy of uncached organizations in one query, then writes
+  one statement for each organization (at most 100 records or 1 MiB each). The 1 MiB limit applies to
   the statement as it is sent. When the bodies of one request are together too large for one
   statement, the pod compacts them again with a smaller limit, so a large body becomes a
   placeholder. It runs one statement at a time, so it uses at most one connection of the audit pool.
+  The audit database client itself still encodes each statement on the pod's event loop, about 11 ms
+  for a full 1 MiB statement, as for any other audit write of that size.
 - The content is best effort. It uses the best-effort queue capacity, which keeps the required reserve
   free for required audit events. The pod does not retry a failed send.
 
@@ -275,6 +281,7 @@ Content is dropped, and the audit event stays without bodies, in these cases. Ea
 | `flush_bytes` | One send is larger than 64 MiB after compaction. |
 | `record_bytes` | The record of one request does not fit in one 1 MiB statement, even after the pod compacts it again. |
 | `payload_values` | A body that the request checks did not turn into JSON text has more than 16,384 values. Only this body is replaced by a placeholder; the rest of the content is sent. |
+| `invalid_record` | The record of one request cannot be written as JSON, for example because a body has a key that JSON does not allow. The rest of the send goes on. |
 | `policy_unavailable` | The policy read failed. |
 | `enqueue_failed` | The database write failed, for example because the database is busy. The pod drops the rest of the send. |
 | `queue_full` | The audit queue has no best-effort capacity. The pod then stops the send and drops the rest of it. |
@@ -293,7 +300,9 @@ with `audit_persistence_unavailable`:
   string, so you can still match a stored event to a known file. Remote URLs and normal text are kept as-is.
 - if a payload is still larger than `general_settings.audit_payload_max_bytes` (default 1 MiB, measured as
   an approximate JSON size), it is replaced by
-  `{"omitted": "payload_too_large", "approx_size_bytes": ..., "max_bytes": ...}`.
+  `{"omitted": "payload_too_large", "approx_size_bytes": ..., "max_bytes": ...}`. JSON writes each
+  character outside ASCII as a six-character escape (for example `\u0639`), and the size counts these
+  escapes, so a body of Arabic text reaches the limit at about 170,000 characters.
 
 The audit event itself (actor, model, status, tokens, latency) is always recorded.
 

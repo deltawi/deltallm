@@ -134,8 +134,16 @@ class AuditIngestionRepository:
         envelopes: Sequence[AuditOutboxEnvelope],
         max_pending_events: int,
         required_reserve: int,
+        serialized_envelopes: str | None = None,
     ) -> AuditBundleEnqueueResult:
-        """Accept a small same-tenant bundle with one policy and capacity decision."""
+        """Accept a small same-tenant bundle with one policy and capacity decision.
+
+        A caller that already has the JSON text of the bundle (the list of
+        ``audit_envelope_wire`` of each envelope, as ``json.dumps`` writes it) passes it
+        as ``serialized_envelopes``, for example because it encoded it off the event
+        loop. That text is sent as is; ``envelopes`` then only give the organization and
+        the event IDs.
+        """
 
         with AcceptanceObservation(
             TelemetryQueue.AUDIT,
@@ -155,10 +163,11 @@ class AuditIngestionRepository:
                 if len(set(event_ids)) != len(event_ids):
                     raise ValueError("audit enqueue bundle event IDs must be unique")
                 organization_id = next(iter(organization_ids))
-                serialized_envelopes = json.dumps(
-                    [audit_envelope_wire(item) for item in envelopes],
-                    default=str,
-                )
+                if serialized_envelopes is None:
+                    serialized_envelopes = json.dumps(
+                        [audit_envelope_wire(item) for item in envelopes],
+                        default=str,
+                    )
                 observation.retain_serialized(serialized_envelopes)
             # One statement takes the queue and policy locks and commits on its
             # own, so a stalled caller never holds them across a client round trip.
