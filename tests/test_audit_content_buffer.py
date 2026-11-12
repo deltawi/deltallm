@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import json
 from time import perf_counter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -17,7 +18,11 @@ from src.billing.accounting.accounting_finalization import (
     accounting_finalization_audit_event_id,
 )
 from src.chat.audit import emit_text_audit_event
-from src.db.audit.audit_ingestion import AuditBundleEnqueueResult, AuditOutboxEnvelope
+from src.db.audit.audit_ingestion import (
+    AuditBundleEnqueueResult,
+    AuditOutboxEnvelope,
+    audit_envelope_wire,
+)
 from src.db.audit.repository import AuditRepository
 from src.routers.audit_helpers import emit_audit_event
 from src.services.audit.audit_service import (
@@ -183,6 +188,54 @@ def test_size_estimate_adds_up_string_lengths_and_a_little_per_value():
     assert approximate_chars({"data": "A" * 1_000_000}) == 2 + 4 + 4 + 1_000_002
 
 
+class _NeverWalked(list):
+    def __iter__(self):
+        raise AssertionError("the size estimate iterated a list over its work limit")
+
+
+def test_size_estimate_stops_before_a_list_over_its_work_limit():
+    assert approximate_chars([1, 2, 3], max_values=4) is not None
+    assert approximate_chars([1, 2, 3, 4], max_values=4) is None
+    # The long list is refused by its length, before any of its values is visited.
+    assert approximate_chars(_NeverWalked([0.5] * 1_500_000)) is None
+    assert approximate_chars({"data": [1, _NeverWalked([0.5] * 100)]}, max_values=10) is None
+
+
+async def test_a_large_embeddings_response_costs_bounded_work_on_the_request_path():
+    """512 inputs of 3,072 floats: about 1.5 million values in the response."""
+
+    service = _Service({"org-1": True})
+    buffer = AuditContentBuffer(service)
+    inputs = [f"input {index}" for index in range(64)]
+    response = {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "index": index, "embedding": [0.5] * 3072}
+            for index in range(512)
+        ],
+    }
+    item = AuditContentItem(
+        target_event_id=str(uuid4()),
+        event=AuditEventInput(action="EMBEDDING_REQUEST", organization_id="org-1"),
+        payloads=[
+            AuditPayloadInput(kind="request", content_json={"input": inputs}),
+            AuditPayloadInput(kind="response", content_json=response),
+        ],
+        enqueued_at=datetime.now(UTC),
+    )
+
+    assert buffer.offer(item) is True
+    await buffer.flush()
+
+    request, stored_response = service.bundles[0][0].payload["payloads"]
+    # The request is kept; the response is a placeholder, as compaction would make it.
+    assert request["content_json"] == {"input": inputs}
+    assert stored_response["content_json"] == {
+        "omitted": "payload_too_many_values",
+        "max_values": buffer.max_size_values,
+    }
+
+
 async def test_bundles_respect_the_byte_and_item_limits():
     service = _Service({"org-1": True})
     buffer = AuditContentBuffer(service, bundle_max_items=2, bundle_max_bytes=10_000_000)
@@ -193,12 +246,55 @@ async def test_bundles_respect_the_byte_and_item_limits():
 
     assert [len(bundle) for bundle in service.bundles] == [2, 2, 1]
 
+    # A limit that fits one record (and not two) gives one record per statement.
     small = _Service({"org-1": True})
-    one_per_bundle = AuditContentBuffer(small, bundle_max_bytes=1)
-    for _ in range(3):
-        one_per_bundle.offer(_item())
+    items = [_item() for _ in range(3)]
+    largest = max(_statement_bytes([_envelope_of(small, item)]) for item in items)
+    one_per_bundle = AuditContentBuffer(small, bundle_max_bytes=largest)
+    for item in items:
+        one_per_bundle.offer(item)
     await one_per_bundle.flush()
     assert [len(bundle) for bundle in small.bundles] == [1, 1, 1]
+    assert all(_statement_bytes(bundle) <= largest for bundle in small.bundles)
+
+
+def _envelope_of(service: _Service, item: AuditContentItem) -> AuditOutboxEnvelope:
+    return AuditContentBuffer(service)._envelope(item)
+
+
+def _statement_bytes(bundle: list[AuditOutboxEnvelope]) -> int:
+    """The size of the JSON that enqueue_bundle sends for this bundle."""
+
+    return len(json.dumps([audit_envelope_wire(envelope) for envelope in bundle], default=str))
+
+
+async def test_no_statement_is_larger_than_the_byte_limit():
+    """Each body fits the payload limit, but the two together do not fit a statement."""
+
+    service = _Service({"org-1": True})  # payload_max_bytes=4096
+    text = "hello world " * 300  # 3,600 characters: kept by compaction on its own
+    limit = 6_000
+    buffer = AuditContentBuffer(service, bundle_max_bytes=limit)
+    for _ in range(4):
+        buffer.offer(_item(text=text))
+
+    await buffer.flush()
+
+    assert sum(len(bundle) for bundle in service.bundles) == 4
+    assert all(_statement_bytes(bundle) <= limit for bundle in service.bundles)
+    # The record was compacted harder to fit: its bodies became placeholders.
+    stored = service.bundles[0][0].payload["payloads"]
+    assert all(payload["content_json"]["omitted"] == "payload_too_large" for payload in stored)
+
+
+async def test_a_record_that_cannot_fit_a_statement_is_dropped():
+    service = _Service({"org-1": True})
+    buffer = AuditContentBuffer(service, bundle_max_bytes=100)
+    buffer.offer(_item())
+
+    await buffer.flush()
+
+    assert service.bundles == []
 
 
 async def test_flush_byte_limit_drops_the_excess():
