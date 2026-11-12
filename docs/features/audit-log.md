@@ -141,7 +141,8 @@ share one event.
 When the operation succeeds, the event has `status` `success`. Its `input_tokens` and
 `output_tokens` are the `prompt_tokens` and `completion_tokens` of the charge, from the
 response usage or, if the usage does not have them, from the billing usage snapshot. A count
-that the charge does not have stays empty (`null`). It is not shown as 0.
+that the charge does not have stays empty (`null`). It is not shown as 0. This applies to
+every charge: live calls, Realtime sessions, batch items and model selector calls.
 
 When the operation fails, the event has `status` `error`, and `error_type` tells why:
 

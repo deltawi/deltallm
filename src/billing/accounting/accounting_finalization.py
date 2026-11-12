@@ -30,8 +30,6 @@ def accounting_audit_envelope(
     metadata: Mapping[str, object],
     error_type: str | None = None,
     correlation_id: object = None,
-    input_tokens: int | None = None,
-    output_tokens: int | None = None,
 ) -> dict[str, object]:
     attribution = operation.reservation.attribution
     audit_event_id = uuid5(UUID(str(event_id)), "accounting-audit:v1")
@@ -53,8 +51,8 @@ def accounting_audit_envelope(
         "user_agent": None,
         "status": status,
         "latency_ms": None,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
+        "input_tokens": None,
+        "output_tokens": None,
         "error_type": None if status == "success" else error_type or "AccountingOutcomeUnknown",
         "error_code": None,
         "metadata": metadata,
@@ -70,35 +68,6 @@ def accounting_audit_envelope(
         "payload": payload,
         "redacted_payload": payload,
     }
-
-
-def accounting_audit_token_counts(
-    payload: Mapping[str, object],
-) -> tuple[int | None, int | None]:
-    """Return the input and output token counts of a charge for its audit event.
-
-    The source order is the same as reporting: explicit usage first, then the
-    billing usage snapshot. A count that is missing or that does not fit the
-    audit column is None, never zero, so an unknown count stays unknown.
-    """
-
-    usage = payload.get("usage")
-    metadata = payload.get("metadata")
-    billing = metadata.get("billing") if isinstance(metadata, Mapping) else None
-    snapshot = billing.get("usage_snapshot") if isinstance(billing, Mapping) else None
-    sources = [source for source in (usage, snapshot) if isinstance(source, Mapping)]
-
-    def count(field: str) -> int | None:
-        for source in sources:
-            value = source.get(field)
-            if value is None:
-                continue
-            if type(value) is int and 0 <= value < 2**31:
-                return value
-            return None
-        return None
-
-    return count("prompt_tokens"), count("completion_tokens")
 
 
 class AccountingSpendFinalizer:
@@ -128,7 +97,6 @@ class AccountingSpendFinalizer:
     ) -> None:
         service = self._require_accounting(operation, event_id=event_id)
         final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
-        input_tokens, output_tokens = accounting_audit_token_counts(payload)
         try:
             finalization = prepare_accounting_charge(
                 operation,
@@ -142,8 +110,6 @@ class AccountingSpendFinalizer:
                         "attempt_count": len(operation.attempts),
                         "cache_hit": payload.get("cache_hit") is True,
                     },
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
                 ),
             )
         except UnqualifiedAccountingReceipt as exc:

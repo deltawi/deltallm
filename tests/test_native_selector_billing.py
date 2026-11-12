@@ -8,6 +8,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from src.billing.accounting.journal.accounting_terminal_preparation import (
+    accounting_audit_token_counts,
+)
 from src.billing.accounting.accounting_protocol import AccountingOutcome
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.accounting_snapshots import finalization_bytes
@@ -83,6 +86,10 @@ async def test_native_selector_preserves_component_and_parent_identities_and_exa
         operation.attribution.operation_id
     )
     assert terminal.spend_payload["provider_cost_exact"] == str(charge.provider_cost)
+    audit = terminal.audit_envelope["payload"]["event"]
+    counts = accounting_audit_token_counts(terminal.spend_payload)
+    assert counts != (None, None)
+    assert (audit["input_tokens"], audit["output_tokens"]) == counts
     await store.close()
     service.finalize_operation.assert_awaited_once()
 

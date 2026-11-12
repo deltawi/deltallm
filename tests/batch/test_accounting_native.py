@@ -197,6 +197,8 @@ async def test_completed_batch_prices_are_frozen_before_provider_and_exact(nativ
     outbox = execution.completion_payload({"completed_at": datetime.now(UTC).isoformat()}, usage)
     terminal = execution.checkpoint.terminal
     assert terminal.exact_charge == Decimal("0.009")
+    audit = terminal.audit_envelope["payload"]["event"]
+    assert (audit["input_tokens"], audit["output_tokens"]) == (5, 2)
     assert terminal.spend_payload["provider_cost_exact"] == "0.090000000000000000"
     assert outbox["billing_event_id"] == str(execution.checkpoint.operation_id)
     assert "cost_exact" not in deployment.model_info

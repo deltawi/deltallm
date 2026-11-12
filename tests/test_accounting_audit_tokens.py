@@ -5,9 +5,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from datetime import UTC, datetime
+
 from src.billing.accounting.accounting_finalization import (
     AccountingSpendFinalizer,
+    accounting_audit_envelope,
+)
+from src.billing.accounting.journal.accounting_terminal_preparation import (
     accounting_audit_token_counts,
+    prepare_accounting_charge,
 )
 from tests.test_accounting_request_ids import _operation
 
@@ -46,6 +52,34 @@ async def test_charge_audit_event_keeps_unknown_counts_unknown():
     event = _audit_event(terminal)
     assert event["input_tokens"] is None
     assert event["output_tokens"] is None
+
+
+def test_every_charge_path_gets_the_counts_from_the_shared_boundary():
+    # Realtime, batch and the selector build their own envelope without counts
+    # and call prepare_accounting_charge directly.
+    operation = _operation()
+    envelope = accounting_audit_envelope(
+        operation,
+        event_id=str(operation.reservation.operation_id),
+        status="success",
+        metadata={"batch": True},
+    )
+    payload = {"cost_exact": "0.1", "usage": {"prompt_tokens": 5, "completion_tokens": 2}}
+
+    first = prepare_accounting_charge(
+        operation, payload=payload, occurred_at=datetime.now(UTC), audit_envelope=envelope
+    )
+    again = prepare_accounting_charge(
+        operation, payload=payload, occurred_at=datetime.now(UTC), audit_envelope=envelope
+    )
+
+    event = _audit_event(first)
+    assert (event["input_tokens"], event["output_tokens"]) == (5, 2)
+    assert first.audit_envelope["redacted_payload"] is first.audit_envelope["payload"]
+    # A replay of the same charge builds the same envelope bytes.
+    assert again.audit_envelope == first.audit_envelope
+    # The caller's envelope is not changed in place.
+    assert envelope["payload"]["event"]["input_tokens"] is None
 
 
 def test_usage_wins_over_the_billing_snapshot():
