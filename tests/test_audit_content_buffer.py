@@ -24,7 +24,7 @@ from src.db.audit.audit_ingestion import (
     audit_envelope_wire,
 )
 from src.db.audit.repository import AuditRepository
-from src.routers.audit_helpers import emit_audit_event
+from src.routers.audit_helpers import _json_body_bytes, emit_audit_event
 from src.services.audit.audit_service import (
     AuditEventInput,
     AuditIngestionConfig,
@@ -39,8 +39,10 @@ from src.services.audit.content_attachment import (
 from src.services.audit.content_buffer import (
     AuditContentBuffer,
     AuditContentItem,
+    _measure,
     approximate_chars,
 )
+from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES, _compact
 from tests.test_accounting_request_ids import _operation as accounting_operation
 
 pytestmark = pytest.mark.hermetic
@@ -69,11 +71,13 @@ class _Ingestion:
 class _Service(AuditService):
     """A real AuditService for policy cache and payload logic, with fake I/O."""
 
-    def __init__(self, policies: dict[str, bool] | None = None) -> None:
+    def __init__(
+        self, policies: dict[str, bool] | None = None, *, payload_max_bytes: int = 4096
+    ) -> None:
         super().__init__(
             AuditRepository(None),
             ingestion_config=AuditIngestionConfig(
-                enabled=True, worker_enabled=False, payload_max_bytes=4096
+                enabled=True, worker_enabled=False, payload_max_bytes=payload_max_bytes
             ),
         )
         self.policies = dict(policies or {})
@@ -228,12 +232,13 @@ async def test_a_large_embeddings_response_costs_bounded_work_on_the_request_pat
     await buffer.flush()
 
     request, stored_response = service.bundles[0][0].payload["payloads"]
-    # The request is kept; the response is a placeholder, as compaction would make it.
+    # The request is kept. The response surely exceeds the payload limit, so it is
+    # replaced on the request path by the placeholder that compaction would make.
     assert request["content_json"] == {"input": inputs}
-    assert stored_response["content_json"] == {
-        "omitted": "payload_too_many_values",
-        "max_values": buffer.max_size_values,
-    }
+    placeholder = stored_response["content_json"]
+    assert placeholder["omitted"] == "payload_too_large"
+    assert placeholder["max_bytes"] == service.ingestion_config.payload_max_bytes
+    assert placeholder["approx_size_bytes"] > 1_000_000
 
 
 async def test_bundles_respect_the_byte_and_item_limits():
@@ -468,7 +473,12 @@ def test_target_id_matches_the_finalization_audit_event():
     assert UUID(envelope["event_id"])
 
 
-def _request(*, buffer: AuditContentBuffer | None, operation: object | None) -> Request:
+def _request(
+    *,
+    buffer: AuditContentBuffer | None,
+    operation: object | None,
+    headers: dict[str, str] | None = None,
+) -> Request:
     app = SimpleNamespace(
         state=SimpleNamespace(
             audit_content_buffer=buffer,
@@ -480,7 +490,8 @@ def _request(*, buffer: AuditContentBuffer | None, operation: object | None) -> 
             "type": "http",
             "method": "POST",
             "path": "/v1/chat/completions",
-            "headers": [(b"x-request-id", b"req-1")],
+            "headers": [(b"x-request-id", b"req-1")]
+            + [(key.encode(), value.encode()) for key, value in (headers or {}).items()],
             "query_string": b"",
             "scheme": "http",
             "server": ("test", 80),
@@ -606,3 +617,223 @@ async def test_no_buffer_means_no_work_with_accounting_v2(monkeypatch):
     )
 
     enqueue.assert_not_awaited()
+
+
+# Large text requests that fit the payload limit -----------------------------------
+
+
+def _tool_schema_request(api: str) -> dict:
+    """128 tools of 40 string properties each: over 20,000 values, under 1 MiB."""
+
+    def parameters(index: int) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                f"field_{n}": {"type": "string", "description": f"Field {n} of tool {index}."}
+                for n in range(40)
+            },
+            "required": [f"field_{n}" for n in range(40)],
+        }
+
+    if api == "chat":
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": f"tool_{index}",
+                    "description": f"Tool {index}.",
+                    "parameters": parameters(index),
+                },
+            }
+            for index in range(128)
+        ]
+        return {"model": "m", "messages": [{"role": "user", "content": "hi"}], "tools": tools}
+    if api == "responses":
+        tools = [
+            {"type": "function", "name": f"tool_{index}", "parameters": parameters(index)}
+            for index in range(128)
+        ]
+        return {"model": "m", "input": "hi", "tools": tools}
+    tools = [
+        {"name": f"tool_{index}", "description": "d", "input_schema": parameters(index)}
+        for index in range(128)
+    ]
+    return {
+        "model": "m",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": tools,
+    }
+
+
+def _long_conversation() -> dict:
+    messages = [
+        {
+            "role": "user" if turn % 2 == 0 else "assistant",
+            "content": [{"type": "text", "text": f"Turn {turn}: " + "words " * 15}],
+        }
+        for turn in range(3_000)
+    ]
+    return {"model": "m", "messages": messages}
+
+
+def _value_count(value) -> int:
+    if isinstance(value, dict):
+        return 1 + sum(_value_count(item) for item in value.values())
+    if isinstance(value, list):
+        return 1 + sum(_value_count(item) for item in value)
+    return 1
+
+
+def _json_headers(body: bytes) -> dict[str, str]:
+    return {"content-type": "application/json", "content-length": str(len(body))}
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        pytest.param(_tool_schema_request("chat"), id="chat-tools"),
+        pytest.param(_tool_schema_request("responses"), id="responses-tools"),
+        pytest.param(_tool_schema_request("messages"), id="messages-tools"),
+        pytest.param(_long_conversation(), id="long-conversation"),
+    ],
+)
+async def test_a_large_json_request_keeps_its_body(monkeypatch, request_data):
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
+    body = json.dumps(request_data).encode()
+    assert _value_count(request_data) > 16_384
+    assert len(body) < DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service)
+
+    await emit_text_audit_event(
+        request=_request(
+            buffer=buffer, operation=accounting_operation(), headers=_json_headers(body)
+        ),
+        auth=_auth(),
+        action="CHAT_COMPLETION_REQUEST",
+        model="m",
+        status="success",
+        request_start=perf_counter(),
+        request_data=request_data,
+        response_data={"reply": "hello"},
+    )
+
+    # Counted by the size of the body as received: its values are not visited.
+    assert buffer.pending_items == 1
+    assert buffer._items[0].request_body_bytes == len(body)
+    assert buffer._waiting_chars == len(body) + approximate_chars({"reply": "hello"})
+    await buffer.flush()
+    request, response = service.bundles[0][0].payload["payloads"]
+    assert request["content_json"] == request_data
+    assert response["content_json"] == {"reply": "hello"}
+
+
+class _NeverWalkedDict(dict):
+    def items(self):
+        raise AssertionError("a JSON request body with a known size was walked")
+
+
+async def test_a_json_request_body_with_a_known_size_is_not_walked():
+    service = _Service({"org-1": True})
+    buffer = AuditContentBuffer(service)
+    item = AuditContentItem(
+        target_event_id=str(uuid4()),
+        event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
+        payloads=[AuditPayloadInput(kind="request", content_json=_NeverWalkedDict(a=1))],
+        enqueued_at=datetime.now(UTC),
+        request_body_bytes=1_234,
+    )
+
+    assert buffer.offer(item) is True
+    assert buffer._waiting_chars == 1_234
+
+
+def _unsized_request(request_data: dict) -> AuditContentItem:
+    """A request whose body size is unknown (for example a chunked upload)."""
+
+    return AuditContentItem(
+        target_event_id=str(uuid4()),
+        event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
+        payloads=[AuditPayloadInput(kind="request", content_json=request_data)],
+        enqueued_at=datetime.now(UTC),
+    )
+
+
+async def test_an_unsized_body_over_the_work_limit_is_handed_off_with_a_bound(monkeypatch):
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "src.services.audit.content_buffer.increment_audit_content_dropped",
+        lambda *, reason, count=1: dropped.append(reason),
+    )
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service, max_unmeasured=1)
+    request_data = _tool_schema_request("chat")
+
+    # The first one takes the only slot: kept unchanged, measured by the flusher.
+    assert buffer.offer(_unsized_request(request_data)) is True
+    assert buffer._waiting_chars >= DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
+    # No slot is left: the body is replaced, the item is still sent.
+    assert buffer.offer(_unsized_request(request_data)) is True
+    assert dropped == ["payload_values"]
+    sending = asyncio.create_task(buffer.flush())
+    await asyncio.sleep(0)
+    # The slot is held until the send ends.
+    assert buffer._unmeasured() == 1
+    await sending
+    assert buffer._unmeasured() == 0
+    first, second = service.bundles[0]
+    assert first.payload["payloads"][0]["content_json"] == request_data
+    assert second.payload["payloads"][0]["content_json"]["omitted"] == "payload_too_many_values"
+    # The slot is free again.
+    assert buffer.offer(_unsized_request(request_data)) is True
+    assert dropped == ["payload_values"]
+
+
+def _floor_cases() -> list:
+    embedding = {"data": [{"index": i, "embedding": [0.25] * 300} for i in range(40)]}
+    image = {"messages": [{"content": [{"image_url": "data:image/png;base64," + "A" * 5_000}]}]}
+    return [
+        embedding,
+        image,
+        {1: ["", [], {}], "k": {"x": None, 2: [True, 1.5]}},
+        _tool_schema_request("chat"),
+        [[], {}, "", 0] * 50,
+    ]
+
+
+@pytest.mark.parametrize("budget", [1, 5, 100, 10_000, 1_000_000])
+def test_the_size_floor_never_exceeds_the_compacted_size(budget):
+    for body in _floor_cases():
+        compacted_size = _compact(body)[1]
+        size = _measure(body, budget)
+        assert size.floor <= compacted_size
+        # The work stays within about twice the limit.
+        assert size.visited <= 2 * budget + 2
+
+
+def test_json_body_size_is_known_only_for_plain_json_with_a_length():
+    def headers(**values: str) -> Request:
+        return _request(
+            buffer=None,
+            operation=None,
+            headers={key.replace("_", "-"): value for key, value in values.items()},
+        )
+
+    assert (
+        _json_body_bytes(
+            headers(content_type="application/json; charset=utf-8", content_length="42")
+        )
+        == 42
+    )
+    assert (
+        _json_body_bytes(headers(content_type="multipart/form-data", content_length="42")) is None
+    )
+    assert _json_body_bytes(headers(content_type="application/json")) is None
+    assert _json_body_bytes(headers(content_type="application/json", content_length="0")) is None
+    assert (
+        _json_body_bytes(
+            headers(content_type="application/json", content_length="42", content_encoding="gzip")
+        )
+        is None
+    )

@@ -20,7 +20,9 @@ _INLINE_DATA_MIN_CHARS = 1024
 _DATA_URL = re.compile(r"data:([\w.+-]+/[\w.+-]+)?(?:;[\w.+-]+=[^;,]*)*;base64,", re.ASCII)
 _BASE64 = re.compile(r"[A-Za-z0-9+/=_\-\r\n]+", re.ASCII)
 # Rough JSON overhead per container entry and per scalar.
-_ENTRY_OVERHEAD = 4
+ENTRY_OVERHEAD = 4
+# The smallest size this module gives a value: an empty string, list or dict.
+MIN_VALUE_SIZE = 2
 
 
 def compact_audit_content(content: Any, *, max_bytes: int) -> tuple[Any, bool]:
@@ -29,7 +31,13 @@ def compact_audit_content(content: Any, *, max_bytes: int) -> tuple[Any, bool]:
     compacted, size, changed = _compact(content)
     if size <= max_bytes:
         return compacted, changed
-    return {"omitted": "payload_too_large", "approx_size_bytes": size, "max_bytes": max_bytes}, True
+    return oversize_placeholder(size, max_bytes=max_bytes), True
+
+
+def oversize_placeholder(size: int, *, max_bytes: int) -> dict[str, Any]:
+    """Return what replaces a payload whose compacted size is over ``max_bytes``."""
+
+    return {"omitted": "payload_too_large", "approx_size_bytes": size, "max_bytes": max_bytes}
 
 
 def _compact(value: Any) -> tuple[Any, int, bool]:
@@ -45,7 +53,7 @@ def _compact(value: Any) -> tuple[Any, int, bool]:
         for key, item in value.items():
             compacted, item_size, item_changed = _compact(item)
             result[key] = compacted
-            size += len(str(key)) + item_size + _ENTRY_OVERHEAD
+            size += len(str(key)) + item_size + ENTRY_OVERHEAD
             changed = changed or item_changed
         return (result if changed else value), size, changed
     if isinstance(value, (list, tuple)):
@@ -58,7 +66,7 @@ def _compact(value: Any) -> tuple[Any, int, bool]:
             size += item_size + 1
             changed = changed or item_changed
         return (items if changed else value), size, changed
-    return value, _ENTRY_OVERHEAD, False
+    return value, ENTRY_OVERHEAD, False
 
 
 def _inline_data_placeholder(value: str) -> str | None:

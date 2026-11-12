@@ -7,10 +7,14 @@ a short time and a background task sends them as best-effort ``audit_content``
 records. The audit worker attaches them to the accounting event.
 
 Request path cost: ``offer`` is synchronous. It does one cached policy lookup, a
-size estimate that visits at most ``AUDIT_CONTENT_MAX_SIZE_VALUES`` values, and one
-list append. It never waits for the database, and it never fails a request. A body
-with more values (for example an embeddings response) is replaced by a short
-placeholder, as compaction would do later.
+size estimate, and one list append. It never waits for the database, and it never
+fails a request. A JSON request body is counted by its size as received, without
+visiting its values. Other bodies are measured with a work limit of
+``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is replaced by
+the placeholder of compaction when its size surely exceeds the payload limit (for
+example a large embeddings response). Otherwise it is kept unmeasured and the
+flusher measures it off the event loop; at most ``AUDIT_CONTENT_MAX_UNMEASURED``
+such bodies are held at once.
 
 Database cost: the flusher runs once per second (or earlier when many items wait),
 reads uncached policies in one query, and writes one statement per organization
@@ -55,6 +59,11 @@ from src.services.audit.content_attachment import (
     audit_content_fields,
     audit_content_record_id,
 )
+from src.services.audit.payload_compaction import (
+    ENTRY_OVERHEAD,
+    MIN_VALUE_SIZE,
+    oversize_placeholder,
+)
 
 if TYPE_CHECKING:
     from src.services.audit.audit_service import (
@@ -74,8 +83,12 @@ AUDIT_CONTENT_BUNDLE_MAX_BYTES = 1024 * 1024
 AUDIT_CONTENT_BUNDLE_MAX_ITEMS = 100
 AUDIT_CONTENT_SHUTDOWN_FLUSH_SECONDS = 2.0
 # Work limit of the size estimate on the request path, for all bodies of one item
-# (about 2 ms in the worst case). A large chat request has a few thousand values.
+# (about 3 ms in the worst case). JSON request bodies are not walked: they are
+# counted by their size as received.
 AUDIT_CONTENT_MAX_SIZE_VALUES = 16_384
+# Bodies over the work limit whose size is unknown, held at once (waiting and in
+# flight). Each counts as the payload limit (1 MiB by default) or more.
+AUDIT_CONTENT_MAX_UNMEASURED = 8
 # Attempts to compact a record into one statement before it is dropped.
 _FIT_ATTEMPTS = 3
 
@@ -86,6 +99,8 @@ class AuditContentItem:
     event: AuditEventInput
     payloads: list[AuditPayloadInput]
     enqueued_at: datetime
+    # Size of the JSON request body as received, when the request path knows it.
+    request_body_bytes: int | None = None
 
     @property
     def organization_id(self) -> str | None:
@@ -113,6 +128,7 @@ class AuditContentBuffer:
         bundle_max_bytes: int = AUDIT_CONTENT_BUNDLE_MAX_BYTES,
         bundle_max_items: int = AUDIT_CONTENT_BUNDLE_MAX_ITEMS,
         max_size_values: int = AUDIT_CONTENT_MAX_SIZE_VALUES,
+        max_unmeasured: int = AUDIT_CONTENT_MAX_UNMEASURED,
     ) -> None:
         self.audit_service = audit_service
         self.flush_interval_seconds = max(0.01, float(flush_interval_seconds))
@@ -123,10 +139,14 @@ class AuditContentBuffer:
         self.bundle_max_bytes = max(1, int(bundle_max_bytes))
         self.bundle_max_items = max(1, int(bundle_max_items))
         self.max_size_values = max(1, int(max_size_values))
+        self.max_unmeasured = max(0, int(max_unmeasured))
         self._items: list[AuditContentItem] = []
         # Approximate characters of the bodies that wait, and of those in flight.
         self._waiting_chars = 0
         self._in_flight_chars = 0
+        # Bodies kept without a measured size, waiting and in flight.
+        self._waiting_unmeasured = 0
+        self._in_flight_unmeasured = 0
         self._wake = asyncio.Event()
         self._closed = False
         self._task: asyncio.Task[None] | None = None
@@ -145,40 +165,65 @@ class AuditContentBuffer:
         if len(self._items) >= self.max_items:
             increment_audit_content_dropped(reason="buffer_full")
             return False
-        item, size = self._bounded_size(item)
+        item, size, unmeasured = self._bounded_size(item)
         if self._waiting_chars + self._in_flight_chars + size > self.max_held_chars:
             increment_audit_content_dropped(reason="buffer_bytes")
             return False
         self._items.append(item)
         self._waiting_chars += size
+        self._waiting_unmeasured += unmeasured
         if len(self._items) >= self.early_flush_items:
             self._wake.set()
         return True
 
-    def _bounded_size(self, item: AuditContentItem) -> tuple[AuditContentItem, int]:
-        """Estimate the bodies with one shared work limit; replace a body that is over it."""
+    def _bounded_size(self, item: AuditContentItem) -> tuple[AuditContentItem, int, int]:
+        """Size the bodies with one shared work limit.
+
+        Returns the item (with a placeholder for each body it cannot keep), the
+        characters it counts, and how many of its bodies are kept unmeasured.
+        """
 
         budget = self.max_size_values
+        payload_limit = self.audit_service.ingestion_config.payload_max_bytes
         total = 0
+        unmeasured = 0
         payloads: list[AuditPayloadInput] | None = None
         for index, payload in enumerate(item.payloads):
             if payload.content_json is None:
                 continue
-            walked = _walk(payload.content_json, budget)
-            if walked is not None:
-                chars, visited = walked
-                total += chars
-                budget -= visited
+            if payload.kind == "request" and item.request_body_bytes is not None:
+                # The JSON body as received: its size is known without visiting it.
+                total += item.request_body_bytes
                 continue
+            size = _measure(payload.content_json, budget)
+            budget = max(0, budget - size.visited)
+            if size.complete:
+                total += size.chars
+                continue
+            if size.floor > payload_limit:
+                # Compaction would replace it later, so the placeholder is made now.
+                placeholder = oversize_placeholder(size.floor, max_bytes=payload_limit)
+            elif self._unmeasured() + unmeasured < self.max_unmeasured:
+                # Bounded hand-off: the flusher measures it in its worker thread.
+                unmeasured += 1
+                total += max(size.chars, payload_limit)
+                continue
+            else:
+                placeholder = {
+                    "omitted": "payload_too_many_values",
+                    "max_values": self.max_size_values,
+                }
+                increment_audit_content_dropped(reason="payload_values")
             if payloads is None:
                 payloads = list(item.payloads)
-            placeholder = {"omitted": "payload_too_many_values", "max_values": self.max_size_values}
             payloads[index] = replace(payload, content_json=placeholder)
-            total += 64
-            increment_audit_content_dropped(reason="payload_values")
-        if payloads is None:
-            return item, total
-        return replace(item, payloads=payloads), total
+            total += _PLACEHOLDER_CHARS
+        if payloads is not None:
+            item = replace(item, payloads=payloads)
+        return item, total, unmeasured
+
+    def _unmeasured(self) -> int:
+        return self._waiting_unmeasured + self._in_flight_unmeasured
 
     # Lifecycle ----------------------------------------------------------------
 
@@ -210,6 +255,7 @@ class AuditContentBuffer:
             increment_audit_content_dropped(reason="shutdown", count=len(self._items))
             self._items = []
             self._waiting_chars = 0
+            self._waiting_unmeasured = 0
         set_audit_content_buffer_items(0)
 
     @property
@@ -234,16 +280,19 @@ class AuditContentBuffer:
     async def flush(self) -> None:
         items, self._items = self._items, []
         held, self._waiting_chars = self._waiting_chars, 0
+        unmeasured, self._waiting_unmeasured = self._waiting_unmeasured, 0
         # The items that waited for this flush; at most max_items.
         set_audit_content_buffer_items(len(items))
         if not items:
             return
         # The bodies stay in memory until the send ends, so they still count.
         self._in_flight_chars += held
+        self._in_flight_unmeasured += unmeasured
         try:
             await self._flush(items)
         finally:
             self._in_flight_chars -= held
+            self._in_flight_unmeasured -= unmeasured
 
     async def _flush(self, items: list[AuditContentItem]) -> None:
         organization_ids = {item.organization_id for item in items if item.organization_id}
@@ -400,44 +449,79 @@ def approximate_chars(value: Any, *, max_values: int = AUDIT_CONTENT_MAX_SIZE_VA
     """Return a rough JSON size of a body, or ``None`` if it has more than ``max_values`` values.
 
     It only adds up string lengths and a few characters for each other value, so
-    its cost depends on the number of values, not on their size, and it visits at
-    most ``max_values`` values.
+    its cost depends on the number of values, not on their size.
     """
 
-    walked = _walk(value, max_values)
-    return None if walked is None else walked[0]
+    size = _measure(value, max_values)
+    return size.chars if size.complete else None
 
 
-def _walk(value: Any, budget: int) -> tuple[int, int] | None:
-    """Return (approximate characters, values visited), or ``None`` over the budget.
+@dataclass(frozen=True, slots=True)
+class _Size:
+    # Rough JSON size of the values visited.
+    chars: int
+    # Lower bound of the size that compaction computes for the whole body.
+    floor: int
+    visited: int
+    # False when some container was not expanded (over the work limit).
+    complete: bool
 
-    A container is only expanded when all its values fit in what is left of the
-    budget, so a long list is never iterated.
+
+# Characters counted for a placeholder that replaces a body.
+_PLACEHOLDER_CHARS = 96
+
+
+def _measure(value: Any, budget: int) -> _Size:
+    """Measure a body with a work limit.
+
+    A container is expanded only when all its values fit in what is left of the
+    budget, so a long list is never iterated. A container that does not fit adds
+    only its length to the floor (each of its values has a compacted size of at
+    least ``MIN_VALUE_SIZE``). The work is at most about twice the budget: the
+    values visited, plus the values that wait when the budget is reached.
+
+    The floor follows ``compact_audit_content``: a string counts only its quotes,
+    because compaction can shorten inline data.
     """
 
-    total = 0
+    chars = 0
+    floor = 0
     visited = 0
+    complete = True
     stack = [value]
     while stack:
         current = stack.pop()
         visited += 1
         if isinstance(current, str):
-            total += len(current) + 2
+            chars += len(current) + 2
+            floor += MIN_VALUE_SIZE
         elif isinstance(current, dict):
             if visited + len(stack) + len(current) > budget:
-                return None
-            total += 2
+                complete = False
+                floor += 2 + len(current) * (ENTRY_OVERHEAD + MIN_VALUE_SIZE)
+                continue
+            chars += 2
+            floor += 2
             for key, item in current.items():
-                total += (len(key) if isinstance(key, str) else 8) + 4
+                if isinstance(key, str):
+                    chars += len(key) + 4
+                    floor += len(key) + ENTRY_OVERHEAD
+                else:
+                    chars += 12
+                    floor += ENTRY_OVERHEAD
                 stack.append(item)
         elif isinstance(current, (list, tuple)):
             if visited + len(stack) + len(current) > budget:
-                return None
-            total += 2 + len(current)
+                complete = False
+                floor += 2 + len(current) * (1 + MIN_VALUE_SIZE)
+                continue
+            chars += 2 + len(current)
+            floor += 2 + len(current)
             stack.extend(current)
         else:
-            total += 8
-    return total, visited
+            chars += 8
+            floor += ENTRY_OVERHEAD
+    return _Size(chars=chars, floor=floor, visited=visited, complete=complete)
 
 
 # The statement sends a JSON list: "[" and "]", and ", " between records.

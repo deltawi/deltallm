@@ -65,8 +65,29 @@ def offer_accounting_audit_content(
             event=event,
             payloads=payloads,
             enqueued_at=datetime.now(UTC),
+            request_body_bytes=_json_body_bytes(request),
         )
     )
+
+
+def _json_body_bytes(request: Request) -> int | None:
+    """Return the size of a JSON request body as received, or None when it is unknown.
+
+    The buffer counts the request body by this size, so a large chat request (many
+    tools, a long conversation) is not walked value by value on the request path.
+    The ingress refuses a body whose length differs from its Content-Length.
+    """
+
+    headers = request.headers
+    media_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    length = headers.get("content-length", "")
+    if (
+        not media_type.endswith("json")
+        or headers.get("content-encoding", "identity").lower() != "identity"
+        or not (length.isascii() and length.isdigit())
+    ):
+        return None
+    return int(length) or None
 
 
 async def emit_audit_event(
