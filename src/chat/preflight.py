@@ -14,7 +14,7 @@ from src.models.errors import InvalidRequestError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
 from src.rate_limit_policy import estimate_tokens_for_json_size, json_text
-from src.services.audit.content_buffer import audit_content_may_be_stored
+from src.services.audit.content_buffer import audit_request_text
 from src.services.admission.output_admission import prepare_output_policy
 from src.middleware.rate_limit import (
     _release_rate_limits,
@@ -49,7 +49,8 @@ class TextPreflightResult:
     guardrail_middleware: Any
     token_estimate: int
     # JSON text of request_data as sent upstream, kept from the token estimate only
-    # when the audit content buffer may store it. It cannot change later.
+    # when the audit content buffer may store it and its parse is short. It cannot
+    # change later.
     audit_request_json: str | None = None
 
 
@@ -315,10 +316,8 @@ async def run_text_preflight(
         callback_manager=callback_manager,
         guardrail_middleware=guardrail_middleware,
         token_estimate=token_estimate,
-        audit_request_json=(
-            request_json
-            if audit_content_may_be_stored(request, getattr(auth, "organization_id", None))
-            else None
+        audit_request_json=audit_request_text(
+            request, getattr(auth, "organization_id", None), request_json
         ),
     )
     request.state.prepared_text_request = result

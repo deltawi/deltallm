@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import gc
 import json
 from time import perf_counter
 from types import SimpleNamespace
@@ -38,10 +39,12 @@ from src.services.audit.content_attachment import (
     audit_content_target,
 )
 from src.services.audit.content_buffer import (
+    AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS,
     AuditContentBuffer,
     AuditContentItem,
     _measure,
     approximate_chars,
+    audit_request_text,
 )
 from src.rate_limit_policy import json_text
 from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES, _compact
@@ -814,6 +817,99 @@ async def test_a_request_body_serialized_by_the_preflight_is_not_walked(monkeypa
     await buffer.flush()
     request_payload, response_payload = service.bundles[0][0].payload["payloads"]
     assert request_payload["content_json"] == {"a": 1}
+    assert response_payload["content_json"] == {"reply": "hello"}
+
+
+async def test_only_a_request_text_with_a_short_parse_is_kept():
+    service = _Service({"org-1": True})
+    buffer = AuditContentBuffer(service)
+    request = _request(buffer=buffer, operation=None)
+    tools = json_text(_tool_schema_request("chat"))
+
+    assert audit_request_text(request, "org-1", tools) == tools
+    # Many small values: under the length limit, but a long parse.
+    small_values = json_text({"p": {f"field_{n}": {"type": "string"} for n in range(20_000)}})
+    assert len(small_values) < AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS
+    assert audit_request_text(request, "org-1", small_values) is None
+    # Long prose: few values, over the length limit (it is walked instead).
+    prose = json_text({"messages": [{"role": "user", "content": "word " * 250_000}]})
+    assert audit_request_text(request, "org-1", prose) is None
+    # Content storage known to be off, or no buffer: nothing is kept.
+    service.cache_policy("org-2", False)
+    assert audit_request_text(request, "org-2", tools) is None
+    assert audit_request_text(_request(buffer=None, operation=None), "org-1", tools) is None
+
+
+async def test_a_large_request_does_not_stop_the_event_loop_during_the_flush(monkeypatch):
+    """The flusher's parse holds the GIL, so a large request is never parsed there."""
+
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service)
+    request = _request(buffer=buffer, operation=accounting_operation())
+    properties = {f"field_{n}": {"type": "string"} for n in range(400_000)}
+    request_data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "t",
+                    "parameters": {"type": "object", "properties": properties},
+                },
+            }
+        ],
+    }
+    text = json_text(request_data)
+    request.state.prepared_text_request = TextPreflightResult(
+        auth=None,
+        payload=None,
+        request_data=request_data,
+        callback_manager=None,
+        guardrail_middleware=None,
+        token_estimate=len(text) // 4,
+        audit_request_json=audit_request_text(request, "org-1", text),
+    )
+    await emit_text_audit_event(
+        request=request,
+        auth=_auth(),
+        action="CHAT_COMPLETION_REQUEST",
+        model="m",
+        status="success",
+        request_start=perf_counter(),
+        request_data=request_data,
+        response_data={"reply": "hello"},
+    )
+    assert buffer.pending_items == 1
+    assert buffer._items[0].request_json is None
+
+    gaps: list[float] = []
+    done = asyncio.Event()
+
+    async def probe() -> None:
+        last = perf_counter()
+        while not done.is_set():
+            await asyncio.sleep(0.001)
+            now = perf_counter()
+            gaps.append(now - last)
+            last = now
+
+    # The test's own large objects are left out of garbage collection pauses.
+    gc.collect()
+    gc.freeze()
+    try:
+        task = asyncio.create_task(probe())
+        await asyncio.sleep(0.005)
+        await buffer.flush()
+        done.set()
+        await task
+    finally:
+        gc.unfreeze()
+
+    assert max(gaps) < 0.05
+    request_payload, response_payload = service.bundles[0][0].payload["payloads"]
+    assert request_payload["content_json"]["omitted"] == "payload_too_large"
     assert response_payload["content_json"] == {"reply": "hello"}
 
 

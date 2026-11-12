@@ -233,7 +233,10 @@ database:
   embeddings requests, the request checks already turn this request into JSON text for the token
   estimate; the buffer keeps that text and counts its length. So a large request (many tools, a long
   conversation, a long system prompt added by a template) is counted at its real size and costs no
-  extra work.
+  extra work. The background task parses the text back in one step that pauses the pod's other
+  work, so the text is kept only when it is at most 1 MiB and has at most 49,152 separators (`,` and
+  `:`), which parse in about 5 ms at most. A larger request is measured and copied like the other
+  bodies below, when the request ends.
 - The buffer keeps its own copy of the bodies. A post-call hook or guardrail that changes the request
   or response after the hand-off (with streaming, post-call hooks run after it) does not change what
   is stored or how much memory is counted. Other bodies, for example responses, are measured and

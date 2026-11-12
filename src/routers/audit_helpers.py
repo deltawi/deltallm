@@ -21,7 +21,11 @@ from src.services.audit.audit_service import (
     AuditService,
     enqueue_audit_event,
 )
-from src.services.audit.content_buffer import AuditContentItem, audit_content_may_be_stored
+from src.services.audit.content_buffer import (
+    AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS,
+    AuditContentItem,
+    audit_content_may_be_stored,
+)
 
 
 def accounting_operation(request: Request) -> AccountingOperationHandle | None:
@@ -91,7 +95,9 @@ def _preflight_request_json(request: Request, payloads: list[AuditPayloadInput])
         prepared = getattr(request.state, name, None)
         if prepared is not None and getattr(prepared, "request_data", None) is body:
             text = getattr(prepared, "audit_request_json", None)
-            return text if isinstance(text, str) else None
+            if not isinstance(text, str) or len(text) > AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS:
+                return None
+            return text
     return None
 
 

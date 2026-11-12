@@ -7,12 +7,14 @@ a short time and a background task sends them as best-effort ``audit_content``
 records. The audit worker attaches them to the accounting event.
 
 Request path cost: ``offer`` is synchronous. It does one cached policy lookup, a
-size estimate, and one list append. It never waits for the database, and it never
-fails a request. A request body that the text or embeddings preflight already
-serialized for its token estimate (after prompt resolution, hooks and guardrails)
-is kept as that JSON text, the request as sent upstream: it is counted by its
-length and not visited again. Other bodies are measured and copied with a work
-limit of ``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is
+bounded measure and copy, and one list append. It never waits for the database,
+and it never fails a request. A request body that the text or embeddings preflight
+already serialized for its token estimate (after prompt resolution, hooks and
+guardrails) is kept as that JSON text, the request as sent upstream, when it is
+small enough for a short parse (see ``audit_request_text``): it is counted by its
+length and not visited again. Other bodies, and larger
+requests, are measured and copied with a work limit of
+``AUDIT_CONTENT_MAX_SIZE_VALUES`` values. A body over that limit is
 replaced by a placeholder: the one of compaction when its size surely exceeds the
 payload limit (for example a large embeddings response), or
 ``payload_too_many_values``. So every body that is kept is counted by a measured
@@ -90,6 +92,13 @@ AUDIT_CONTENT_SHUTDOWN_FLUSH_SECONDS = 2.0
 # 3 ms for large real bodies, at most about 5 ms for a body made only of empty
 # containers. Request bodies that the preflight serialized are not walked.
 AUDIT_CONTENT_MAX_SIZE_VALUES = 16_384
+# Largest preflight JSON text of a request that the buffer keeps. The flusher parses
+# it back in one call that holds the GIL, so its cost must stay small: the parse
+# takes up to about 0.1 us for each separator (``,`` or ``:``), so 49,152 of them
+# take at most about 5 ms. A larger request is measured and copied like any other
+# body instead.
+AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS = 1024 * 1024
+AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS = 49_152
 # Attempts to compact a record into one statement before it is dropped.
 _FIT_ATTEMPTS = 3
 
@@ -548,7 +557,11 @@ def _measure(value: Any, budget: int) -> _Size:
 
 
 def _with_request_body(item: AuditContentItem) -> AuditContentItem:
-    """Parse the request text that the preflight kept (in the flusher's thread)."""
+    """Parse the request text that the preflight kept (in the flusher's thread).
+
+    The parse holds the GIL for its whole length, which is why only a small text is
+    kept (see ``audit_request_text``).
+    """
 
     if item.request_json is None:
         return item
@@ -560,6 +573,25 @@ def _with_request_body(item: AuditContentItem) -> AuditContentItem:
         for payload in item.payloads
     ]
     return replace(item, payloads=payloads, request_json=None)
+
+
+def audit_request_text(request: Any, organization_id: str | None, text: str) -> str | None:
+    """Return the preflight's JSON text of a request if the buffer may keep it. No I/O.
+
+    Only a text of at most ``AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS`` characters and
+    ``AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS`` separators is kept, so the flusher's
+    parse stays short. Counting the separators is a fast scan of the text (about
+    0.4 ms per MiB). A larger request is measured and copied at the hand-off, within
+    the work limit, like any other body.
+    """
+
+    if len(text) > AUDIT_CONTENT_MAX_REQUEST_TEXT_CHARS:
+        return None
+    if not audit_content_may_be_stored(request, organization_id):
+        return None
+    if text.count(",") + text.count(":") > AUDIT_CONTENT_MAX_REQUEST_TEXT_SEPARATORS:
+        return None
+    return text
 
 
 def audit_content_may_be_stored(request: Any, organization_id: str | None) -> bool:
