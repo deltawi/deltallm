@@ -198,10 +198,8 @@ Audit payloads are handled differently depending on the event type:
 ### Content that arrives after its event
 
 With accounting v2, the accounting worker writes the audit event of a data-plane request, and that event
-has no request or response body. The bodies can arrive separately as an `audit_content` outbox record that
-names the event. This section describes how the audit worker processes such a record. The request side
-that sends these records is a separate change. Until it is deployed, accounting v2 requests send no
-`audit_content` records, so their audit events stay without bodies.
+has no request or response body. The bodies arrive separately as an `audit_content` outbox record that
+names the event. Each API pod sends these records from a buffer, as described below.
 
 The audit worker processes the record in the same batched transaction as other audit records:
 
@@ -223,6 +221,32 @@ The audit worker processes the record in the same batched transaction as other a
 `deltallm_audit_content_records_total{outcome}` counts the records by `attached`, `deferred`,
 `fallback_event` and `organization_mismatch`. A high `deferred` count means that the accounting
 projection is slow. An `organization_mismatch` count is not expected; it shows a defect in the sender.
+
+Each API pod sends these records from a small in-memory buffer, so the request does not wait for the
+database:
+
+- The request only adds its bodies to the buffer. It does no database I/O for this step, and this step
+  never fails the request. When the pod already knows that the organization has content storage off, the
+  bodies do not go into the buffer.
+- One background task per pod sends the buffer every second, or earlier when 500 items wait. It reads the
+  content policy of uncached organizations in one query, then writes one statement for each organization
+  (at most 100 records or 1 MiB each). It runs one statement at a time, so it uses at most one connection
+  of the audit pool.
+- The content is best effort. It uses the best-effort queue capacity, which keeps the required reserve
+  free for required audit events. The pod does not retry a failed send.
+
+Content is dropped, and the audit event stays without bodies, in these cases. Each drop increments
+`deltallm_audit_content_dropped_total{reason}`:
+
+| Reason | Cause |
+| --- | --- |
+| `buffer_full` | 2,000 items already wait in the buffer of this pod. |
+| `flush_bytes` | One send is larger than 64 MiB after compaction. |
+| `policy_unavailable` | The policy read failed. |
+| `enqueue_failed` | The database write failed, for example because the database is busy. The pod drops the rest of the send. |
+| `queue_full` | The audit queue has no best-effort capacity. The pod then stops the send and drops the rest of it. |
+| `duplicate` | The same audit event already has a content record. Only the first one is kept. |
+| `closed`, `shutdown` | The pod is stopping. It tries one final send of at most 2 seconds. |
 
 ### Inline files and large payloads
 

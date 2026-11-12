@@ -15,6 +15,7 @@ from src.bootstrap.batch_runtime import scheduler as batch_scheduler
 from src.bootstrap.batch_runtime import workers as batch_workers
 from src.bootstrap.batch_runtime.lifecycle import drain_worker_task as _drain_worker_task
 from src.batch.scheduling import advisory_lock_mode, set_advisory_lock_mode
+from src.services.audit.content_buffer import AuditContentBuffer
 
 
 def _audit_config(*, enabled: bool, retention_enabled: bool) -> SimpleNamespace:
@@ -296,6 +297,7 @@ async def test_init_and_shutdown_audit_runtime_enabled(monkeypatch: pytest.Monke
             self.kwargs = kwargs
             self.started = False
             self.stopped = False
+            self.durable_ingestion_enabled = True
             created["service"] = self
 
         async def start(self) -> None:
@@ -333,6 +335,8 @@ async def test_init_and_shutdown_audit_runtime_enabled(monkeypatch: pytest.Monke
     assert app.state.audit_repository == {"client": "db-client"}
     assert isinstance(app.state.audit_service, FakeAuditService)
     assert created["service"].started is True
+    content_buffer = app.state.audit_content_buffer
+    assert isinstance(content_buffer, AuditContentBuffer)
     assert runtime.retention_worker is created["worker"]
     assert runtime.retention_task is not None
     assert runtime.statuses == (
@@ -344,6 +348,8 @@ async def test_init_and_shutdown_audit_runtime_enabled(monkeypatch: pytest.Monke
 
     assert created["worker"].stopped is True
     assert created["service"].stopped is True
+    assert app.state.audit_content_buffer is None
+    assert content_buffer.offer(object()) is False  # closed: takes no more items
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
@@ -9,6 +10,9 @@ from src.audit.actions import AuditAction, normalize_audit_action
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
 from src.client_address import request_client_ip
+from src.billing.accounting.accounting_finalization import (
+    accounting_finalization_audit_event_id,
+)
 from src.billing.accounting.accounting_protocol import AccountingOperationHandle
 from src.services.audit.audit_service import (
     AuditEventInput,
@@ -16,6 +20,53 @@ from src.services.audit.audit_service import (
     AuditService,
     enqueue_audit_event,
 )
+from src.services.audit.content_buffer import AuditContentItem
+
+
+def accounting_operation(request: Request) -> AccountingOperationHandle | None:
+    """Return the accounting v2 operation of this request, if it has one."""
+
+    handle = getattr(request.state, "spend_operation_handle", None)
+    return handle if isinstance(handle, AccountingOperationHandle) else None
+
+
+def accounting_audit_content_wanted(request: Request, organization_id: str | None) -> bool:
+    """Return False when the content of this request is surely not stored. No I/O."""
+
+    buffer = getattr(request.app.state, "audit_content_buffer", None)
+    if buffer is None:
+        return False
+    return buffer.audit_service.peek_content_storage_policy(organization_id) is not False
+
+
+def offer_accounting_audit_content(
+    request: Request,
+    operation: AccountingOperationHandle,
+    *,
+    event: AuditEventInput,
+    payloads: list[AuditPayloadInput],
+) -> None:
+    """Hand the bodies of an accounting v2 request to the content buffer.
+
+    The accounting write already records the audit event of the request, without
+    bodies. This call only appends to a bounded in-memory buffer: it never waits
+    and never fails the request. The audit worker attaches the bodies to that
+    event later, for organizations with content storage on.
+    """
+
+    buffer = getattr(request.app.state, "audit_content_buffer", None)
+    if buffer is None or not any(payload.has_content() for payload in payloads):
+        return
+    operation_id = operation.reservation.operation_id
+    event.metadata = {**(event.metadata or {}), "accounting_operation_id": str(operation_id)}
+    buffer.offer(
+        AuditContentItem(
+            target_event_id=accounting_finalization_audit_event_id(operation_id),
+            event=event,
+            payloads=payloads,
+            enqueued_at=datetime.now(UTC),
+        )
+    )
 
 
 async def emit_audit_event(
@@ -42,13 +93,12 @@ async def emit_audit_event(
     # The accounting finalization ACK already contains the required redacted
     # audit envelope. Its projection worker writes the compatibility audit row;
     # a second request-path enqueue would reintroduce per-request lifecycle I/O.
-    if isinstance(
-        getattr(request.state, "spend_operation_handle", None),
-        AccountingOperationHandle,
-    ):
+    # Only the bodies go to the best-effort content buffer, without waiting.
+    operation = accounting_operation(request)
+    if operation is not None and not accounting_audit_content_wanted(request, organization_id):
         return
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
-    if audit_service is None:
+    if audit_service is None and operation is None:
         return
 
     request_id = request.headers.get("x-request-id")
@@ -58,29 +108,33 @@ async def emit_audit_event(
     if response_payload is not None:
         payloads.append(AuditPayloadInput(kind="response", content_json=response_payload))
 
+    event = AuditEventInput(
+        action=normalize_audit_action(action),
+        organization_id=organization_id,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        api_key=api_key,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        request_id=request_id,
+        correlation_id=request_id,
+        ip=request_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        status=status,
+        latency_ms=int((perf_counter() - request_start) * 1000),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        error_type=error.__class__.__name__ if error is not None else None,
+        error_code=derive_audit_error_code(error),
+        metadata=metadata or {},
+        event_id=event_id,
+    )
+    if operation is not None:
+        offer_accounting_audit_content(request, operation, event=event, payloads=payloads)
+        return
     await enqueue_audit_event(
         audit_service,
-        AuditEventInput(
-            action=normalize_audit_action(action),
-            organization_id=organization_id,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            api_key=api_key,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            request_id=request_id,
-            correlation_id=request_id,
-            ip=request_client_ip(request),
-            user_agent=request.headers.get("user-agent"),
-            status=status,
-            latency_ms=int((perf_counter() - request_start) * 1000),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            error_type=error.__class__.__name__ if error is not None else None,
-            error_code=derive_audit_error_code(error),
-            metadata=metadata or {},
-            event_id=event_id,
-        ),
+        event,
         payloads=payloads,
         delivery_class=(
             AuditDeliveryClass.REQUIRED if critical else AuditDeliveryClass.BEST_EFFORT
