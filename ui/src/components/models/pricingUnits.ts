@@ -2,6 +2,8 @@
 // shows them per 1M tokens. The conversion moves the decimal point in the text,
 // so no binary rounding changes a saved price.
 
+const MAX_EXPONENT = 100;
+
 const DECIMAL = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/;
 
 /** Moves the decimal point of a decimal text. Returns null when the text is not a number. */
@@ -12,6 +14,9 @@ export function shiftDecimal(value: string, places: number): string | null {
   if (!match) return null;
   const [, sign, whole = '', fraction = '', exponent = '0'] = match;
   if (!whole && !fraction) return null;
+  // A price never needs a large exponent. This also stops "1e9999999999" from
+  // building a string that is too long.
+  if (Math.abs(Number(exponent)) > MAX_EXPONENT) return null;
   const digits = `${whole}${fraction}`;
   const point = whole.length + Number(exponent) + places;
   let shifted: string;
@@ -44,10 +49,16 @@ export function isPriceText(value: string): boolean {
   return !text || (shiftDecimal(text, 0) !== null && !text.startsWith('-'));
 }
 
-/** The first price field (a key with "cost_per_") whose text is not a number, or null. */
-export function firstInvalidPriceField(values: object): string | null {
-  for (const [field, value] of Object.entries(values)) {
-    if (field.includes('cost_per_') && typeof value === 'string' && !isPriceText(value)) return field;
+/**
+ * The first price field whose text is not a number, or null. It checks the
+ * given fields, or every key with "cost_per_" when no fields are given.
+ */
+export function firstInvalidPriceField<T extends object>(values: T, fields?: readonly (keyof T & string)[]): string | null {
+  const record = values as Record<string, unknown>;
+  const keys = fields ?? Object.keys(record).filter((field) => field.includes('cost_per_'));
+  for (const field of keys) {
+    const value = record[field];
+    if (typeof value === 'string' && !isPriceText(value)) return field;
   }
   return null;
 }

@@ -63,6 +63,9 @@ export default function ProviderPicker({ id, presets, value, mode, onChange, dis
   const listing = useMemo(() => listProviders(presets, query, mode, value), [presets, query, mode, value]);
   const { options, sections, unsupported } = listing;
   const activeOption = options[Math.min(active, options.length - 1)];
+  // With no match, the generic provider is the one choice, and Enter picks it.
+  const fallbackAvailable = options.length === 0
+    && presets.some((preset) => preset.provider === GENERIC_PROVIDER && (!mode || preset.supported_modes.includes(mode)));
 
   const close = (restoreFocus: boolean) => {
     setOpen(false);
@@ -103,6 +106,7 @@ export default function ProviderPicker({ id, presets, value, mode, onChange, dis
     } else if (event.key === 'Enter') {
       event.preventDefault();
       if (activeOption) pick(activeOption.provider);
+      else if (fallbackAvailable) pick(GENERIC_PROVIDER);
     } else if (event.key === 'Escape') {
       event.preventDefault();
       close(true);
@@ -203,10 +207,10 @@ export default function ProviderPicker({ id, presets, value, mode, onChange, dis
             {options.length === 0 ? (
               <div className="px-3 py-6 text-center">
                 <p className="text-sm text-gray-700">{query.trim() ? `No provider matches "${query.trim()}".` : 'No provider supports this model type.'}</p>
-                {presets.some((preset) => preset.provider === GENERIC_PROVIDER && (!mode || preset.supported_modes.includes(mode))) ? (
+                {fallbackAvailable ? (
                   <>
-                    <p className="mt-1 text-xs text-gray-500">Any OpenAI-style API works with the generic provider.</p>
-                    <Button size="sm" variant="outline" className="mt-3" onClick={() => pick(GENERIC_PROVIDER)}>Use OpenAI-compatible</Button>
+                    <p className="mt-1 text-xs text-gray-500">Any OpenAI-style API works with the generic provider. Press Enter to use it.</p>
+                    <Button size="sm" variant="outline" className="mt-3" onMouseDown={(event) => event.preventDefault()} onClick={() => pick(GENERIC_PROVIDER)}>Use OpenAI-compatible</Button>
                   </>
                 ) : null}
               </div>

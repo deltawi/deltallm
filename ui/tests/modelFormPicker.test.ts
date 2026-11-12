@@ -90,6 +90,11 @@ test('price units move the decimal point exactly', () => {
   assert.equal(perTokenFromPerMillion(''), '');
   assert.equal(perTokenFromPerMillion('abc'), 'abc');
   assert.equal(shiftDecimal('.5', 1), '5');
+  // A huge exponent is not a price, and it must not build a huge string.
+  assert.equal(shiftDecimal('1e9999999999', 0), null);
+  assert.equal(perTokenFromPerMillion('1e9999999999'), '1e9999999999');
+  assert.ok(!isPriceText('1e9999999999'));
+  assert.equal(shiftDecimal('2.5e-100', 0)?.length, 103);
   for (const value of ['0.0000025', '0.00001', '0.000000075', '3', '0.1234567891']) {
     assert.equal(perTokenFromPerMillion(perMillionFromPerToken(value)), value);
   }
@@ -142,6 +147,17 @@ test('validateModelForm rejects a provider without the model type, bad prices an
   const batch = validateModelForm({ ...VALID, chat_batching_mode: 'sync_microbatch', chat_batching_upstream_max_batch_size: '1' }, EMPTY_REQUEST_SHAPING, CONTEXT);
   assert.ok(!batch.ok);
   assert.equal(batch.section, 'batch');
+
+  // A bad price in a field that the model type hides does not block Save.
+  const hidden = validateModelForm({ ...VALID, mode: 'embedding', output_cost_per_token: 'free' }, EMPTY_REQUEST_SHAPING, CONTEXT);
+  assert.ok(hidden.ok);
+  const realtime = validateModelForm(
+    { ...VALID, mode: 'realtime', realtime_profile: 'transcription', realtime_usage_type: 'duration', input_cost_per_second: 'x' },
+    EMPTY_REQUEST_SHAPING,
+    CONTEXT,
+  );
+  assert.ok(!realtime.ok);
+  assert.equal(realtime.section, 'pricing');
 
   const limits = validateModelForm({ ...VALID, max_input_tokens: '0' }, EMPTY_REQUEST_SHAPING, CONTEXT);
   assert.ok(!limits.ok);

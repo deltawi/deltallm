@@ -18,7 +18,7 @@ interface ModelFormAsideProps {
 export default function ModelFormAside({ name, provider, model, mode, apiModelId, checklist }: ModelFormAsideProps) {
   const snippet = modelCallSnippet(mode, apiModelId);
   return (
-    <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
+    <div className="min-w-0 space-y-6 lg:sticky lg:top-6 lg:self-start">
       <PanelCard>
         <h2 className="text-sm font-semibold text-gray-900">Summary</h2>
         <div className="mt-3 flex items-center gap-3">

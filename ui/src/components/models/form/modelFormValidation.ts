@@ -8,6 +8,7 @@ import {
 } from '../../modelFormShared';
 import { validateRequestShaping, type RequestShapingForm } from '../requestShaping';
 import { firstInvalidPriceField } from '../pricingUnits';
+import { visiblePriceFields } from './priceFieldSpecs';
 
 export type RequiredField =
   | 'model_name'
@@ -143,7 +144,7 @@ export function validateModelForm(
     );
   }
 
-  const invalidPrice = firstInvalidPriceField(form);
+  const invalidPrice = firstInvalidPriceField(form, visiblePriceFields(form));
   if (invalidPrice) return fail('Enter prices as numbers, for example 2.50.', 'pricing');
 
   const capacityErrors = validateContextCapacityFields(form);

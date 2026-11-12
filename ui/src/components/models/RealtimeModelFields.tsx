@@ -3,15 +3,7 @@ import type { ModelFormValues } from '../modelFormShared';
 import PriceInput from './form/PriceInput';
 import { FieldLabel } from './form/formPrimitives';
 import { fieldClass } from './form/formStyles';
-
-const tokenFields = [
-  ['input_cost_per_token', 'Input text'],
-  ['output_cost_per_token', 'Output text'],
-  ['input_cost_per_token_cache_hit', 'Cached input text'],
-  ['input_cost_per_audio_token', 'Input audio'],
-  ['output_cost_per_audio_token', 'Output audio'],
-  ['input_cost_per_audio_token_cache_hit', 'Cached input audio'],
-] as const;
+import { REALTIME_TOKEN_PRICES, realtimePriceFields } from './form/priceFieldSpecs';
 
 export default function RealtimeModelFields({ form, onChange }: {
   form: ModelFormValues;
@@ -19,7 +11,8 @@ export default function RealtimeModelFields({ form, onChange }: {
 }) {
   const id = useId();
   const duration = form.realtime_profile === 'transcription' && form.realtime_usage_type === 'duration';
-  const prices = tokenFields.filter(([field]) => form.realtime_profile !== 'transcription' || field !== 'output_cost_per_audio_token');
+  const visible = realtimePriceFields(form);
+  const prices = REALTIME_TOKEN_PRICES.filter(([field]) => visible.includes(field));
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-500">

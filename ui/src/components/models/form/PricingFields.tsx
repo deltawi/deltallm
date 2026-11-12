@@ -4,63 +4,7 @@ import { isPriceText } from '../pricingUnits';
 import PriceInput from './PriceInput';
 import { Disclosure, FieldLabel } from './formPrimitives';
 import { fieldClass } from './formStyles';
-
-type PriceField = {
-  [K in keyof ModelFormValues]: ModelFormValues[K] extends string ? K : never;
-}[keyof ModelFormValues];
-
-interface PriceSpec {
-  field: PriceField;
-  label: string;
-  placeholder?: string;
-  perMillion?: boolean;
-  help?: string;
-}
-
-const token = (field: PriceField, label: string, placeholder = '0.00', help?: string): PriceSpec => (
-  { field, label: `${label} per 1M tokens`, placeholder, perMillion: true, help }
-);
-
-const MAIN_PRICES: Partial<Record<ModelFormValues['mode'], PriceSpec[]>> = {
-  chat: [
-    token('input_cost_per_token', 'Input', '2.50'),
-    token('output_cost_per_token', 'Output', '10.00'),
-    token('input_cost_per_token_cache_hit', 'Cached input', 'Optional'),
-  ],
-  embedding: [
-    token('input_cost_per_token', 'Input', '0.02'),
-    token('input_cost_per_token_cache_hit', 'Cached input', 'Optional'),
-  ],
-  image_generation: [
-    { field: 'input_cost_per_image', label: 'Price per image', placeholder: '0.04' },
-  ],
-  audio_speech: [
-    { field: 'input_cost_per_character', label: 'Input per character', placeholder: '0.000015' },
-    { field: 'output_cost_per_character', label: 'Output per character', placeholder: '0.000015' },
-    { field: 'input_cost_per_second', label: 'Input per second', placeholder: '0.00025' },
-    { field: 'output_cost_per_second', label: 'Output per second', placeholder: '0.00025' },
-    token('input_cost_per_audio_token', 'Input audio', '100.00'),
-    token('output_cost_per_audio_token', 'Output audio', '100.00'),
-  ],
-  audio_transcription: [
-    { field: 'input_cost_per_second', label: 'Input per second', placeholder: '0.0001', help: 'The main price for duration-based billing.' },
-    { field: 'output_cost_per_second', label: 'Output per second', placeholder: '0', help: 'Only for providers that bill output audio time.' },
-  ],
-  rerank: [
-    token('input_cost_per_token', 'Input', '2.00', 'Counts the tokens of the query and the documents.'),
-  ],
-};
-
-const CACHE_PRICES: PriceSpec[] = [
-  token('output_cost_per_token_cache_hit', 'Cached output', 'Optional'),
-  token('input_cost_per_token_cache_write', 'Cache write', 'Empty uses input price'),
-  token('input_cost_per_token_cache_write_1h', 'Cache write (1 hour)', 'Empty uses cache write price'),
-];
-
-const BATCH_PRICES: PriceSpec[] = [
-  token('batch_input_cost_per_token', 'Batch input', 'Optional'),
-  token('batch_output_cost_per_token', 'Batch output', 'Optional'),
-];
+import { BATCH_PRICES, CACHE_PRICES, MAIN_PRICES, type PriceSpec } from './priceFieldSpecs';
 
 interface PricingFieldsProps {
   form: ModelFormValues;
@@ -144,4 +88,3 @@ export default function PricingFields({ form, onChange }: PricingFieldsProps) {
     </>
   );
 }
-

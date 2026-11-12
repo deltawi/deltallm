@@ -45,6 +45,21 @@ export function FormPanel({ title, description, actions, children }: {
 }
 
 /** A text button that shows or hides more fields in place. */
+/**
+ * Open state that a parent can force open, for example when a field inside has
+ * an error. Once forced open, it stays open until the user closes it, so fixing
+ * the error does not close the section under the cursor.
+ */
+function useStickyOpen(defaultOpen: boolean, forceOpen: boolean) {
+  const [open, setOpen] = useState(defaultOpen || forceOpen);
+  const [wasForced, setWasForced] = useState(forceOpen);
+  if (forceOpen !== wasForced) {
+    setWasForced(forceOpen);
+    if (forceOpen) setOpen(true);
+  }
+  return [open, setOpen] as const;
+}
+
 export function Disclosure({ label, children, defaultOpen = false, forceOpen = false }: {
   label: string;
   children: ReactNode;
@@ -52,8 +67,7 @@ export function Disclosure({ label, children, defaultOpen = false, forceOpen = f
   /** Keeps the content open, for example while a field in it has an error. */
   forceOpen?: boolean;
 }) {
-  const [userOpen, setOpen] = useState(defaultOpen);
-  const open = userOpen || forceOpen;
+  const [open, setOpen] = useStickyOpen(defaultOpen, forceOpen);
   const id = useId();
   return (
     <div>
@@ -98,8 +112,7 @@ export function SettingsRow({ title, description, value, hasError = false, child
   hasError?: boolean;
   children: ReactNode;
 }) {
-  const [userOpen, setOpen] = useState(false);
-  const open = userOpen || hasError;
+  const [open, setOpen] = useStickyOpen(false, hasError);
   const id = useId();
   return (
     <li>
@@ -107,7 +120,7 @@ export function SettingsRow({ title, description, value, hasError = false, child
         type="button"
         aria-expanded={open}
         aria-controls={id}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-4 px-5 py-3 text-left hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary"
       >
         <span className="min-w-0 flex-1">

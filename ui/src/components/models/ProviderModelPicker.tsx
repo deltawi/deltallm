@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import type { ProviderModelOption } from '../../lib/api';
 import { Highlight } from './ProviderPicker';
@@ -50,6 +50,11 @@ export default function ProviderModelPicker({
   const highlight = exact ? '' : value;
   const activeOption = active >= 0 ? visible[active] : undefined;
   const showList = open && !disabled && (visible.length > 0 || loading);
+
+  useEffect(() => {
+    if (!showList || active < 0) return;
+    document.getElementById(`${listId}-${active}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [showList, active, listId]);
 
   const pick = (option: ProviderModelOption) => {
     onChange(option.id);

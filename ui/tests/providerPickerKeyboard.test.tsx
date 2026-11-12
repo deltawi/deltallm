@@ -4,8 +4,10 @@ import { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
 
+import ProviderModelPicker from '../src/components/models/ProviderModelPicker';
 import ProviderPicker from '../src/components/models/ProviderPicker';
-import type { ProviderPreset } from '../src/lib/api';
+import { SettingsRow } from '../src/components/models/form/formPrimitives';
+import type { ProviderModelOption, ProviderPreset } from '../src/lib/api';
 
 function installDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'https://admin.example.test/' });
@@ -113,11 +115,79 @@ test('provider picker hides providers without the model type and offers the gene
     act(() => generic.click());
     assert.deepEqual(picked, ['openai_compatible']);
 
+    // Enter picks the generic provider from the keyboard when nothing matches.
+    act(() => trigger.click());
+    const again = document.querySelector<HTMLInputElement>('input[role="combobox"]');
+    assert.ok(again);
+    await act(async () => { type(again, 'cohere'); });
+    act(() => key(again, 'Enter'));
+    assert.deepEqual(picked, ['openai_compatible', 'openai_compatible']);
+    assert.equal(document.activeElement, trigger);
+
     act(() => trigger.click());
     const reopened = document.querySelector<HTMLInputElement>('input[role="combobox"]');
     assert.ok(reopened);
     act(() => key(reopened, 'Escape'));
     assert.equal(document.querySelector('input[role="combobox"]'), null);
+  } finally {
+    await act(async () => { root.unmount(); });
+    restore();
+  }
+});
+
+function RowHarness({ hasError }: { hasError: boolean }) {
+  return (
+    <ul>
+      <SettingsRow title="Batch execution" description="Batch settings" value="Defaults" hasError={hasError}>
+        <input aria-label="Max in flight" />
+      </SettingsRow>
+    </ul>
+  );
+}
+
+test('a settings row opened by an error stays open after the error clears', async () => {
+  const restore = installDom();
+  const root = createRoot(document.getElementById('root')!);
+  try {
+    await act(async () => { root.render(<RowHarness hasError={false} />); });
+    assert.equal(document.querySelector('input[aria-label="Max in flight"]'), null);
+    await act(async () => { root.render(<RowHarness hasError />); });
+    assert.ok(document.querySelector('input[aria-label="Max in flight"]'));
+    // The first edit clears the error; the row must not close under the user.
+    await act(async () => { root.render(<RowHarness hasError={false} />); });
+    assert.ok(document.querySelector('input[aria-label="Max in flight"]'));
+    const toggle = document.querySelector<HTMLButtonElement>('button[aria-expanded]');
+    assert.ok(toggle);
+    act(() => toggle.click());
+    assert.equal(document.querySelector('input[aria-label="Max in flight"]'), null);
+  } finally {
+    await act(async () => { root.unmount(); });
+    restore();
+  }
+});
+
+test('the model list scrolls the keyboard selection into view', async () => {
+  const restore = installDom();
+  const scrolled: string[] = [];
+  Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value(this: HTMLElement) { scrolled.push(this.textContent || ''); },
+  });
+  const options: ProviderModelOption[] = Array.from({ length: 5 }, (_, index) => (
+    { id: `model-${index}`, label: `model-${index}`, provider: 'openai', source: 'catalog', supported_modes: ['chat'], known_metadata: null }
+  ));
+  const root = createRoot(document.getElementById('root')!);
+  try {
+    await act(async () => {
+      root.render(<ProviderModelPicker value="" onChange={() => undefined} options={options} providerLabel="OpenAI" placeholder="gpt-4o" />);
+    });
+    const input = document.querySelector<HTMLInputElement>('input[role="combobox"]');
+    assert.ok(input);
+    act(() => { input.focus(); });
+    act(() => { key(input, 'ArrowDown'); });
+    act(() => { key(input, 'ArrowDown'); });
+    act(() => { key(input, 'ArrowDown'); });
+    assert.match(scrolled.at(-1) || '', /model-2/);
   } finally {
     await act(async () => { root.unmount(); });
     restore();
