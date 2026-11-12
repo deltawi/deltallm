@@ -39,7 +39,19 @@ def estimate_tokens(payload: Any) -> int:
     if isinstance(payload, (str, bytes)):
         text = payload.decode("utf-8", errors="ignore") if isinstance(payload, bytes) else payload
         return max(1, len(text) // 4)
-    return max(1, len(json.dumps(payload, default=str)) // 4)
+    return estimate_tokens_for_json_size(json_text_size(payload))
+
+
+def json_text_size(payload: Any) -> int:
+    """Return the length of the JSON text of a payload, as ``estimate_tokens`` measures it."""
+
+    return len(json.dumps(payload, default=str))
+
+
+def estimate_tokens_for_json_size(size: int) -> int:
+    """Return the token estimate of a payload whose JSON text has ``size`` characters."""
+
+    return max(1, size // 4)
 
 
 def _model_limit(limits: dict[str, int] | None, model: str | None) -> int | None:

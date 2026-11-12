@@ -481,6 +481,46 @@ async def test_chat_rate_limit_estimate_uses_final_transformed_payload(
 
 
 @pytest.mark.asyncio
+async def test_chat_audit_request_size_is_measured_after_pre_call_transformation(
+    client,
+    test_app,
+    monkeypatch,
+):
+    """The audit content buffer counts the request as the hooks left it, not as received."""
+
+    from src.routers.audit_helpers import _measured_request_chars
+    from src.services.audit.audit_service import AuditPayloadInput
+
+    system_message = "x" * 20_000
+    rewriter = RewritingPreCallCallback(system_message=system_message)
+    manager = CallbackManager()
+    manager.register_callback(rewriter, callback_type="success")
+    test_app.state.callback_manager = manager
+    measured: list[tuple[int | None, int]] = []
+
+    async def capture_audit(*, request, request_data, **_kwargs):  # noqa: ANN001, ANN003, ANN202
+        payloads = [AuditPayloadInput(kind="request", content_json=request_data)]
+        measured.append(
+            (
+                _measured_request_chars(request, payloads),
+                len(jsonlib.dumps(request_data, default=str)),
+            )
+        )
+
+    monkeypatch.setattr("src.chat.telemetry.emit_text_audit_event", capture_audit)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert len(measured) == 1
+    chars, actual = measured[0]
+    assert chars == actual
+    assert chars > len(system_message)
+
+
+@pytest.mark.asyncio
 async def test_chat_local_context_rejection_uses_context_window_fallback(client, test_app):
     registry_store = test_app.state.router.deployment_registry
     primary = registry_store["gpt-4o-mini"][0]

@@ -65,29 +65,29 @@ def offer_accounting_audit_content(
             event=event,
             payloads=payloads,
             enqueued_at=datetime.now(UTC),
-            request_body_bytes=_json_body_bytes(request),
+            request_chars=_measured_request_chars(request, payloads),
         )
     )
 
 
-def _json_body_bytes(request: Request) -> int | None:
-    """Return the size of a JSON request body as received, or None when it is unknown.
+def _measured_request_chars(request: Request, payloads: list[AuditPayloadInput]) -> int | None:
+    """Return the JSON size of the request body, when the preflight measured this very object.
 
-    The buffer counts the request body by this size, so a large chat request (many
-    tools, a long conversation) is not walked value by value on the request path.
-    The ingress refuses a body whose length differs from its Content-Length.
+    The text and embeddings preflights measure the request after prompt resolution,
+    hooks and guardrails, for their token estimate. The buffer counts the request by
+    that size, so a large request (many tools, a long conversation) is not walked
+    value by value on the request path. Any other object is measured by the buffer.
     """
 
-    headers = request.headers
-    media_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    length = headers.get("content-length", "")
-    if (
-        not media_type.endswith("json")
-        or headers.get("content-encoding", "identity").lower() != "identity"
-        or not (length.isascii() and length.isdigit())
-    ):
+    body = next((payload.content_json for payload in payloads if payload.kind == "request"), None)
+    if body is None:
         return None
-    return int(length) or None
+    for name in ("prepared_text_request", "prepared_embedding_request"):
+        prepared = getattr(request.state, name, None)
+        if prepared is not None and getattr(prepared, "request_data", None) is body:
+            chars = getattr(prepared, "request_data_chars", 0)
+            return chars if isinstance(chars, int) and chars > 0 else None
+    return None
 
 
 async def emit_audit_event(

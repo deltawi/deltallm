@@ -18,13 +18,14 @@ from src.billing.accounting.accounting_finalization import (
     accounting_finalization_audit_event_id,
 )
 from src.chat.audit import emit_text_audit_event
+from src.chat.preflight import TextPreflightResult
 from src.db.audit.audit_ingestion import (
     AuditBundleEnqueueResult,
     AuditOutboxEnvelope,
     audit_envelope_wire,
 )
 from src.db.audit.repository import AuditRepository
-from src.routers.audit_helpers import _json_body_bytes, emit_audit_event
+from src.routers.audit_helpers import _measured_request_chars, emit_audit_event
 from src.services.audit.audit_service import (
     AuditEventInput,
     AuditIngestionConfig,
@@ -42,6 +43,7 @@ from src.services.audit.content_buffer import (
     _measure,
     approximate_chars,
 )
+from src.rate_limit_policy import json_text_size
 from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES, _compact
 from tests.test_accounting_request_ids import _operation as accounting_operation
 
@@ -685,8 +687,35 @@ def _value_count(value) -> int:
     return 1
 
 
-def _json_headers(body: bytes) -> dict[str, str]:
-    return {"content-type": "application/json", "content-length": str(len(body))}
+def _preflight(request_data: dict) -> TextPreflightResult:
+    """What run_text_preflight leaves on request.state for this request body."""
+
+    chars = json_text_size(request_data)
+    return TextPreflightResult(
+        auth=None,
+        payload=None,
+        request_data=request_data,
+        callback_manager=None,
+        guardrail_middleware=None,
+        token_estimate=max(1, chars // 4),
+        request_data_chars=chars,
+    )
+
+
+async def _emit_chat(buffer: AuditContentBuffer, request_data: dict, *, measured: bool) -> None:
+    request = _request(buffer=buffer, operation=accounting_operation())
+    if measured:
+        request.state.prepared_text_request = _preflight(request_data)
+    await emit_text_audit_event(
+        request=request,
+        auth=_auth(),
+        action="CHAT_COMPLETION_REQUEST",
+        model="m",
+        status="success",
+        request_start=perf_counter(),
+        request_data=request_data,
+        response_data={"reply": "hello"},
+    )
 
 
 @pytest.mark.parametrize(
@@ -698,43 +727,69 @@ def _json_headers(body: bytes) -> dict[str, str]:
         pytest.param(_long_conversation(), id="long-conversation"),
     ],
 )
-async def test_a_large_json_request_keeps_its_body(monkeypatch, request_data):
+async def test_a_large_measured_request_keeps_its_body(monkeypatch, request_data):
     monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
-    body = json.dumps(request_data).encode()
     assert _value_count(request_data) > 16_384
-    assert len(body) < DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
+    assert json_text_size(request_data) < DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
     service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
     buffer = AuditContentBuffer(service)
 
-    await emit_text_audit_event(
-        request=_request(
-            buffer=buffer, operation=accounting_operation(), headers=_json_headers(body)
-        ),
-        auth=_auth(),
-        action="CHAT_COMPLETION_REQUEST",
-        model="m",
-        status="success",
-        request_start=perf_counter(),
-        request_data=request_data,
-        response_data={"reply": "hello"},
-    )
+    await _emit_chat(buffer, request_data, measured=True)
 
-    # Counted by the size of the body as received: its values are not visited.
+    # Counted by the size the preflight measured: its values are not visited again.
     assert buffer.pending_items == 1
-    assert buffer._items[0].request_body_bytes == len(body)
-    assert buffer._waiting_chars == len(body) + approximate_chars({"reply": "hello"})
+    assert buffer._items[0].request_chars == json_text_size(request_data)
+    expected = json_text_size(request_data) + approximate_chars({"reply": "hello"})
+    assert buffer._waiting_chars == expected
     await buffer.flush()
     request, response = service.bundles[0][0].payload["payloads"]
     assert request["content_json"] == request_data
     assert response["content_json"] == {"reply": "hello"}
 
 
+async def test_a_request_grown_by_the_preflight_counts_its_grown_size(monkeypatch):
+    """A tiny request whose prompt resolution or hooks add a large system prompt."""
+
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
+    service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
+    buffer = AuditContentBuffer(service, max_held_chars=1_048_576)
+
+    def grown() -> dict:
+        return {
+            "model": "m",
+            "messages": [
+                {"role": "system", "content": "x" * 800_000},
+                {"role": "user", "content": "hi"},
+            ],
+        }
+
+    for _ in range(3):
+        await _emit_chat(buffer, grown(), measured=True)
+
+    # Only the first fits the cap: each one counts its 800,000 characters.
+    assert buffer.pending_items == 1
+    assert buffer._waiting_chars > 800_000
+
+
+def test_the_measured_size_is_used_only_for_the_measured_object():
+    request_data = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+    request = _request(buffer=None, operation=None)
+    request.state.prepared_text_request = _preflight(request_data)
+
+    measured = [AuditPayloadInput(kind="request", content_json=request_data)]
+    assert _measured_request_chars(request, measured) == json_text_size(request_data)
+    # An equal dict that is another object (for example one changed later) is walked.
+    copy = [AuditPayloadInput(kind="request", content_json=dict(request_data))]
+    assert _measured_request_chars(request, copy) is None
+    assert _measured_request_chars(_request(buffer=None, operation=None), measured) is None
+
+
 class _NeverWalkedDict(dict):
     def items(self):
-        raise AssertionError("a JSON request body with a known size was walked")
+        raise AssertionError("a request body measured by the preflight was walked")
 
 
-async def test_a_json_request_body_with_a_known_size_is_not_walked():
+async def test_a_request_body_measured_by_the_preflight_is_not_walked():
     service = _Service({"org-1": True})
     buffer = AuditContentBuffer(service)
     item = AuditContentItem(
@@ -742,52 +797,37 @@ async def test_a_json_request_body_with_a_known_size_is_not_walked():
         event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
         payloads=[AuditPayloadInput(kind="request", content_json=_NeverWalkedDict(a=1))],
         enqueued_at=datetime.now(UTC),
-        request_body_bytes=1_234,
+        request_chars=1_234,
     )
 
     assert buffer.offer(item) is True
     assert buffer._waiting_chars == 1_234
 
 
-def _unsized_request(request_data: dict) -> AuditContentItem:
-    """A request whose body size is unknown (for example a chunked upload)."""
-
-    return AuditContentItem(
-        target_event_id=str(uuid4()),
-        event=AuditEventInput(action="CHAT_COMPLETION_REQUEST", organization_id="org-1"),
-        payloads=[AuditPayloadInput(kind="request", content_json=request_data)],
-        enqueued_at=datetime.now(UTC),
-    )
-
-
-async def test_an_unsized_body_over_the_work_limit_is_handed_off_with_a_bound(monkeypatch):
+async def test_an_unmeasured_body_over_the_work_limit_is_replaced(monkeypatch):
     dropped: list[str] = []
     monkeypatch.setattr(
         "src.services.audit.content_buffer.increment_audit_content_dropped",
         lambda *, reason, count=1: dropped.append(reason),
     )
+    monkeypatch.setattr("src.chat.audit.enqueue_audit_event", AsyncMock())
     service = _Service({"org-1": True}, payload_max_bytes=DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)
-    buffer = AuditContentBuffer(service, max_unmeasured=1)
+    buffer = AuditContentBuffer(service)
     request_data = _tool_schema_request("chat")
 
-    # The first one takes the only slot: kept unchanged, measured by the flusher.
-    assert buffer.offer(_unsized_request(request_data)) is True
-    assert buffer._waiting_chars >= DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
-    # No slot is left: the body is replaced, the item is still sent.
-    assert buffer.offer(_unsized_request(request_data)) is True
+    # Without a measured size the body cannot be counted safely, so it is replaced;
+    # the response is still kept.
+    await _emit_chat(buffer, request_data, measured=False)
+
     assert dropped == ["payload_values"]
-    sending = asyncio.create_task(buffer.flush())
-    await asyncio.sleep(0)
-    # The slot is held until the send ends.
-    assert buffer._unmeasured() == 1
-    await sending
-    assert buffer._unmeasured() == 0
-    first, second = service.bundles[0]
-    assert first.payload["payloads"][0]["content_json"] == request_data
-    assert second.payload["payloads"][0]["content_json"]["omitted"] == "payload_too_many_values"
-    # The slot is free again.
-    assert buffer.offer(_unsized_request(request_data)) is True
-    assert dropped == ["payload_values"]
+    assert buffer._waiting_chars < 1_000
+    await buffer.flush()
+    request, response = service.bundles[0][0].payload["payloads"]
+    assert request["content_json"] == {
+        "omitted": "payload_too_many_values",
+        "max_values": buffer.max_size_values,
+    }
+    assert response["content_json"] == {"reply": "hello"}
 
 
 def _floor_cases() -> list:
@@ -810,30 +850,3 @@ def test_the_size_floor_never_exceeds_the_compacted_size(budget):
         assert size.floor <= compacted_size
         # The work stays within about twice the limit.
         assert size.visited <= 2 * budget + 2
-
-
-def test_json_body_size_is_known_only_for_plain_json_with_a_length():
-    def headers(**values: str) -> Request:
-        return _request(
-            buffer=None,
-            operation=None,
-            headers={key.replace("_", "-"): value for key, value in values.items()},
-        )
-
-    assert (
-        _json_body_bytes(
-            headers(content_type="application/json; charset=utf-8", content_length="42")
-        )
-        == 42
-    )
-    assert (
-        _json_body_bytes(headers(content_type="multipart/form-data", content_length="42")) is None
-    )
-    assert _json_body_bytes(headers(content_type="application/json")) is None
-    assert _json_body_bytes(headers(content_type="application/json", content_length="0")) is None
-    assert (
-        _json_body_bytes(
-            headers(content_type="application/json", content_length="42", content_encoding="gzip")
-        )
-        is None
-    )

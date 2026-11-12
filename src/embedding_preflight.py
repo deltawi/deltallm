@@ -14,7 +14,7 @@ from src.middleware.rate_limit import (
 )
 from src.models.errors import InvalidRequestError
 from src.models.requests import EmbeddingRequest
-from src.rate_limit_policy import estimate_tokens
+from src.rate_limit_policy import estimate_tokens_for_json_size, json_text_size
 from src.router.context_policy import estimate_embedding_context_input_tokens
 from src.routers.utils import enforce_budget_if_configured
 from src.router.runtime_generation import RoutingRuntimeGeneration
@@ -38,6 +38,9 @@ class EmbeddingPreflightResult:
     callback_manager: CallbackManager
     token_estimate: int
     context_input_tokens: int
+    # Length of the JSON text of request_data (after hooks and guardrails),
+    # measured once for the token estimate.
+    request_data_chars: int = 0
 
 
 async def run_embedding_preflight(
@@ -72,7 +75,8 @@ async def run_embedding_preflight(
             message="Request data was invalid after pre-call policy processing"
         ) from exc
     transformed_data = transformed_payload.model_dump(exclude_none=True)
-    token_estimate = estimate_tokens(transformed_data)
+    request_data_chars = json_text_size(transformed_data)
+    token_estimate = estimate_tokens_for_json_size(request_data_chars)
     context_input_tokens = estimate_embedding_context_input_tokens(transformed_payload.input)
 
     ensure_model_allowed(
@@ -125,6 +129,7 @@ async def run_embedding_preflight(
         callback_manager=callback_manager,
         token_estimate=token_estimate,
         context_input_tokens=context_input_tokens,
+        request_data_chars=request_data_chars,
     )
     request.state.prepared_embedding_request = result
     return result
