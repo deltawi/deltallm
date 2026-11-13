@@ -762,11 +762,47 @@ def test_a_long_fallback_model_counts_against_the_limit() -> None:
 def test_large_integers_are_charged_at_their_heap_size() -> None:
     memory = ReplyMemory(1 << 30)
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
-    numbers = [int("9" * 4300) - i for i in range(200)]
+    numbers = [2**1024 - 1 - i for i in range(200)]
     reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "extra": numbers}]}))
 
     kept = reply._reasoning_details[0]["extra"]
     assert kept is numbers
     assert memory.used >= sum(sys.getsizeof(value) for value in numbers) + sys.getsizeof(kept)
+    # A larger integer is not kept: the reply stops and is marked.
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 1, "extra": [int("9" * 4300)]}]}))
+    assert "extra" not in reply._reasoning_details[1]
+    assert reply.truncated is True
     reply.release()
     assert memory.used == 0
+
+
+def test_large_integers_in_tool_arguments_are_refused_without_encoding(monkeypatch) -> None:
+    import src.chat.stream_reply as stream_reply
+
+    def no_encode(*args, **kwargs):
+        raise AssertionError("the arguments must not be encoded")
+
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=ReplyMemory(1 << 30))
+    monkeypatch.setattr(stream_reply.json, "dumps", no_encode)
+    numbers = [int("9" * 4300) - i for i in range(200)]
+    reply.add_delta({"tool_calls": [{"index": 0, "function": {"arguments": {"n": numbers}}}]})
+
+    assert reply.truncated is True
+    assert reply._tool_calls[0].arguments.value() == ""
+
+
+def test_tool_arguments_object_with_many_values_is_refused() -> None:
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_delta({"tool_calls": [{"index": 0, "function": {"arguments": {"v": [0.5] * 300}}}]})
+
+    assert reply.truncated is True
+    assert reply._tool_calls[0].arguments.value() == ""
+
+
+def test_tool_arguments_object_with_few_values_is_kept() -> None:
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    arguments = {"v": [0.5] * 100, "n": 2**1000}
+    reply.add_delta({"tool_calls": [{"index": 0, "function": {"arguments": arguments}}]})
+
+    assert reply.truncated is False
+    assert reply._tool_calls[0].arguments.value() == json.dumps(arguments, separators=(",", ":"))
