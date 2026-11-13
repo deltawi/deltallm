@@ -330,11 +330,15 @@ class StreamReplyAccumulator:
                 "name": self._function_call.name.value(),
                 "arguments": self._function_call.arguments.value(),
             }
+        model = self.model
+        if model is None:
+            # The request's model name counts against the limit like the provider's.
+            model = self._meta(fallback_model)
         body: dict[str, Any] = {
             "id": self.response_id,
             "object": "chat.completion",
             "created": self.created,
-            "model": self.model or fallback_model,
+            "model": model,
             "choices": [{"index": 0, "message": message, "finish_reason": self.finish_reason}],
             # Readers can tell a rebuilt stream reply from a provider response body.
             "stream": True,
@@ -624,9 +628,11 @@ def _same_scalar(previous: Any, value: Any) -> bool:
 def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int, int] | None:
     """Return (JSON characters, heap bytes, values read) for a decoded JSON value.
 
-    The sizes are upper bounds. The walk stops with None when the value is more
-    than ``max_chars`` or holds more than ``max_values`` values, so its work is
-    bounded by those limits and not by the value. It never encodes the value.
+    The sizes are upper bounds. The characters include the separators that the
+    audit writer (``json.dumps`` with its default ``", "`` and ``": "``) puts
+    between items. The walk stops with None when the value is more than
+    ``max_chars`` or holds more than ``max_values`` values, so its work is bounded
+    by those limits and not by the value. It never encodes the value.
     """
     chars = 0
     heap = 0
@@ -657,12 +663,14 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
         elif isinstance(item, list):
             if count + len(stack) + len(item) > max_values:
                 return None
-            chars += 2 + len(item)
+            # Brackets, and ", " after each item.
+            chars += 2 + 2 * len(item)
             stack.extend(item)
         elif isinstance(item, dict):
             if count + len(stack) + 2 * len(item) > max_values:
                 return None
-            chars += 2 + 2 * len(item)
+            # Braces, and ": " and ", " for each entry.
+            chars += 2 + 4 * len(item)
             for key, child in item.items():
                 stack.append(key if isinstance(key, str) else str(key))
                 stack.append(child)
