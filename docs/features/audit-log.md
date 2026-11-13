@@ -232,8 +232,9 @@ that it sends to the client. The payload is one `chat.completion` object with th
     64-bit range, a number was not finite (`1e309`, `NaN`), or a value or name had a NUL
     character or a lone UTF-16 surrogate. DeltaLLM does not keep these values, because the audit
     writer could not copy them, PostgreSQL could not store them, or the audit reader could not
-    read them back unchanged. In the reply text, DeltaLLM replaces each such character with
-    U+FFFD (�) and keeps the text
+    read them back unchanged. In the reply text, DeltaLLM replaces such a character with
+    U+FFFD (�) and keeps the text. It replaces at most 64 of them in one reply, and cuts the
+    reply before the next one, so this work stays small for each chunk
 
 The payload has the same shape for `/v1/chat/completions`, `/v1/completions`, `/v1/responses` and
 `/v1/messages`. It does not have the provider's own response format.

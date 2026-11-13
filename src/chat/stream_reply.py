@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Any
+from typing import Any, Iterator
 import weakref
 
 from src.providers.openai_stream_contract import OpenAIStreamDeltaField
@@ -56,6 +56,9 @@ _MIN_INTEGER = -(1 << 63)
 # PostgreSQL JSONB cannot store NUL or a UTF-16 surrogate that is not part of a
 # pair (the decoder joins pairs, so each surrogate left in a string is alone).
 _UNSTORABLE = re.compile("[\x00\ud800-\udfff]")
+# In the reply text, at most this many such characters are replaced with U+FFFD.
+# At the next one, the text is cut, so the replacement work of a reply is small.
+_MAX_REPLACED_CHARS = 64
 # A value nested deeper is not kept: the audit writer copies and encodes the
 # reply with recursive calls, and a deep value would exceed the recursion limit.
 _MAX_JSON_DEPTH = 32
@@ -199,6 +202,7 @@ class StreamReplyAccumulator:
         self._json_values_left = _MAX_JSON_VALUES
         self._argument_values_left = _MAX_ARGUMENT_VALUES
         self._argument_chars_left = _MAX_ARGUMENT_CHARS
+        self._replace_left = _MAX_REPLACED_CHARS
         self._memory = memory
         self._held = [0]
         # The share goes back when release() runs or when the accumulator is
@@ -455,29 +459,48 @@ class StreamReplyAccumulator:
         text.present = True
         if not fragment:
             return
+        complete = True
         if self._max_chars is not None:
-            fragment = self._storable_text(fragment)
+            fragment, complete = self._storable_text(fragment)
             # The exact JSON size, escapes included. The scan stops past the
             # remaining budget, so its work is bounded.
             chars = json_text_chars(fragment, stop=self._max_chars - self._chars)
-            if not self._reserve(chars, text.cost_of(fragment)):
+            if fragment and not self._reserve(chars, text.cost_of(fragment)):
                 return
-        freed = text.add(fragment)
-        if freed:
-            self._give(freed)
+        if fragment:
+            freed = text.add(fragment)
+            if freed:
+                self._give(freed)
+        if not complete:
+            self._stop()
 
-    def _storable_text(self, value: str) -> str:
-        """Audit only: replace what JSONB cannot store with U+FFFD and mark the reply.
+    def _storable_text(self, value: str) -> tuple[str, bool]:
+        """Audit only: return the text that JSONB can store, and False if it was cut.
 
-        The replacement has the same JSON size (six characters). A text longer than
-        the rest of the limit is not scanned: it cannot be kept anyway.
+        Each character that JSONB cannot store becomes U+FFFD, which has the same JSON
+        size (six characters), and the reply is marked. After _MAX_REPLACED_CHARS of
+        them in one reply, the text is cut before the next one. The scans run in C,
+        and a text longer than the rest of the limit is not scanned: it cannot be kept.
         """
-        if self._max_chars is None or len(value) > self._max_chars - self._chars:
-            return value
-        if _storable(value):
-            return value
-        self.truncated = True
-        return _UNSTORABLE.sub("\ufffd", value)
+        if (
+            self._max_chars is None
+            or len(value) > self._max_chars - self._chars
+            or _storable(value)
+        ):
+            return value, True
+        kept: list[str] = []
+        start = 0
+        for position in _unstorable_positions(value):
+            self.truncated = True
+            kept.append(value[start:position])
+            if self._replace_left == 0:
+                return "\ufffd".join(kept), False
+            self._replace_left -= 1
+            start = position + 1
+        if not kept:
+            return value, True
+        kept.append(value[start:])
+        return "\ufffd".join(kept), True
 
     def _add_field(self, text: _Text, value: Any) -> None:
         if isinstance(value, str):
@@ -647,8 +670,15 @@ class StreamReplyAccumulator:
         name = function.get("name")
         # Most providers send the name once; some repeat it on every delta.
         if isinstance(name, str) and name:
-            name = self._storable_text(name)
-            if not entry.name.equals(name):
+            replace_left = self._replace_left
+            name, complete = self._storable_text(name)
+            if not complete:
+                self._stop()
+                return
+            if entry.name.equals(name):
+                # A repeated name adds nothing, so it uses no replacements.
+                self._replace_left = replace_left
+            else:
                 self._add_text(entry.name, name)
         arguments = function.get("arguments")
         if isinstance(arguments, str):
@@ -698,9 +728,38 @@ def _exact_integer(value: int) -> bool:
 
 
 def _storable(value: str) -> bool:
+    if "\x00" in value:
+        return False
     if value.isascii():
-        return "\x00" not in value
-    return _UNSTORABLE.search(value) is None
+        return True
+    # The UTF-8 encoder refuses lone surrogates, and it is about three times as
+    # fast as a regular expression scan of the same text.
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _unstorable_positions(value: str) -> Iterator[int]:
+    """Yield the positions of the characters that JSONB cannot store, in order.
+
+    The text before the first one is scanned only by the fast checks of _storable.
+    """
+    first = value.find("\x00")
+    if value.isascii():
+        while first >= 0:
+            yield first
+            first = value.find("\x00", first + 1)
+        return
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        first = exc.start if first < 0 else min(first, exc.start)
+    if first < 0:
+        return
+    for match in _UNSTORABLE.finditer(value, first):
+        yield match.start()
 
 
 def _same_scalar(previous: Any, value: Any) -> bool:
