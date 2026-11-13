@@ -144,6 +144,18 @@ def _inline_data_placeholder(value: str) -> str | None:
     return f"[omitted inline data: {media_type}, {len(value)} chars, sha256={_sha256(value)}]"
 
 
+def json_text_chars(value: str) -> int:
+    """Return the size this module counts for ``value`` as JSON text, without quotes.
+
+    ASCII text counts its length and other text its ``\\uXXXX`` escapes, so a caller
+    that cuts text to the payload limit cuts it as compaction will measure it.
+    """
+
+    if value.isascii():
+        return len(value)
+    return _text_size(value, stop=len(value) * 12 + 2) - 2
+
+
 def _text_size(value: str, *, stop: int) -> int:
     """Return the length of ``value`` as JSON text, as ``json.dumps`` writes it.
 

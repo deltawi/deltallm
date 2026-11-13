@@ -207,9 +207,10 @@ that it sends to the client. The payload is one `chat.completion` object with th
 - `stream: true`: this field shows that DeltaLLM built the payload from a stream
 - `truncated: true`: this field is present only when DeltaLLM dropped a part of the reply. This
   occurs when the retained reply data is longer than `general_settings.audit_payload_max_bytes`
-  characters minus a margin (16 KiB, or half of a smaller limit) for the other fields, when the
-  reply has more than 128 tool calls, or when the replies that the pod keeps at the same time
-  already use 64 MiB. DeltaLLM keeps the start of the reply.
+  minus a margin (16 KiB, or half of a smaller limit) for the other fields, when the reply has more
+  than 128 tool calls, or when the replies that the pod keeps at the same time already use 64 MiB.
+  DeltaLLM keeps the start of the reply. Reply data is measured as JSON text, like the payload limit:
+  each character outside ASCII counts six, so an Arabic reply is cut at about 170,000 characters.
 
 The payload has the same shape for `/v1/chat/completions`, `/v1/completions`, `/v1/responses` and
 `/v1/messages`. It does not have the provider's own response format.
