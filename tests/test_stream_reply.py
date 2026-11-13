@@ -2,12 +2,21 @@
 
 import asyncio
 import gc
+import json
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from src.chat.audit import stream_reply_accumulator
-from src.chat.stream_reply import ReplyMemory, StreamReplyAccumulator
+from src.chat.stream_reply import (
+    _ENTRY_CHARS,
+    _STR_BYTES,
+    ReplyMemory,
+    StreamReplyAccumulator,
+    _json_size,
+)
+from src.chat.stream_response import ManagedStreamLifecycle
 from src.db.audit.repository import AuditRepository
 from src.services.audit.audit_service import AuditIngestionConfig, AuditService
 from src.services.audit.payload_compaction import compact_audit_content
@@ -82,14 +91,17 @@ def test_completion_keeps_text_reasoning_and_tool_calls() -> None:
     }
 
 
-def test_completion_omits_empty_tool_calls_and_ignores_other_choices() -> None:
+def test_completion_omits_empty_tool_calls_and_marks_other_choices() -> None:
     reply = StreamReplyAccumulator(max_chars=1000)
     reply.add_chunk(_chunk({"content": "kept"}, finish="stop"))
     reply.add_chunk(_chunk({"content": "dropped"}, index=1))
+    reply.add_chunk(_chunk({"content": " too"}))
 
     body = reply.completion(fallback_model="x", usage=None)
 
-    assert body["choices"][0]["message"] == {"role": "assistant", "content": "kept"}
+    # Only the first choice is kept, and the marker tells that n > 1 had more.
+    assert body["choices"][0]["message"] == {"role": "assistant", "content": "kept too"}
+    assert body["truncated"] is True
     assert "usage" not in body
 
 
@@ -103,20 +115,45 @@ def test_limit_drops_later_text_and_marks_truncation() -> None:
     body = reply.completion(fallback_model="x", usage=None)
 
     assert body["choices"][0]["message"]["content"] == "abc"
-    assert body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == "{}"
+    # A stopped reply does no more work, so the later tool call is not kept.
+    assert "tool_calls" not in body["choices"][0]["message"]
     assert body["truncated"] is True
 
 
 def test_limit_bounds_the_number_of_tool_calls() -> None:
     reply = StreamReplyAccumulator(max_chars=100_000)
+    # An adapter can send many tool calls in one delta.
     reply.add_chunk(
-        _chunk({"tool_calls": [{"index": i, "function": {"name": "f"}} for i in range(200)]})
+        _chunk({"tool_calls": [{"index": i, "function": {"name": "f"}} for i in range(100)]})
     )
+    for i in range(100, 200):
+        reply.add_chunk(_chunk({"tool_calls": [{"index": i, "function": {"name": "f"}}]}))
 
     body = reply.completion(fallback_model="x", usage=None)
 
     assert len(body["choices"][0]["message"]["tool_calls"]) == 128
     assert body["truncated"] is True
+
+
+def test_limit_bounds_the_number_of_reasoning_details() -> None:
+    reply = StreamReplyAccumulator(max_chars=100_000)
+    for i in range(130):
+        reply.add_chunk(_chunk({"reasoning_details": [{"index": i, "text": "t"}]}))
+
+    body = reply.completion(fallback_model="x", usage=None)
+
+    assert len(body["choices"][0]["message"]["reasoning_details"]) == 128
+    assert body["truncated"] is True
+
+
+def test_long_lists_in_one_delta_are_not_read() -> None:
+    reply = StreamReplyAccumulator(max_chars=100_000)
+    reply.add_delta({"tool_calls": _Unreadable([{}] * 129)})
+    reply.add_delta({"reasoning_details": _Unreadable([{}] * 17)})
+    reply.add_delta({"content": "still kept"})
+
+    assert reply.truncated is True
+    assert reply.message()["content"] == "still kept"
 
 
 def test_without_limit_every_tool_call_is_kept() -> None:
@@ -142,7 +179,8 @@ def test_fallback_model_is_used_when_chunks_have_no_model() -> None:
 
 
 def test_limit_counts_tool_call_ids_types_and_names() -> None:
-    reply = StreamReplyAccumulator(max_chars=5)
+    # Room for the tool call entry and five characters.
+    reply = StreamReplyAccumulator(max_chars=_ENTRY_CHARS + 5)
     reply.add_delta(
         {"tool_calls": [{"index": 0, "id": "i" * 100, "type": "t" * 100, "function": {}}]}
     )
@@ -159,8 +197,12 @@ def test_limit_counts_tool_call_ids_types_and_names() -> None:
 
 
 def test_limit_counts_replaced_and_nested_reasoning_details() -> None:
-    reply = StreamReplyAccumulator(max_chars=50)
+    # The first detail takes 110 characters: the entry, its keys and values.
+    reply = StreamReplyAccumulator(max_chars=120)
     reply.add_delta({"reasoning_details": [{"index": 0, "type": "reasoning.text", "text": "a"}]})
+    # A repeated value is not counted again.
+    reply.add_delta({"reasoning_details": [{"index": 0, "type": "reasoning.text"}]})
+    assert reply._chars == 110
     reply.add_delta({"reasoning_details": [{"index": 0, "extra": {"data": "x" * 100}}]})
     reply.add_delta({"reasoning_details": [{"index": 1, "nested": ["y" * 100]}]})
 
@@ -171,7 +213,7 @@ def test_limit_counts_replaced_and_nested_reasoning_details() -> None:
 
 
 def test_unhashable_reasoning_index_does_not_raise() -> None:
-    reply = StreamReplyAccumulator(max_chars=100)
+    reply = StreamReplyAccumulator(max_chars=1000)
     reply.add_delta({"reasoning_details": [{"index": [], "text": "a"}]})
     reply.add_delta({"reasoning_details": [{"index": {}, "text": "b"}]})
 
@@ -193,14 +235,15 @@ def test_completion_keeps_refusal() -> None:
 
 
 def test_shared_memory_caps_all_replies_and_comes_back_on_release_or_free() -> None:
-    memory = ReplyMemory(10)
+    # A string costs its characters and the bytes of the string object.
+    memory = ReplyMemory(_STR_BYTES + 10)
     first = StreamReplyAccumulator(max_chars=100, memory=memory)
     second = StreamReplyAccumulator(max_chars=100, memory=memory)
 
     first.add_chunk(_chunk({"content": "abcdefgh"}))
     second.add_chunk(_chunk({"content": "abcdefgh"}))
 
-    assert memory.used == 8
+    assert memory.used == _STR_BYTES + 8
     assert not first.truncated
     assert second.truncated
     first.release()
@@ -211,7 +254,7 @@ def test_shared_memory_caps_all_replies_and_comes_back_on_release_or_free() -> N
 
     third = StreamReplyAccumulator(max_chars=100, memory=memory)
     third.add_chunk(_chunk({"content": "abc"}))
-    assert memory.used == 3
+    assert memory.used == _STR_BYTES + 3
     del third  # a failed or cancelled stream drops its accumulator
     gc.collect()
     assert memory.used == 0
@@ -302,10 +345,176 @@ def test_a_non_ascii_reply_at_the_limit_is_cut_by_its_json_size() -> None:
     assert len(content) < max_bytes // 6
 
 
-def test_unbounded_replies_count_text_by_length() -> None:
+def test_bounded_replies_count_text_at_its_json_size() -> None:
     reply = StreamReplyAccumulator()
     reply.add_chunk(_chunk({"content": "ع" * 10}))
-    assert reply._chars == 10
+    assert reply.message()["content"] == "ع" * 10
     bounded = StreamReplyAccumulator(max_chars=1000)
     bounded.add_chunk(_chunk({"content": "ع" * 10}))
     assert bounded._chars == 60
+
+
+class _Unreadable(list):
+    def __iter__(self):
+        raise AssertionError("the list must not be read")
+
+
+class _UnreadableDelta(dict):
+    def get(self, *args):
+        raise AssertionError("a stopped reply must not read the delta")
+
+    def items(self):
+        raise AssertionError("a stopped reply must not read the delta")
+
+
+def test_a_large_json_value_is_refused_without_encoding_it() -> None:
+    # One reasoning frame with 35,000 numbers is refused by the value count.
+    reply = StreamReplyAccumulator(max_chars=1_000_000)
+    detail = {"index": 0, "type": "reasoning.encrypted", "points": [0.5] * 35_000}
+    reply.add_chunk(_chunk({"reasoning_details": [detail]}))
+
+    assert reply.truncated is True
+    # The walk refuses a list over the bound before it reads the list.
+    assert _json_size(_Unreadable([1] * 5000), max_chars=10**9, max_values=4096) is None
+
+
+def test_a_stopped_reply_does_no_work_for_later_chunks() -> None:
+    reply = StreamReplyAccumulator(max_chars=3)
+    reply.add_chunk(_chunk({"content": "abcd"}))
+    assert reply.truncated is True
+
+    reply.add_delta(_UnreadableDelta(content="x"))
+    reply.add_chunk(_chunk({"content": "y"}, finish="stop"))
+
+    assert reply.finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"a": [1, -20, 3.25e-300, None, True, False, 'x"y\\n', "ع😀"]},
+        [{"k": {}}, [], [[]], 2**200, -(2**64), ""],
+        {"ключ": {"inner": ["value", 0.1]}},
+    ],
+)
+def test_measured_sizes_are_upper_bounds(value) -> None:
+    size = _json_size(value, max_chars=10**6, max_values=4096)
+
+    assert size is not None
+    assert size[0] >= len(json.dumps(value, separators=(",", ":")))
+
+
+def test_small_fragments_are_joined_and_their_heap_is_charged() -> None:
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=1 << 20, memory=memory)
+    for _ in range(40_000):
+        reply.add_chunk(_chunk({"content": "abc"}))
+
+    parts = reply._content._parts
+    kept = sum(sys.getsizeof(part) + 8 for part in parts)
+
+    assert len(parts) <= 40_000 // 64 + 64
+    assert kept <= memory.used
+    # Without joins, the 120,000 characters would keep about 2 MB of string objects.
+    assert memory.used < 2 * 120_000
+
+
+def test_text_outside_ascii_is_charged_at_four_bytes_per_character() -> None:
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=1 << 20, memory=memory)
+    reply.add_chunk(_chunk({"content": "a" * 1000}))
+    reply.add_chunk(_chunk({"content": "😀"}))
+
+    assert sys.getsizeof(reply._content.value()) <= memory.used
+
+
+def test_completion_moves_the_data_and_keeps_the_charge_until_release() -> None:
+    memory = ReplyMemory(1 << 20)
+    reply = StreamReplyAccumulator(max_chars=1000, memory=memory)
+    reply.add_chunk(_chunk({"content": "hello"}))
+    held = memory.used
+
+    body = reply.completion(fallback_model="x", usage=None)
+
+    assert body["choices"][0]["message"]["content"] == "hello"
+    assert reply._content.length == 0
+    assert memory.used == held
+    reply.add_chunk(_chunk({"content": "late"}))
+    assert memory.used == held
+    reply.release()
+    assert memory.used == 0
+
+
+def test_closing_the_stream_releases_the_reply_at_once() -> None:
+    memory = ReplyMemory(1 << 20)
+    reply = StreamReplyAccumulator(max_chars=1000, memory=memory)
+    reply.add_chunk(_chunk({"content": "hello"}))
+    released = []
+
+    async def close_upstream(exc=None) -> None:
+        del exc
+
+    async def release_permit() -> None:
+        released.append(True)
+
+    async def disconnect() -> None:
+        lifecycle = ManagedStreamLifecycle(
+            SimpleNamespace(close=close_upstream),
+            SimpleNamespace(release=release_permit),
+            audit_reply=reply,
+        )
+        await lifecycle.close(asyncio.CancelledError())
+
+    asyncio.run(disconnect())
+
+    # No garbage collection is needed: the client disconnect path frees the share.
+    assert memory.used == 0
+    assert released == [True]
+
+
+def test_completion_keeps_reasoning_and_the_legacy_function_call() -> None:
+    reply = StreamReplyAccumulator(max_chars=1000)
+    reply.add_chunk(_chunk({"reasoning": "step "}))
+    reply.add_chunk(_chunk({"reasoning": "one"}))
+    reply.add_chunk(_chunk({"function_call": {"name": "lookup", "arguments": ""}}))
+    reply.add_chunk(_chunk({"function_call": {"arguments": '{"q":'}}))
+    reply.add_chunk(_chunk({"function_call": {"arguments": '"x"}'}}, finish="function_call"))
+
+    body = reply.completion(fallback_model="x", usage=None)
+
+    assert body["choices"][0]["message"] == {
+        "role": "assistant",
+        "content": None,
+        "reasoning": "step one",
+        "function_call": {"name": "lookup", "arguments": '{"q":"x"}'},
+    }
+    assert "truncated" not in body
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [
+        {"audio": {"data": "AAAA"}},
+        {"content": [{"type": "text", "text": "a"}]},
+        {"reasoning": {"text": "a"}},
+        {"function_call": "lookup"},
+        {"tool_calls": [["not", "an", "object"]]},
+    ],
+)
+def test_data_that_is_not_rebuilt_marks_the_reply(delta) -> None:
+    reply = StreamReplyAccumulator(max_chars=1000)
+    reply.add_chunk(_chunk(delta))
+
+    assert reply.completion(fallback_model="x", usage=None)["truncated"] is True
+
+
+def test_empty_fields_and_logprobs() -> None:
+    reply = StreamReplyAccumulator(max_chars=1000)
+    reply.add_chunk(_chunk({"role": "assistant", "content": "", "audio": None, "annotations": []}))
+    assert reply.truncated is False
+
+    chunk = _chunk({"content": "a"})
+    chunk["choices"][0]["logprobs"] = {"content": [{"token": "a", "logprob": -0.1}]}
+    reply.add_chunk(chunk)
+
+    assert reply.truncated is True

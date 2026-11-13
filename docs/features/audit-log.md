@@ -200,17 +200,27 @@ Audit payloads are handled differently depending on the event type:
 For a streamed text request (`stream: true`), DeltaLLM builds the response payload from the stream
 that it sends to the client. The payload is one `chat.completion` object with these fields:
 
-- `choices[0].message`: the assistant text (`content`), reasoning (`reasoning_content` and
-  `reasoning_details`), refusal (`refusal`) and tool calls (`tool_calls`)
+- `choices[0].message`: the assistant text (`content`), reasoning (`reasoning_content`, `reasoning`
+  and `reasoning_details`), refusal (`refusal`), tool calls (`tool_calls`) and a legacy function call
+  (`function_call`)
 - `choices[0].finish_reason`
 - `usage`: the token counts of the stream
 - `stream: true`: this field shows that DeltaLLM built the payload from a stream
-- `truncated: true`: this field is present only when DeltaLLM dropped a part of the reply. This
-  occurs when the retained reply data is longer than `general_settings.audit_payload_max_bytes`
-  minus a margin (16 KiB, or half of a smaller limit) for the other fields, when the reply has more
-  than 128 tool calls, or when the replies that the pod keeps at the same time already use 64 MiB.
-  DeltaLLM keeps the start of the reply. Reply data is measured as JSON text, like the payload limit:
-  each character outside ASCII counts six, so an Arabic reply is cut at about 170,000 characters.
+- `truncated: true`: this field is present only when the payload is not the full reply. DeltaLLM
+  keeps the start of the reply and sets this field when:
+  - the reply data is longer than `general_settings.audit_payload_max_bytes` minus a margin (16 KiB,
+    or half of a smaller limit) for the other fields. Text is measured as JSON text, like the payload
+    limit: each character outside ASCII counts six, so an Arabic reply is cut at about 170,000
+    characters
+  - the replies that the pod keeps at the same time already use 64 MiB of memory
+  - the reply has more than 128 tool calls or 128 reasoning details
+  - the request asked for more than one choice (`n` > 1). DeltaLLM keeps only the first choice
+  - the stream sent data that DeltaLLM does not rebuild, for example `logprobs`, audio, annotations,
+    or a field in a shape that is not text
+  - one delta sent more than 16 fields, more than 128 tool calls or more than 16 reasoning
+    details, a reasoning detail had more than 16 fields, or the reasoning details and tool
+    arguments of the reply had more than 4,096 JSON values. These limits keep the work for each
+    chunk small
 
 The payload has the same shape for `/v1/chat/completions`, `/v1/completions`, `/v1/responses` and
 `/v1/messages`. It does not have the provider's own response format.
