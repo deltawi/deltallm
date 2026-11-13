@@ -64,9 +64,11 @@ _MAX_REPLACED_CHARS = 64
 _MAX_JSON_DEPTH = 32
 _MERGED_REASONING_TEXT_KEYS = ("text", "summary", "data", "signature")
 _KNOWN_DELTA_FIELDS = frozenset(field.value for field in OpenAIStreamDeltaField)
-# Upper bounds of heap bytes. A string has a header of at most 64 bytes and a
-# list slot; its characters take 1 byte (ASCII) to 4 bytes each.
-_STR_BYTES = 80
+# Upper bounds of heap bytes. A string has a header of at most 76 bytes (with
+# its terminator) and a list slot of 8 bytes, and a list built by appends has at
+# most one more spare byte for each item. Its characters take 1 byte (ASCII) to
+# 4 bytes each.
+_STR_BYTES = 96
 _VALUE_BYTES = 128
 # A list or dictionary also has its item table: a list built by appends has at
 # most 9 bytes for each item (16 after items are removed), and a dictionary at
@@ -85,14 +87,16 @@ _MAX_KEY_CHARS = 64
 # limit, and a fixed charge at creation covers their heap bytes.
 _MAX_META_CHARS = 256
 _META_BYTES = 3 * (_STR_BYTES + 4 * _MAX_META_CHARS)
-# The accumulator itself, its fixed text fields and dictionaries, and its
-# finalizer: about 2.4 KiB on CPython 3.11 to 3.13.
-_STATE_BYTES = 3 * 1024
+# A ``_Text`` (72 bytes on CPython 3.11 to 3.13) and its two lists: 56 bytes each
+# when empty, plus at most 6 spare slots each. The charge of each string covers
+# the other spare slots. A text field of a reasoning detail also adds a
+# dictionary entry.
+_TEXT_BYTES = 320
+# The accumulator itself, its dictionaries, its finalizer (about 2 KiB on CPython
+# 3.11 to 3.13 together) and its four fixed text fields.
+_STATE_BYTES = 2 * 1024 + 4 * _TEXT_BYTES
 # The share that each reply takes when it is made.
 _FIXED_BYTES = _STATE_BYTES + _META_BYTES
-# A ``_Text`` and its empty list of parts (128 bytes on CPython 3.11 to 3.13).
-# A text field of a reasoning detail also adds a dictionary entry.
-_TEXT_BYTES = 160
 # Audit only: provider usage above these bounds keeps only the token counts.
 _MAX_USAGE_CHARS = 4096
 _MAX_USAGE_VALUES = 128
@@ -132,43 +136,50 @@ def _give_back(memory: ReplyMemory, held: list[int]) -> None:
 
 
 class _Text:
-    """Text built from stream fragments, joined in groups of ``_JOIN_EVERY``."""
+    """Text built from stream fragments, joined in groups of ``_JOIN_EVERY``.
 
-    __slots__ = ("_parts", "_blocks", "length", "wide", "present")
+    The joined groups and the fragments since the last join are in two lists
+    that only grow by appends. A join replaces the list of fragments, so no list
+    keeps the spare slots of the items that a join removed.
+    """
+
+    __slots__ = ("_blocks", "_parts", "length", "wide", "present")
 
     def __init__(self) -> None:
+        self._blocks: list[str] = []
         self._parts: list[str] = []
-        self._blocks = 0
         self.length = 0
         self.wide = False
         # A field sent as "" is still sent; the MCP hop passes it on.
         self.present = False
 
     def cost(self) -> int:
-        return (4 if self.wide else 1) * self.length + _STR_BYTES * len(self._parts)
+        strings = len(self._blocks) + len(self._parts)
+        return (4 if self.wide else 1) * self.length + _STR_BYTES * strings
 
     def cost_of(self, fragment: str) -> int:
         """Return the heap bytes that ``add(fragment)`` adds, before any join."""
         wide = self.wide or not fragment.isascii()
         after = (4 if wide else 1) * (self.length + len(fragment))
-        return after + _STR_BYTES * (len(self._parts) + 1) - self.cost()
+        strings = len(self._blocks) + len(self._parts) + 1
+        return after + _STR_BYTES * strings - self.cost()
 
     def add(self, fragment: str) -> int:
         """Append a fragment and return the heap bytes that a join freed."""
         self._parts.append(fragment)
         self.length += len(fragment)
         self.wide = self.wide or not fragment.isascii()
-        pending = len(self._parts) - self._blocks
+        pending = len(self._parts)
         if pending < _JOIN_EVERY:
             return 0
-        block = "".join(self._parts[self._blocks :])
-        del self._parts[self._blocks :]
-        self._parts.append(block)
-        self._blocks += 1
+        self._blocks.append("".join(self._parts))
+        self._parts = []
         return _STR_BYTES * (pending - 1)
 
     def value(self) -> str:
-        return "".join(self._parts)
+        if not self._blocks:
+            return "".join(self._parts)
+        return "".join([*self._blocks, *self._parts])
 
     def equals(self, text: str) -> bool:
         return len(text) == self.length and self.value() == text
@@ -653,7 +664,8 @@ class StreamReplyAccumulator:
                 if self._audit and len(self._tool_calls) >= _MAX_TOOL_CALLS:
                     self.truncated = True
                     continue
-                if not self._reserve(_ENTRY_CHARS, _ENTRY_BYTES):
+                # The entry and its name and arguments texts.
+                if not self._reserve(_ENTRY_CHARS, _ENTRY_BYTES + 2 * _TEXT_BYTES):
                     return
                 entry = self._tool_calls[index] = _ToolCall()
             call_id = item.get("id")
@@ -675,7 +687,7 @@ class StreamReplyAccumulator:
             self.truncated = True
             return
         if self._function_call is None:
-            if not self._reserve(_ENTRY_CHARS, _ENTRY_BYTES):
+            if not self._reserve(_ENTRY_CHARS, _ENTRY_BYTES + 2 * _TEXT_BYTES):
                 return
             self._function_call = _FunctionCall()
         self._add_function(self._function_call, value)

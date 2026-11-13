@@ -423,7 +423,7 @@ def test_small_fragments_are_joined_and_their_heap_is_charged() -> None:
     for _ in range(40_000):
         reply.add_chunk(_chunk({"content": "abc"}))
 
-    parts = reply._content._parts
+    parts = [*reply._content._blocks, *reply._content._parts]
     kept = sum(sys.getsizeof(part) + 8 for part in parts)
 
     assert len(parts) <= 40_000 // 64 + 64
@@ -792,8 +792,10 @@ def _kept_heap(value) -> int:  # noqa: ANN001
             stack.extend(item.values())
         elif isinstance(item, (list, tuple)):
             stack.extend(item)
-        elif hasattr(item, "__slots__"):
-            stack.extend(getattr(item, name) for name in item.__slots__)
+        else:
+            # The slots of each class, also those of a base class (a tool call).
+            for cls in type(item).__mro__:
+                stack.extend(getattr(item, name) for name in cls.__dict__.get("__slots__", ()))
     return total
 
 
@@ -872,6 +874,20 @@ _EMPTY_DETAIL = {"text": "", "summary": "", "data": "", "signature": ""}
         [{"function_call": {"name": "f", "arguments": "{"}}]
         + [{"function_call": {"arguments": "a"}}] * 200,
         [{"content": "a", "reasoning_content": "b", "reasoning": "c", "refusal": "d"}] * 500,
+        # One-character fragments outside the BMP have the largest string header.
+        [
+            {
+                "tool_calls": [
+                    {
+                        "index": i,
+                        "function": {"name": chr(0x1F600 + j % 2), "arguments": chr(0x1F600 + j)},
+                    }
+                    for i in range(128)
+                ]
+            }
+            for j in range(255)
+        ],
+        [{"content": chr(0x1F600 + j % 50)} for j in range(5000)],
     ],
     ids=[
         "empty",
@@ -881,6 +897,8 @@ _EMPTY_DETAIL = {"text": "", "summary": "", "data": "", "signature": ""}
         "large-indexes",
         "function-call",
         "text",
+        "astral-tool-calls",
+        "astral-text",
     ],
 )
 def test_the_charge_covers_the_heap_that_the_reply_keeps(deltas) -> None:  # noqa: ANN001
