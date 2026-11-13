@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 import weakref
 
@@ -42,16 +43,19 @@ _MAX_CHOICES_PER_CHUNK = 8
 # fields of reasoning details or tool arguments sent as an object.
 _MAX_JSON_VALUES = 4096
 # Tool arguments sent as an object are encoded on the event loop, and a number
-# costs up to about 2 us to write. So one object has at most this many values,
-# and the objects of one delta have at most this many JSON characters together,
-# where each object counts as at least 1 KiB (so at most 64 objects a delta).
+# costs up to about 2 us to write. So the objects of one delta have at most this
+# many values and this many JSON characters together, where each object counts
+# as at least 2 KiB (so at most 32 objects a delta).
 _MAX_ARGUMENT_VALUES = 256
 _MAX_ARGUMENT_CHARS = 64 * 1024
-_MIN_ARGUMENT_CHARS = 1024
-# Larger integers are not kept: their decimal text costs time quadratic in its
-# length, and the audit reader reads a number as a 64-bit float, which cannot
-# hold 2**1024. Infinity and NaN are not JSON, so they are not kept either.
-_MAX_INTEGER_BITS = 1023
+_MIN_ARGUMENT_CHARS = 2 * 1024
+# The audit reader keeps an integer exactly only when it fits in a signed or an
+# unsigned 64-bit integer, so other integers are not kept. Infinity and NaN are
+# not JSON, so they are not kept either.
+_MIN_INTEGER = -(1 << 63)
+# PostgreSQL JSONB cannot store NUL or a UTF-16 surrogate that is not part of a
+# pair (the decoder joins pairs, so each surrogate left in a string is alone).
+_UNSTORABLE = re.compile("[\x00\ud800-\udfff]")
 # A value nested deeper is not kept: the audit writer copies and encodes the
 # reply with recursive calls, and a deep value would exceed the recursion limit.
 _MAX_JSON_DEPTH = 32
@@ -193,6 +197,7 @@ class StreamReplyAccumulator:
         self._max_usage_chars = max(0, min(_MAX_USAGE_CHARS, max_usage_chars))
         self._chars = 0
         self._json_values_left = _MAX_JSON_VALUES
+        self._argument_values_left = _MAX_ARGUMENT_VALUES
         self._argument_chars_left = _MAX_ARGUMENT_CHARS
         self._memory = memory
         self._held = [0]
@@ -241,7 +246,7 @@ class StreamReplyAccumulator:
         created = chunk.get("created")
         if self.created is None and isinstance(created, int) and not isinstance(created, bool):
             # A Unix time; a larger integer is not kept.
-            self.created = created if created.bit_length() <= 64 else None
+            self.created = created if _exact_integer(created) else None
         if self.model is None:
             self.model = self._meta(chunk.get("model"))
         choices = chunk.get("choices")
@@ -272,6 +277,7 @@ class StreamReplyAccumulator:
         # Check the stopped state first: a stopped reply does no work for a chunk.
         if self._stopped:
             return
+        self._argument_values_left = _MAX_ARGUMENT_VALUES
         self._argument_chars_left = _MAX_ARGUMENT_CHARS
         if self._audit and not self.truncated:
             self._mark_unknown_fields(delta)
@@ -378,7 +384,12 @@ class StreamReplyAccumulator:
             return None
         if not self._audit:
             return value
-        if not self._keep_meta or len(value) > _MAX_META_CHARS or not self._reserve_meta(value):
+        if (
+            not self._keep_meta
+            or len(value) > _MAX_META_CHARS
+            or not _storable(value)
+            or not self._reserve_meta(value)
+        ):
             # Not kept; the reply text goes on.
             self.truncated = True
             return None
@@ -445,6 +456,7 @@ class StreamReplyAccumulator:
         if not fragment:
             return
         if self._max_chars is not None:
+            fragment = self._storable_text(fragment)
             # The exact JSON size, escapes included. The scan stops past the
             # remaining budget, so its work is bounded.
             chars = json_text_chars(fragment, stop=self._max_chars - self._chars)
@@ -453,6 +465,19 @@ class StreamReplyAccumulator:
         freed = text.add(fragment)
         if freed:
             self._give(freed)
+
+    def _storable_text(self, value: str) -> str:
+        """Audit only: replace what JSONB cannot store with U+FFFD and mark the reply.
+
+        The replacement has the same JSON size (six characters). A text longer than
+        the rest of the limit is not scanned: it cannot be kept anyway.
+        """
+        if self._max_chars is None or len(value) > self._max_chars - self._chars:
+            return value
+        if _storable(value):
+            return value
+        self.truncated = True
+        return _UNSTORABLE.sub("\ufffd", value)
 
     def _add_field(self, text: _Text, value: Any) -> None:
         if isinstance(value, str):
@@ -468,6 +493,10 @@ class StreamReplyAccumulator:
             return False
         remaining = self._max_chars - self._chars
         chars = json_text_chars(value, stop=remaining) + 2
+        if chars <= remaining and not _storable(value):
+            # Not kept: the reply uses its default value.
+            self.truncated = True
+            return False
         width = 1 if value.isascii() else 4
         return self._reserve(chars, _STR_BYTES + width * len(value))
 
@@ -477,6 +506,7 @@ class StreamReplyAccumulator:
         *,
         max_values: int = _MAX_JSON_VALUES,
         max_chars: int | None = None,
+        check_strings: bool = True,
     ) -> tuple[int, int] | None:
         """Measure a JSON value with bounded work: (JSON characters, heap bytes)."""
         if self._stopped or self._max_chars is None:
@@ -486,6 +516,7 @@ class StreamReplyAccumulator:
             value,
             max_chars=remaining if max_chars is None else min(remaining, max_chars),
             max_values=min(max_values, self._json_values_left),
+            check_strings=check_strings,
         )
         if size is None:
             self._stop()
@@ -576,7 +607,7 @@ class StreamReplyAccumulator:
             index = item.get("index")
             if not isinstance(index, int) or isinstance(index, bool):
                 index = position
-            elif self._audit and index.bit_length() > 64:
+            elif self._audit and not _exact_integer(index):
                 # The key is kept before any value is counted.
                 index = position
                 self.truncated = True
@@ -615,8 +646,10 @@ class StreamReplyAccumulator:
     def _add_function(self, entry: _FunctionCall, function: dict[str, Any]) -> None:
         name = function.get("name")
         # Most providers send the name once; some repeat it on every delta.
-        if isinstance(name, str) and name and not entry.name.equals(name):
-            self._add_text(entry.name, name)
+        if isinstance(name, str) and name:
+            name = self._storable_text(name)
+            if not entry.name.equals(name):
+                self._add_text(entry.name, name)
         arguments = function.get("arguments")
         if isinstance(arguments, str):
             self._add_text(entry.arguments, arguments)
@@ -625,13 +658,17 @@ class StreamReplyAccumulator:
             # sizes); the kept string is then charged as text, at its JSON size and
             # heap bytes.
             if self._audit:
+                values_left = self._json_values_left
                 size = self._measure_json(
                     arguments,
-                    max_values=_MAX_ARGUMENT_VALUES,
+                    max_values=self._argument_values_left,
                     max_chars=self._argument_chars_left,
+                    # The encode escapes NUL and lone surrogates as ASCII text.
+                    check_strings=False,
                 )
                 if size is None:
                     return
+                self._argument_values_left -= values_left - self._json_values_left
                 self._argument_chars_left -= max(size[0], _MIN_ARGUMENT_CHARS)
             encoded = json.dumps(arguments, separators=(",", ":"))
             entry.arguments = _Text()
@@ -644,7 +681,7 @@ def _small_key(value: Any) -> bool:
     if value is None or isinstance(value, (bool, float)):
         return True
     if isinstance(value, int):
-        return value.bit_length() <= 64
+        return _exact_integer(value)
     return isinstance(value, str) and len(value) <= _MAX_KEY_CHARS
 
 
@@ -652,8 +689,18 @@ def _small_number(value: Any) -> bool:
     if isinstance(value, bool):
         return False
     if isinstance(value, int):
-        return value.bit_length() <= 64
+        return _exact_integer(value)
     return isinstance(value, float) and math.isfinite(value)
+
+
+def _exact_integer(value: int) -> bool:
+    return value.bit_length() <= 64 and value >= _MIN_INTEGER
+
+
+def _storable(value: str) -> bool:
+    if value.isascii():
+        return "\x00" not in value
+    return _UNSTORABLE.search(value) is None
 
 
 def _same_scalar(previous: Any, value: Any) -> bool:
@@ -662,7 +709,9 @@ def _same_scalar(previous: Any, value: Any) -> bool:
     return (value is None or isinstance(value, (str, int, float, bool))) and previous == value
 
 
-def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int, int] | None:
+def _json_size(
+    value: Any, *, max_chars: int, max_values: int, check_strings: bool = True
+) -> tuple[int, int, int] | None:
     """Return (JSON characters, heap bytes, values read) for a decoded JSON value.
 
     The sizes are upper bounds. The characters include the separators that the
@@ -670,10 +719,11 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
     between items. The heap includes the item tables of lists and dictionaries.
     The walk stops with None when the value is more than ``max_chars``, holds
     more than ``max_values`` values, is nested more than 32 levels deep, or has
-    an integer of 1,024 bits or more or a float that is not finite. So its work
-    is bounded by those limits and not by the value, and the audit writer and
-    reader can copy, encode and decode every value that it accepts. It never
-    encodes the value.
+    an integer outside the signed and unsigned 64-bit range, a float that is not
+    finite or (with ``check_strings``) a string that JSONB cannot store. So its
+    work is bounded by those limits and not by the value, and the audit writer,
+    PostgreSQL and the audit reader can copy, store and read back every value
+    that it accepts. It never encodes the value.
     """
     chars = 0
     heap = 0
@@ -692,6 +742,8 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
             size = json_text_chars(item, stop=remaining)
             if size > remaining:
                 return None
+            if check_strings and not _storable(item):
+                return None
             chars += size + 2
             heap += _STR_BYTES + (1 if item.isascii() else 4) * len(item)
             continue
@@ -699,9 +751,9 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
         if item is None or isinstance(item, bool):
             chars += 5
         elif isinstance(item, int):
-            bits = item.bit_length()
-            if bits > _MAX_INTEGER_BITS:
+            if not _exact_integer(item):
                 return None
+            bits = item.bit_length()
             # Decimal digits are at most 0.31 per bit, plus a sign; at least what
             # audit compaction counts for the number.
             chars += max(4, bits * 31 // 100 + 3)
