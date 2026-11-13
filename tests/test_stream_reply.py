@@ -265,3 +265,47 @@ def test_no_accumulator_when_the_org_has_content_storage_off() -> None:
         )
 
     asyncio.run(check())
+
+
+def test_a_non_ascii_reply_at_the_limit_is_cut_by_its_json_size() -> None:
+    """Arabic text is six JSON characters per letter, as compaction counts it."""
+
+    max_bytes = 64 * 1024
+    service = AuditService(
+        AuditRepository(None),
+        ingestion_config=AuditIngestionConfig(enabled=True, payload_max_bytes=max_bytes),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(),
+        app=SimpleNamespace(state=SimpleNamespace(audit_service=service)),
+    )
+    auth = SimpleNamespace(organization_id="org-1")
+
+    async def build():
+        reply = stream_reply_accumulator(request, auth)
+        assert reply is not None
+        for _ in range(200):
+            reply.add_chunk(_chunk({"content": "مرحبا بالعالم " * 20}))
+        reply.add_chunk(
+            _chunk({"reasoning_details": [{"index": 0, "type": "reasoning.text", "text": "ع"}]})
+        )
+        return reply.completion(fallback_model="m", usage=None)
+
+    body = asyncio.run(build())
+    stored, changed = compact_audit_content(body, max_bytes=max_bytes)
+
+    assert body["truncated"] is True
+    assert changed is False
+    content = stored["choices"][0]["message"]["content"]
+    assert content.startswith("مرحبا")
+    # Counted by length, the reply would have kept about six times more text.
+    assert len(content) < max_bytes // 6
+
+
+def test_unbounded_replies_count_text_by_length() -> None:
+    reply = StreamReplyAccumulator()
+    reply.add_chunk(_chunk({"content": "ع" * 10}))
+    assert reply._chars == 10
+    bounded = StreamReplyAccumulator(max_chars=1000)
+    bounded.add_chunk(_chunk({"content": "ع" * 10}))
+    assert bounded._chars == 60

@@ -6,9 +6,11 @@ Two owners use this accumulator:
   next hop. It runs without a size limit, because a cut turn would corrupt the
   follow-up request.
 - The text audit keeps the reply of a streamed completion. It runs with a
-  character limit on every retained string, so the reply size is bounded by the
-  audit payload limit and not by the stream length. When the limit is reached,
-  later data is dropped and the reply is marked ``truncated``.
+  limit on every retained string, so the reply size is bounded by the audit
+  payload limit and not by the stream length. Text counts its size as JSON, as
+  audit compaction measures it (a character outside ASCII is a six-character
+  escape). When the limit is reached, later data is dropped and the reply is
+  marked ``truncated``.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Any
 import weakref
 
 from src.providers.openai_stream_contract import OpenAIStreamDeltaField
+from src.services.audit.payload_compaction import json_text_chars
 
 _MAX_REASONING_DETAILS = 128
 # Bounded mode only: the MCP tool loop must see every call the model made.
@@ -175,7 +178,7 @@ class StreamReplyAccumulator:
         return body
 
     def _append(self, parts: list[str], text: str) -> None:
-        if not text or not self._reserve(len(text)):
+        if not text or not self._reserve_text(text):
             return
         parts.append(text)
 
@@ -200,7 +203,12 @@ class StreamReplyAccumulator:
         return True
 
     def _reserve_text(self, text: str) -> bool:
-        return self._reserve(len(text))
+        # A bounded reply counts text as audit compaction does, so a reply at the
+        # limit is cut here and not replaced as a whole later. The MCP tool loop has
+        # no limit and only needs the length.
+        if self._max_chars is None:
+            return self._reserve(len(text))
+        return self._reserve(json_text_chars(text))
 
     def _reserve_json(self, value: Any) -> bool:
         if self._max_chars is None:
@@ -278,5 +286,6 @@ class StreamReplyAccumulator:
 
 
 def _json_size(value: Any) -> int:
-    # The chunk was decoded from JSON, so it encodes again without an error.
-    return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False))
+    # The chunk was decoded from JSON, so it encodes again without an error. Text
+    # outside ASCII counts its escapes, as audit compaction measures it.
+    return len(json.dumps(value, separators=(",", ":")))
