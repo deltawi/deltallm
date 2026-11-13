@@ -11,7 +11,7 @@ import pytest
 from src.chat.audit import stream_reply_accumulator
 from src.chat.stream_reply import (
     _ENTRY_CHARS,
-    _META_BYTES,
+    _FIXED_BYTES,
     _STR_BYTES,
     ReplyMemory,
     StreamReplyAccumulator,
@@ -240,34 +240,34 @@ def test_completion_keeps_refusal() -> None:
 
 
 def test_shared_memory_caps_all_replies_and_comes_back_on_release_or_free() -> None:
-    # Each reply pays a fixed share for its id, model and finish reason. A string
-    # costs its characters and the bytes of the string object.
-    memory = ReplyMemory(2 * _META_BYTES + _STR_BYTES + 10)
+    # Each reply pays a fixed share for its own state, id, model and finish reason.
+    # A string costs its characters and the bytes of the string object.
+    memory = ReplyMemory(2 * _FIXED_BYTES + _STR_BYTES + 10)
     first = StreamReplyAccumulator(max_chars=100, memory=memory)
     second = StreamReplyAccumulator(max_chars=100, memory=memory)
 
     first.add_chunk(_chunk({"content": "abcdefgh"}))
     second.add_chunk(_chunk({"content": "abcdefgh"}))
 
-    assert memory.used == 2 * _META_BYTES + _STR_BYTES + 8
+    assert memory.used == 2 * _FIXED_BYTES + _STR_BYTES + 8
     assert not first.truncated
     assert second.truncated
     first.release()
-    assert memory.used == _META_BYTES
+    assert memory.used == _FIXED_BYTES
     # A released reply takes no more data.
     first.add_chunk(_chunk({"content": "x"}))
-    assert memory.used == _META_BYTES
+    assert memory.used == _FIXED_BYTES
 
     third = StreamReplyAccumulator(max_chars=100, memory=memory)
     third.add_chunk(_chunk({"content": "abc"}))
-    assert memory.used == 2 * _META_BYTES + _STR_BYTES + 3
+    assert memory.used == 2 * _FIXED_BYTES + _STR_BYTES + 3
     del third  # a failed or cancelled stream drops its accumulator
     gc.collect()
-    assert memory.used == _META_BYTES
+    assert memory.used == _FIXED_BYTES
     second.release()
     assert memory.used == 0
     # Without room for its fixed share, a reply keeps nothing.
-    full = StreamReplyAccumulator(max_chars=100, memory=ReplyMemory(_META_BYTES - 1))
+    full = StreamReplyAccumulator(max_chars=100, memory=ReplyMemory(_FIXED_BYTES - 1))
     full.add_chunk(_chunk({"content": "abc"}))
     assert full.completion(fallback_model="x", usage=None)["truncated"] is True
 
@@ -819,6 +819,79 @@ def test_decoded_containers_are_charged_with_their_item_tables(extra) -> None:  
     assert reply._reasoning_details[0]["extra"] == extra
     assert reply.truncated is False
     assert memory.used >= _kept_heap(reply._reasoning_details)
+    reply.release()
+    assert memory.used == 0
+
+
+def _reply_heap(reply) -> int:  # noqa: ANN001
+    """The heap that one reply keeps: the accumulator, its attributes and their values.
+
+    The shared budget is left out. The finalizer is also left out: its size is
+    internal to CPython, and the fixed share has room for it.
+    """
+    fields = [value for name, value in vars(reply).items() if name not in ("_memory", "_finalizer")]
+    kept = _kept_heap(fields) - sys.getsizeof(fields)
+    return sys.getsizeof(reply) + sys.getsizeof(vars(reply)) + kept
+
+
+_EMPTY_DETAIL = {"text": "", "summary": "", "data": "", "signature": ""}
+
+
+@pytest.mark.parametrize(
+    "deltas",
+    [
+        [],
+        # Empty text fields still keep their containers. Without an index, each
+        # delta adds a new detail.
+        [{"reasoning_details": [_EMPTY_DETAIL]}] * 128,
+        [
+            {
+                "reasoning_details": [
+                    {"index": i, "type": "reasoning.text", "format": "f", "text": "t"}
+                ]
+            }
+            for i in range(128)
+        ],
+        [
+            {
+                "tool_calls": [
+                    {
+                        "index": i,
+                        "id": f"call_{i}",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ]
+            }
+            for i in range(128)
+        ],
+        [
+            {"tool_calls": [{"index": 2**64 - 1 - i, "function": {"name": "", "arguments": ""}}]}
+            for i in range(128)
+        ],
+        [{"function_call": {"name": "f", "arguments": "{"}}]
+        + [{"function_call": {"arguments": "a"}}] * 200,
+        [{"content": "a", "reasoning_content": "b", "reasoning": "c", "refusal": "d"}] * 500,
+    ],
+    ids=[
+        "empty",
+        "empty-details",
+        "details",
+        "tool-calls",
+        "large-indexes",
+        "function-call",
+        "text",
+    ],
+)
+def test_the_charge_covers_the_heap_that_the_reply_keeps(deltas) -> None:  # noqa: ANN001
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
+    for delta in deltas:
+        # Decoded like a stream line, so each delta has its own objects.
+        reply.add_chunk(json.loads(json.dumps(_chunk(delta))))
+
+    assert reply.truncated is False
+    assert memory.used >= _reply_heap(reply)
     reply.release()
     assert memory.used == 0
 
