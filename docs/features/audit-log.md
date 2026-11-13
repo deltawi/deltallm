@@ -225,9 +225,13 @@ that it sends to the client. The payload is one `chat.completion` object with th
     or a field in a shape that is not text
   - one delta sent more than 16 fields, more than 128 tool calls or more than 16 reasoning
     details, a reasoning detail had more than 16 fields, tool arguments sent as one JSON object
-    had more than 256 values, a number had more than 1,024 bits, or the reasoning details and
-    tool arguments of the reply had more than 4,096 JSON values. These limits keep the work for
-    each chunk small
+    had more than 256 values, or the reasoning details and tool arguments of the reply had more
+    than 4,096 JSON values. Tool arguments sent as JSON objects can have at most 64 KiB of JSON
+    text in one delta (each object counts as at least 1 KiB). These limits keep the work for each
+    chunk small
+  - a value was nested more than 32 levels deep, an integer had 1,024 bits or more, or a number
+    was not finite (`1e309`, `NaN`). DeltaLLM does not keep these values, because the audit
+    writer could not copy them or the audit reader could not read them back
 
 The payload has the same shape for `/v1/chat/completions`, `/v1/completions`, `/v1/responses` and
 `/v1/messages`. It does not have the provider's own response format.
