@@ -40,6 +40,12 @@ _MAX_CHOICES_PER_CHUNK = 8
 # JSON values (not text fragments) that one reply may measure, such as the
 # fields of reasoning details or tool arguments sent as an object.
 _MAX_JSON_VALUES = 4096
+# Tool arguments sent as an object are encoded on the event loop, and a number
+# costs up to about 2 us to write. So one object has at most this many values.
+_MAX_ARGUMENT_VALUES = 256
+# Larger integers are not kept: their decimal text costs time quadratic in its
+# length, and audit compaction replaces them.
+_MAX_INTEGER_BITS = 1024
 _MERGED_REASONING_TEXT_KEYS = ("text", "summary", "data", "signature")
 _KNOWN_DELTA_FIELDS = frozenset(field.value for field in OpenAIStreamDeltaField)
 # Upper bounds of heap bytes. A string has a header of at most 64 bytes and a
@@ -449,14 +455,16 @@ class StreamReplyAccumulator:
         width = 1 if value.isascii() else 4
         return self._reserve(chars, _STR_BYTES + width * len(value))
 
-    def _measure_json(self, value: Any) -> tuple[int, int] | None:
+    def _measure_json(
+        self, value: Any, *, max_values: int = _MAX_JSON_VALUES
+    ) -> tuple[int, int] | None:
         """Measure a JSON value with bounded work: (JSON characters, heap bytes)."""
         if self._stopped or self._max_chars is None:
             return None
         size = _json_size(
             value,
             max_chars=self._max_chars - self._chars,
-            max_values=self._json_values_left,
+            max_values=min(max_values, self._json_values_left),
         )
         if size is None:
             self._stop()
@@ -592,9 +600,11 @@ class StreamReplyAccumulator:
         if isinstance(arguments, str):
             self._add_text(entry.arguments, arguments)
         elif isinstance(arguments, dict):
-            # The walk bounds the work of the encode; the kept string is then
-            # charged as text, at its own JSON size and heap bytes.
-            if self._audit and self._measure_json(arguments) is None:
+            # The walk bounds the work of the encode (values and integer sizes); the
+            # kept string is then charged as text, at its JSON size and heap bytes.
+            if self._audit and (
+                self._measure_json(arguments, max_values=_MAX_ARGUMENT_VALUES) is None
+            ):
                 return
             encoded = json.dumps(arguments, separators=(",", ":"))
             entry.arguments = _Text()
@@ -631,8 +641,9 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
     The sizes are upper bounds. The characters include the separators that the
     audit writer (``json.dumps`` with its default ``", "`` and ``": "``) puts
     between items. The walk stops with None when the value is more than
-    ``max_chars`` or holds more than ``max_values`` values, so its work is bounded
-    by those limits and not by the value. It never encodes the value.
+    ``max_chars``, holds more than ``max_values`` values or has an integer over
+    1,024 bits, so its work is bounded by those limits and not by the value. It
+    never encodes the value.
     """
     chars = 0
     heap = 0
@@ -656,6 +667,8 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
             chars += 5
         elif isinstance(item, int):
             bits = item.bit_length()
+            if bits > _MAX_INTEGER_BITS:
+                return None
             # Decimal digits are at most 0.31 per bit, plus a sign; at least what
             # audit compaction counts for the number.
             chars += max(4, bits * 31 // 100 + 3)
