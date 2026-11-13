@@ -1099,6 +1099,36 @@ def test_a_reply_replaces_a_few_unstorable_characters_and_then_cuts(bad) -> None
     assert content == "ok\ufffd" + "a" + "\ufffd" * (limit - 1)
 
 
+def test_a_large_text_fragment_is_measured_in_one_pass(monkeypatch) -> None:
+    """A text fragment of about 1 MB is measured on the event loop with one UTF-8
+    encode and C byte scans: no separate JSONB check and no JSON encode."""
+
+    from src.chat import stream_reply
+    from src.services.audit import payload_compaction
+
+    checked: list[int] = []
+    real_storable = stream_reply._storable
+
+    def counting_storable(value: str) -> bool:
+        checked.append(len(value))
+        return real_storable(value)
+
+    def no_encode(value: str) -> str:
+        raise AssertionError("the size check must not write the JSON text")
+
+    monkeypatch.setattr(stream_reply, "_storable", counting_storable)
+    monkeypatch.setattr(payload_compaction, "encode_basestring_ascii", no_encode)
+    for content in ("x " * 516_000, 'line — "b"\n' * 50_000):
+        reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+        reply.add_chunk(_chunk({"content": content}))
+
+        assert reply.truncated is False
+        assert reply._chars == _CHUNK_META_CHARS + len(json.dumps(content)) - 2
+        body = reply.completion(fallback_model=None, usage=None)
+        assert body["choices"][0]["message"]["content"] == content
+        assert len(content) not in checked
+
+
 def test_a_repeated_tool_name_uses_no_replacements() -> None:
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
     for _ in range(200):

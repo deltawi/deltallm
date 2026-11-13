@@ -27,8 +27,17 @@ _DATA_URL_MAX_HEADER_CHARS = 1024
 # is one C call that holds the GIL, so compaction in a worker thread never stops the
 # serving event loop for long (a whole 24 MiB string took about 200 ms).
 _SCAN_CHUNK_CHARS = 256 * 1024
-# The ASCII characters that ``json.dumps`` escapes.
-_JSON_ESCAPED_ASCII = re.compile(r'["\\\x00-\x1f\x7f]')
+# Byte tables for an exact JSON length count of text in C (``bytes.translate``).
+# ``json.dumps`` writes printable ASCII other than a quote and a backslash as it is.
+# A UTF-8 continuation byte adds nothing: the lead byte stands for its character.
+_JSON_PLAIN_OR_CONTINUATION_BYTES = bytes(
+    [byte for byte in range(0x20, 0x7F) if byte not in b'"\\'] + list(range(0x80, 0xC0))
+)
+# These ASCII characters take a two-character escape. Other control characters
+# take six (``\u00XX``).
+_JSON_SHORT_ESCAPE_BYTES = b'"\\\b\f\n\r\t'
+# The UTF-8 lead bytes below 0xF0 start a character in the BMP.
+_BELOW_ASTRAL_LEAD_BYTES = bytes(range(0xF0))
 # Larger integers are replaced: their decimal text has no bound and costs time
 # quadratic in its length (a 4,096-digit integer takes about 0.15 ms to print).
 _MAX_INTEGER_BITS = 1024
@@ -157,13 +166,58 @@ def json_text_chars(value: str, *, stop: int | None = None) -> int:
     over ``stop``. Then the result is only known to be more than ``stop``.
     """
 
+    return measure_json_text(value, stop=stop)[0]
+
+
+def measure_json_text(value: str, *, stop: int | None = None) -> tuple[int, bool]:
+    """Return ``json_text_chars(value, stop=stop)`` and whether the scan found a
+    character that PostgreSQL JSONB cannot store (NUL or a lone surrogate).
+
+    This runs on the event loop for each streamed text fragment, so it uses one UTF-8
+    encode and byte table scans in C, and it does not write the JSON text. A 1 MB
+    fragment takes about 0.5 to 1 ms; a regular expression scan and a JSON encode
+    took 2 to 5 ms. The part of the text after the scan stops is not checked.
+    """
+
     limit = len(value) * 12 if stop is None else max(0, stop)
     if len(value) > limit:
         # Escapes only make the text longer, so the length is a lower bound.
-        return len(value)
-    if value.isascii() and _JSON_ESCAPED_ASCII.search(value) is None:
-        return len(value)
-    return _encoded_size(value, stop=limit + 2) - 2
+        return len(value), False
+    # Each character counts one, and the escapes add to that.
+    size = len(value)
+    unstorable = False
+    for position in range(0, len(value), _SCAN_CHUNK_CHARS):
+        text = value[position : position + _SCAN_CHUNK_CHARS]
+        try:
+            data = text.encode("utf-8")
+        except UnicodeEncodeError:
+            unstorable = True
+            data = text.encode("utf-8", "surrogatepass")
+        added, nul = _json_escape_chars(data)
+        size += added
+        unstorable = unstorable or nul
+        if size > limit:
+            break
+    return size, unstorable
+
+
+def _json_escape_chars(data: bytes) -> tuple[int, bool]:
+    """Return the characters that JSON escapes add to the UTF-8 text ``data``, and
+    whether it has a NUL.
+
+    The scans remove the plain ASCII bytes and the UTF-8 continuation bytes. Each byte
+    that stays adds to the length: a two-character escape adds one, a control
+    character or a character in the BMP adds five (``\\u00XX``), and a character
+    outside the BMP adds eleven (two escapes). A lone surrogate (encoded with
+    ``surrogatepass``) counts as a character in the BMP, as ``json.dumps`` writes it.
+    """
+
+    special = data.translate(None, _JSON_PLAIN_OR_CONTINUATION_BYTES)
+    if not special:
+        return 0, False
+    wide = special.translate(None, _JSON_SHORT_ESCAPE_BYTES)
+    astral = len(wide.translate(None, _BELOW_ASTRAL_LEAD_BYTES))
+    return len(special) - len(wide) + 5 * len(wide) + 6 * astral, b"\x00" in wide
 
 
 def _text_size(value: str, *, stop: int) -> int:

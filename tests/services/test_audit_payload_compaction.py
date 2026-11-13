@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 from hashlib import sha256
+import json
+import random
 
 from src.services.audit.payload_compaction import compact_audit_content
 
@@ -369,3 +371,78 @@ def test_a_long_non_ascii_key_after_the_limit_is_not_encoded(monkeypatch) -> Non
     compacted, _ = compact_audit_content(content, max_bytes=200)
     assert compacted["omitted"] == "payload_too_large"
     assert encoded == []
+
+
+def _json_text_samples() -> list[str]:
+    samples = [
+        "",
+        "plain text",
+        "".join(chr(code) for code in range(0x80)),
+        "é—’ع漢字",
+        "😀a😀",
+        "\ud83d\ude00",
+        "a\ud800b\udfff",
+        '\x7f\x00\x1f"\\\b\f\n\r\t',
+    ]
+    edges = [0xE9, 0x7FF, 0x800, 0xD7FF, 0xD800, 0xDFFF, 0xE000, 0xFFFF, 0x10000, 0x10FFFF]
+    pool = [*range(0x80), *edges]
+    rnd = random.Random(575)
+    for _ in range(2000):
+        samples.append("".join(chr(rnd.choice(pool)) for _ in range(rnd.randrange(48))))
+    return samples
+
+
+def test_json_text_chars_is_the_exact_json_length(monkeypatch) -> None:
+    """The byte count matches ``json.dumps`` for each kind of character and escape."""
+
+    from src.services.audit import payload_compaction
+
+    samples = _json_text_samples()
+    for value in samples:
+        assert payload_compaction.json_text_chars(value) == len(json.dumps(value)) - 2, ascii(value)
+    # Slices of three characters: escapes and UTF-8 sequences at each slice boundary.
+    monkeypatch.setattr(payload_compaction, "_SCAN_CHUNK_CHARS", 3)
+    for value in samples:
+        assert payload_compaction.json_text_chars(value) == len(json.dumps(value)) - 2, ascii(value)
+
+
+def test_json_text_chars_does_not_encode_and_stops_past_the_limit(monkeypatch) -> None:
+    """The count runs on the event loop: C byte scans, slice by slice, to the limit."""
+
+    from src.services.audit import payload_compaction
+
+    def no_encode(value: str) -> str:
+        raise AssertionError("the count must not write the JSON text")
+
+    monkeypatch.setattr(payload_compaction, "encode_basestring_ascii", no_encode)
+    scanned = _counting(monkeypatch, "_json_escape_chars")
+    chunk = payload_compaction._SCAN_CHUNK_CHARS
+    text = "x " * (2 * chunk)
+    assert payload_compaction.json_text_chars(text, stop=len(text)) == len(text)
+    assert scanned == [chunk] * 4
+    # The first slice is all control characters (six JSON characters each), so the
+    # size is over the limit after it and the other slices are not scanned.
+    scanned.clear()
+    controls = "\x01" * chunk + "x" * (3 * chunk)
+    assert payload_compaction.json_text_chars(controls, stop=len(controls)) == 9 * chunk
+    assert scanned == [chunk]
+    # Text longer than the limit is not scanned.
+    scanned.clear()
+    assert payload_compaction.json_text_chars(text, stop=len(text) - 1) == len(text)
+    assert scanned == []
+
+
+def test_measure_json_text_finds_what_jsonb_cannot_store() -> None:
+    from src.services.audit.payload_compaction import measure_json_text
+
+    for value, unstorable in (
+        ("plain — text 😀", False),
+        ("a\x00b", True),
+        ("é\x00", True),
+        ("a\ud800b", True),
+        ("\udfff", True),
+        ("x" * 10, False),
+    ):
+        assert measure_json_text(value) == (len(json.dumps(value)) - 2, unstorable)
+    # Text longer than the limit is not scanned, so nothing is found.
+    assert measure_json_text("a\x00b", stop=2) == (3, False)
