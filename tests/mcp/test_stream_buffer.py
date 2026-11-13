@@ -135,4 +135,5 @@ def test_buffer_joins_many_small_fragments() -> None:
         buffer.filter(_line({"tool_calls": [{"index": 0, "function": {"arguments": "a"}}]}))
 
     assert buffer.tool_calls()[0]["function"]["arguments"] == "a" * 1000
-    assert len(buffer._reply._tool_calls[0].arguments._parts) <= 1000 // 64 + 64
+    arguments = buffer._reply._tool_calls[0].arguments
+    assert len(arguments._blocks) + len(arguments._parts) <= 1000 // 64 + 64
