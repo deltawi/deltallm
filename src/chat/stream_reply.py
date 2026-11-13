@@ -21,6 +21,7 @@ counts an upper bound of the heap bytes of the kept strings and values.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 import weakref
 
@@ -41,17 +42,30 @@ _MAX_CHOICES_PER_CHUNK = 8
 # fields of reasoning details or tool arguments sent as an object.
 _MAX_JSON_VALUES = 4096
 # Tool arguments sent as an object are encoded on the event loop, and a number
-# costs up to about 2 us to write. So one object has at most this many values.
+# costs up to about 2 us to write. So one object has at most this many values,
+# and the objects of one delta have at most this many JSON characters together,
+# where each object counts as at least 1 KiB (so at most 64 objects a delta).
 _MAX_ARGUMENT_VALUES = 256
+_MAX_ARGUMENT_CHARS = 64 * 1024
+_MIN_ARGUMENT_CHARS = 1024
 # Larger integers are not kept: their decimal text costs time quadratic in its
-# length, and audit compaction replaces them.
-_MAX_INTEGER_BITS = 1024
+# length, and the audit reader reads a number as a 64-bit float, which cannot
+# hold 2**1024. Infinity and NaN are not JSON, so they are not kept either.
+_MAX_INTEGER_BITS = 1023
+# A value nested deeper is not kept: the audit writer copies and encodes the
+# reply with recursive calls, and a deep value would exceed the recursion limit.
+_MAX_JSON_DEPTH = 32
 _MERGED_REASONING_TEXT_KEYS = ("text", "summary", "data", "signature")
 _KNOWN_DELTA_FIELDS = frozenset(field.value for field in OpenAIStreamDeltaField)
 # Upper bounds of heap bytes. A string has a header of at most 64 bytes and a
 # list slot; its characters take 1 byte (ASCII) to 4 bytes each.
 _STR_BYTES = 80
 _VALUE_BYTES = 128
+# A list or dictionary also has its item table: a list built by appends has at
+# most 9 bytes for each item (16 after items are removed), and a dictionary at
+# most 56 bytes for each entry (more without string keys).
+_LIST_ITEM_BYTES = 16
+_DICT_ENTRY_BYTES = 64
 _ENTRY_BYTES = 512
 # The JSON of a tool call, function call or reasoning detail around its counted
 # values, such as a default tool call id ``call_<index>`` and type ``function``.
@@ -179,6 +193,7 @@ class StreamReplyAccumulator:
         self._max_usage_chars = max(0, min(_MAX_USAGE_CHARS, max_usage_chars))
         self._chars = 0
         self._json_values_left = _MAX_JSON_VALUES
+        self._argument_chars_left = _MAX_ARGUMENT_CHARS
         self._memory = memory
         self._held = [0]
         # The share goes back when release() runs or when the accumulator is
@@ -257,6 +272,7 @@ class StreamReplyAccumulator:
         # Check the stopped state first: a stopped reply does no work for a chunk.
         if self._stopped:
             return
+        self._argument_chars_left = _MAX_ARGUMENT_CHARS
         if self._audit and not self.truncated:
             self._mark_unknown_fields(delta)
         self._add_field(self._content, delta.get(OpenAIStreamDeltaField.CONTENT.value))
@@ -456,14 +472,19 @@ class StreamReplyAccumulator:
         return self._reserve(chars, _STR_BYTES + width * len(value))
 
     def _measure_json(
-        self, value: Any, *, max_values: int = _MAX_JSON_VALUES
+        self,
+        value: Any,
+        *,
+        max_values: int = _MAX_JSON_VALUES,
+        max_chars: int | None = None,
     ) -> tuple[int, int] | None:
         """Measure a JSON value with bounded work: (JSON characters, heap bytes)."""
         if self._stopped or self._max_chars is None:
             return None
+        remaining = self._max_chars - self._chars
         size = _json_size(
             value,
-            max_chars=self._max_chars - self._chars,
+            max_chars=remaining if max_chars is None else min(remaining, max_chars),
             max_values=min(max_values, self._json_values_left),
         )
         if size is None:
@@ -600,12 +621,18 @@ class StreamReplyAccumulator:
         if isinstance(arguments, str):
             self._add_text(entry.arguments, arguments)
         elif isinstance(arguments, dict):
-            # The walk bounds the work of the encode (values and integer sizes); the
-            # kept string is then charged as text, at its JSON size and heap bytes.
-            if self._audit and (
-                self._measure_json(arguments, max_values=_MAX_ARGUMENT_VALUES) is None
-            ):
-                return
+            # The walk bounds the work of the encode (values, characters and integer
+            # sizes); the kept string is then charged as text, at its JSON size and
+            # heap bytes.
+            if self._audit:
+                size = self._measure_json(
+                    arguments,
+                    max_values=_MAX_ARGUMENT_VALUES,
+                    max_chars=self._argument_chars_left,
+                )
+                if size is None:
+                    return
+                self._argument_chars_left -= max(size[0], _MIN_ARGUMENT_CHARS)
             encoded = json.dumps(arguments, separators=(",", ":"))
             entry.arguments = _Text()
             self._add_text(entry.arguments, encoded)
@@ -626,7 +653,7 @@ def _small_number(value: Any) -> bool:
         return False
     if isinstance(value, int):
         return value.bit_length() <= 64
-    return isinstance(value, float)
+    return isinstance(value, float) and math.isfinite(value)
 
 
 def _same_scalar(previous: Any, value: Any) -> bool:
@@ -640,17 +667,23 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
 
     The sizes are upper bounds. The characters include the separators that the
     audit writer (``json.dumps`` with its default ``", "`` and ``": "``) puts
-    between items. The walk stops with None when the value is more than
-    ``max_chars``, holds more than ``max_values`` values or has an integer over
-    1,024 bits, so its work is bounded by those limits and not by the value. It
-    never encodes the value.
+    between items. The heap includes the item tables of lists and dictionaries.
+    The walk stops with None when the value is more than ``max_chars``, holds
+    more than ``max_values`` values, is nested more than 32 levels deep, or has
+    an integer of 1,024 bits or more or a float that is not finite. So its work
+    is bounded by those limits and not by the value, and the audit writer and
+    reader can copy, encode and decode every value that it accepts. It never
+    encodes the value.
     """
     chars = 0
     heap = 0
     count = 0
     stack: list[Any] = [value]
+    # The nesting level of each value in the stack.
+    depths = [0]
     while stack:
         item = stack.pop()
+        depth = depths.pop()
         count += 1
         if count > max_values:
             return None
@@ -675,21 +708,27 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
             # A large integer object keeps 4 bytes for each 30 bits.
             heap += 4 * (bits // 30 + 1)
         elif isinstance(item, float):
+            if not math.isfinite(item):
+                return None
             chars += 24
         elif isinstance(item, list):
-            if count + len(stack) + len(item) > max_values:
+            if depth >= _MAX_JSON_DEPTH or count + len(stack) + len(item) > max_values:
                 return None
             # Brackets, and ", " after each item.
             chars += 2 + 2 * len(item)
+            heap += _LIST_ITEM_BYTES * len(item)
             stack.extend(item)
+            depths.extend([depth + 1] * len(item))
         elif isinstance(item, dict):
-            if count + len(stack) + 2 * len(item) > max_values:
+            if depth >= _MAX_JSON_DEPTH or count + len(stack) + 2 * len(item) > max_values:
                 return None
             # Braces, and ": " and ", " for each entry.
             chars += 2 + 4 * len(item)
+            heap += _DICT_ENTRY_BYTES * len(item)
             for key, child in item.items():
                 stack.append(key if isinstance(key, str) else str(key))
                 stack.append(child)
+            depths.extend([depth + 1] * (2 * len(item)))
         else:
             return None
         if chars > max_chars:

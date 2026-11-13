@@ -536,7 +536,7 @@ def test_empty_fields_and_logprobs() -> None:
 def test_tool_arguments_sent_as_an_object_are_charged_as_the_kept_string() -> None:
     memory = ReplyMemory(1 << 30)
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
-    arguments = {"q": "\x00" * 130_000}
+    arguments = {"q": "\x00" * 10_000}
     reply.add_chunk(_chunk({"tool_calls": [{"index": 0, "function": {"arguments": arguments}}]}))
 
     kept = reply._tool_calls[0].arguments.value()
@@ -762,7 +762,7 @@ def test_a_long_fallback_model_counts_against_the_limit() -> None:
 def test_large_integers_are_charged_at_their_heap_size() -> None:
     memory = ReplyMemory(1 << 30)
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
-    numbers = [2**1024 - 1 - i for i in range(200)]
+    numbers = [2**1023 - 1 - i for i in range(200)]
     reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "extra": numbers}]}))
 
     kept = reply._reasoning_details[0]["extra"]
@@ -774,6 +774,84 @@ def test_large_integers_are_charged_at_their_heap_size() -> None:
     assert reply.truncated is True
     reply.release()
     assert memory.used == 0
+
+
+def _kept_heap(value) -> int:  # noqa: ANN001
+    """The heap of every object reachable from value, each object counted once."""
+    seen: set[int] = set()
+    total = 0
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        total += sys.getsizeof(item)
+        if isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif hasattr(item, "__slots__"):
+            stack.extend(getattr(item, name) for name in item.__slots__)
+    return total
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        # Small dictionaries: each has a table larger than its children.
+        [{chr(0x1000 + i): chr(0x3000 + i)} for i in range(1300)],
+        # One dictionary just past a resize, and a long list of small numbers.
+        {f"k{i}": 0 for i in range(1366)},
+        list(range(4000)),
+        [[i] for i in range(1300)],
+    ],
+    ids=["small-dicts", "large-dict", "long-list", "small-lists"],
+)
+def test_decoded_containers_are_charged_with_their_item_tables(extra) -> None:  # noqa: ANN001
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
+    # Decoded like a stream line, so the containers grow as the parser builds them.
+    line = json.dumps(_chunk({"reasoning_details": [{"index": 0, "text": "a", "extra": extra}]}))
+    reply.add_chunk(json.loads(line))
+
+    assert reply._reasoning_details[0]["extra"] == extra
+    assert reply.truncated is False
+    assert memory.used >= _kept_heap(reply._reasoning_details)
+    reply.release()
+    assert memory.used == 0
+
+
+def test_a_deeply_nested_value_is_refused_and_the_reply_still_encodes() -> None:
+    from dataclasses import asdict
+
+    from src.services.audit.audit_service import AuditPayloadInput
+
+    def nested(depth: int) -> object:
+        value: object = 0
+        for _ in range(depth):
+            value = [value]
+        return value
+
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    # The detail entry adds one level, so 31 lists are the deepest value kept.
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "extra": nested(31)}]}))
+    assert reply._reasoning_details[0]["extra"] == nested(31)
+    assert reply.truncated is False
+
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 1, "extra": nested(800)}]}))
+    assert "extra" not in reply._reasoning_details[1]
+    assert reply.truncated is True
+
+    body = reply.completion(fallback_model="m", usage={"total_tokens": 1, "x": nested(800)})
+    assert body["truncated"] is True
+    assert body["usage"] == {"total_tokens": 1}
+    # The audit writer copies the body with recursive calls, then encodes it.
+    payload = asdict(AuditPayloadInput(kind="response", content_json=body))
+    assert json.loads(json.dumps(payload))["content_json"] == body
+    compacted, _ = compact_audit_content(body, max_bytes=1 << 20)
+    assert compacted == body
 
 
 def test_large_integers_in_tool_arguments_are_refused_without_encoding(monkeypatch) -> None:
@@ -806,3 +884,74 @@ def test_tool_arguments_object_with_few_values_is_kept() -> None:
 
     assert reply.truncated is False
     assert reply._tool_calls[0].arguments.value() == json.dumps(arguments, separators=(",", ":"))
+
+
+def test_a_long_string_in_tool_arguments_is_refused_without_encoding(monkeypatch) -> None:
+    import src.chat.stream_reply as stream_reply
+
+    def no_encode(*args, **kwargs):
+        raise AssertionError("the arguments must not be encoded")
+
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    monkeypatch.setattr(stream_reply.json, "dumps", no_encode)
+    # Only 3 values, but more JSON characters than one delta may encode.
+    reply.add_delta({"tool_calls": [{"index": 0, "function": {"arguments": {"q": "a" * 70_000}}}]})
+
+    assert reply.truncated is True
+    assert reply._tool_calls[0].arguments.value() == ""
+
+
+def test_tool_argument_objects_share_a_budget_for_each_delta() -> None:
+    def calls(count: int, text: str) -> dict:
+        return {
+            "tool_calls": [
+                {"index": index, "function": {"arguments": {"q": text}}} for index in range(count)
+            ]
+        }
+
+    # Each delta may encode 64 KiB: two objects of 30,000 characters fit in one,
+    # and the budget starts again for the next delta.
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_delta(calls(2, "hello " * 5_000))
+    reply.add_delta(
+        {"tool_calls": [{"index": 2, "function": {"arguments": {"q": "hi " * 10_000}}}]}
+    )
+    assert reply.truncated is False
+    assert len(reply._tool_calls[2].arguments.value()) > 30_000
+
+    # Each object counts as at least 1 KiB, so one delta encodes at most 64 objects.
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_delta(calls(64, "x"))
+    assert reply.truncated is False
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_delta(calls(65, "x"))
+    assert reply.truncated is True
+    assert reply._tool_calls[64].arguments.value() == ""
+
+
+@pytest.mark.parametrize("number", ["1e309", "-1e309", "NaN", "Infinity"])
+def test_numbers_that_are_not_finite_are_not_kept(number) -> None:  # noqa: ANN001
+    # The decoder reads these as inf or nan, which are not JSON.
+    line = json.dumps(_chunk({"reasoning_details": [{"index": 0, "text": "a", "extra": 7}]}))
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_chunk(json.loads(line.replace("7", f"[{number}]")))
+
+    assert "extra" not in reply._reasoning_details[0]
+    assert reply.truncated is True
+    usage = json.loads(f'{{"prompt_tokens": {number}, "completion_tokens": 2, "total_tokens": 3}}')
+    body = reply.completion(fallback_model="m", usage=usage)
+    assert body["usage"] == {"completion_tokens": 2, "total_tokens": 3}
+    json.dumps(body, allow_nan=False)
+
+
+def test_integers_from_1024_bits_are_not_kept() -> None:
+    # The audit reader reads a number as a 64-bit float, which ends below 2**1024.
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "n": 2**1023 - 1}]}))
+    assert reply._reasoning_details[0]["n"] == 2**1023 - 1
+    assert float(reply._reasoning_details[0]["n"]) > 0
+    assert reply.truncated is False
+
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 1, "n": 2**1024 - 1}]}))
+    assert "n" not in reply._reasoning_details[1]
+    assert reply.truncated is True
