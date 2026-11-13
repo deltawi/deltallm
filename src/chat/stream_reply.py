@@ -85,6 +85,14 @@ _MAX_KEY_CHARS = 64
 # limit, and a fixed charge at creation covers their heap bytes.
 _MAX_META_CHARS = 256
 _META_BYTES = 3 * (_STR_BYTES + 4 * _MAX_META_CHARS)
+# The accumulator itself, its fixed text fields and dictionaries, and its
+# finalizer: about 2.4 KiB on CPython 3.11 to 3.13.
+_STATE_BYTES = 3 * 1024
+# The share that each reply takes when it is made.
+_FIXED_BYTES = _STATE_BYTES + _META_BYTES
+# A ``_Text`` and its empty list of parts (128 bytes on CPython 3.11 to 3.13).
+# A text field of a reasoning detail also adds a dictionary entry.
+_TEXT_BYTES = 160
 # Audit only: provider usage above these bounds keeps only the token counts.
 _MAX_USAGE_CHARS = 4096
 _MAX_USAGE_VALUES = 128
@@ -217,8 +225,8 @@ class StreamReplyAccumulator:
         self._clear()
         self._keep_meta = True
         if memory is not None:
-            if memory.take(_META_BYTES):
-                self._held[0] += _META_BYTES
+            if memory.take(_FIXED_BYTES):
+                self._held[0] += _FIXED_BYTES
             else:
                 self._keep_meta = False
                 self._stop()
@@ -513,7 +521,8 @@ class StreamReplyAccumulator:
             # A shape that cannot be rebuilt as text (for example a list).
             self.truncated = True
 
-    def _reserve_string(self, value: str) -> bool:
+    def _reserve_string(self, value: str, *, heap: int = 0) -> bool:
+        """Reserve a kept string, and ``heap`` more bytes for what keeps it."""
         if self._max_chars is None:
             return True
         if self._stopped:
@@ -525,7 +534,7 @@ class StreamReplyAccumulator:
             self.truncated = True
             return False
         width = 1 if value.isascii() else 4
-        return self._reserve(chars, _STR_BYTES + width * len(value))
+        return self._reserve(chars, _STR_BYTES + width * len(value) + heap)
 
     def _measure_json(
         self,
@@ -608,10 +617,11 @@ class StreamReplyAccumulator:
             previous = current.get(name)
             if name in _MERGED_REASONING_TEXT_KEYS and isinstance(value, str):
                 if not isinstance(previous, _Text):
-                    previous = _Text()
-                    if not self._reserve_string(name):
+                    # The key, its dictionary entry and the empty text are kept,
+                    # also when every fragment is "".
+                    if not self._reserve_string(name, heap=_TEXT_BYTES + _DICT_ENTRY_BYTES):
                         return
-                    current[name] = previous
+                    previous = current[name] = _Text()
                 self._add_text(previous, value)
             elif name in current and _same_scalar(previous, value):
                 # Most providers repeat the type, format and index on every delta.
