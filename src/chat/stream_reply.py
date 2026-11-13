@@ -461,7 +461,8 @@ class StreamReplyAccumulator:
             return
         complete = True
         if self._max_chars is not None:
-            fragment, complete = self._storable_text(fragment)
+            fragment, complete, replaced = self._storable_text(fragment, limit=self._replace_left)
+            self._replace_left -= replaced
             # The exact JSON size, escapes included. The scan stops past the
             # remaining budget, so its work is bounded.
             chars = json_text_chars(fragment, stop=self._max_chars - self._chars)
@@ -474,33 +475,31 @@ class StreamReplyAccumulator:
         if not complete:
             self._stop()
 
-    def _storable_text(self, value: str) -> tuple[str, bool]:
-        """Audit only: return the text that JSONB can store, and False if it was cut.
+    def _storable_text(self, value: str, *, limit: int) -> tuple[str, bool, int]:
+        """Audit only: return the text that JSONB can store, if it is whole, and the
+        number of characters replaced.
 
         Each character that JSONB cannot store becomes U+FFFD, which has the same JSON
-        size (six characters), and the reply is marked. After _MAX_REPLACED_CHARS of
-        them in one reply, the text is cut before the next one. The scans run in C,
-        and a text longer than the rest of the limit is not scanned: it cannot be kept.
+        size (six characters), and the reply is marked. After ``limit`` of them, the
+        text is cut before the next one. The scans run in C, and a text longer than the
+        rest of the limit is not scanned: it cannot be kept.
         """
         if (
             self._max_chars is None
             or len(value) > self._max_chars - self._chars
             or _storable(value)
         ):
-            return value, True
+            return value, True, 0
         kept: list[str] = []
         start = 0
         for position in _unstorable_positions(value):
             self.truncated = True
             kept.append(value[start:position])
-            if self._replace_left == 0:
-                return "\ufffd".join(kept), False
-            self._replace_left -= 1
+            if len(kept) > limit:
+                return "\ufffd".join(kept), False, limit
             start = position + 1
-        if not kept:
-            return value, True
         kept.append(value[start:])
-        return "\ufffd".join(kept), True
+        return "\ufffd".join(kept), True, len(kept) - 1
 
     def _add_field(self, text: _Text, value: Any) -> None:
         if isinstance(value, str):
@@ -668,17 +667,12 @@ class StreamReplyAccumulator:
 
     def _add_function(self, entry: _FunctionCall, function: dict[str, Any]) -> None:
         name = function.get("name")
-        # Most providers send the name once; some repeat it on every delta.
+        # Most providers send the name once; some repeat it on every delta. A repeated
+        # name adds nothing, so it is compared before it uses the replacements of the
+        # reply. A kept name has at most _MAX_REPLACED_CHARS of them.
         if isinstance(name, str) and name:
-            replace_left = self._replace_left
-            name, complete = self._storable_text(name)
-            if not complete:
-                self._stop()
-                return
-            if entry.name.equals(name):
-                # A repeated name adds nothing, so it uses no replacements.
-                self._replace_left = replace_left
-            else:
+            stored, complete, _ = self._storable_text(name, limit=_MAX_REPLACED_CHARS)
+            if not (complete and entry.name.equals(stored)):
                 self._add_text(entry.name, name)
         arguments = function.get("arguments")
         if isinstance(arguments, str):

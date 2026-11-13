@@ -1021,6 +1021,43 @@ def test_a_repeated_tool_name_uses_no_replacements() -> None:
     assert message["content"] == "a\ufffdb"
 
 
+@pytest.mark.parametrize("bad", ["\x00", "\ud800"])
+def test_a_repeated_tool_name_is_compared_before_the_replacement_limit(bad) -> None:
+    # The name uses 33 of the 64 replacements, so a second replacement of it
+    # would pass the limit. It is the same name, so it adds nothing and is kept once.
+    name = "f" + bad * 33
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    for arguments in ('{"a":', "1}"):
+        call = {"index": 0, "function": {"name": name, "arguments": arguments}}
+        reply.add_chunk(_chunk({"tool_calls": [call]}))
+    reply.add_chunk(_chunk({"content": "tail"}))
+
+    body = reply.completion(fallback_model=None, usage=None)
+    message = body["choices"][0]["message"]
+    assert message["tool_calls"][0]["function"] == {
+        "name": "f" + "\ufffd" * 33,
+        "arguments": '{"a":1}',
+    }
+    assert message["content"] == "tail"
+    assert reply.truncated is True
+
+
+def test_a_new_tool_name_past_the_replacement_limit_cuts_the_reply() -> None:
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_chunk(_chunk({"content": "a" + "\x00" * 60}))
+    call = {"index": 0, "function": {"name": "g" + "\x00" * 10, "arguments": "{}"}}
+    reply.add_chunk(_chunk({"tool_calls": [call]}))
+    reply.add_chunk(_chunk({"content": "late"}))
+
+    body = reply.completion(fallback_model=None, usage=None)
+    message = body["choices"][0]["message"]
+    assert message["content"] == "a" + "\ufffd" * 60
+    # Four replacements were left: the name is cut before the fifth, and nothing
+    # follows (the arguments stay empty, written as "{}").
+    assert message["tool_calls"][0]["function"] == {"name": "g" + "\ufffd" * 4, "arguments": "{}"}
+    assert reply.truncated is True
+
+
 def test_tool_argument_objects_share_a_value_budget_for_each_delta() -> None:
     def calls(count: int, size: int) -> dict:
         arguments = {"q": [1.234567890123456e-300] * size}
