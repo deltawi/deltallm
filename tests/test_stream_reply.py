@@ -202,12 +202,12 @@ def test_limit_counts_tool_call_ids_types_and_names() -> None:
 
 
 def test_limit_counts_replaced_and_nested_reasoning_details() -> None:
-    # The first detail takes the entry and 48 characters for its keys and values.
-    reply = StreamReplyAccumulator(max_chars=_ENTRY_CHARS + 58)
+    # The first detail takes the entry and 52 characters for its keys and values.
+    reply = StreamReplyAccumulator(max_chars=_ENTRY_CHARS + 62)
     reply.add_delta({"reasoning_details": [{"index": 0, "type": "reasoning.text", "text": "a"}]})
     # A repeated value is not counted again.
     reply.add_delta({"reasoning_details": [{"index": 0, "type": "reasoning.text"}]})
-    assert reply._chars == _ENTRY_CHARS + 48
+    assert reply._chars == _ENTRY_CHARS + 52
     reply.add_delta({"reasoning_details": [{"index": 0, "extra": {"data": "x" * 100}}]})
     reply.add_delta({"reasoning_details": [{"index": 1, "nested": ["y" * 100]}]})
 
@@ -694,23 +694,41 @@ def _worst_details(reply):
 
 
 def _worst_text(reply):
-    for _ in range(400):
+    for _ in range(800):
         reply.add_chunk(_chunk({"content": 'ع"\\\x01😀' * 50, "reasoning_content": "think " * 50}))
 
 
-@pytest.mark.parametrize("max_bytes", [4096, 16 * 1024, 1 << 20])
-@pytest.mark.parametrize("fill", [_worst_tool_calls, _worst_details, _worst_text])
-def test_a_reply_at_its_limit_is_kept_by_compaction(max_bytes, fill) -> None:
+def _dense_detail_then_text(reply):
+    # Short items in one list: the writer puts ", " between them.
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "extra": [""] * 1265}]}))
+    _worst_text(reply)
+
+
+def _numbers_usage():
+    usage = {f"k{i}": 2**63 for i in range(50)}
+    usage.update(prompt_tokens=2**64 - 1, completion_tokens=2**64 - 1, total_tokens=2**64 - 1)
+    return usage
+
+
+def _padded_usage():
+    return {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "x": " " * 2997}
+
+
+@pytest.mark.parametrize("max_bytes", [4096, 8192, 16 * 1024, 1 << 20])
+@pytest.mark.parametrize(
+    "fill", [_worst_tool_calls, _worst_details, _worst_text, _dense_detail_then_text]
+)
+@pytest.mark.parametrize("make_usage", [_numbers_usage, _padded_usage])
+def test_a_reply_at_its_limit_is_kept_by_compaction(max_bytes, fill, make_usage) -> None:
     reply = _audit_reply(max_bytes)
     first = _chunk({"role": "assistant"})
     first["created"] = 2**64 - 1
+    first["model"] = None
     reply.add_chunk(first)
     fill(reply)
     reply.add_chunk(_chunk({"refusal": "", "reasoning": ""}, finish="stop"))
-    usage = {f"k{i}": 2**63 for i in range(50)}
-    usage.update(prompt_tokens=2**64 - 1, completion_tokens=2**64 - 1, total_tokens=2**64 - 1)
 
-    body = reply.completion(fallback_model="m", usage=usage)
+    body = reply.completion(fallback_model="alias." + "x" * 200, usage=make_usage())
     stored, changed = compact_audit_content(body, max_bytes=max_bytes)
 
     assert changed is False
@@ -721,3 +739,21 @@ def test_a_larger_payload_limit_keeps_the_stream_reply_at_the_default() -> None:
     reply = _audit_reply(8 * 1024 * 1024)
 
     assert reply._max_chars == (1 << 20) - 16 * 1024
+
+
+def test_a_long_fallback_model_counts_against_the_limit() -> None:
+    max_bytes = 4096
+    reply = _audit_reply(max_bytes)
+    answer = ("hello " * 300)[:1750]
+    chunk = _chunk({"content": answer}, finish="stop")
+    chunk["model"] = "😀" * 256
+    reply.add_chunk(chunk)
+
+    body = reply.completion(fallback_model="alias." + "x" * 2500, usage=None)
+    stored, changed = compact_audit_content(body, max_bytes=max_bytes)
+
+    assert changed is False
+    assert stored["model"] is None
+    assert stored["choices"][0]["message"]["content"] == answer
+    assert stored["truncated"] is True
+    assert len(json.dumps(body)) <= max_bytes
