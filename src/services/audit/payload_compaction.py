@@ -27,6 +27,8 @@ _DATA_URL_MAX_HEADER_CHARS = 1024
 # is one C call that holds the GIL, so compaction in a worker thread never stops the
 # serving event loop for long (a whole 24 MiB string took about 200 ms).
 _SCAN_CHUNK_CHARS = 256 * 1024
+# The ASCII characters that ``json.dumps`` escapes.
+_JSON_ESCAPED_ASCII = re.compile(r'["\\\x00-\x1f\x7f]')
 # Larger integers are replaced: their decimal text has no bound and costs time
 # quadratic in its length (a 4,096-digit integer takes about 0.15 ms to print).
 _MAX_INTEGER_BITS = 1024
@@ -145,18 +147,23 @@ def _inline_data_placeholder(value: str) -> str | None:
 
 
 def json_text_chars(value: str, *, stop: int | None = None) -> int:
-    """Return the size this module counts for ``value`` as JSON text, without quotes.
+    """Return the exact length of ``value`` as JSON text (``json.dumps``), without quotes.
 
-    ASCII text counts its length and other text its ``\\uXXXX`` escapes, so a caller
-    that cuts text to the payload limit cuts it as compaction will measure it. With
-    ``stop``, the scan ends at the first slice that takes the size over ``stop``: then the
-    result is only known to be more than ``stop``, and the work is bounded by ``stop``.
+    Escapes count: a quote, a backslash or a control character is two or six
+    characters, and a character outside ASCII is six (twelve outside the BMP). A caller
+    that cuts text to the payload limit thus cuts it as the exact size check of the
+    record measures it. With ``stop``, the work is bounded by ``stop``: text longer than
+    ``stop`` is not scanned, and the scan ends at the first slice that takes the size
+    over ``stop``. Then the result is only known to be more than ``stop``.
     """
 
-    if value.isascii():
-        return len(value)
     limit = len(value) * 12 if stop is None else max(0, stop)
-    return _text_size(value, stop=limit + 2) - 2
+    if len(value) > limit:
+        # Escapes only make the text longer, so the length is a lower bound.
+        return len(value)
+    if value.isascii() and _JSON_ESCAPED_ASCII.search(value) is None:
+        return len(value)
+    return _encoded_size(value, stop=limit + 2) - 2
 
 
 def _text_size(value: str, *, stop: int) -> int:
@@ -172,6 +179,12 @@ def _text_size(value: str, *, stop: int) -> int:
     if value.isascii() or len(value) + 2 > stop:
         # Escapes only make the text longer, so the length is a lower bound.
         return len(value) + 2
+    return _encoded_size(value, stop=stop)
+
+
+def _encoded_size(value: str, *, stop: int) -> int:
+    """Encode ``value`` slice by slice and return its JSON size, or a size over ``stop``."""
+
     size = 2
     for position in range(0, len(value), _SCAN_CHUNK_CHARS):
         size += len(encode_basestring_ascii(value[position : position + _SCAN_CHUNK_CHARS])) - 2
