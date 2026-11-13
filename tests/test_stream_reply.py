@@ -990,6 +990,37 @@ def test_text_that_jsonb_cannot_store_is_replaced_and_marked() -> None:
     text.encode("utf-8")
 
 
+@pytest.mark.parametrize("bad", ["\x00", "\ud800"])
+def test_a_reply_replaces_a_few_unstorable_characters_and_then_cuts(bad) -> None:
+    from src.chat import stream_reply
+
+    limit = stream_reply._MAX_REPLACED_CHARS
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_chunk(_chunk({"content": "ok" + bad}))
+    # 160,000 such characters fit the limit (six JSON characters each). Only the first
+    # few are replaced, and the text is cut before the next one.
+    reply.add_chunk(_chunk({"content": "a" + bad * 160_000}))
+    reply.add_chunk(_chunk({"content": "later"}))
+
+    assert reply.truncated is True
+    body = reply.completion(fallback_model=None, usage=None)
+    content = body["choices"][0]["message"]["content"]
+    assert content == "ok\ufffd" + "a" + "\ufffd" * (limit - 1)
+
+
+def test_a_repeated_tool_name_uses_no_replacements() -> None:
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    for _ in range(200):
+        call = {"index": 0, "function": {"name": "f\x00", "arguments": "x"}}
+        reply.add_chunk(_chunk({"tool_calls": [call]}))
+    reply.add_chunk(_chunk({"content": "a\x00b"}))
+
+    body = reply.completion(fallback_model=None, usage=None)
+    message = body["choices"][0]["message"]
+    assert message["tool_calls"][0]["function"] == {"name": "f\ufffd", "arguments": "x" * 200}
+    assert message["content"] == "a\ufffdb"
+
+
 def test_tool_argument_objects_share_a_value_budget_for_each_delta() -> None:
     def calls(count: int, size: int) -> dict:
         arguments = {"q": [1.234567890123456e-300] * size}
