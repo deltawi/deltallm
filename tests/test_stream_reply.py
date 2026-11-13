@@ -406,7 +406,7 @@ def test_a_stopped_reply_does_no_work_for_later_chunks() -> None:
     "value",
     [
         {"a": [1, -20, 3.25e-300, None, True, False, 'x"y\\n', "ع😀"]},
-        [{"k": {}}, [], [[]], 2**200, -(2**64), ""],
+        [{"k": {}}, [], [[]], 2**64 - 1, -(2**63), ""],
         {"ключ": {"inner": ["value", 0.1]}},
     ],
 )
@@ -762,7 +762,7 @@ def test_a_long_fallback_model_counts_against_the_limit() -> None:
 def test_large_integers_are_charged_at_their_heap_size() -> None:
     memory = ReplyMemory(1 << 30)
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
-    numbers = [2**1023 - 1 - i for i in range(200)]
+    numbers = [2**64 - 1 - i for i in range(200)] + [-(2**63) + i for i in range(200)]
     reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "extra": numbers}]}))
 
     kept = reply._reasoning_details[0]["extra"]
@@ -879,7 +879,7 @@ def test_tool_arguments_object_with_many_values_is_refused() -> None:
 
 def test_tool_arguments_object_with_few_values_is_kept() -> None:
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
-    arguments = {"v": [0.5] * 100, "n": 2**1000}
+    arguments = {"v": [0.5] * 100, "n": 2**63}
     reply.add_delta({"tool_calls": [{"index": 0, "function": {"arguments": arguments}}]})
 
     assert reply.truncated is False
@@ -919,14 +919,14 @@ def test_tool_argument_objects_share_a_budget_for_each_delta() -> None:
     assert reply.truncated is False
     assert len(reply._tool_calls[2].arguments.value()) > 30_000
 
-    # Each object counts as at least 1 KiB, so one delta encodes at most 64 objects.
+    # Each object counts as at least 2 KiB, so one delta encodes at most 32 objects.
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
-    reply.add_delta(calls(64, "x"))
+    reply.add_delta(calls(32, "x"))
     assert reply.truncated is False
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
-    reply.add_delta(calls(65, "x"))
+    reply.add_delta(calls(33, "x"))
     assert reply.truncated is True
-    assert reply._tool_calls[64].arguments.value() == ""
+    assert reply._tool_calls[32].arguments.value() == ""
 
 
 @pytest.mark.parametrize("number", ["1e309", "-1e309", "NaN", "Infinity"])
@@ -944,14 +944,78 @@ def test_numbers_that_are_not_finite_are_not_kept(number) -> None:  # noqa: ANN0
     json.dumps(body, allow_nan=False)
 
 
-def test_integers_from_1024_bits_are_not_kept() -> None:
-    # The audit reader reads a number as a 64-bit float, which ends below 2**1024.
+@pytest.mark.parametrize("number", [2**64 - 1, -(2**63)])
+def test_integers_in_the_64_bit_range_are_kept(number) -> None:  # noqa: ANN001
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
-    reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "n": 2**1023 - 1}]}))
-    assert reply._reasoning_details[0]["n"] == 2**1023 - 1
-    assert float(reply._reasoning_details[0]["n"]) > 0
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "n": number}]}))
+    assert reply._reasoning_details[0]["n"] == number
     assert reply.truncated is False
 
-    reply.add_chunk(_chunk({"reasoning_details": [{"index": 1, "n": 2**1024 - 1}]}))
-    assert "n" not in reply._reasoning_details[1]
+
+@pytest.mark.parametrize("number", [2**64, 2**64 + 1, -(2**63) - 1, 2**1023 - 1, 2**1024 - 1])
+def test_integers_that_the_audit_reader_changes_are_not_kept(number) -> None:  # noqa: ANN001
+    # The audit reader keeps an integer exactly only in the signed or unsigned
+    # 64-bit range; it reads a larger one as a float, or fails.
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "n": number}]}))
+    assert "n" not in reply._reasoning_details[0]
     assert reply.truncated is True
+
+
+def test_text_that_jsonb_cannot_store_is_replaced_and_marked() -> None:
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    chunk = _chunk({"content": "hello\x00world", "reasoning_content": "a\ud800b"})
+    chunk["model"] = "m\x00"
+    reply.add_chunk(chunk)
+    for _ in range(3):
+        call = {"index": 0, "id": "c\udfff", "function": {"name": "f\x00", "arguments": "{\x00"}}
+        reply.add_delta({"tool_calls": [call]})
+    reply.add_delta({"reasoning_details": [{"index": 0, "text": "t", "extra": ["\x00"]}]})
+    assert reply.truncated is True
+
+    usage = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3, "note": "\ud800"}
+    body = reply.completion(fallback_model="m\ud800", usage=usage)
+    message = body["choices"][0]["message"]
+    # Same length: each character is replaced by U+FFFD.
+    assert message["content"] == "hello\ufffdworld"
+    assert message["reasoning_content"] == "a\ufffdb"
+    call = message["tool_calls"][0]
+    assert call["id"] == "call_0"
+    assert call["function"] == {"name": "f\ufffd", "arguments": "{\ufffd" * 3}
+    assert body["model"] is None
+    assert body["usage"] == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+    # No NUL and no lone surrogate is left: the text encodes as UTF-8.
+    text = json.dumps(body, ensure_ascii=False)
+    assert "\x00" not in text
+    text.encode("utf-8")
+
+
+def test_tool_argument_objects_share_a_value_budget_for_each_delta() -> None:
+    def calls(count: int, size: int) -> dict:
+        arguments = {"q": [1.234567890123456e-300] * size}
+        return {
+            "tool_calls": [
+                {"index": index, "function": {"arguments": arguments}} for index in range(count)
+            ]
+        }
+
+    # Each object has its list and numbers, its key and itself: 41 values. Six fit
+    # in the 256 values of one delta, and the budget starts again for the next one.
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_delta(calls(6, 38))
+    reply.add_delta(calls(6, 38))
+    assert reply.truncated is False
+
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
+    reply.add_delta(calls(64, 38))
+    assert reply.truncated is True
+    assert reply._tool_calls[6].arguments.value() == ""
+
+
+@pytest.mark.parametrize(
+    ("count", "kept"), [(0, 0), (2**31 - 1, 2**31 - 1), (2**31, None), (-1, None), (True, None)]
+)
+def test_audit_token_counts_fit_the_audit_column(count, kept) -> None:  # noqa: ANN001
+    from src.chat.telemetry import _usage_tokens
+
+    assert _usage_tokens({"prompt_tokens": count}, "prompt_tokens") == kept

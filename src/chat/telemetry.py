@@ -37,11 +37,16 @@ from src.routers.routing_decision import attach_route_decision, resolve_failure_
 from src.routers.response_cost import record_response_cost
 
 
+# The audit event stores token counts in PostgreSQL integer columns.
+_MAX_AUDIT_TOKENS = 2**31 - 1
+
+
 def _usage_tokens(usage: dict[str, Any], key: str) -> int | None:
     value = usage.get(key)
     if isinstance(value, bool) or not isinstance(value, int):
         return None
-    return value
+    # A count that the column cannot hold would leave the audit event in retry.
+    return value if 0 <= value <= _MAX_AUDIT_TOKENS else None
 
 
 def _append_route_decision_metadata(request: Request, metadata: dict[str, Any]) -> dict[str, Any]:
