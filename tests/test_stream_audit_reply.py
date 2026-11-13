@@ -13,10 +13,11 @@ from tests.test_messages_native import (
 from src.billing.accounting.accounting_finalization import (
     accounting_finalization_audit_event_id,
 )
+from src.chat.stream_reply import AUDIT_REPLY_MEMORY
 from src.services.audit.content_buffer import AuditContentBuffer
 from tests.test_accounting_request_ids import _operation as accounting_operation
 from tests.test_audit_content_buffer import _Service as _ContentService
-from tests.test_stream_accounting_commit import configured_stream, request_body
+from tests.test_stream_accounting_commit import SpendRecorder, configured_stream, request_body
 
 pytestmark = pytest.mark.app
 
@@ -69,6 +70,35 @@ async def test_stream_audit_stores_reply_and_tokens(test_app, endpoint) -> None:
     assert reply["choices"][0]["finish_reason"] == "stop"
     assert reply["usage"]["total_tokens"] == 18
     assert "truncated" not in reply
+
+
+async def test_stream_reply_keeps_its_memory_until_the_audit_has_it(test_app, monkeypatch) -> None:
+    seen = {}
+    audit = _RecordingAuditService()
+    record_event = audit.record_event
+
+    def record(event, *, payloads=None, critical=False):  # noqa: ANN001, ANN202
+        seen["audit"] = AUDIT_REPLY_MEMORY.used
+        record_event(event, payloads=payloads, critical=critical)
+
+    audit.record_event = record
+    test_app.state.audit_service = audit
+    log_spend = SpendRecorder.log_spend
+
+    async def spend(self, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        seen["spend"] = AUDIT_REPLY_MEMORY.used
+        await log_spend(self, **kwargs)
+
+    monkeypatch.setattr(SpendRecorder, "log_spend", spend)
+    before = AUDIT_REPLY_MEMORY.used
+
+    response = await _post_stream(test_app, "/v1/chat/completions")
+
+    assert response.status_code == 200
+    # The reply is charged while the spend write waits and until the audit takes it.
+    assert seen["spend"] > before
+    assert seen["audit"] > before
+    assert AUDIT_REPLY_MEMORY.used == before
 
 
 async def test_stream_audit_reply_follows_the_audit_payload_limit(test_app) -> None:

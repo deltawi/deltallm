@@ -144,16 +144,19 @@ def _inline_data_placeholder(value: str) -> str | None:
     return f"[omitted inline data: {media_type}, {len(value)} chars, sha256={_sha256(value)}]"
 
 
-def json_text_chars(value: str) -> int:
+def json_text_chars(value: str, *, stop: int | None = None) -> int:
     """Return the size this module counts for ``value`` as JSON text, without quotes.
 
     ASCII text counts its length and other text its ``\\uXXXX`` escapes, so a caller
-    that cuts text to the payload limit cuts it as compaction will measure it.
+    that cuts text to the payload limit cuts it as compaction will measure it. With
+    ``stop``, the scan ends at the first slice that takes the size over ``stop``: then the
+    result is only known to be more than ``stop``, and the work is bounded by ``stop``.
     """
 
     if value.isascii():
         return len(value)
-    return _text_size(value, stop=len(value) * 12 + 2) - 2
+    limit = len(value) * 12 if stop is None else max(0, stop)
+    return _text_size(value, stop=limit + 2) - 2
 
 
 def _text_size(value: str, *, stop: int) -> int:

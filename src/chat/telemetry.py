@@ -14,6 +14,7 @@ from src.billing.pricing.tier_pricing import (
 )
 from src.callbacks import build_standard_logging_payload
 from src.chat.audit import emit_text_audit_event
+from src.chat.stream_reply import StreamReplyAccumulator
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -120,7 +121,7 @@ async def emit_stream_success(
     params: dict[str, Any],
     usage: dict[str, Any] | None = None,
     usage_metadata: dict[str, Any] | None = None,
-    reply: dict[str, Any] | None = None,
+    reply: StreamReplyAccumulator | None = None,
 ) -> AsyncIterator[None]:
     """Await configured accounting and required audit before the terminal frame.
 
@@ -128,6 +129,9 @@ async def emit_stream_success(
     failures, so its return does not guarantee a committed charge.
     The caller releases the response permit before leaving this context, so
     post-call hooks never hold provider capacity. No independent task is spawned.
+    The reply keeps its share of the reply memory through the spend write, and
+    gives it back when the audit has the body. The stream lifecycle releases it
+    on the other paths.
     """
     api_provider = resolve_provider(params)
     usage_data, pricing, customer_billing, provider_billing = _resolve_completion_pricing_costs(
@@ -207,32 +211,42 @@ async def emit_stream_success(
             end_time=datetime.now(tz=UTC),
         ),
     )
-    await emit_text_audit_event(
-        request=request,
-        auth=auth,
-        action=audit_action,
-        model=payload.model,
-        status="success",
-        request_start=request_start,
-        request_data=request_data,
-        # Without a rebuilt reply, the audit keeps the earlier placeholder.
-        response_data=reply or {"object": stream_response_object},
-        input_tokens=_usage_tokens(usage_data, "prompt_tokens"),
-        output_tokens=_usage_tokens(usage_data, "completion_tokens"),
-        metadata=_append_route_decision_metadata(
-            request,
-            {
-                "route": request.url.path,
-                "stream": True,
-                "cache_hit": cache_hit,
-                "cache_key": cache_key,
-                "api_base": api_base,
-                "provider": api_provider,
-                "deployment_model": params.get("model"),
-                **dict(usage_metadata or {}),
-            },
-        ),
+    reply_body = (
+        reply.completion(fallback_model=payload.model, usage=usage) if reply is not None else None
     )
+    try:
+        await emit_text_audit_event(
+            request=request,
+            auth=auth,
+            action=audit_action,
+            model=payload.model,
+            status="success",
+            request_start=request_start,
+            request_data=request_data,
+            # Without a rebuilt reply, the audit keeps the earlier placeholder.
+            response_data=reply_body or {"object": stream_response_object},
+            input_tokens=_usage_tokens(usage_data, "prompt_tokens"),
+            output_tokens=_usage_tokens(usage_data, "completion_tokens"),
+            metadata=_append_route_decision_metadata(
+                request,
+                {
+                    "route": request.url.path,
+                    "stream": True,
+                    "cache_hit": cache_hit,
+                    "cache_key": cache_key,
+                    "api_base": api_base,
+                    "provider": api_provider,
+                    "deployment_model": params.get("model"),
+                    **dict(usage_metadata or {}),
+                },
+            ),
+        )
+    finally:
+        # The audit (or the content buffer) owns the body now. Drop this frame's
+        # reference and give the reply memory back before the terminal frame.
+        del reply_body
+        if reply is not None:
+            reply.release()
     try:
         yield
     finally:

@@ -105,3 +105,34 @@ def test_tool_call_without_argument_text_gets_empty_object() -> None:
     )
 
     assert buffer.tool_calls()[0]["function"] == {"name": "docs.list", "arguments": "{}"}
+
+
+def test_buffer_keeps_no_audit_only_fields() -> None:
+    buffer = MCPStreamHopBuffer(completion_id=None)
+    for _ in range(100):
+        buffer.filter(
+            _line({"refusal": "x" * 1000, "reasoning": "r", "function_call": {"name": "f"}})
+        )
+    buffer.filter(_line({"content": "ok", "reasoning_content": ""}))
+
+    message = buffer.assistant_response()["choices"][0]["message"]
+
+    # The next hop does not send these fields, so the hop keeps none of them.
+    assert buffer._reply._refusal.length == 0
+    assert buffer._reply._reasoning.length == 0
+    assert buffer._reply._function_call is None
+    assert message == {
+        "role": "assistant",
+        "content": "ok",
+        "tool_calls": [],
+        "reasoning_content": "",
+    }
+
+
+def test_buffer_joins_many_small_fragments() -> None:
+    buffer = MCPStreamHopBuffer(completion_id=None)
+    for _ in range(1000):
+        buffer.filter(_line({"tool_calls": [{"index": 0, "function": {"arguments": "a"}}]}))
+
+    assert buffer.tool_calls()[0]["function"]["arguments"] == "a" * 1000
+    assert len(buffer._reply._tool_calls[0].arguments._parts) <= 1000 // 64 + 64

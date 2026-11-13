@@ -9,6 +9,7 @@ import anyio
 from fastapi.responses import StreamingResponse
 
 from src.chat.executor import OpenedStream
+from src.chat.stream_reply import StreamReplyAccumulator
 from src.metrics import increment_router_health_update_failure
 from src.router.health_state import DeploymentHealthRef
 from src.router.execution import ManagedFailoverResult, RequestDeadline
@@ -23,15 +24,23 @@ STREAM_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
 class ManagedStreamLifecycle:
-    """Single idempotent owner for an opened upstream and its capacity permit."""
+    """Single idempotent owner for an opened upstream and its capacity permit.
+
+    It also owns the audit copy of the reply, if any: the success path gives that
+    copy to the audit and releases it earlier, and close() releases it on every
+    other path (failure, cancellation, client disconnect) without waiting for GC.
+    """
 
     def __init__(
         self,
         opened_stream: OpenedStream,
         managed_stream: ManagedFailoverResult[OpenedStream],
+        *,
+        audit_reply: StreamReplyAccumulator | None = None,
     ) -> None:
         self.opened_stream = opened_stream
         self.managed_stream = managed_stream
+        self.audit_reply = audit_reply
         self._closed = False
         self._close_lock = anyio.Lock()
 
@@ -46,6 +55,8 @@ class ManagedStreamLifecycle:
             try:
                 await self.close_upstream(exc)
             finally:
+                if self.audit_reply is not None:
+                    self.audit_reply.release()
                 await self.managed_stream.release()
             self._closed = True
 

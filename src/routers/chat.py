@@ -231,7 +231,11 @@ async def handle_chat_like_request(
                 )
             )
             opened_stream = managed_stream.value
-            stream_lifecycle = ManagedStreamLifecycle(opened_stream, managed_stream)
+            stream_lifecycle = ManagedStreamLifecycle(
+                opened_stream,
+                managed_stream,
+                audit_reply=stream_reply_accumulator(request, auth),
+            )
             served_deployment = managed_stream.deployment
             observation = selector_answer_observation(request_context)
             if observation is not None:
@@ -255,7 +259,7 @@ async def handle_chat_like_request(
                 stream_handler = getattr(request.app.state, "streaming_cache_handler", None)
                 stream_id = None
                 stream_write_context: StreamWriteContext | None = None
-                stream_usage = StreamUsageTracker(reply=stream_reply_accumulator(request, auth))
+                stream_usage = StreamUsageTracker(reply=stream_lifecycle.audit_reply)
                 failure_exc: BaseException | None = None
                 stream_error: Exception | None = None
                 health_error: Exception | None = None
@@ -468,13 +472,6 @@ async def handle_chat_like_request(
                     mode="chat",
                     usage=resolved_usage.usage,
                 )
-                stream_reply = None
-                if stream_usage.reply is not None:
-                    stream_reply = stream_usage.reply.completion(
-                        fallback_model=payload.model, usage=resolved_usage.usage
-                    )
-                    # The rebuilt body holds the reply now; free the stream's share.
-                    stream_usage.reply.release()
                 async with emit_stream_success(
                     request=request,
                     auth=auth,
@@ -494,7 +491,7 @@ async def handle_chat_like_request(
                     params=opened_stream.params,
                     usage=resolved_usage.usage,
                     usage_metadata=resolved_usage.metadata(),
-                    reply=stream_reply,
+                    reply=stream_lifecycle.audit_reply,
                 ):
                     try:
                         if terminal_line is not None:
