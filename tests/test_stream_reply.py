@@ -757,3 +757,16 @@ def test_a_long_fallback_model_counts_against_the_limit() -> None:
     assert stored["choices"][0]["message"]["content"] == answer
     assert stored["truncated"] is True
     assert len(json.dumps(body)) <= max_bytes
+
+
+def test_large_integers_are_charged_at_their_heap_size() -> None:
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
+    numbers = [int("9" * 4300) - i for i in range(200)]
+    reply.add_chunk(_chunk({"reasoning_details": [{"index": 0, "text": "a", "extra": numbers}]}))
+
+    kept = reply._reasoning_details[0]["extra"]
+    assert kept is numbers
+    assert memory.used >= sum(sys.getsizeof(value) for value in numbers) + sys.getsizeof(kept)
+    reply.release()
+    assert memory.used == 0

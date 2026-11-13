@@ -655,9 +655,12 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
         if item is None or isinstance(item, bool):
             chars += 5
         elif isinstance(item, int):
+            bits = item.bit_length()
             # Decimal digits are at most 0.31 per bit, plus a sign; at least what
             # audit compaction counts for the number.
-            chars += max(4, item.bit_length() * 31 // 100 + 3)
+            chars += max(4, bits * 31 // 100 + 3)
+            # A large integer object keeps 4 bytes for each 30 bits.
+            heap += 4 * (bits // 30 + 1)
         elif isinstance(item, float):
             chars += 24
         elif isinstance(item, list):
