@@ -27,7 +27,7 @@ from typing import Any, Iterator
 import weakref
 
 from src.providers.openai_stream_contract import OpenAIStreamDeltaField
-from src.services.audit.payload_compaction import json_text_chars
+from src.services.audit.payload_compaction import json_text_chars, measure_json_text
 
 _MAX_REASONING_DETAILS = 128
 # Audit only: the MCP tool loop must see every call and every field the model sent.
@@ -480,11 +480,14 @@ class StreamReplyAccumulator:
             return
         complete = True
         if self._max_chars is not None:
-            fragment, complete, replaced = self._storable_text(fragment, limit=self._replace_left)
-            self._replace_left -= replaced
-            # The exact JSON size, escapes included. The scan stops past the
-            # remaining budget, so its work is bounded.
-            chars = json_text_chars(fragment, stop=self._max_chars - self._chars)
+            # The exact JSON size, escapes included, from one UTF-8 encode and C
+            # scans. The scan stops past the remaining budget, so its work is bounded.
+            remaining = self._max_chars - self._chars
+            chars, unstorable = measure_json_text(fragment, stop=remaining)
+            if unstorable and chars <= remaining:
+                fragment, complete = self._storable_text(fragment)
+                if not complete:
+                    chars = json_text_chars(fragment, stop=remaining)
             if fragment and not self._reserve(chars, text.cost_of(fragment)):
                 return
         if fragment:
@@ -494,23 +497,18 @@ class StreamReplyAccumulator:
         if not complete:
             self._stop()
 
-    def _storable_text(self, value: str, *, limit: int) -> tuple[str, bool, int]:
-        """Audit only: return the text that JSONB can store, if it is whole, and the
-        number of characters replaced.
+    def _storable_text(self, value: str) -> tuple[str, bool]:
+        """Audit only: return the text that JSONB can store, and whether it is whole.
 
         Each character that JSONB cannot store becomes U+FFFD, which has the same JSON
-        size (six characters), and the reply is marked. After ``limit`` of them, the
-        text is cut before the next one. The scans run in C, and a text longer than the
-        rest of the limit is not scanned: it cannot be kept.
+        size (six characters), and the reply is marked. After _MAX_REPLACED_CHARS of
+        them in the reply, the text is cut before the next one. This runs only for a
+        text that has such a character and fits the rest of the limit.
         """
-        if (
-            self._max_chars is None
-            or len(value) > self._max_chars - self._chars
-            or _storable(value)
-        ):
-            return value, True, 0
         self.truncated = True
-        return _replace_unstorable(value, limit)
+        value, complete, replaced = _replace_unstorable(value, self._replace_left)
+        self._replace_left -= replaced
+        return value, complete
 
     def _same_name(self, stored: _Text, name: str) -> bool:
         """Return True if ``name`` repeats the stored name, as the audit keeps it.
