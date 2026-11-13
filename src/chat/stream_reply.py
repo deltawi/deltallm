@@ -47,6 +47,15 @@ _STR_BYTES = 80
 _VALUE_BYTES = 128
 _ENTRY_BYTES = 512
 _ENTRY_CHARS = 64
+# Audit only: the id, model and finish reason are kept when they are at most this
+# long. The margin of the payload limit covers their characters, and a fixed
+# charge at creation covers their heap bytes.
+_MAX_META_CHARS = 256
+_META_BYTES = 3 * (_STR_BYTES + 4 * _MAX_META_CHARS)
+# Audit only: provider usage above these bounds keeps only the token counts.
+_MAX_USAGE_CHARS = 4096
+_MAX_USAGE_VALUES = 128
+_TOKEN_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
 _JOIN_EVERY = 64
 AUDIT_REPLY_MEMORY_MAX_BYTES = 64 * 1024 * 1024
 
@@ -160,13 +169,23 @@ class StreamReplyAccumulator:
         self._released = False
         self.truncated = False
         self.saw_chunk = False
+        self._clear()
+        self._keep_meta = True
+        if memory is not None:
+            if memory.take(_META_BYTES):
+                self._held[0] += _META_BYTES
+            else:
+                self._keep_meta = False
+                self._stop()
+
+    def _clear(self) -> None:
         self.response_id: str | None = None
         self.created: int | None = None
         self.model: str | None = None
         self.finish_reason: str | None = None
-        self._clear()
+        self._clear_data()
 
-    def _clear(self) -> None:
+    def _clear_data(self) -> None:
         self._content = _Text()
         self._reasoning_content = _Text()
         self._reasoning_details: dict[Any, dict[str, Any]] = {}
@@ -181,13 +200,14 @@ class StreamReplyAccumulator:
         if self._released:
             return
         self.saw_chunk = True
-        if self.response_id is None and isinstance(chunk.get("id"), str):
-            self.response_id = chunk["id"]
+        if self.response_id is None:
+            self.response_id = self._meta(chunk.get("id"))
         created = chunk.get("created")
         if self.created is None and isinstance(created, int) and not isinstance(created, bool):
-            self.created = created
-        if self.model is None and isinstance(chunk.get("model"), str):
-            self.model = chunk["model"]
+            # A Unix time; a larger integer is not kept.
+            self.created = created if created.bit_length() <= 64 else None
+        if self.model is None:
+            self.model = self._meta(chunk.get("model"))
         choices = chunk.get("choices")
         if not isinstance(choices, list):
             return
@@ -200,8 +220,8 @@ class StreamReplyAccumulator:
                 # Other choices (n > 1) are not kept; the marker tells the reader.
                 self.truncated = True
                 continue
-            finish_reason = choice.get("finish_reason")
-            if isinstance(finish_reason, str) and finish_reason:
+            finish_reason = self._meta(choice.get("finish_reason"))
+            if finish_reason:
                 self.finish_reason = finish_reason
             if choice.get("logprobs") is not None:
                 self.truncated = True
@@ -302,12 +322,29 @@ class StreamReplyAccumulator:
             "stream": True,
         }
         if usage is not None:
-            body["usage"] = dict(usage)
+            body["usage"] = self._bounded_usage(usage)
         if self.truncated:
             body["truncated"] = True
         self._stopped = True
         self._clear()
         return body
+
+    def _meta(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        if self._audit and (not self._keep_meta or len(value) > _MAX_META_CHARS):
+            self.truncated = True
+            return None
+        return value
+
+    def _bounded_usage(self, usage: dict[str, Any]) -> dict[str, Any]:
+        if not self._audit:
+            return dict(usage)
+        size = _json_size(usage, max_chars=_MAX_USAGE_CHARS, max_values=_MAX_USAGE_VALUES)
+        if size is not None:
+            return dict(usage)
+        self.truncated = True
+        return {key: usage[key] for key in _TOKEN_KEYS if key in usage}
 
     def release(self) -> None:
         """Drop the kept data and give this reply's share of the budget back."""
@@ -350,11 +387,9 @@ class StreamReplyAccumulator:
         if not fragment:
             return
         if self._max_chars is not None:
-            if fragment.isascii():
-                chars = len(fragment)
-            else:
-                # The scan stops past the remaining budget, so its work is bounded.
-                chars = json_text_chars(fragment, stop=self._max_chars - self._chars)
+            # The exact JSON size, escapes included. The scan stops past the
+            # remaining budget, so its work is bounded.
+            chars = json_text_chars(fragment, stop=self._max_chars - self._chars)
             if not self._reserve(chars, text.cost_of(fragment)):
                 return
         freed = text.add(fragment)
@@ -378,12 +413,10 @@ class StreamReplyAccumulator:
         width = 1 if value.isascii() else 4
         return self._reserve(chars, _STR_BYTES + width * len(value))
 
-    def _reserve_json(self, value: Any) -> bool:
-        """Measure a JSON value with bounded work, then reserve its size."""
-        if self._max_chars is None:
-            return True
-        if self._stopped:
-            return False
+    def _measure_json(self, value: Any) -> tuple[int, int] | None:
+        """Measure a JSON value with bounded work: (JSON characters, heap bytes)."""
+        if self._stopped or self._max_chars is None:
+            return None
         size = _json_size(
             value,
             max_chars=self._max_chars - self._chars,
@@ -391,10 +424,16 @@ class StreamReplyAccumulator:
         )
         if size is None:
             self._stop()
-            return False
+            return None
         chars, heap, values = size
         self._json_values_left -= values
-        return self._reserve(chars, heap)
+        return chars, heap
+
+    def _reserve_json(self, value: Any) -> bool:
+        if self._max_chars is None:
+            return True
+        size = self._measure_json(value)
+        return size is not None and self._reserve(*size)
 
     def _mark_unknown_fields(self, delta: dict[str, Any]) -> None:
         if len(delta) > _MAX_FIELDS_PER_DELTA:
@@ -508,12 +547,13 @@ class StreamReplyAccumulator:
         if isinstance(arguments, str):
             self._add_text(entry.arguments, arguments)
         elif isinstance(arguments, dict):
-            if not self._reserve_json(arguments):
+            # The walk bounds the work of the encode; the kept string is then
+            # charged as text, at its own JSON size and heap bytes.
+            if self._audit and self._measure_json(arguments) is None:
                 return
-            # The measured object is bounded, so encoding it is bounded too.
             encoded = json.dumps(arguments, separators=(",", ":"))
             entry.arguments = _Text()
-            entry.arguments.add(encoded)
+            self._add_text(entry.arguments, encoded)
         elif arguments is not None and self._audit:
             self.truncated = True
 

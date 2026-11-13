@@ -11,6 +11,7 @@ import pytest
 from src.chat.audit import stream_reply_accumulator
 from src.chat.stream_reply import (
     _ENTRY_CHARS,
+    _META_BYTES,
     _STR_BYTES,
     ReplyMemory,
     StreamReplyAccumulator,
@@ -235,29 +236,36 @@ def test_completion_keeps_refusal() -> None:
 
 
 def test_shared_memory_caps_all_replies_and_comes_back_on_release_or_free() -> None:
-    # A string costs its characters and the bytes of the string object.
-    memory = ReplyMemory(_STR_BYTES + 10)
+    # Each reply pays a fixed share for its id, model and finish reason. A string
+    # costs its characters and the bytes of the string object.
+    memory = ReplyMemory(2 * _META_BYTES + _STR_BYTES + 10)
     first = StreamReplyAccumulator(max_chars=100, memory=memory)
     second = StreamReplyAccumulator(max_chars=100, memory=memory)
 
     first.add_chunk(_chunk({"content": "abcdefgh"}))
     second.add_chunk(_chunk({"content": "abcdefgh"}))
 
-    assert memory.used == _STR_BYTES + 8
+    assert memory.used == 2 * _META_BYTES + _STR_BYTES + 8
     assert not first.truncated
     assert second.truncated
     first.release()
-    assert memory.used == 0
+    assert memory.used == _META_BYTES
     # A released reply takes no more data.
     first.add_chunk(_chunk({"content": "x"}))
-    assert memory.used == 0
+    assert memory.used == _META_BYTES
 
     third = StreamReplyAccumulator(max_chars=100, memory=memory)
     third.add_chunk(_chunk({"content": "abc"}))
-    assert memory.used == _STR_BYTES + 3
+    assert memory.used == 2 * _META_BYTES + _STR_BYTES + 3
     del third  # a failed or cancelled stream drops its accumulator
     gc.collect()
+    assert memory.used == _META_BYTES
+    second.release()
     assert memory.used == 0
+    # Without room for its fixed share, a reply keeps nothing.
+    full = StreamReplyAccumulator(max_chars=100, memory=ReplyMemory(_META_BYTES - 1))
+    full.add_chunk(_chunk({"content": "abc"}))
+    assert full.completion(fallback_model="x", usage=None)["truncated"] is True
 
 
 def test_audit_reply_at_the_limit_is_cut_not_replaced_by_compaction() -> None:
@@ -518,3 +526,82 @@ def test_empty_fields_and_logprobs() -> None:
     reply.add_chunk(chunk)
 
     assert reply.truncated is True
+
+
+def test_tool_arguments_sent_as_an_object_are_charged_as_the_kept_string() -> None:
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
+    arguments = {"q": "\x00" * 130_000}
+    reply.add_chunk(_chunk({"tool_calls": [{"index": 0, "function": {"arguments": arguments}}]}))
+
+    kept = reply._tool_calls[0].arguments.value()
+
+    assert kept == json.dumps(arguments, separators=(",", ":"))
+    assert memory.used >= sys.getsizeof(kept)
+    # The kept string counts at its own JSON size: each escape is escaped again.
+    assert reply._chars == len(json.dumps(kept)) - 2 + _ENTRY_CHARS
+
+
+def test_long_id_model_and_finish_reason_are_not_kept() -> None:
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=1000, memory=memory)
+    chunk = _chunk({"content": "a"}, finish="s" * 300_000)
+    chunk["id"] = "i" * 300_000
+    chunk["model"] = "m" * 300_000
+    reply.add_chunk(chunk)
+
+    assert reply.response_id is None
+    assert reply.model is None
+    assert reply.finish_reason is None
+    assert reply.truncated is True
+    body = reply.completion(fallback_model="group", usage=None)
+    assert body["model"] == "group"
+    reply.release()
+    assert memory.used == 0
+
+
+def test_metadata_is_kept_when_short_and_cleared_on_release() -> None:
+    reply = StreamReplyAccumulator(max_chars=1000, memory=ReplyMemory(1 << 20))
+    reply.add_chunk(_chunk({"content": "a"}, finish="stop"))
+
+    assert (reply.response_id, reply.model, reply.finish_reason) == ("chatcmpl-1", "m", "stop")
+    reply.release()
+    assert (reply.response_id, reply.model, reply.finish_reason) == (None, None, None)
+
+
+def test_quotes_count_at_their_json_size_so_compaction_keeps_the_prefix() -> None:
+    max_bytes = 64 * 1024
+    service = AuditService(
+        AuditRepository(None),
+        ingestion_config=AuditIngestionConfig(enabled=True, payload_max_bytes=max_bytes),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(),
+        app=SimpleNamespace(state=SimpleNamespace(audit_service=service)),
+    )
+
+    async def build():
+        reply = stream_reply_accumulator(request, SimpleNamespace(organization_id="org-1"))
+        assert reply is not None
+        for _ in range(40):
+            reply.add_chunk(_chunk({"content": '"' * 16_000}))
+        reply.add_chunk(_chunk({"content": "ع"}))
+        return reply.completion(fallback_model="m", usage=None)
+
+    body = asyncio.run(build())
+    stored, changed = compact_audit_content(body, max_bytes=max_bytes)
+
+    assert body["truncated"] is True
+    assert changed is False
+    assert stored["choices"][0]["message"]["content"].startswith('"' * 16_000)
+
+
+def test_large_provider_usage_keeps_only_the_token_counts() -> None:
+    reply = StreamReplyAccumulator(max_chars=1000)
+    reply.add_chunk(_chunk({"content": "a"}))
+    usage = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3, "x": "y" * 10_000}
+
+    body = reply.completion(fallback_model="m", usage=usage)
+
+    assert body["usage"] == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+    assert body["truncated"] is True
