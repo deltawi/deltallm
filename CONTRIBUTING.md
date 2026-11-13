@@ -176,6 +176,15 @@ default. Use `-n 0` to request serial execution or `-n 2` to reproduce the
 application CI run locally. Explicit worker settings take precedence. This
 policy keeps the existing CI deadline and all required checks.
 
+After collection, each test process freezes the objects that exist at that time
+(`freeze_startup_heap()`, the same call that the gateway makes at startup), so
+later full garbage collections do not scan them. Without this, a full collection
+in a test process scanned more than a million objects and stopped the event loop
+for 0.7 to 1.4 seconds, so a test with a 1 second deadline could fail. A test
+that must have no collection in a measured window uses `gc.disable()` and then
+enables collection again. It does not call `gc.unfreeze()`, because that undoes
+the freeze for the rest of the process.
+
 The PostgreSQL lane uses four CI runners. Each runner has its own PostgreSQL and
 Redis services. `--postgres-shard=0/4` through `--postgres-shard=3/4` divide all
 collected PostgreSQL modules by a stable path hash. Each test runs once, and each

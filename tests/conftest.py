@@ -32,6 +32,7 @@ from src.guardrails.middleware import GuardrailMiddleware
 from src.callbacks import CallbackManager
 from src.billing.spend.spend import SpendTrackingService
 from src.blocking_work import BlockingWorkExecutor
+from src.bootstrap.metrics import freeze_startup_heap
 from src.guardrails.registry import GuardrailRegistry
 from src.main import create_app
 from src.providers.bedrock import BedrockAdapter
@@ -61,6 +62,19 @@ from src.services.admission.limit_counter import LimitCounter
 
 
 pytest_plugins = ("tests.dependency_lanes", "tests.app_lane_workers")
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Keep the objects that live for the whole run out of later full GC scans.
+
+    The gateway does the same at startup. Without it, each full collection in a
+    test worker scans more than a million import-time objects and stops the
+    event loop for about 1 s, which is longer than the 1 s deadlines that some
+    tests check.
+    """
+    del session
+    freeze_startup_heap()
 
 
 class NoopBudgetService:

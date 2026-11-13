@@ -863,9 +863,11 @@ async def _longest_loop_pause(work) -> float:
             gaps.append(now - last)
             last = now
 
-    # The test's own large objects are left out of garbage collection pauses.
+    # No garbage collection pause is counted in the window. gc.unfreeze() is not
+    # used: it would also unfreeze the startup heap that conftest.py freezes.
     gc.collect()
-    gc.freeze()
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
     try:
         task = asyncio.create_task(probe())
         await asyncio.sleep(0.005)
@@ -873,7 +875,8 @@ async def _longest_loop_pause(work) -> float:
         done.set()
         await task
     finally:
-        gc.unfreeze()
+        if gc_was_enabled:
+            gc.enable()
     return max(gaps)
 
 
