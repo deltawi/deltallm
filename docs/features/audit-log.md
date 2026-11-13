@@ -208,15 +208,19 @@ that it sends to the client. The payload is one `chat.completion` object with th
 - `stream: true`: this field shows that DeltaLLM built the payload from a stream
 - `truncated: true`: this field is present only when the payload is not the full reply. DeltaLLM
   keeps the start of the reply and sets this field when:
-  - the reply data is longer than `general_settings.audit_payload_max_bytes` minus a margin (16 KiB,
-    or half of a smaller limit) for the other fields. Text is measured as JSON text, like the payload
+  - the reply data is longer than its limit: `general_settings.audit_payload_max_bytes`, at most
+    1 MiB, minus a margin (16 KiB, or half of a smaller limit) for the JSON keys and the provider
+    usage. A stream reply is not kept past 1 MiB, also when the payload limit is larger, so the
+    audit write at the end of a stream stays short. Text is measured as JSON text, like the payload
     limit: a quote, a backslash or a control character counts two or six, and each character
-    outside ASCII counts six, so an Arabic reply is cut at about 170,000 characters
+    outside ASCII counts six, so an Arabic reply is cut at about 170,000 characters. The response
+    id, model and finish reason count against the same limit
   - the replies that the pod keeps at the same time already use 64 MiB of memory
   - the reply has more than 128 tool calls or 128 reasoning details
   - the request asked for more than one choice (`n` > 1). DeltaLLM keeps only the first choice
-  - the response id, model or finish reason is longer than 256 characters (it is not kept), or the
-    provider usage is larger than 4 KiB or 128 values (only the token counts are kept)
+  - the response id, model or finish reason is longer than 256 characters or does not fit the limit
+    (it is not kept), or the provider usage is larger than 4 KiB, 128 values or its part of the
+    margin (only the token counts are kept)
   - the stream sent data that DeltaLLM does not rebuild, for example `logprobs`, audio, annotations,
     or a field in a shape that is not text
   - one delta sent more than 16 fields, more than 128 tool calls or more than 16 reasoning

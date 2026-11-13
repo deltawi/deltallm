@@ -25,6 +25,10 @@ from src.services.audit.payload_compaction import compact_audit_content
 pytestmark = pytest.mark.hermetic
 
 
+# The JSON size of the id and model of ``_chunk``: they count against the limit.
+_CHUNK_META_CHARS = len('"chatcmpl-1"') + len('"m"')
+
+
 def _chunk(delta, *, finish=None, index=0):
     return {
         "id": "chatcmpl-1",
@@ -107,7 +111,7 @@ def test_completion_omits_empty_tool_calls_and_marks_other_choices() -> None:
 
 
 def test_limit_drops_later_text_and_marks_truncation() -> None:
-    reply = StreamReplyAccumulator(max_chars=5)
+    reply = StreamReplyAccumulator(max_chars=_CHUNK_META_CHARS + 5)
     reply.add_chunk(_chunk({"content": "abc"}))
     reply.add_chunk(_chunk({"content": "defgh"}))
     reply.add_chunk(_chunk({"content": "i"}))
@@ -198,12 +202,12 @@ def test_limit_counts_tool_call_ids_types_and_names() -> None:
 
 
 def test_limit_counts_replaced_and_nested_reasoning_details() -> None:
-    # The first detail takes 110 characters: the entry, its keys and values.
-    reply = StreamReplyAccumulator(max_chars=120)
+    # The first detail takes the entry and 48 characters for its keys and values.
+    reply = StreamReplyAccumulator(max_chars=_ENTRY_CHARS + 58)
     reply.add_delta({"reasoning_details": [{"index": 0, "type": "reasoning.text", "text": "a"}]})
     # A repeated value is not counted again.
     reply.add_delta({"reasoning_details": [{"index": 0, "type": "reasoning.text"}]})
-    assert reply._chars == 110
+    assert reply._chars == _ENTRY_CHARS + 48
     reply.add_delta({"reasoning_details": [{"index": 0, "extra": {"data": "x" * 100}}]})
     reply.add_delta({"reasoning_details": [{"index": 1, "nested": ["y" * 100]}]})
 
@@ -359,7 +363,7 @@ def test_bounded_replies_count_text_at_its_json_size() -> None:
     assert reply.message()["content"] == "ع" * 10
     bounded = StreamReplyAccumulator(max_chars=1000)
     bounded.add_chunk(_chunk({"content": "ع" * 10}))
-    assert bounded._chars == 60
+    assert bounded._chars == _CHUNK_META_CHARS + 60
 
 
 class _Unreadable(list):
@@ -387,8 +391,9 @@ def test_a_large_json_value_is_refused_without_encoding_it() -> None:
 
 
 def test_a_stopped_reply_does_no_work_for_later_chunks() -> None:
-    reply = StreamReplyAccumulator(max_chars=3)
-    reply.add_chunk(_chunk({"content": "abcd"}))
+    # Room for the id, the model, the finish reason and three characters.
+    reply = StreamReplyAccumulator(max_chars=_CHUNK_META_CHARS + len('"stop"') + 3)
+    reply.add_chunk(_chunk({"content": "a" * 10}))
     assert reply.truncated is True
 
     reply.add_delta(_UnreadableDelta(content="x"))
@@ -539,7 +544,7 @@ def test_tool_arguments_sent_as_an_object_are_charged_as_the_kept_string() -> No
     assert kept == json.dumps(arguments, separators=(",", ":"))
     assert memory.used >= sys.getsizeof(kept)
     # The kept string counts at its own JSON size: each escape is escaped again.
-    assert reply._chars == len(json.dumps(kept)) - 2 + _ENTRY_CHARS
+    assert reply._chars == _CHUNK_META_CHARS + len(json.dumps(kept)) - 2 + _ENTRY_CHARS
 
 
 def test_long_id_model_and_finish_reason_are_not_kept() -> None:
@@ -605,3 +610,114 @@ def test_large_provider_usage_keeps_only_the_token_counts() -> None:
 
     assert body["usage"] == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
     assert body["truncated"] is True
+
+
+def _audit_reply(max_bytes: int) -> StreamReplyAccumulator:
+    service = AuditService(
+        AuditRepository(None),
+        ingestion_config=AuditIngestionConfig(enabled=True, payload_max_bytes=max_bytes),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(),
+        app=SimpleNamespace(state=SimpleNamespace(audit_service=service)),
+    )
+
+    async def build():
+        return stream_reply_accumulator(request, SimpleNamespace(organization_id="org-1"))
+
+    reply = asyncio.run(build())
+    assert reply is not None
+    return reply
+
+
+def test_a_long_reasoning_index_is_not_kept_as_a_key() -> None:
+    memory = ReplyMemory(1 << 30)
+    reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024, memory=memory)
+    reply.add_delta({"reasoning_details": [{"index": "😀" * 90_000, "text": "a"}]})
+    reply.add_delta({"tool_calls": [{"index": 2**100, "function": {"name": "f"}}]})
+
+    assert all(type(key) is int for key in reply._reasoning_details)
+    assert reply._tool_calls.keys() <= {0}
+    assert reply.truncated is True
+    # Nothing larger than the charge is kept.
+    kept = sum(sys.getsizeof(key) for key in reply._reasoning_details)
+    assert kept < memory.used < 64 * 1024
+    reply.release()
+    assert memory.used == 0
+
+
+def test_short_reasoning_index_still_merges() -> None:
+    reply = StreamReplyAccumulator(max_chars=1000)
+    reply.add_delta({"reasoning_details": [{"index": "r1", "text": "a"}]})
+    reply.add_delta({"reasoning_details": [{"index": "r1", "text": "b"}]})
+
+    assert reply.message()["reasoning_details"] == [{"index": "r1", "text": "ab"}]
+
+
+def test_metadata_and_usage_fit_the_smallest_payload_limit() -> None:
+    max_bytes = 4096
+    reply = _audit_reply(max_bytes)
+    chunk = _chunk({"content": "Hello, world."}, finish="😀" * 256)
+    chunk["id"] = "😀" * 256
+    chunk["model"] = "😀" * 256
+    reply.add_chunk(chunk)
+    usage = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3, "details": "!" * 3900}
+
+    body = reply.completion(fallback_model="m", usage=usage)
+    stored, changed = compact_audit_content(body, max_bytes=max_bytes)
+
+    assert changed is False
+    assert stored["choices"][0]["message"]["content"] == "Hello, world."
+    assert stored["usage"] == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+    assert stored["truncated"] is True
+
+
+def _worst_tool_calls(reply):
+    # Ids left out: each call takes the default id and type.
+    for index in range(200):
+        reply.add_chunk(
+            _chunk({"tool_calls": [{"index": 2**64 - 1 - index, "function": {"name": "f"}}]})
+        )
+
+
+def _worst_details(reply):
+    for index in range(200):
+        reply.add_chunk(
+            _chunk(
+                {
+                    "reasoning_details": [
+                        {"index": index, "text": "", "summary": "", "data": "", "signature": ""}
+                    ]
+                }
+            )
+        )
+
+
+def _worst_text(reply):
+    for _ in range(400):
+        reply.add_chunk(_chunk({"content": 'ع"\\\x01😀' * 50, "reasoning_content": "think " * 50}))
+
+
+@pytest.mark.parametrize("max_bytes", [4096, 16 * 1024, 1 << 20])
+@pytest.mark.parametrize("fill", [_worst_tool_calls, _worst_details, _worst_text])
+def test_a_reply_at_its_limit_is_kept_by_compaction(max_bytes, fill) -> None:
+    reply = _audit_reply(max_bytes)
+    first = _chunk({"role": "assistant"})
+    first["created"] = 2**64 - 1
+    reply.add_chunk(first)
+    fill(reply)
+    reply.add_chunk(_chunk({"refusal": "", "reasoning": ""}, finish="stop"))
+    usage = {f"k{i}": 2**63 for i in range(50)}
+    usage.update(prompt_tokens=2**64 - 1, completion_tokens=2**64 - 1, total_tokens=2**64 - 1)
+
+    body = reply.completion(fallback_model="m", usage=usage)
+    stored, changed = compact_audit_content(body, max_bytes=max_bytes)
+
+    assert changed is False
+    assert len(json.dumps(body)) <= max_bytes
+
+
+def test_a_larger_payload_limit_keeps_the_stream_reply_at_the_default() -> None:
+    reply = _audit_reply(8 * 1024 * 1024)
+
+    assert reply._max_chars == (1 << 20) - 16 * 1024

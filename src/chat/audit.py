@@ -25,10 +25,17 @@ from src.services.audit.audit_service import (
 from src.services.audit.payload_compaction import DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
 
 
-# Room for the fields around the reply text (ids, model, usage, JSON keys), so a
-# reply at the limit is cut and marked ``truncated`` and not replaced as a whole
-# when the payload is compacted.
+# Room for the fields around the reply text (JSON keys, short values and the
+# provider usage), so a reply at the limit is cut and marked ``truncated`` and not
+# replaced as a whole when the payload is compacted.
 _REPLY_HEADROOM_BYTES = 16 * 1024
+# The part of that room for the keys, short values and token counts. The rest is
+# for the provider usage.
+_REPLY_SKELETON_BYTES = 1024
+# A stream reply is kept up to the default payload limit, also when the configured
+# limit is larger. The required audit write compacts and encodes the body on the
+# event loop, so this bounds that final work for each stream.
+_STREAM_REPLY_MAX_BYTES = DEFAULT_AUDIT_PAYLOAD_MAX_BYTES
 
 
 def stream_reply_accumulator(request: Request, auth: Any) -> StreamReplyAccumulator | None:
@@ -56,9 +63,16 @@ def stream_reply_accumulator(request: Request, auth: Any) -> StreamReplyAccumula
         if peek is not None and peek(organization_id) is False:
             return None
     config = getattr(audit_service, "ingestion_config", None)
-    max_bytes = int(getattr(config, "payload_max_bytes", DEFAULT_AUDIT_PAYLOAD_MAX_BYTES))
+    max_bytes = min(
+        int(getattr(config, "payload_max_bytes", DEFAULT_AUDIT_PAYLOAD_MAX_BYTES)),
+        _STREAM_REPLY_MAX_BYTES,
+    )
     headroom = min(_REPLY_HEADROOM_BYTES, max_bytes // 2)
-    return StreamReplyAccumulator(max_chars=max(1, max_bytes - headroom), memory=AUDIT_REPLY_MEMORY)
+    return StreamReplyAccumulator(
+        max_chars=max(1, max_bytes - headroom),
+        max_usage_chars=headroom - _REPLY_SKELETON_BYTES,
+        memory=AUDIT_REPLY_MEMORY,
+    )
 
 
 def audit_action_for_path(path: str) -> str:

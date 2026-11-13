@@ -6,9 +6,10 @@ Two owners use this accumulator:
   next hop. It runs without limits, because a cut turn would corrupt the
   follow-up request, and it keeps only the fields that the next hop sends.
 - The text audit keeps the reply of a streamed completion (``max_chars`` is
-  set). The reply size is bounded by the audit payload limit and not by the
-  stream length. Text counts its size as JSON, as audit compaction measures it
-  (a character outside ASCII is a six-character escape). The work for one
+  set). The reply size is bounded by the audit payload limit (at most 1 MiB)
+  and not by the stream length. Text counts its size as JSON, as audit
+  compaction measures it (a character outside ASCII is a six-character
+  escape). The id, model and finish reason count too. The work for one
   chunk is bounded too: long lists, large objects and many JSON values are not
   read. When data is not kept, the reply is marked ``truncated``.
 
@@ -46,10 +47,15 @@ _KNOWN_DELTA_FIELDS = frozenset(field.value for field in OpenAIStreamDeltaField)
 _STR_BYTES = 80
 _VALUE_BYTES = 128
 _ENTRY_BYTES = 512
-_ENTRY_CHARS = 64
+# The JSON of a tool call, function call or reasoning detail around its counted
+# values, such as a default tool call id ``call_<index>`` and type ``function``.
+_ENTRY_CHARS = 128
+# Audit only: a reasoning detail index is a dictionary key before its value is
+# counted, so a longer string or a larger integer is not used as a key.
+_MAX_KEY_CHARS = 64
 # Audit only: the id, model and finish reason are kept when they are at most this
-# long. The margin of the payload limit covers their characters, and a fixed
-# charge at creation covers their heap bytes.
+# long and fit the payload limit of the reply. Their characters count against that
+# limit, and a fixed charge at creation covers their heap bytes.
 _MAX_META_CHARS = 256
 _META_BYTES = 3 * (_STR_BYTES + 4 * _MAX_META_CHARS)
 # Audit only: provider usage above these bounds keeps only the token counts.
@@ -151,11 +157,20 @@ class _ToolCall(_FunctionCall):
 
 
 class StreamReplyAccumulator:
-    def __init__(self, *, max_chars: int | None = None, memory: ReplyMemory | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        max_chars: int | None = None,
+        max_usage_chars: int = _MAX_USAGE_CHARS,
+        memory: ReplyMemory | None = None,
+    ) -> None:
         # A limit means the audit owner: bounded work, audit-only fields, and a
         # ``truncated`` marker for data that is not kept.
         self._audit = max_chars is not None
         self._max_chars = max_chars
+        # The provider usage is added at the end, from the margin of the payload
+        # limit that is not part of ``max_chars``.
+        self._max_usage_chars = max(0, min(_MAX_USAGE_CHARS, max_usage_chars))
         self._chars = 0
         self._json_values_left = _MAX_JSON_VALUES
         self._memory = memory
@@ -220,9 +235,12 @@ class StreamReplyAccumulator:
                 # Other choices (n > 1) are not kept; the marker tells the reader.
                 self.truncated = True
                 continue
-            finish_reason = self._meta(choice.get("finish_reason"))
-            if finish_reason:
-                self.finish_reason = finish_reason
+            finish_reason = choice.get("finish_reason")
+            # Some providers repeat the finish reason; it counts once.
+            if finish_reason and finish_reason != self.finish_reason:
+                kept = self._meta(finish_reason)
+                if kept:
+                    self.finish_reason = kept
             if choice.get("logprobs") is not None:
                 self.truncated = True
             delta = choice.get("delta")
@@ -332,19 +350,33 @@ class StreamReplyAccumulator:
     def _meta(self, value: Any) -> str | None:
         if not isinstance(value, str):
             return None
-        if self._audit and (not self._keep_meta or len(value) > _MAX_META_CHARS):
+        if not self._audit:
+            return value
+        if not self._keep_meta or len(value) > _MAX_META_CHARS or not self._reserve_meta(value):
+            # Not kept; the reply text goes on.
             self.truncated = True
             return None
         return value
 
+    def _reserve_meta(self, value: str) -> bool:
+        # The heap bytes were charged at creation. The characters count against the
+        # payload limit of this reply, so a small limit still fits the whole body.
+        remaining = self._max_chars - self._chars
+        chars = json_text_chars(value, stop=remaining) + 2
+        if chars > remaining:
+            return False
+        self._chars += chars
+        return True
+
     def _bounded_usage(self, usage: dict[str, Any]) -> dict[str, Any]:
         if not self._audit:
             return dict(usage)
-        size = _json_size(usage, max_chars=_MAX_USAGE_CHARS, max_values=_MAX_USAGE_VALUES)
+        size = _json_size(usage, max_chars=self._max_usage_chars, max_values=_MAX_USAGE_VALUES)
         if size is not None:
             return dict(usage)
         self.truncated = True
-        return {key: usage[key] for key in _TOKEN_KEYS if key in usage}
+        # The margin of the payload limit covers three numbers of at most 64 bits.
+        return {key: usage[key] for key in _TOKEN_KEYS if _small_number(usage.get(key))}
 
     def release(self) -> None:
         """Drop the kept data and give this reply's share of the budget back."""
@@ -465,6 +497,11 @@ class StreamReplyAccumulator:
         # A JSON array or object is not hashable. Treat it as a missing index.
         if isinstance(index, (list, dict)):
             index = len(self._reasoning_details)
+        elif self._audit and not _small_key(index):
+            # The key is kept before its value is counted, so a long one is not used.
+            # Later deltas with that index are then not merged into this detail.
+            index = len(self._reasoning_details)
+            self.truncated = True
         current = self._reasoning_details.get(index)
         if current is None:
             if len(self._reasoning_details) >= _MAX_REASONING_DETAILS:
@@ -506,6 +543,10 @@ class StreamReplyAccumulator:
             index = item.get("index")
             if not isinstance(index, int) or isinstance(index, bool):
                 index = position
+            elif self._audit and index.bit_length() > 64:
+                # The key is kept before any value is counted.
+                index = position
+                self.truncated = True
             entry = self._tool_calls.get(index)
             if entry is None:
                 if self._audit and len(self._tool_calls) >= _MAX_TOOL_CALLS:
@@ -558,6 +599,22 @@ class StreamReplyAccumulator:
             self.truncated = True
 
 
+def _small_key(value: Any) -> bool:
+    if value is None or isinstance(value, (bool, float)):
+        return True
+    if isinstance(value, int):
+        return value.bit_length() <= 64
+    return isinstance(value, str) and len(value) <= _MAX_KEY_CHARS
+
+
+def _small_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value.bit_length() <= 64
+    return isinstance(value, float)
+
+
 def _same_scalar(previous: Any, value: Any) -> bool:
     if type(previous) is not type(value):
         return False
@@ -592,8 +649,9 @@ def _json_size(value: Any, *, max_chars: int, max_values: int) -> tuple[int, int
         if item is None or isinstance(item, bool):
             chars += 5
         elif isinstance(item, int):
-            # Decimal digits are at most 0.31 per bit, plus a sign.
-            chars += item.bit_length() * 31 // 100 + 2
+            # Decimal digits are at most 0.31 per bit, plus a sign; at least what
+            # audit compaction counts for the number.
+            chars += max(4, item.bit_length() * 31 // 100 + 3)
         elif isinstance(item, float):
             chars += 24
         elif isinstance(item, list):
