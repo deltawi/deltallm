@@ -1042,6 +1042,28 @@ def test_a_repeated_tool_name_is_compared_before_the_replacement_limit(bad) -> N
     assert reply.truncated is True
 
 
+@pytest.mark.parametrize("bad", ["\x00", "\ud800"])
+def test_a_repeated_tool_name_is_compared_without_the_remaining_space(bad) -> None:
+    name = "f" + bad * 33
+    reply = StreamReplyAccumulator(max_chars=2048)
+    call = {"index": 0, "function": {"name": name, "arguments": '{"a":'}}
+    reply.add_chunk(_chunk({"tool_calls": [call]}))
+    # Fill the reply until less room is left than the length of the name.
+    reply.add_chunk(_chunk({"content": "x" * (reply._max_chars - reply._chars - 12)}))
+    assert 6 <= reply._max_chars - reply._chars < len(name)
+    call = {"index": 0, "function": {"name": name, "arguments": "1}"}}
+    reply.add_chunk(_chunk({"tool_calls": [call]}))
+    reply.add_chunk(_chunk({"content": "tail"}))
+
+    body = reply.completion(fallback_model=None, usage=None)
+    message = body["choices"][0]["message"]
+    assert message["tool_calls"][0]["function"] == {
+        "name": "f" + "\ufffd" * 33,
+        "arguments": '{"a":1}',
+    }
+    assert message["content"].endswith("xtail")
+
+
 def test_a_new_tool_name_past_the_replacement_limit_cuts_the_reply() -> None:
     reply = StreamReplyAccumulator(max_chars=(1 << 20) - 16 * 1024)
     reply.add_chunk(_chunk({"content": "a" + "\x00" * 60}))

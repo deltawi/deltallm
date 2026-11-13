@@ -490,16 +490,21 @@ class StreamReplyAccumulator:
             or _storable(value)
         ):
             return value, True, 0
-        kept: list[str] = []
-        start = 0
-        for position in _unstorable_positions(value):
-            self.truncated = True
-            kept.append(value[start:position])
-            if len(kept) > limit:
-                return "\ufffd".join(kept), False, limit
-            start = position + 1
-        kept.append(value[start:])
-        return "\ufffd".join(kept), True, len(kept) - 1
+        self.truncated = True
+        return _replace_unstorable(value, limit)
+
+    def _same_name(self, stored: _Text, name: str) -> bool:
+        """Return True if ``name`` repeats the stored name, as the audit keeps it.
+
+        A replacement keeps the length, so only a name of the same length is compared.
+        A kept name has at most _MAX_REPLACED_CHARS replacements, which bounds the work.
+        """
+        if stored.length != len(name):
+            return False
+        if not self._audit or _storable(name):
+            return stored.equals(name)
+        candidate, complete, _ = _replace_unstorable(name, _MAX_REPLACED_CHARS)
+        return complete and stored.equals(candidate)
 
     def _add_field(self, text: _Text, value: Any) -> None:
         if isinstance(value, str):
@@ -668,12 +673,9 @@ class StreamReplyAccumulator:
     def _add_function(self, entry: _FunctionCall, function: dict[str, Any]) -> None:
         name = function.get("name")
         # Most providers send the name once; some repeat it on every delta. A repeated
-        # name adds nothing, so it is compared before it uses the replacements of the
-        # reply. A kept name has at most _MAX_REPLACED_CHARS of them.
-        if isinstance(name, str) and name:
-            stored, complete, _ = self._storable_text(name, limit=_MAX_REPLACED_CHARS)
-            if not (complete and entry.name.equals(stored)):
-                self._add_text(entry.name, name)
+        # name adds nothing, so only a new name uses the payload and replacement limits.
+        if isinstance(name, str) and name and not self._same_name(entry.name, name):
+            self._add_text(entry.name, name)
         arguments = function.get("arguments")
         if isinstance(arguments, str):
             self._add_text(entry.arguments, arguments)
@@ -733,6 +735,23 @@ def _storable(value: str) -> bool:
     except UnicodeEncodeError:
         return False
     return True
+
+
+def _replace_unstorable(value: str, limit: int) -> tuple[str, bool, int]:
+    """Replace the characters that JSONB cannot store with U+FFFD, at most ``limit``.
+
+    Return the text, cut before the next such character when there are more, whether
+    it is whole, and the number of characters replaced.
+    """
+    kept: list[str] = []
+    start = 0
+    for position in _unstorable_positions(value):
+        kept.append(value[start:position])
+        if len(kept) > limit:
+            return "\ufffd".join(kept), False, limit
+        start = position + 1
+    kept.append(value[start:])
+    return "\ufffd".join(kept), True, len(kept) - 1
 
 
 def _unstorable_positions(value: str) -> Iterator[int]:
