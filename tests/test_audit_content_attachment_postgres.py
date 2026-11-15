@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 import os
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
@@ -574,3 +575,42 @@ async def test_content_lookups_work_on_migrated_uuid_audit_ids(audit_db):
     assert await repository.mark_content_stored([target, target]) == 1
     assert await _content_stored(db, target) is True
     assert await repository.mark_content_stored([target]) == 0
+
+
+async def test_content_lookups_keep_working_on_one_connection_after_the_id_type_changes(
+    audit_db,
+):
+    """The same pooled connection runs both lookups first on text IDs, then on uuid IDs.
+
+    The connection caches its prepared statements, so a result type that follows
+    the column type fails with "cached plan must not change result type".
+    """
+
+    _db, organization_id, cleanup = audit_db
+    url = urlsplit(DATABASE_URL)
+    query = dict(parse_qsl(url.query))
+    query["connection_limit"] = "1"
+    client = Prisma(datasource={"url": urlunsplit(url._replace(query=urlencode(query)))})
+    await client.connect()
+    try:
+        text_target = str(uuid4())
+        with pytest.raises(_RollBack):
+            async with client.tx(timeout=timedelta(seconds=30)) as tx:
+                await _use_text_audit_ids(tx)
+                await _insert_target(tx, event_id=text_target, organization_id=organization_id)
+                repository = AuditRepository(tx)
+                assert await repository.event_organizations([text_target]) == {
+                    text_target: organization_id
+                }
+                assert await repository.mark_content_stored([text_target]) == 1
+                raise _RollBack
+
+        uuid_target = str(uuid4())
+        cleanup["events"].append(uuid_target)
+        await _insert_target(client, event_id=uuid_target, organization_id=organization_id)
+        repository = AuditRepository(client)
+        assert await repository.event_organizations([uuid_target]) == {uuid_target: organization_id}
+        assert await repository.mark_content_stored([uuid_target]) == 1
+        assert await _content_stored(client, uuid_target) is True
+    finally:
+        await client.disconnect()

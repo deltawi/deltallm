@@ -191,7 +191,7 @@ class AuditRepository:
                 item->>'prev_hash', item->>'event_hash'
             FROM jsonb_array_elements($1::jsonb) AS source(item)
             ON CONFLICT (event_id) DO NOTHING
-            RETURNING event_id
+            RETURNING 1
             """,
             json.dumps(payload, default=str),
         )
@@ -222,7 +222,7 @@ class AuditRepository:
                 COALESCE((item->>'created_at')::timestamptz, NOW())
             FROM jsonb_array_elements($1::jsonb) AS source(item)
             ON CONFLICT (payload_id) DO NOTHING
-            RETURNING payload_id
+            RETURNING 1
             """,
             json.dumps(payload, default=str),
         )
@@ -260,7 +260,7 @@ class AuditRepository:
                 FROM jsonb_populate_recordset(NULL::deltallm_auditevent, $1::jsonb) AS requested
             ))
               AND content_stored = FALSE
-            RETURNING event_id
+            RETURNING 1
             """,
             _event_id_rows(event_ids),
         )
@@ -410,6 +410,8 @@ def _event_id_rows(event_ids: list[str]) -> str:
     String. PostgreSQL has no ``text = uuid`` operator, and a cast of the column
     stops the use of the primary key. The row type of the table gives each ID
     the type of the column, so the lookups use the primary key on both types.
+    These lookups and the batch inserts return only text or a constant, so a
+    connection's cached statement stays valid when the column type is different.
     """
 
     return json.dumps([{"event_id": event_id} for event_id in sorted(set(event_ids))])
