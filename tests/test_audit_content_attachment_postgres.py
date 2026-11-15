@@ -10,7 +10,6 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.audit import repository as audit_repository_module
 from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxRecord
 from src.db.audit.repository import AuditEventRecord, AuditRepository
 from src.services.audit.audit_service import (
@@ -525,9 +524,8 @@ async def _use_text_audit_ids(tx: Any) -> None:
 
 
 @pytest.mark.parametrize("target_arrives", [True, False])
-async def test_content_is_written_when_audit_ids_are_text(audit_db, monkeypatch, target_arrives):
+async def test_content_is_written_when_audit_ids_are_text(audit_db, target_arrives):
     db, organization_id, _cleanup = audit_db
-    monkeypatch.setattr(audit_repository_module, "_EVENT_ID_ARRAY_TYPE", None)
     target = str(uuid4())
     # The record is new when its target arrives, and too old to wait when it does not.
     enqueued_at = datetime.now(UTC) - (timedelta(0) if target_arrives else timedelta(minutes=10))
@@ -543,7 +541,6 @@ async def test_content_is_written_when_audit_ids_are_text(audit_db, monkeypatch,
 
             await _service(tx)._process_durable_batch(await _claim(tx, [record_id]))
 
-            assert audit_repository_module._EVENT_ID_ARRAY_TYPE == "text[]"
             content_event = target if target_arrives else record_id
             payloads = await tx.query_raw(
                 "SELECT kind, content_json FROM deltallm_auditpayload "
@@ -564,15 +561,16 @@ async def test_content_is_written_when_audit_ids_are_text(audit_db, monkeypatch,
             raise _RollBack
 
 
-async def test_content_lookups_use_the_uuid_type_of_migrated_audit_ids(audit_db, monkeypatch):
+async def test_content_lookups_work_on_migrated_uuid_audit_ids(audit_db):
     db, organization_id, cleanup = audit_db
-    monkeypatch.setattr(audit_repository_module, "_EVENT_ID_ARRAY_TYPE", None)
     target = str(uuid4())
     cleanup["events"].append(target)
     await _insert_target(db, event_id=target, organization_id=organization_id)
     repository = AuditRepository(db)
 
-    assert await repository.event_organizations([target, str(uuid4())]) == {target: organization_id}
-    assert audit_repository_module._EVENT_ID_ARRAY_TYPE == "uuid[]"
-    assert await repository.mark_content_stored([target]) == 1
+    assert await repository.event_organizations([target, str(uuid4()), target]) == {
+        target: organization_id
+    }
+    assert await repository.mark_content_stored([target, target]) == 1
     assert await _content_stored(db, target) is True
+    assert await repository.mark_content_stored([target]) == 0
