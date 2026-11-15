@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 import os
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
@@ -491,3 +492,125 @@ async def test_a_waiting_record_comes_back_later_as_it_gets_older(audit_db):
     assert rows[0]["status"] == "retry"
     # Half the 60 s age, capped at 30 s; not the 2 s of a new record.
     assert 25 <= rows[0]["wait"] <= 30
+
+
+class _RollBack(Exception):
+    """Ends the test transaction, so its tables and rows go away."""
+
+
+async def _use_text_audit_ids(tx: Any) -> None:
+    """Shadow the audit tables with copies whose IDs are text, as ``prisma db push`` makes them.
+
+    Temporary tables come first in the search path, so in this transaction every
+    statement on the audit tables uses the copies.
+    """
+
+    for table, id_columns in (
+        ("deltallm_auditevent", ("event_id",)),
+        ("deltallm_auditpayload", ("payload_id", "event_id")),
+    ):
+        await tx.execute_raw(
+            f"CREATE TEMP TABLE pg_temp.{table} (LIKE {table} INCLUDING DEFAULTS) ON COMMIT DROP"
+        )
+        for column in id_columns:
+            await tx.execute_raw(
+                f"ALTER TABLE pg_temp.{table} ALTER COLUMN {column} DROP DEFAULT, "
+                f"ALTER COLUMN {column} TYPE text"
+            )
+    await tx.execute_raw("ALTER TABLE pg_temp.deltallm_auditevent ADD PRIMARY KEY (event_id)")
+    await tx.execute_raw(
+        "ALTER TABLE pg_temp.deltallm_auditpayload ADD PRIMARY KEY (payload_id), "
+        "ADD FOREIGN KEY (event_id) REFERENCES pg_temp.deltallm_auditevent (event_id)"
+    )
+
+
+@pytest.mark.parametrize("target_arrives", [True, False])
+async def test_content_is_written_when_audit_ids_are_text(audit_db, target_arrives):
+    db, organization_id, _cleanup = audit_db
+    target = str(uuid4())
+    # The record is new when its target arrives, and too old to wait when it does not.
+    enqueued_at = datetime.now(UTC) - (timedelta(0) if target_arrives else timedelta(minutes=10))
+
+    with pytest.raises(_RollBack):
+        async with db.tx(timeout=timedelta(seconds=30)) as tx:
+            await _use_text_audit_ids(tx)
+            if target_arrives:
+                await _insert_target(tx, event_id=target, organization_id=organization_id)
+            record_id = await _enqueue_content(
+                tx, organization_id=organization_id, target_event_id=target, enqueued_at=enqueued_at
+            )
+
+            await _service(tx)._process_durable_batch(await _claim(tx, [record_id]))
+
+            content_event = target if target_arrives else record_id
+            payloads = await tx.query_raw(
+                "SELECT kind, content_json FROM deltallm_auditpayload "
+                "WHERE event_id = $1 ORDER BY kind",
+                content_event,
+            )
+            assert [(row["kind"], row["content_json"]) for row in payloads] == [
+                ("request", {"messages": ["hi"]}),
+                ("response", {"reply": "hello"}),
+            ]
+            events = await tx.query_raw(
+                "SELECT event_id, content_stored FROM deltallm_auditevent",
+            )
+            assert [(row["event_id"], row["content_stored"]) for row in events] == [
+                (content_event, True)
+            ]
+            assert (await _outbox_row(tx, record_id))["status"] == "completed"
+            raise _RollBack
+
+
+async def test_content_lookups_work_on_migrated_uuid_audit_ids(audit_db):
+    db, organization_id, cleanup = audit_db
+    target = str(uuid4())
+    cleanup["events"].append(target)
+    await _insert_target(db, event_id=target, organization_id=organization_id)
+    repository = AuditRepository(db)
+
+    assert await repository.event_organizations([target, str(uuid4()), target]) == {
+        target: organization_id
+    }
+    assert await repository.mark_content_stored([target, target]) == 1
+    assert await _content_stored(db, target) is True
+    assert await repository.mark_content_stored([target]) == 0
+
+
+async def test_content_lookups_keep_working_on_one_connection_after_the_id_type_changes(
+    audit_db,
+):
+    """The same pooled connection runs both lookups first on text IDs, then on uuid IDs.
+
+    The connection caches its prepared statements, so a result type that follows
+    the column type fails with "cached plan must not change result type".
+    """
+
+    _db, organization_id, cleanup = audit_db
+    url = urlsplit(DATABASE_URL)
+    query = dict(parse_qsl(url.query))
+    query["connection_limit"] = "1"
+    client = Prisma(datasource={"url": urlunsplit(url._replace(query=urlencode(query)))})
+    await client.connect()
+    try:
+        text_target = str(uuid4())
+        with pytest.raises(_RollBack):
+            async with client.tx(timeout=timedelta(seconds=30)) as tx:
+                await _use_text_audit_ids(tx)
+                await _insert_target(tx, event_id=text_target, organization_id=organization_id)
+                repository = AuditRepository(tx)
+                assert await repository.event_organizations([text_target]) == {
+                    text_target: organization_id
+                }
+                assert await repository.mark_content_stored([text_target]) == 1
+                raise _RollBack
+
+        uuid_target = str(uuid4())
+        cleanup["events"].append(uuid_target)
+        await _insert_target(client, event_id=uuid_target, organization_id=organization_id)
+        repository = AuditRepository(client)
+        assert await repository.event_organizations([uuid_target]) == {uuid_target: organization_id}
+        assert await repository.mark_content_stored([uuid_target]) == 1
+        assert await _content_stored(client, uuid_target) is True
+    finally:
+        await client.disconnect()
