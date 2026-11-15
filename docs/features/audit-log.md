@@ -277,6 +277,10 @@ The audit worker processes the record in the same batched transaction as other a
 `fallback_event` and `organization_mismatch`. A high `deferred` count means that the accounting
 projection is slow. An `organization_mismatch` count is not expected; it shows a defect in the sender.
 
+The lookups of the target event work when the audit ID columns are `uuid` (created by migrations) or
+`text` (created by `prisma db push`). Each process reads the column type once and compares the IDs in
+that type, so the lookups use the primary key on both.
+
 Each API pod sends these records from a small in-memory buffer, so the request does not wait for the
 database:
 

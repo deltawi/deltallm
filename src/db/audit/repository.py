@@ -22,6 +22,10 @@ AUDIT_METADATA_RETENTION_DAYS_KEY = "audit_metadata_retention_days"
 AUDIT_PAYLOAD_RETENTION_DAYS_KEY = "audit_payload_retention_days"
 
 
+# "uuid[]" or "text[]": the array type of deltallm_auditevent.event_id. Read once.
+_EVENT_ID_ARRAY_TYPE: str | None = None
+
+
 @dataclass
 class AuditEventRecord:
     event_id: str
@@ -233,11 +237,12 @@ class AuditRepository:
 
         if self.prisma is None or not event_ids:
             return {}
+        id_array = await self._event_id_array_type()
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT event_id::text AS event_id, organization_id
             FROM deltallm_auditevent
-            WHERE event_id = ANY($1::uuid[])
+            WHERE event_id = ANY($1::{id_array})
             """,
             sorted(set(event_ids)),
         )
@@ -248,17 +253,46 @@ class AuditRepository:
 
         if self.prisma is None or not event_ids:
             return 0
+        id_array = await self._event_id_array_type()
         rows = await self.prisma.query_raw(
-            """
+            f"""
             UPDATE deltallm_auditevent
             SET content_stored = TRUE
-            WHERE event_id = ANY($1::uuid[])
+            WHERE event_id = ANY($1::{id_array})
               AND content_stored = FALSE
             RETURNING event_id
             """,
             sorted(set(event_ids)),
         )
         return len(rows)
+
+    async def _event_id_array_type(self) -> str:
+        """Return the array type that matches ``deltallm_auditevent.event_id``.
+
+        Databases made by the migrations store audit IDs as uuid. Databases made
+        by ``prisma db push`` store them as text, because the Prisma schema
+        declares a String. PostgreSQL has no ``text = uuid`` operator, and a cast
+        of the column would stop the use of the primary key. Thus the lookups
+        cast the parameter to the column type. The type is read once for each
+        process: from the same search path that the lookups use.
+        """
+
+        global _EVENT_ID_ARRAY_TYPE
+        if _EVENT_ID_ARRAY_TYPE is None:
+            rows = await self.prisma.query_raw(
+                """
+                SELECT format_type(atttypid, atttypmod) AS id_type
+                FROM pg_attribute
+                WHERE attrelid = to_regclass('deltallm_auditevent')
+                  AND attname = 'event_id'
+                  AND NOT attisdropped
+                """
+            )
+            if not rows:
+                raise RuntimeError("deltallm_auditevent.event_id is missing")
+            id_type = str(dict(rows[0]).get("id_type") or "")
+            _EVENT_ID_ARRAY_TYPE = "uuid[]" if id_type == "uuid" else "text[]"
+        return _EVENT_ID_ARRAY_TYPE
 
     async def is_content_storage_enabled_for_org(self, organization_id: str | None) -> bool:
         if self.prisma is None or not organization_id:

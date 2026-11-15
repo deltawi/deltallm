@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from src.db.audit import repository as audit_repository_module
 from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxRecord
 from src.db.audit.repository import AuditEventRecord, AuditRepository
 from src.services.audit.audit_service import (
@@ -491,3 +492,87 @@ async def test_a_waiting_record_comes_back_later_as_it_gets_older(audit_db):
     assert rows[0]["status"] == "retry"
     # Half the 60 s age, capped at 30 s; not the 2 s of a new record.
     assert 25 <= rows[0]["wait"] <= 30
+
+
+class _RollBack(Exception):
+    """Ends the test transaction, so its tables and rows go away."""
+
+
+async def _use_text_audit_ids(tx: Any) -> None:
+    """Shadow the audit tables with copies whose IDs are text, as ``prisma db push`` makes them.
+
+    Temporary tables come first in the search path, so in this transaction every
+    statement on the audit tables uses the copies.
+    """
+
+    for table, id_columns in (
+        ("deltallm_auditevent", ("event_id",)),
+        ("deltallm_auditpayload", ("payload_id", "event_id")),
+    ):
+        await tx.execute_raw(
+            f"CREATE TEMP TABLE pg_temp.{table} (LIKE {table} INCLUDING DEFAULTS) ON COMMIT DROP"
+        )
+        for column in id_columns:
+            await tx.execute_raw(
+                f"ALTER TABLE pg_temp.{table} ALTER COLUMN {column} DROP DEFAULT, "
+                f"ALTER COLUMN {column} TYPE text"
+            )
+    await tx.execute_raw("ALTER TABLE pg_temp.deltallm_auditevent ADD PRIMARY KEY (event_id)")
+    await tx.execute_raw(
+        "ALTER TABLE pg_temp.deltallm_auditpayload ADD PRIMARY KEY (payload_id), "
+        "ADD FOREIGN KEY (event_id) REFERENCES pg_temp.deltallm_auditevent (event_id)"
+    )
+
+
+@pytest.mark.parametrize("target_arrives", [True, False])
+async def test_content_is_written_when_audit_ids_are_text(audit_db, monkeypatch, target_arrives):
+    db, organization_id, _cleanup = audit_db
+    monkeypatch.setattr(audit_repository_module, "_EVENT_ID_ARRAY_TYPE", None)
+    target = str(uuid4())
+    # The record is new when its target arrives, and too old to wait when it does not.
+    enqueued_at = datetime.now(UTC) - (timedelta(0) if target_arrives else timedelta(minutes=10))
+
+    with pytest.raises(_RollBack):
+        async with db.tx(timeout=timedelta(seconds=30)) as tx:
+            await _use_text_audit_ids(tx)
+            if target_arrives:
+                await _insert_target(tx, event_id=target, organization_id=organization_id)
+            record_id = await _enqueue_content(
+                tx, organization_id=organization_id, target_event_id=target, enqueued_at=enqueued_at
+            )
+
+            await _service(tx)._process_durable_batch(await _claim(tx, [record_id]))
+
+            assert audit_repository_module._EVENT_ID_ARRAY_TYPE == "text[]"
+            content_event = target if target_arrives else record_id
+            payloads = await tx.query_raw(
+                "SELECT kind, content_json FROM deltallm_auditpayload "
+                "WHERE event_id = $1 ORDER BY kind",
+                content_event,
+            )
+            assert [(row["kind"], row["content_json"]) for row in payloads] == [
+                ("request", {"messages": ["hi"]}),
+                ("response", {"reply": "hello"}),
+            ]
+            events = await tx.query_raw(
+                "SELECT event_id, content_stored FROM deltallm_auditevent",
+            )
+            assert [(row["event_id"], row["content_stored"]) for row in events] == [
+                (content_event, True)
+            ]
+            assert (await _outbox_row(tx, record_id))["status"] == "completed"
+            raise _RollBack
+
+
+async def test_content_lookups_use_the_uuid_type_of_migrated_audit_ids(audit_db, monkeypatch):
+    db, organization_id, cleanup = audit_db
+    monkeypatch.setattr(audit_repository_module, "_EVENT_ID_ARRAY_TYPE", None)
+    target = str(uuid4())
+    cleanup["events"].append(target)
+    await _insert_target(db, event_id=target, organization_id=organization_id)
+    repository = AuditRepository(db)
+
+    assert await repository.event_organizations([target, str(uuid4())]) == {target: organization_id}
+    assert audit_repository_module._EVENT_ID_ARRAY_TYPE == "uuid[]"
+    assert await repository.mark_content_stored([target]) == 1
+    assert await _content_stored(db, target) is True
