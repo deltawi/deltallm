@@ -521,6 +521,25 @@ def test_data_that_is_not_rebuilt_marks_the_reply(delta) -> None:
     assert reply.completion(fallback_model="x", usage=None)["truncated"] is True
 
 
+def test_the_gpt_oss_channel_label_does_not_mark_the_reply() -> None:
+    reply = StreamReplyAccumulator(max_chars=1000)
+    reply.add_chunk(_chunk({"role": "assistant", "channel": "analysis", "reasoning": "think"}))
+    reply.add_chunk(_chunk({"channel": "final", "content": "answer"}, finish="stop"))
+
+    body = reply.completion(fallback_model="x", usage=None)
+
+    assert "truncated" not in body
+    assert body["choices"][0]["message"]["content"] == "answer"
+    assert body["choices"][0]["message"]["reasoning"] == "think"
+
+
+def test_a_channel_that_is_not_text_marks_the_reply() -> None:
+    reply = StreamReplyAccumulator(max_chars=1000)
+    reply.add_chunk(_chunk({"channel": {"name": "final"}, "content": "answer"}))
+
+    assert reply.truncated is True
+
+
 def test_empty_fields_and_logprobs() -> None:
     reply = StreamReplyAccumulator(max_chars=1000)
     reply.add_chunk(_chunk({"role": "assistant", "content": "", "audio": None, "annotations": []}))

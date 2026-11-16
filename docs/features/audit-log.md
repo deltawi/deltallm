@@ -222,7 +222,8 @@ that it sends to the client. The payload is one `chat.completion` object with th
     (it is not kept), or the provider usage is larger than 4 KiB, 128 values or its part of the
     margin (only the token counts are kept)
   - the stream sent data that DeltaLLM does not rebuild, for example `logprobs`, audio, annotations,
-    or a field in a shape that is not text
+    or a field in a shape that is not text. A text `channel` label on a delta (Groq sends one with
+    gpt-oss) is not kept and does not set this field, because the text of that delta is kept
   - one delta sent more than 16 fields, more than 128 tool calls or more than 16 reasoning
     details, a reasoning detail had more than 16 fields, or the reasoning details and tool
     arguments of the reply had more than 4,096 JSON values. Tool arguments sent as JSON objects
