@@ -64,6 +64,11 @@ _MAX_REPLACED_CHARS = 64
 _MAX_JSON_DEPTH = 32
 _MERGED_REASONING_TEXT_KEYS = ("text", "summary", "data", "signature")
 _KNOWN_DELTA_FIELDS = frozenset(field.value for field in OpenAIStreamDeltaField)
+# Labels that some providers add to each delta and that hold no reply data. For
+# example, Groq sends the channel of gpt-oss ("analysis" or "final") with each
+# delta. The text of that delta is in its own field and is kept, so the reply
+# stays complete.
+_DELTA_LABEL_FIELDS = frozenset({"channel"})
 # Upper bounds of heap bytes. A string has a header of at most 76 bytes (with
 # its terminator) and a list slot of 8 bytes, and a list built by appends has at
 # most one more spare byte for each item. Its characters take 1 byte (ASCII) to
@@ -581,6 +586,8 @@ class StreamReplyAccumulator:
             self.truncated = True
             return
         for name, value in delta.items():
+            if name in _DELTA_LABEL_FIELDS and isinstance(value, str):
+                continue
             if name not in _KNOWN_DELTA_FIELDS and value not in (None, "", [], {}):
                 # For example audio or annotations: not kept, so the reply is incomplete.
                 self.truncated = True
