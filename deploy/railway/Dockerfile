@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 # Generated from Dockerfile by scripts/check_container_contract.py --write.
 # Railway uses the same runtime without BuildKit cache mounts.
-ARG NODE_IMAGE=node:22.16.0-bookworm-slim@sha256:048ed02c5fd52e86fda6fbd2f6a76cf0d4492fd6c6fee9e2c463ed5108da0e34
-ARG PYTHON_IMAGE=python:3.11.13-slim-bookworm@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1
+# Base images are written out in each FROM line (not ARGs) so Dependabot can
+# update the tag and digest together.
 
-FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend
+FROM --platform=$BUILDPLATFORM node:22.23.4-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS frontend
 WORKDIR /app/ui
 COPY ui/package.json ui/package-lock.json ./
 ENV NPM_CONFIG_AUDIT=false NPM_CONFIG_FUND=false
@@ -12,8 +12,8 @@ RUN npm ci --prefer-offline
 COPY ui/ ./
 RUN npm run build
 
-FROM ${NODE_IMAGE} AS node-runtime
-FROM ${PYTHON_IMAGE} AS base
+FROM node:22.23.4-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS node-runtime
+FROM python:3.11.18-slim-bookworm@sha256:a83ba18aef0f865b1a4a611c2cf460fe446f2795673bbb9fe43be570439e3b39 AS base
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 curl libatomic1 libstdc++6 ca-certificates \

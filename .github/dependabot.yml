@@ -1,7 +1,10 @@
-# Keeps the SHA-pinned GitHub Actions current. Dependabot rewrites both the
-# commit SHA and the trailing "# vX.Y.Z" comment in one pull request.
+# Keeps pinned dependencies current: GitHub Actions, the Python lock, the admin UI,
+# the Docker base images and the isolated SDK test pins. Security updates for any of
+# these are opened by Dependabot security updates (repo setting) without the cooldown.
 version: 2
 updates:
+  # SHA-pinned actions: Dependabot rewrites the commit SHA and the trailing
+  # "# vX.Y.Z" comment in one pull request.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -36,5 +39,92 @@ updates:
           - "*"
     ignore:
       - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # Realtime SDK pins, isolated for the same reason as tests/openai_sdk.
+  - package-ecosystem: pip
+    directory: /tests/realtime
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    groups:
+      realtime-sdk:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # Application Python dependencies (pyproject.toml + uv.lock). A uv pull request
+  # does not regenerate requirements.txt; run
+  # `uv run python scripts/check_container_contract.py --write` on the branch and push.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    groups:
+      python:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+      # FastAPI 0.137 mounts lazy routers, so app.routes is no longer flat and the
+      # ingress route test breaks. Move to it in its own pull request.
+      - dependency-name: fastapi
+        versions:
+          - ">=0.137"
+
+  # Admin UI (built into the image) and the root screenshot tooling.
+  - package-ecosystem: npm
+    directories:
+      - /ui
+      - /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    groups:
+      npm:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # Base images in the Dockerfile and its generated Railway copy. Both files carry
+  # the same FROM lines, so one grouped pull request keeps them identical.
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /deploy/railway
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    groups:
+      base-images:
+        patterns:
+          - "*"
+    ignore:
+      # Stay on Python 3.11 and Node 22 until we move on purpose.
+      - dependency-name: python
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+      - dependency-name: node
         update-types:
           - version-update:semver-major

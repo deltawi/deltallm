@@ -49,6 +49,50 @@ def test_dependabot_keeps_action_pins_current() -> None:
     assert {"dependency-name": "*", "update-types": ["version-update:semver-major"]} in actions["ignore"]
 
 
+def test_dependabot_covers_every_shipped_dependency_with_a_cooldown() -> None:
+    config = yaml.safe_load((REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    covered = {
+        (update["package-ecosystem"], directory)
+        for update in config["updates"]
+        for directory in update.get("directories", [update.get("directory")])
+    }
+
+    assert {
+        ("github-actions", "/"),
+        ("uv", "/"),
+        ("npm", "/ui"),
+        ("npm", "/"),
+        ("docker", "/"),
+        ("docker", "/deploy/railway"),
+        ("pip", "/tests/openai_sdk"),
+        ("pip", "/tests/realtime"),
+    } <= covered
+    for update in config["updates"]:
+        assert update["cooldown"]["default-days"] >= 7, update["package-ecosystem"]
+
+
+def test_dockerfile_base_images_are_literal_so_dependabot_can_update_them() -> None:
+    images = [
+        next(word for word in line.split()[1:] if not word.startswith("--"))
+        for line in (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if line.startswith("FROM ")
+    ]
+    external = [image for image in images if image != "base"]
+
+    assert len(external) == 3
+    for image in external:
+        assert re.fullmatch(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}", image), image
+
+
+def test_security_scan_installs_a_checksum_pinned_trivy() -> None:
+    script = (REPO_ROOT / "scripts" / "ci" / "install_trivy.sh").read_text(encoding="utf-8")
+    assert re.search(r'^TRIVY_SHA256="[0-9a-f]{64}"$', script, re.MULTILINE)
+    assert "sha256sum -c" in script
+    workflow = _load("security-scan.yml")
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow[True]["schedule"]  # PyYAML reads the "on" key as True
+
+
 def test_release_build_attaches_sbom_and_provenance() -> None:
     job = _load("lifecycle-acceptance.yml")["jobs"]["image-and-rollout"]
     (build,) = _steps_using(job, "docker/build-push-action")
