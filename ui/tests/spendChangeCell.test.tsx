@@ -26,7 +26,9 @@ function setup() {
 test('keyboard focus opens the spend card, Escape closes it, and keys do not reach the row', async () => {
   const env = setup();
   let rowKeys = 0;
-  document.getElementById('row')!.addEventListener('keydown', () => { rowKeys += 1; });
+  document.getElementById('row')!.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') rowKeys += 1;
+  });
   await act(async () => env.root.render(<SpendChangeCell current={1.36} previous={0.0063} period={PERIOD} />));
   const cell = document.querySelector<HTMLElement>('#root > span')!;
   assert.equal(cell.tabIndex, 0);
@@ -40,6 +42,34 @@ test('keyboard focus opens the spend card, Escape closes it, and keys do not rea
   await act(async () => cell.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
   await act(async () => cell.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   assert.equal(rowKeys, 0);
+  assert.equal(document.querySelector('[role="tooltip"]'), null);
+  await env.cleanup();
+});
+
+test('pointer leave keeps a focused card open', async () => {
+  const env = setup();
+  await act(async () => env.root.render(<SpendChangeCell current={1.36} previous={0.0063} period={PERIOD} />));
+  const cell = document.querySelector<HTMLElement>('#root > span')!;
+  await act(async () => cell.focus());
+  await act(async () => cell.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })));
+  await act(async () => cell.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })));
+  assert.ok(document.querySelector('[role="tooltip"]'));
+  assert.ok(cell.getAttribute('aria-describedby'));
+  await act(async () => cell.blur());
+  assert.equal(document.querySelector('[role="tooltip"]'), null);
+  await env.cleanup();
+});
+
+test('Escape closes a hover-open card while focus stays on the row', async () => {
+  const env = setup();
+  const row = document.getElementById('row')!;
+  row.tabIndex = 0;
+  row.focus();
+  await act(async () => env.root.render(<SpendChangeCell current={1.36} previous={0.0063} period={PERIOD} />));
+  const cell = document.querySelector<HTMLElement>('#root > span')!;
+  await act(async () => cell.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })));
+  assert.ok(document.querySelector('[role="tooltip"]'));
+  await act(async () => row.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   assert.equal(document.querySelector('[role="tooltip"]'), null);
   await env.cleanup();
 });

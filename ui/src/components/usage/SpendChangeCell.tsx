@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import type { UsageWindow } from '../../lib/api/usageReports';
@@ -109,7 +109,21 @@ export default function SpendChangeCell({ current, previous, period }: {
 }) {
   const anchorRef = useRef<HTMLSpanElement | null>(null);
   const tooltipId = useId();
-  const [open, setOpen] = useState(false);
+  // Hover and focus are tracked apart so leaving with the pointer keeps a focused card open.
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const open = (hovered || focused) && !dismissed;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    // Escape closes the card wherever focus is, including a hover-open card while the row has focus.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDismissed(true);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open]);
 
   if (previous === null) return <span className="text-gray-400">—</span>;
 
@@ -138,14 +152,14 @@ export default function SpendChangeCell({ current, previous, period }: {
       ref={anchorRef}
       tabIndex={0}
       aria-describedby={open ? tooltipId : undefined}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
+      onMouseEnter={() => { setHovered(true); setDismissed(false); }}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => { setFocused(true); setDismissed(false); }}
+      onBlur={() => setFocused(false)}
       onKeyDown={(event) => {
-        // The row filters on Enter and Space; keys pressed on this cell only drive the hover card.
-        event.stopPropagation();
-        if (event.key === 'Escape') setOpen(false);
+        // The row filters on Enter and Space; keys pressed on this cell only drive the card.
+        if (event.key === 'Escape') setDismissed(true);
+        else event.stopPropagation();
       }}
       className="inline-block rounded tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
     >

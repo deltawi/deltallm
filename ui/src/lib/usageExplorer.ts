@@ -91,7 +91,8 @@ export function periodChange(current: number, previous: number | null | undefine
   const ratio = (current - previous) / previous;
   const direction: ChangeDirection = ratio > 0 ? 'up' : ratio < 0 ? 'down' : 'flat';
   if (ratio >= 1) {
-    const multiple = current / previous;
+    // Round away float noise (0.07 / 0.0007 = 100.00000000000001) before the cap and the floor.
+    const multiple = Math.round((current / previous) * 1e9) / 1e9;
     const size = multiple > MAX_GROWTH_MULTIPLE
       ? `>${MAX_GROWTH_MULTIPLE}×`
       : multiple < 10 ? `${Math.round(multiple * 10) / 10}×` : `${Math.floor(multiple)}×`;
