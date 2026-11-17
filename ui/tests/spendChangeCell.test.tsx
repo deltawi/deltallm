@@ -55,6 +55,8 @@ test('pointer leave keeps a focused card open', async () => {
   await act(async () => cell.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })));
   assert.ok(document.querySelector('[role="tooltip"]'));
   assert.ok(cell.getAttribute('aria-describedby'));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 250)));
+  assert.ok(document.querySelector('[role="tooltip"]'), 'still open after the hover leave delay');
   await act(async () => cell.blur());
   assert.equal(document.querySelector('[role="tooltip"]'), null);
   await env.cleanup();
@@ -70,6 +72,25 @@ test('Escape closes a hover-open card while focus stays on the row', async () =>
   await act(async () => cell.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })));
   assert.ok(document.querySelector('[role="tooltip"]'));
   await act(async () => row.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  assert.equal(document.querySelector('[role="tooltip"]'), null);
+  await env.cleanup();
+});
+
+test('the pointer can move from the value onto the card without closing it', async () => {
+  const env = setup();
+  await act(async () => env.root.render(<SpendChangeCell current={1.36} previous={0.0063} period={PERIOD} />));
+  const cell = document.querySelector<HTMLElement>('#root > span')!;
+  const outside = document.body;
+  await act(async () => cell.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, relatedTarget: outside })));
+  const card = document.querySelector<HTMLElement>('[role="tooltip"]')!;
+  assert.ok(card);
+  assert.doesNotMatch(card.className, /pointer-events-none/);
+  await act(async () => cell.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: outside })));
+  await act(async () => card.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, relatedTarget: outside })));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 250)));
+  assert.ok(document.querySelector('[role="tooltip"]'), 'card stays open while the pointer is on it');
+  await act(async () => card.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: outside })));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 250)));
   assert.equal(document.querySelector('[role="tooltip"]'), null);
   await env.cleanup();
 });

@@ -8,6 +8,7 @@ import { periodChange, type PeriodChange } from '../../lib/usageExplorer';
 const TOOLTIP_OFFSET_PX = 8;
 const TOOLTIP_WIDTH_PX = 248;
 const VIEWPORT_PADDING_PX = 12;
+const HOVER_LEAVE_DELAY_MS = 150;
 
 function shortDay(value: string): string {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(
@@ -32,8 +33,9 @@ function spendChangeSummary(current: number, previous: number, change: PeriodCha
   return `Spend ${change.direction} ${change.size} on the previous period`;
 }
 
-function ChangeTooltip({ anchorRef, tooltipId, current, previous, change, period }: {
+function ChangeTooltip({ anchorRef, tooltipId, current, previous, change, period, onPointerInside }: {
   anchorRef: React.RefObject<HTMLSpanElement | null>;
+  onPointerInside: (inside: boolean) => void;
   tooltipId: string;
   current: number;
   previous: number;
@@ -77,7 +79,11 @@ function ChangeTooltip({ anchorRef, tooltipId, current, previous, change, period
       ref={tooltipRef}
       id={tooltipId}
       role="tooltip"
-      className="pointer-events-none fixed z-[100] rounded-lg bg-gray-900 px-3 py-2.5 text-left shadow-lg"
+      // The pointer can move onto the card to read it (WCAG 1.4.13); clicks on it do not reach the row filter.
+      onMouseEnter={() => onPointerInside(true)}
+      onMouseLeave={() => onPointerInside(false)}
+      onClick={(event) => event.stopPropagation()}
+      className="fixed z-[100] cursor-default rounded-lg bg-gray-900 px-3 py-2.5 text-left shadow-lg"
       style={{ width: TOOLTIP_WIDTH_PX, left: position?.left ?? -9999, top: position?.top ?? -9999 }}
     >
       <p className="mb-1.5 text-xs font-semibold text-white">Spend vs the previous period</p>
@@ -110,9 +116,24 @@ export default function SpendChangeCell({ current, previous, period }: {
   const anchorRef = useRef<HTMLSpanElement | null>(null);
   const tooltipId = useId();
   // Hover and focus are tracked apart so leaving with the pointer keeps a focused card open.
-  const [hovered, setHovered] = useState(false);
-  const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [hovered, setHoveredNow] = useState(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Leaving is delayed a little so the pointer can cross the gap between the value and its card.
+  const setHovered = (inside: boolean) => {
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    leaveTimer.current = null;
+    if (inside) {
+      setHoveredNow(true);
+      setDismissed(false);
+    } else {
+      leaveTimer.current = setTimeout(() => setHoveredNow(false), HOVER_LEAVE_DELAY_MS);
+    }
+  };
+  useEffect(() => () => {
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+  }, []);
+  const [focused, setFocused] = useState(false);
   const open = (hovered || focused) && !dismissed;
 
   useEffect(() => {
@@ -152,7 +173,7 @@ export default function SpendChangeCell({ current, previous, period }: {
       ref={anchorRef}
       tabIndex={0}
       aria-describedby={open ? tooltipId : undefined}
-      onMouseEnter={() => { setHovered(true); setDismissed(false); }}
+      onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => { setFocused(true); setDismissed(false); }}
       onBlur={() => setFocused(false)}
@@ -173,6 +194,7 @@ export default function SpendChangeCell({ current, previous, period }: {
           previous={previous}
           change={change}
           period={period}
+          onPointerInside={setHovered}
         />
       )}
     </span>
