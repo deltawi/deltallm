@@ -76,7 +76,7 @@ export interface PeriodChange {
   ratio: number;
 }
 
-/** Growth from this many times the previous value and up is shown as ">100×". */
+/** Growth above this many times the previous value is shown as ">100×". */
 export const MAX_GROWTH_MULTIPLE = 100;
 
 /**
@@ -92,7 +92,7 @@ export function periodChange(current: number, previous: number | null | undefine
   const direction: ChangeDirection = ratio > 0 ? 'up' : ratio < 0 ? 'down' : 'flat';
   if (ratio >= 1) {
     const multiple = current / previous;
-    const size = multiple >= MAX_GROWTH_MULTIPLE
+    const size = multiple > MAX_GROWTH_MULTIPLE
       ? `>${MAX_GROWTH_MULTIPLE}×`
       : multiple < 10 ? `${Math.round(multiple * 10) / 10}×` : `${Math.floor(multiple)}×`;
     return { direction, size, ratio };

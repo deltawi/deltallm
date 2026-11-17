@@ -27,7 +27,8 @@ function signedSpend(value: number): string {
 
 function spendChangeSummary(current: number, previous: number, change: PeriodChange | null): string {
   if (previous === 0) return current === 0 ? 'No spend in either period' : 'New: no spend in the previous period';
-  if (!change || change.direction === 'flat') return 'Same spend as the previous period';
+  if (!change) return 'No percent change: the previous period has a negative spend total';
+  if (change.direction === 'flat') return 'Same spend as the previous period';
   return `Spend ${change.direction} ${change.size} on the previous period`;
 }
 
@@ -117,7 +118,10 @@ export default function SpendChangeCell({ current, previous, period }: {
   let content;
   if (previous === 0) {
     content = <span className="text-xs font-medium text-gray-500">{current === 0 ? '0%' : 'New'}</span>;
-  } else if (!change || change.direction === 'flat') {
+  } else if (!change) {
+    // A negative previous total (legacy signed rows) has no meaningful ratio; the hover card still shows both amounts.
+    content = <span className="text-gray-400">—</span>;
+  } else if (change.direction === 'flat') {
     content = <span className="font-medium text-gray-500">0%</span>;
   } else {
     const Arrow = change.direction === 'up' ? ArrowUp : ArrowDown;
@@ -132,10 +136,18 @@ export default function SpendChangeCell({ current, previous, period }: {
   return (
     <span
       ref={anchorRef}
+      tabIndex={0}
       aria-describedby={open ? tooltipId : undefined}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
-      className="inline-block tabular-nums"
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      onKeyDown={(event) => {
+        // The row filters on Enter and Space; keys pressed on this cell only drive the hover card.
+        event.stopPropagation();
+        if (event.key === 'Escape') setOpen(false);
+      }}
+      className="inline-block rounded tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
     >
       <span aria-hidden="true">{content}</span>
       <span className="sr-only">{summary}</span>

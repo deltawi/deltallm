@@ -41,7 +41,9 @@ test('period change gives a direction and a size without a sign', () => {
   assert.equal(periodChange(5, 0), null);
   assert.equal(periodChange(5, null), null);
   assert.equal(periodChange(130, 10)?.size, '13×');
-  assert.equal(periodChange(1_000, 10)?.size, '>100×');
+  assert.equal(periodChange(1_000, 10)?.size, '100×');
+  assert.equal(periodChange(1_001, 10)?.size, '>100×');
+  assert.equal(periodChange(5, -10), null);
 });
 
 test('error rate changes are shown in points', () => {
