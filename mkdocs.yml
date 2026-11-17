@@ -237,6 +237,7 @@ nav:
           - Security model: security/index.md
           - Report a security problem: security/vulnerability-reporting.md
           - Verify release images: security/release-verification.md
+          - Dependency vulnerabilities: security/dependency-vulnerabilities.md
           - Versions and compatibility: project/versioning-and-compatibility.md
           - Documentation policy: project/documentation-governance.md
 

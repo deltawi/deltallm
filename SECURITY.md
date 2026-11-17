@@ -26,3 +26,9 @@ Release images are signed with keyless cosign and carry an SBOM and SLSA build p
 Helm chart package has a GitHub build provenance attestation. See
 [How DeltaLLM releases are built and verified](docs/security/release-verification.md)
 (https://docs.deltallm.io/security/release-verification/) for the verify commands.
+
+## Vulnerabilities in dependencies
+
+Dependencies and base images are scanned daily and on every dependency change. See
+[How dependency vulnerabilities are found and handled](docs/security/dependency-vulnerabilities.md)
+(https://docs.deltallm.io/security/dependency-vulnerabilities/) for the process and response targets.

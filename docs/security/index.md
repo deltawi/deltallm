@@ -50,4 +50,6 @@ These are deployment constraints, not controls supplied by the documentation sit
 3. Exercise [backup and restore](../deployment/backup-and-restore.md) and the [incident
    runbooks](../deployment/incident-runbooks.md).
 4. [Verify release images](release-verification.md) and pin them by digest.
-5. Report suspected vulnerabilities through the [private reporting process](vulnerability-reporting.md).
+5. Follow [how dependency vulnerabilities are handled](dependency-vulnerabilities.md) and update to
+   patch releases promptly.
+6. Report suspected vulnerabilities through the [private reporting process](vulnerability-reporting.md).

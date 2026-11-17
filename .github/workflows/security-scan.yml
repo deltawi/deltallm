@@ -1,0 +1,230 @@
+name: Security scan
+
+# Finds known vulnerabilities in what we ship:
+# - Python packages in uv.lock (pip-audit, PyPI advisory data via OSV)
+# - Admin UI and root npm packages (npm audit, GitHub advisory data)
+# - The built image and the published release images, including Debian packages
+#   and the Node/Python runtimes (Trivy)
+# Pull requests that change dependencies run the audits and the dependency review;
+# main and the daily run also publish image results to the Security tab, and a red
+# daily run is the alert that a new advisory affects main or a released image.
+# Response times: docs/security/dependency-vulnerabilities.md
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - requirements.txt
+      - package.json
+      - package-lock.json
+      - ui/package.json
+      - ui/package-lock.json
+      - Dockerfile
+      - deploy/railway/Dockerfile
+      - tests/openai_sdk/requirements.txt
+      - tests/realtime/sdk-requirements.txt
+      - .github/workflows/security-scan.yml
+      - scripts/ci/install_trivy.sh
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - package-lock.json
+      - ui/package-lock.json
+      - Dockerfile
+      - .github/workflows/security-scan.yml
+      - scripts/ci/install_trivy.sh
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# `uv` commands without a frozen lock re-check uv.lock, which downloads the
+# 400 MB en_core_web_lg wheel from github.com.
+env:
+  UV_FROZEN: "1"
+  # Fall back to the GitHub registry when the default Trivy DB mirror is down.
+  TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2
+  TRIVY_NO_PROGRESS: "true"
+
+concurrency:
+  group: security-scan-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Block new dependencies with high or critical advisories
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  python-audit:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        continue-on-error: true
+        with:
+          version: '0.9.28'
+      - name: Install uv from PyPI if the GitHub download failed
+        run: |
+          command -v uv >/dev/null && exit 0
+          python3 -m pip install --user --break-system-packages "uv==0.9.28"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+
+      - name: Audit the runtime lock (standard and Presidio images)
+        # Exports exact pins from uv.lock without installing anything. To accept a
+        # finding that does not affect DeltaLLM, add `--ignore-vuln <ID>` here with
+        # a comment saying why and when to revisit it.
+        run: |
+          uv export --no-dev --no-emit-project --no-hashes --format requirements-txt \
+            --extra guardrails-presidio --output-file /tmp/runtime-requirements.txt
+          uv tool run --from pip-audit==2.10.1 pip-audit \
+            --requirement /tmp/runtime-requirements.txt \
+            --no-deps --disable-pip --progress-spinner off
+
+      - name: Audit the SDK test pins
+        run: |
+          for file in tests/openai_sdk/requirements.txt tests/realtime/sdk-requirements.txt; do
+            echo "::group::$file"
+            uv tool run --from pip-audit==2.10.1 pip-audit \
+              --requirement "$file" --no-deps --disable-pip --progress-spinner off
+            echo "::endgroup::"
+          done
+
+  npm-audit:
+    name: npm dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      # Only packages that reach the built UI or runtime gate here; build-only
+      # (dev) packages are kept current by Dependabot.
+      - name: Audit admin UI production packages
+        working-directory: ui
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit root packages
+        run: npm audit --omit=dev --audit-level=high
+
+  image-scan:
+    name: Image scan (current build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install pinned Trivy
+        run: scripts/ci/install_trivy.sh
+
+      - name: Build the standard image
+        run: docker build --tag deltallm:scan .
+
+      - name: Summarize high and critical findings
+        run: |
+          {
+            echo "### Trivy: image built from ${GITHUB_SHA::12}"
+            echo '```'
+            trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
+              --format table deltallm:scan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write SARIF for the Security tab
+        if: github.event_name != 'pull_request'
+        run: |
+          trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
+            --skip-db-update --format sarif --output /tmp/trivy-image.sarif deltallm:scan
+
+      - name: Upload SARIF
+        if: github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: /tmp/trivy-image.sarif
+          category: trivy-image-main
+
+      # Pull requests only report (the summary above): a base-image CVE should not
+      # block an unrelated dependency bump. Main and the daily run fail, which
+      # notifies the maintainer, when a fixable critical finding is present.
+      - name: Fail on fixable critical findings
+        if: github.event_name != 'pull_request'
+        run: |
+          trivy image --scanners vuln --ignore-unfixed --severity CRITICAL \
+            --skip-db-update --exit-code 1 --format table deltallm:scan
+
+  release-image-scan:
+    name: Image scan (${{ matrix.tag }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [latest, latest-presidio]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install pinned Trivy
+        run: scripts/ci/install_trivy.sh
+
+      - name: Pull the published release image
+        run: docker pull "docker.io/deltallm/deltallm:${{ matrix.tag }}"
+
+      - name: Summarize high and critical findings
+        run: |
+          {
+            echo "### Trivy: deltallm/deltallm:${{ matrix.tag }}"
+            echo '```'
+            trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
+              --format table "docker.io/deltallm/deltallm:${{ matrix.tag }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
+            --skip-db-update --format sarif --output /tmp/trivy-release.sarif \
+            "docker.io/deltallm/deltallm:${{ matrix.tag }}"
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: /tmp/trivy-release.sarif
+          category: trivy-release-${{ matrix.tag }}
+
+      # A red run here means customers on the latest release are exposed: patch
+      # and cut a release (see the response times doc).
+      - name: Fail on fixable critical findings
+        run: |
+          trivy image --scanners vuln --ignore-unfixed --severity CRITICAL \
+            --skip-db-update --exit-code 1 --format table \
+            "docker.io/deltallm/deltallm:${{ matrix.tag }}"
