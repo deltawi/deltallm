@@ -49,7 +49,7 @@ test('live tiles compare the last 24 hours with the 24 hours before', () => {
   assert.equal(tiles.errorRateDelta?.tone, 'bad');
   assert.equal(tiles.spend24h, 24);
   assert.equal(tiles.sevenDayAverage, 10);
-  assert.equal(tiles.spendDelta?.label, '+140%');
+  assert.equal(tiles.spendDelta?.label, '+2.4×');
   // Today (UTC) holds the hours from 00:00 to 10:00.
   assert.equal(tiles.spendToday, 11);
   assert.equal(tiles.activeKeys24h, 7);

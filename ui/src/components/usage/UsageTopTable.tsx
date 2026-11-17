@@ -2,9 +2,10 @@ import { ArrowRight, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import type { UsageBreakdownResponse, UsageBreakdownRow, UsageDimension, UsageFilterValue } from '../../lib/api/usageReports';
 import { fmtCompact, fmtSpendPrecise, fmtSpendValue } from '../../lib/format';
 import { dimensionLabel, groupLabel, keyTail } from '../../lib/usageFilters';
-import { errorRate, percentDelta } from '../../lib/usageExplorer';
+import { errorRate } from '../../lib/usageExplorer';
 import type { ReportState } from '../../lib/useReport';
-import { DeltaBadge, PanelError, ShareBar, Swatch, TableSkeleton } from './ReportBits';
+import { PanelError, ShareBar, Swatch, TableSkeleton } from './ReportBits';
+import SpendChangeCell from './SpendChangeCell';
 
 export const TOP_PAGE_SIZE = 10;
 const DEFAULT_COLOR = '#2a78d6';
@@ -95,7 +96,7 @@ export default function UsageTopTable({
                 <th className="whitespace-nowrap border-b border-gray-200 px-2.5 py-2 text-right">Requests</th>
                 <th className="whitespace-nowrap border-b border-gray-200 px-2.5 py-2 text-right">Tokens</th>
                 <th className="whitespace-nowrap border-b border-gray-200 px-2.5 py-2 text-right">Error rate</th>
-                <th className="whitespace-nowrap border-b border-gray-200 px-2.5 py-2 text-right">vs previous</th>
+                <th className="whitespace-nowrap border-b border-gray-200 px-2.5 py-2 text-right" title="Spend compared with the period of the same length just before">Spend change</th>
               </tr>
             </thead>
             <tbody>
@@ -140,11 +141,7 @@ export default function UsageTopTable({
                       {(rate * 100).toFixed(1)}%
                     </td>
                     <td className="whitespace-nowrap border-b border-gray-100 px-2.5 py-[9px] text-right">
-                      {row.previous_spend === null ? (
-                        <span className="text-gray-400">—</span>
-                      ) : (
-                        <DeltaBadge delta={percentDelta(row.total_spend, row.previous_spend, { higherIsBad: true })} />
-                      )}
+                      <SpendChangeCell current={row.total_spend} previous={row.previous_spend} period={data.window} />
                     </td>
                   </tr>
                 );
