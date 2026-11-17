@@ -160,26 +160,34 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Write SARIF for the Security tab
+        id: sarif
         if: github.event_name != 'pull_request'
         run: |
           trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
             --skip-db-update --format sarif --output /tmp/trivy-image.sarif deltallm:scan
 
-      - name: Upload SARIF
-        if: github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: /tmp/trivy-image.sarif
-          category: trivy-image-main
+      # Trivy does not see the Node.js binary or the CPython build (they are not
+      # Debian, pip or npm packages), so compare them with the upstream security
+      # release feeds. Pull requests only report: a base-image CVE should not block
+      # an unrelated dependency bump.
+      - name: Check Node.js and CPython runtimes
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: python3 scripts/ci/check_image_runtimes.py deltallm:scan
 
-      # Pull requests only report (the summary above): a base-image CVE should not
-      # block an unrelated dependency bump. Main and the daily run fail, which
-      # notifies the maintainer, when a fixable critical finding is present.
       - name: Fail on fixable critical findings
         if: github.event_name != 'pull_request'
         run: |
           trivy image --scanners vuln --ignore-unfixed --severity CRITICAL \
             --skip-db-update --exit-code 1 --format table deltallm:scan
+
+      # Runs even when a check above failed. A push whose actor is Dependabot gets
+      # a read-only token, so that upload is skipped instead of failing with 403.
+      - name: Upload SARIF
+        if: always() && steps.sarif.outcome == 'success' && github.actor != 'dependabot[bot]'
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: /tmp/trivy-image.sarif
+          category: trivy-image-main
 
   release-image-scan:
     name: Image scan (${{ matrix.tag }})
@@ -193,6 +201,8 @@ jobs:
       fail-fast: false
       matrix:
         tag: [latest, latest-presidio]
+    env:
+      IMAGE: docker.io/deltallm/deltallm:${{ matrix.tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -200,31 +210,66 @@ jobs:
         run: scripts/ci/install_trivy.sh
 
       - name: Pull the published release image
-        run: docker pull "docker.io/deltallm/deltallm:${{ matrix.tag }}"
+        run: docker pull "$IMAGE"
 
       - name: Summarize high and critical findings
+        id: sarif
         run: |
           {
-            echo "### Trivy: deltallm/deltallm:${{ matrix.tag }}"
+            echo "### Trivy: $IMAGE"
             echo '```'
             trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
-              --format table "docker.io/deltallm/deltallm:${{ matrix.tag }}"
+              --format table "$IMAGE"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
-            --skip-db-update --format sarif --output /tmp/trivy-release.sarif \
-            "docker.io/deltallm/deltallm:${{ matrix.tag }}"
+            --skip-db-update --format sarif --output /tmp/trivy-release.sarif "$IMAGE"
+
+      # A red step from here on means customers on the latest release are exposed:
+      # patch and cut a release (see the response targets doc).
+      - name: Check Node.js and CPython runtimes
+        run: python3 scripts/ci/check_image_runtimes.py "$IMAGE"
+
+      - name: Fail on fixable critical findings
+        if: always() && steps.sarif.outcome == 'success'
+        run: |
+          trivy image --scanners vuln --ignore-unfixed --severity CRITICAL \
+            --skip-db-update --exit-code 1 --format table "$IMAGE"
 
       - name: Upload SARIF
+        if: always() && steps.sarif.outcome == 'success' && github.actor != 'dependabot[bot]'
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: /tmp/trivy-release.sarif
           category: trivy-release-${{ matrix.tag }}
 
-      # A red run here means customers on the latest release are exposed: patch
-      # and cut a release (see the response times doc).
-      - name: Fail on fixable critical findings
+  # The image holds only the built UI (ui/dist), so Trivy cannot see which npm
+  # packages were bundled into it. Audit the UI lock file of the release that the
+  # `latest` tags point to, so an advisory in a shipped UI library is caught even
+  # when main already has the fix.
+  release-ui-audit:
+    name: npm audit (latest release UI)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Audit the UI packages of the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          trivy image --scanners vuln --ignore-unfixed --severity CRITICAL \
-            --skip-db-update --exit-code 1 --format table \
-            "docker.io/deltallm/deltallm:${{ matrix.tag }}"
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}"
+          mkdir -p /tmp/release-ui
+          git show "${tag}:ui/package.json" > /tmp/release-ui/package.json
+          git show "${tag}:ui/package-lock.json" > /tmp/release-ui/package-lock.json
+          echo "Auditing the UI packages shipped in ${tag}"
+          cd /tmp/release-ui
+          npm audit --omit=dev --audit-level=high

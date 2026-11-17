@@ -12,8 +12,9 @@ To report a vulnerability in DeltaLLM's own code, use the
 | What can be affected | How it is detected | How the fix arrives |
 | --- | --- | --- |
 | Python packages (`pyproject.toml`, `uv.lock`) | Dependabot alerts; `pip-audit` in the **Security scan** workflow | Dependabot security update pull request |
-| Admin UI and root npm packages (`package-lock.json` files) | Dependabot alerts; `npm audit` in the **Security scan** workflow | Dependabot security update pull request |
-| Container base images (Debian packages, Node.js and Python runtimes) | Trivy image scan of the current build and of the published `latest` and `latest-presidio` images | Dependabot docker pull request that moves the pinned base image digest |
+| Admin UI and root npm packages (`package-lock.json` files) | Dependabot alerts; `npm audit` in the **Security scan** workflow, on `main` and on the UI lock file of the latest release | Dependabot security update pull request |
+| Container base images (Debian packages) | Trivy image scan of the current build and of the published `latest` and `latest-presidio` images | Dependabot docker pull request that moves the pinned base image digest |
+| Node.js and CPython runtimes in the image | `scripts/ci/check_image_runtimes.py` compares the image's versions with the Node.js and CPython security release feeds (Trivy does not see these binaries) | Dependabot docker pull request |
 | GitHub Actions | Dependabot alerts | Dependabot pull request that moves the pinned commit SHA |
 | Isolated SDK test pins (`tests/openai_sdk`, `tests/realtime`) | Dependabot alerts; `pip-audit` | Dependabot pull request |
 
@@ -23,8 +24,10 @@ The **Security scan** workflow (`.github/workflows/security-scan.yml`) runs:
   dependency with a high or critical advisory (dependency review), or when the Python or production
   npm dependencies have a known vulnerability. The image scan only reports on pull requests;
 - on every push to `main` that changes a dependency file, and daily. Image results are published
-  to the repository's **Security** tab. The run fails when the current build or a published release
-  image has a critical vulnerability with a fix available, which notifies the maintainers.
+  to the repository's **Security** tab. The run fails, which notifies the maintainers, when the
+  current build or a published release image has a critical vulnerability with a fix available,
+  when its Node.js or CPython runtime is more than 14 days behind a security release, or when the
+  latest release's UI packages have a high or critical advisory.
 
 Routine version updates wait 7 days after a release is published before Dependabot proposes them,
 so a compromised release is usually withdrawn before it reaches this repository. Security updates
