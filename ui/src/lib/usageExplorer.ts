@@ -66,9 +66,45 @@ export function costPerThousandRequests(values: Pick<MetricValues, 'total_spend'
   return values.request_count > 0 ? (values.total_spend / values.request_count) * 1000 : 0;
 }
 
+export type ChangeDirection = 'up' | 'down' | 'flat';
+
+export interface PeriodChange {
+  direction: ChangeDirection;
+  /** Size of the change without a sign: "77%", "2.4×", "13×", ">100×". */
+  size: string;
+  /** Relative change, (current - previous) / previous. */
+  ratio: number;
+}
+
+/** Growth above this many times the previous value is shown as ">100×". */
+export const MAX_GROWTH_MULTIPLE = 100;
+
 /**
- * Percent change against the previous window. Spend going up is shown as bad
- * (``higherIsBad``); request and token volume changes stay neutral.
+ * Change against the previous window, sized for people to read. Changes under
+ * +100% stay in percent. Bigger growth is shown as how many times bigger the
+ * value is (2.4×, 13×), capped at ">100×", so a tiny previous value never turns
+ * into a six-digit percent. Returns null when there is nothing to compare with
+ * (no previous window, or a previous value of zero).
+ */
+export function periodChange(current: number, previous: number | null | undefined): PeriodChange | null {
+  if (previous === null || previous === undefined || previous <= 0) return null;
+  const ratio = (current - previous) / previous;
+  const direction: ChangeDirection = ratio > 0 ? 'up' : ratio < 0 ? 'down' : 'flat';
+  if (ratio >= 1) {
+    // Round away float noise (0.07 / 0.0007 = 100.00000000000001) before the cap and the floor.
+    const multiple = Math.round((current / previous) * 1e9) / 1e9;
+    const size = multiple > MAX_GROWTH_MULTIPLE
+      ? `>${MAX_GROWTH_MULTIPLE}×`
+      : multiple < 10 ? `${Math.round(multiple * 10) / 10}×` : `${Math.floor(multiple)}×`;
+    return { direction, size, ratio };
+  }
+  const percent = Math.abs(ratio) >= 0.1 ? Math.round(Math.abs(ratio) * 100) : Math.round(Math.abs(ratio) * 1000) / 10;
+  return { direction: percent === 0 ? 'flat' : direction, size: `${percent}%`, ratio };
+}
+
+/**
+ * Change against the previous window as a badge. Spend going up is shown as
+ * bad (``higherIsBad``); request and token volume changes stay neutral.
  */
 export function percentDelta(
   current: number,
@@ -77,11 +113,13 @@ export function percentDelta(
 ): Delta | null {
   if (previous === null || previous === undefined) return null;
   if (previous === 0) return current === 0 ? { label: '0%', tone: 'flat' } : { label: 'New', tone: 'flat' };
-  const change = (current - previous) / previous;
-  const rounded = Math.abs(change) >= 0.1 ? Math.round(change * 100) : Math.round(change * 1000) / 10;
-  const label = `${rounded > 0 ? '+' : rounded < 0 ? '−' : ''}${Math.abs(rounded)}%`;
-  if (neutral || Math.abs(change) < 0.02) return { label, tone: 'flat' };
-  const worse = higherIsBad ? change > 0 : change < 0;
+  const change = periodChange(current, previous);
+  if (!change) return null;
+  const capped = change.size.startsWith('>');
+  const sign = capped ? '' : change.direction === 'up' ? '+' : change.direction === 'down' ? '−' : '';
+  const label = `${sign}${change.size}`;
+  if (neutral || Math.abs(change.ratio) < 0.02) return { label, tone: 'flat' };
+  const worse = higherIsBad ? change.ratio > 0 : change.ratio < 0;
   return { label, tone: worse ? 'bad' : 'good' };
 }
 

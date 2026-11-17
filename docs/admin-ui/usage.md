@@ -27,7 +27,13 @@ The Overview shows usage for one period. Use the period control at the top right
 - **Usage over time**: a stacked bar chart. Select the metric (spend, requests, tokens, or errors)
   and split the bars by model, provider, or team. The chart shows the top 4 groups and "Other".
 - **Top table**: the top models, providers, organizations, teams, users, or API keys for the period, with
-  the share of spend, spend, requests, tokens, and error rate. Use the pager and the search box to find a row.
+  the share of spend, spend, requests, tokens, error rate, and spend change. Use the pager and the search box to find a row.
+- **Spend change**: the row's spend compared with the period of the same length just before (for 7 days, the 7 days
+  before). Changes under +100% show in percent (`↑ 77%`, `↓ 63%`). Bigger growth shows how many times bigger the spend
+  is (`2.4×`, `13×`), up to `>100×`, so a model that cost almost nothing before does not show a huge percent.
+  **New** means the row had no spend in the previous period. The arrows are gray: more spend is often more traffic,
+  not a problem. Hover the value to see both periods, both amounts, and the dollar change.
+  The tiles use the same rule, so a tile can show `+2.4×` or `>100×`.
 - **View matching requests**: opens the Requests view with the same filters.
 
 ### Users

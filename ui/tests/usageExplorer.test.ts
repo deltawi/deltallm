@@ -6,6 +6,7 @@ import {
   bucketKeys,
   OTHER_COLOR,
   percentDelta,
+  periodChange,
   pointDelta,
   SERIES_COLORS,
   sparklineValues,
@@ -18,6 +19,34 @@ test('spend going up is bad, volume changes stay neutral', () => {
   assert.deepEqual(percentDelta(120, 100, { neutral: true }), { label: '+20%', tone: 'flat' });
   assert.deepEqual(percentDelta(5, 0), { label: 'New', tone: 'flat' });
   assert.equal(percentDelta(5, null), null);
+});
+
+test('big growth is shown as a capped multiple, not a giant percent', () => {
+  // Load tests on a near-idle model: $0.0000017 -> $0.0232 used to read +1379975%.
+  assert.deepEqual(percentDelta(0.0232, 0.0000017, { higherIsBad: true }), { label: '>100×', tone: 'bad' });
+  assert.deepEqual(percentDelta(1.36, 0.0063, { higherIsBad: true }), { label: '>100×', tone: 'bad' });
+  assert.deepEqual(percentDelta(0.00723952, 0.000576), { label: '+12×', tone: 'good' });
+  assert.deepEqual(percentDelta(240, 100, { neutral: true }), { label: '+2.4×', tone: 'flat' });
+  assert.deepEqual(percentDelta(200, 100, { neutral: true }), { label: '+2×', tone: 'flat' });
+  assert.deepEqual(percentDelta(199, 100, { neutral: true }), { label: '+99%', tone: 'flat' });
+  assert.deepEqual(percentDelta(9_990, 1_000, { neutral: true }), { label: '+10×', tone: 'flat' });
+  assert.deepEqual(percentDelta(1, 100, { neutral: true }), { label: '−99%', tone: 'flat' });
+});
+
+test('period change gives a direction and a size without a sign', () => {
+  assert.deepEqual(periodChange(177, 100), { direction: 'up', size: '77%', ratio: 0.77 });
+  assert.deepEqual(periodChange(37, 100), { direction: 'down', size: '63%', ratio: -0.63 });
+  assert.deepEqual(periodChange(100, 100), { direction: 'flat', size: '0%', ratio: 0 });
+  assert.equal(periodChange(100, 100.01)?.direction, 'flat');
+  assert.equal(periodChange(5, 0), null);
+  assert.equal(periodChange(5, null), null);
+  assert.equal(periodChange(130, 10)?.size, '13×');
+  assert.equal(periodChange(1_000, 10)?.size, '100×');
+  assert.equal(periodChange(1_001, 10)?.size, '>100×');
+  assert.equal(periodChange(5, -10), null);
+  assert.equal(periodChange(0.07, 0.0007)?.size, '100×');
+  assert.equal(periodChange(0.57, 0.0057)?.size, '100×');
+  assert.equal(periodChange(0.0707, 0.0007)?.size, '>100×');
 });
 
 test('error rate changes are shown in points', () => {
