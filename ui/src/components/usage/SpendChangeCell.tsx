@@ -168,24 +168,28 @@ export default function SpendChangeCell({ current, previous, period }: {
     );
   }
 
+  // The card is a sibling of the value in the React tree, not a child, so moving the pointer between
+  // them fires a leave on one and an enter on the other in both directions.
   return (
-    <span
-      ref={anchorRef}
-      tabIndex={0}
-      aria-describedby={open ? tooltipId : undefined}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => { setFocused(true); setDismissed(false); }}
-      onBlur={() => setFocused(false)}
-      onKeyDown={(event) => {
-        // The row filters on Enter and Space; keys pressed on this cell only drive the card.
-        if (event.key === 'Escape') setDismissed(true);
-        else event.stopPropagation();
-      }}
-      className="inline-block rounded tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
-    >
-      <span aria-hidden="true">{content}</span>
-      <span className="sr-only">{summary}</span>
+    <>
+      <span
+        ref={anchorRef}
+        tabIndex={0}
+        aria-describedby={open ? tooltipId : undefined}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => { setFocused(true); setDismissed(false); }}
+        onBlur={() => setFocused(false)}
+        onKeyDown={(event) => {
+          // The row filters on Enter and Space; keys pressed on this cell only drive the card.
+          if (event.key === 'Escape') setDismissed(true);
+          else event.stopPropagation();
+        }}
+        className="inline-block rounded tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+      >
+        <span aria-hidden="true">{content}</span>
+        <span className="sr-only">{summary}</span>
+      </span>
       {open && (
         <ChangeTooltip
           anchorRef={anchorRef}
@@ -197,6 +201,6 @@ export default function SpendChangeCell({ current, previous, period }: {
           onPointerInside={setHovered}
         />
       )}
-    </span>
+    </>
   );
 }
