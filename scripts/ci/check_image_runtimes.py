@@ -58,7 +58,12 @@ def node_security_releases_after(current: str, index: list[dict]) -> list[Behind
         version = parse_version(release["version"])
         if version[0] == ours[0] and version > ours and release.get("security"):
             found.append(
-                Behind("Node.js", current, release["version"].lstrip("v"), date.fromisoformat(release["date"]))
+                Behind(
+                    "Node.js",
+                    current,
+                    release["version"].lstrip("v"),
+                    date.fromisoformat(release["date"]),
+                )
             )
     return found
 
@@ -101,7 +106,9 @@ def image_versions(image: str) -> tuple[str, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("image", nargs="?", help="image to read runtime versions from")
     parser.add_argument("--node", help="Node.js version instead of reading the image")
     parser.add_argument("--python", help="CPython version instead of reading the image")
