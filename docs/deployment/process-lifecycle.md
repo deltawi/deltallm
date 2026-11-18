@@ -110,6 +110,8 @@ Uvicorn's drain and lifespan hooks. When application startup or the socket bind
 fails, the process exits with status 1. Uvicorn selects `httptools` for HTTP/1.1,
 `uvloop` for the event loop and the sans-I/O `websockets` implementation for
 WebSocket connections. During drain, an open WebSocket receives close code 1012.
+Every request starts in a fresh context, so context variables set during startup
+never leak into requests.
 
 The image runs as UID/GID 10001, using frozen dependencies from `uv.lock` and
 prebuilt Prisma/Node assets. Production mounts writable `/tmp` while keeping the

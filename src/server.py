@@ -67,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
             lifespan="on",
             log_level=log_level.lower(),
             access_log=access_log_enabled(log_level),
+            # Uvicorn 0.40 always ran each request in a fresh context; 0.54 made
+            # it opt-in. Keep lifespan context variables out of request tasks.
+            reset_contextvars=True,
         ),
         lifecycle,
     )

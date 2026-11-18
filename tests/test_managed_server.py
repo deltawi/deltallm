@@ -224,3 +224,82 @@ def test_lifespan_startup_failure_keeps_managed_exit_status():
     assert result.returncode == 1, result.stderr
     assert "Application startup failed" in result.stderr
     assert "Application startup complete" not in result.stderr
+
+
+def test_managed_entrypoint_runs_requests_in_a_fresh_context(monkeypatch):
+    from src import server
+    from src.config import AppConfig, Settings
+
+    recorded = []
+
+    class RecordingServer:
+        started = True
+
+        def __init__(self, config, lifecycle):
+            recorded.append(config)
+
+        def run(self):
+            return None
+
+    monkeypatch.setattr(
+        server.StartupConfig,
+        "load",
+        lambda: SimpleNamespace(
+            lifecycle=LifecycleSettings(migration_mode="external"),
+            app_config=AppConfig(),
+            settings=Settings(),
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "create_server_application",
+        lambda **_: SimpleNamespace(state=SimpleNamespace()),
+    )
+    monkeypatch.setattr(server.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(server, "ManagedServer", RecordingServer)
+
+    assert server.main(["--port", "0"]) == 0
+    assert [config.reset_contextvars for config in recorded] == [True]
+
+
+async def test_lifespan_context_does_not_leak_into_requests():
+    from contextvars import ContextVar
+
+    marker: ContextVar[str] = ContextVar("lifespan_marker", default="unset")
+    seen = []
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            assert (await receive())["type"] == "lifespan.startup"
+            marker.set("lifespan")
+            await send({"type": "lifespan.startup.complete"})
+            assert (await receive())["type"] == "lifespan.shutdown"
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        seen.append(marker.get())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    lifecycle = ProcessLifecycle(lifecycle_settings())
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    address = sock.getsockname()
+    server = ManagedServer(
+        uvicorn.Config(app, lifespan="on", access_log=False, reset_contextvars=True),
+        lifecycle,
+    )
+    task = asyncio.create_task(server.serve(sockets=[sock]))
+    try:
+        async with asyncio.timeout(5):
+            while not server.started:
+                await asyncio.sleep(0)
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{address[1]}") as client:
+                assert (await client.get("/")).status_code == 200
+            server.handle_exit(signal.SIGTERM, None)
+            await task
+        assert seen == ["unset"]
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        sock.close()
