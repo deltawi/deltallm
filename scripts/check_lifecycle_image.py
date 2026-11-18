@@ -12,7 +12,7 @@ import importlib.util, os, subprocess, sys, uvicorn
 import sniffio
 from importlib.metadata import version
 assert os.getuid() == 10001
-assert uvicorn.__version__ == "0.40.0"
+assert uvicorn.__version__ == "0.54.0"
 assert version("sniffio") == "1.3.1"
 assert callable(sniffio.current_async_library)
 assert importlib.util.find_spec("pytest") is None

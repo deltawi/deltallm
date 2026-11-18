@@ -1,6 +1,6 @@
 # Provider HTTP connection pool
 
-Use the released `httpcore2[asyncio]==2.13.1` pool behind the shared HTTPX
+Use the released `httpcore2[asyncio]==2.16.0` pool behind the shared HTTPX
 provider client. Keep HTTPX request, response, timeout and exception contracts.
 This removes repeated pool scans and duplicate HTTP/1.1 connection assignment
 without increasing the configured connection budget.

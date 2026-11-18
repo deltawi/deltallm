@@ -38,8 +38,10 @@ a pod and two successes to restore it. A single failed application sample return
 dependency I/O. Detailed health and metrics remain internal operational endpoints.
 
 After drain starts, new inference and control requests return HTTP 503 with
-`error.code=gateway_draining` and `Retry-After: 1`, before reading their bodies or
-using auth, Redis, SQL or provider capacity. The messages API retains its error
+`error.code=gateway_draining` and `Retry-After: 1`, without auth, Redis, SQL or
+provider capacity. They read only a small body, for one second at most, before
+the connection closes. See [ingress admission](ingress-admission.md#handle-local-rejection)
+for the limits and for the uploads that can still lose the 503. The messages API retains its error
 envelope. Queued admission checks drain again after obtaining a permit. Existing
 requests retain their leases until response cleanup completes.
 
@@ -103,6 +105,22 @@ release image. Use the same tested digest for API, worker, dependency waiter and
 migration Job. Custom commands, reload and multiple Uvicorn workers are outside
 this contract. Direct `uvicorn src.main:app` remains a development/embedding path;
 it does not receive the managed signal before Uvicorn's connection drain.
+
+The managed entrypoint requires Uvicorn 0.54.0, the version in `uv.lock`. It
+stops at startup when a different version is installed, because it extends
+Uvicorn's drain and lifespan hooks. When application startup or the socket bind
+fails, the process exits with status 1. Uvicorn selects `httptools` for HTTP/1.1
+and `uvloop` for the event loop. For WebSocket connections, the entrypoint selects
+the `websockets` implementation, not the sans-I/O default of Uvicorn 0.54. The
+sans-I/O implementation stops socket reads while the application has a queued
+message. A slow realtime relay then cannot read the client's pong, and the
+keepalive check closes a healthy session with code 1011. Uvicorn logs a
+deprecation warning for the selected implementation at startup. Change this
+selection only when a real-socket test shows that the new implementation keeps
+reading control frames during backpressure. During drain, an open WebSocket
+receives close code 1012.
+Every request starts in a fresh context, so context variables set during startup
+never leak into requests.
 
 The image runs as UID/GID 10001, using frozen dependencies from `uv.lock` and
 prebuilt Prisma/Node assets. Production mounts writable `/tmp` while keeping the

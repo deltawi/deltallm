@@ -8,6 +8,7 @@ import signal
 import sys
 
 import uvicorn
+from uvicorn.config import STARTUP_FAILURE
 
 from src.managed_server import ManagedServer
 from src.process_lifecycle import ProcessLifecycle
@@ -66,10 +67,25 @@ def main(argv: list[str] | None = None) -> int:
             lifespan="on",
             log_level=log_level.lower(),
             access_log=access_log_enabled(log_level),
+            # Uvicorn 0.40 always ran each request in a fresh context; 0.54 made
+            # it opt-in. Keep lifespan context variables out of request tasks.
+            reset_contextvars=True,
+            # Uvicorn 0.54 "auto" selects the sans-I/O implementation. It stops
+            # socket reads while the application has a queued message, so a slow
+            # realtime relay cannot read the client's pong and keepalive closes a
+            # healthy session. Keep the 0.40 implementation, which reads control
+            # frames during backpressure. Remove when the sans-I/O one does.
+            ws="websockets",
         ),
         lifecycle,
     )
-    server.run()
+    try:
+        server.run()
+    except SystemExit as exc:
+        # Uvicorn exits with its own code when lifespan startup or bind fails.
+        # Keep the managed entrypoint's exit status for a server that never started.
+        if exc.code != STARTUP_FAILURE:
+            raise
     owner = getattr(app.state, "shutdown_owner", None)
     return 1 if not server.started or (owner is not None and owner.failed) else 0
 

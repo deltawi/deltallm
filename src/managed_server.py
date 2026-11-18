@@ -13,7 +13,7 @@ from uvicorn.server import ServerState
 from src.process_lifecycle import ProcessLifecycle
 from src.telemetry.lifecycle import stop_tasks_before_deadline
 
-SUPPORTED_UVICORN = "0.40.0"
+SUPPORTED_UVICORN = "0.54.0"
 
 
 class ManagedLifespan(LifespanOn):
@@ -71,7 +71,7 @@ class ManagedServer(uvicorn.Server):
         deadlines = self.lifecycle.begin_drain()
         await asyncio.sleep(self.lifecycle.remaining(deadlines.withdrawal))
         self.lifecycle.enter_phase("responses")
-        # Uvicorn 0.40.0 spends 100 ms notifying connections before its timeout.
+        # Uvicorn 0.54.0 spends 100 ms notifying connections before its timeout.
         self.config.timeout_graceful_shutdown = max(
             0.0, self.lifecycle.remaining(deadlines.responses) - 0.1
         )

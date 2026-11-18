@@ -30,8 +30,6 @@ click==8.5.1
     # via
     #   prisma
     #   uvicorn
-colorama==0.4.6 ; sys_platform == 'win32'
-    # via uvicorn
 cryptography==50.0.2
     # via
     #   deltallm-core-api
@@ -45,7 +43,7 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
-httpcore2==2.13.1
+httpcore2==2.16.0
     # via deltallm-core-api
 httptools==0.9.0
     # via uvicorn
@@ -135,7 +133,7 @@ typing-inspection==0.4.5
     #   pydantic-settings
 urllib3==2.8.0
     # via botocore
-uvicorn==0.40.0
+uvicorn==0.54.0
     # via deltallm-core-api
 uvloop==0.23.0 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
     # via uvicorn

@@ -192,3 +192,179 @@ def test_signal_during_startup_migration_kills_owned_cli_and_never_serves(tmp_pa
         if process.poll() is None:
             process.kill()
             process.communicate(timeout=5)
+
+
+def test_lifespan_startup_failure_keeps_managed_exit_status():
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent("""
+        from types import SimpleNamespace
+        import sys
+        from src import server
+        from src.config import AppConfig, Settings
+        from src.lifecycle_settings import LifecycleSettings
+        server.StartupConfig.load = lambda: SimpleNamespace(
+            lifecycle=LifecycleSettings(migration_mode='external'),
+            app_config=AppConfig(), settings=Settings())
+        server.effective_startup_log_level = lambda _: 'INFO'
+
+        async def app(scope, receive, send):
+            assert (await receive())['type'] == 'lifespan.startup'
+            await send({'type': 'lifespan.startup.failed', 'message': 'fixture failure'})
+
+        app.state = SimpleNamespace()
+        server.create_server_application = lambda **_: app
+        sys.exit(server.main(['--port', '0']))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 1, result.stderr
+    assert "Application startup failed" in result.stderr
+    assert "Application startup complete" not in result.stderr
+
+
+def test_managed_entrypoint_runs_requests_in_a_fresh_context(monkeypatch):
+    from src import server
+    from src.config import AppConfig, Settings
+
+    recorded = []
+
+    class RecordingServer:
+        started = True
+
+        def __init__(self, config, lifecycle):
+            recorded.append(config)
+
+        def run(self):
+            return None
+
+    monkeypatch.setattr(
+        server.StartupConfig,
+        "load",
+        lambda: SimpleNamespace(
+            lifecycle=LifecycleSettings(migration_mode="external"),
+            app_config=AppConfig(),
+            settings=Settings(),
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "create_server_application",
+        lambda **_: SimpleNamespace(state=SimpleNamespace()),
+    )
+    monkeypatch.setattr(server.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(server, "ManagedServer", RecordingServer)
+
+    assert server.main(["--port", "0"]) == 0
+    assert [(config.reset_contextvars, config.ws) for config in recorded] == [(True, "websockets")]
+
+
+@pytest.mark.parametrize("http", ["httptools", "h11"])
+async def test_startup_context_does_not_leak_into_requests(http):
+    from contextvars import ContextVar
+
+    marker: ContextVar[str] = ContextVar("startup_marker", default="unset")
+    seen = []
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            assert (await receive())["type"] == "lifespan.startup"
+            await send({"type": "lifespan.startup.complete"})
+            assert (await receive())["type"] == "lifespan.shutdown"
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        seen.append(marker.get())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    lifecycle = ProcessLifecycle(lifecycle_settings())
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    address = sock.getsockname()
+    server = ManagedServer(
+        uvicorn.Config(app, lifespan="on", access_log=False, http=http, reset_contextvars=True),
+        lifecycle,
+    )
+    # The server task copies this context, so its connection callbacks see the
+    # marker. Only a fresh request context hides it from the application.
+    token = marker.set("startup")
+    task = asyncio.create_task(server.serve(sockets=[sock]))
+    marker.reset(token)
+    try:
+        async with asyncio.timeout(5):
+            while not server.started:
+                await asyncio.sleep(0)
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{address[1]}") as client:
+                assert (await client.get("/")).status_code == 200
+                assert (await client.get("/")).status_code == 200
+            server.handle_exit(signal.SIGTERM, None)
+            await task
+        assert seen == ["unset", "unset"]
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        sock.close()
+
+
+async def test_websocket_keepalive_reads_pongs_while_the_application_is_slow():
+    from websockets.asyncio.client import connect
+
+    received = []
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            assert (await receive())["type"] == "lifespan.startup"
+            await send({"type": "lifespan.startup.complete"})
+            assert (await receive())["type"] == "lifespan.shutdown"
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        assert (await receive())["type"] == "websocket.connect"
+        await send({"type": "websocket.accept"})
+        while len(received) < 8:
+            message = await receive()
+            if message["type"] == "websocket.disconnect":
+                return
+            received.append(message["text"])
+            # A slow upstream send keeps later client frames queued.
+            await asyncio.sleep(0.15)
+        await send({"type": "websocket.send", "text": "done"})
+        await send({"type": "websocket.close", "code": 1000})
+
+    lifecycle = ProcessLifecycle(lifecycle_settings())
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    address = sock.getsockname()
+    # The managed entrypoint selects this implementation; keepalive is shortened
+    # so that the queued burst outlives several ping/pong rounds.
+    server = ManagedServer(
+        uvicorn.Config(
+            app,
+            lifespan="on",
+            access_log=False,
+            ws="websockets",
+            ws_ping_interval=0.1,
+            ws_ping_timeout=0.2,
+        ),
+        lifecycle,
+    )
+    task = asyncio.create_task(server.serve(sockets=[sock]))
+    try:
+        async with asyncio.timeout(10):
+            while not server.started:
+                await asyncio.sleep(0)
+            async with connect(f"ws://127.0.0.1:{address[1]}/", ping_interval=None) as client:
+                for index in range(8):
+                    await client.send(f"frame-{index}")
+                assert await client.recv() == "done"
+            server.handle_exit(signal.SIGTERM, None)
+            await task
+        assert received == [f"frame-{index}" for index in range(8)]
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        sock.close()
