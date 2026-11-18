@@ -8,6 +8,7 @@ import signal
 import sys
 
 import uvicorn
+from uvicorn.config import STARTUP_FAILURE
 
 from src.managed_server import ManagedServer
 from src.process_lifecycle import ProcessLifecycle
@@ -69,7 +70,13 @@ def main(argv: list[str] | None = None) -> int:
         ),
         lifecycle,
     )
-    server.run()
+    try:
+        server.run()
+    except SystemExit as exc:
+        # Uvicorn exits with its own code when lifespan startup or bind fails.
+        # Keep the managed entrypoint's exit status for a server that never started.
+        if exc.code != STARTUP_FAILURE:
+            raise
     owner = getattr(app.state, "shutdown_owner", None)
     return 1 if not server.started or (owner is not None and owner.failed) else 0
 

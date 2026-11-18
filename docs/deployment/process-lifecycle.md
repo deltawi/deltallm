@@ -104,6 +104,13 @@ migration Job. Custom commands, reload and multiple Uvicorn workers are outside
 this contract. Direct `uvicorn src.main:app` remains a development/embedding path;
 it does not receive the managed signal before Uvicorn's connection drain.
 
+The managed entrypoint requires Uvicorn 0.54.0, the version in `uv.lock`. It
+stops at startup when a different version is installed, because it extends
+Uvicorn's drain and lifespan hooks. When application startup or the socket bind
+fails, the process exits with status 1. Uvicorn selects `httptools` for HTTP/1.1,
+`uvloop` for the event loop and the sans-I/O `websockets` implementation for
+WebSocket connections. During drain, an open WebSocket receives close code 1012.
+
 The image runs as UID/GID 10001, using frozen dependencies from `uv.lock` and
 prebuilt Prisma/Node assets. Production mounts writable `/tmp` while keeping the
 root filesystem read-only. Configure shared artifact storage and any persistent

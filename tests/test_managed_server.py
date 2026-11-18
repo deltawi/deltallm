@@ -192,3 +192,35 @@ def test_signal_during_startup_migration_kills_owned_cli_and_never_serves(tmp_pa
         if process.poll() is None:
             process.kill()
             process.communicate(timeout=5)
+
+
+def test_lifespan_startup_failure_keeps_managed_exit_status():
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent("""
+        from types import SimpleNamespace
+        import sys
+        from src import server
+        from src.config import AppConfig, Settings
+        from src.lifecycle_settings import LifecycleSettings
+        server.StartupConfig.load = lambda: SimpleNamespace(
+            lifecycle=LifecycleSettings(migration_mode='external'),
+            app_config=AppConfig(), settings=Settings())
+        server.effective_startup_log_level = lambda _: 'INFO'
+
+        async def app(scope, receive, send):
+            assert (await receive())['type'] == 'lifespan.startup'
+            await send({'type': 'lifespan.startup.failed', 'message': 'fixture failure'})
+
+        app.state = SimpleNamespace()
+        server.create_server_application = lambda **_: app
+        sys.exit(server.main(['--port', '0']))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 1, result.stderr
+    assert "Application startup failed" in result.stderr
+    assert "Application startup complete" not in result.stderr
