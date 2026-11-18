@@ -192,3 +192,97 @@ def test_signal_during_startup_migration_kills_owned_cli_and_never_serves(tmp_pa
         if process.poll() is None:
             process.kill()
             process.communicate(timeout=5)
+
+
+def _fixture_startup():
+    from src.config import AppConfig, Settings
+
+    return SimpleNamespace(
+        lifecycle=LifecycleSettings(migration_mode="external"),
+        app_config=AppConfig(),
+        settings=Settings(),
+    )
+
+
+def test_failed_lifespan_startup_exits_with_status_one(monkeypatch):
+    from src import server
+
+    class FailingStartup:
+        state = SimpleNamespace()
+
+        async def __call__(self, scope, receive, send):
+            assert scope["type"] == "lifespan"
+            assert (await receive())["type"] == "lifespan.startup"
+            await send({"type": "lifespan.startup.failed", "message": "fixture"})
+
+    monkeypatch.setattr(server.StartupConfig, "load", _fixture_startup)
+    monkeypatch.setattr(server, "create_server_application", lambda **_: FailingStartup())
+    monkeypatch.setattr(server.signal, "signal", lambda *_: None)
+
+    assert server.main(["--host", "127.0.0.1", "--port", "0"]) == 1
+
+
+def test_managed_command_starts_each_request_in_a_fresh_context(monkeypatch):
+    from src import server
+
+    configs = []
+
+    class RecordingServer:
+        started = True
+
+        def __init__(self, config, lifecycle):
+            configs.append(config)
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(server.StartupConfig, "load", _fixture_startup)
+    monkeypatch.setattr(
+        server, "create_server_application", lambda **_: SimpleNamespace(state=SimpleNamespace())
+    )
+    monkeypatch.setattr(server, "ManagedServer", RecordingServer)
+    monkeypatch.setattr(server.signal, "signal", lambda *_: None)
+
+    assert server.main(["--port", "0"]) == 0
+    assert configs[0].reset_contextvars is True
+
+
+async def test_request_does_not_inherit_lifespan_context():
+    import contextvars
+
+    marker = contextvars.ContextVar("lifespan_marker", default="unset")
+    lifecycle = ProcessLifecycle(lifecycle_settings())
+    seen = []
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            marker.set("lifespan")
+            assert (await receive())["type"] == "lifespan.startup"
+            await send({"type": "lifespan.startup.complete"})
+            assert (await receive())["type"] == "lifespan.shutdown"
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        seen.append(marker.get())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    config = uvicorn.Config(app, lifespan="on", access_log=False, reset_contextvars=True)
+    server = ManagedServer(config, lifecycle)
+    task = asyncio.create_task(server.serve(sockets=[sock]))
+    try:
+        async with asyncio.timeout(5):
+            while not server.started:
+                await asyncio.sleep(0)
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+                assert (await client.get("/")).status_code == 200
+            server.handle_exit(signal.SIGTERM, None)
+            await task
+        assert seen == ["unset"]
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        sock.close()

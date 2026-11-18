@@ -66,10 +66,20 @@ def main(argv: list[str] | None = None) -> int:
             lifespan="on",
             log_level=log_level.lower(),
             access_log=access_log_enabled(log_level),
+            # Uvicorn 0.40 always ran each request in a fresh context; 0.54 made it
+            # opt-in. Keep lifespan context variables out of request tasks.
+            reset_contextvars=True,
         ),
         lifecycle,
     )
-    server.run()
+    try:
+        server.run()
+    except SystemExit:
+        # Uvicorn 0.54 exits with status 3 when lifespan startup fails; keep this
+        # entrypoint's status 1 for a server that never started.
+        if server.started:
+            raise
+        return 1
     owner = getattr(app.state, "shutdown_owner", None)
     return 1 if not server.started or (owner is not None and owner.failed) else 0
 

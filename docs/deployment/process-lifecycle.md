@@ -104,6 +104,11 @@ migration Job. Custom commands, reload and multiple Uvicorn workers are outside
 this contract. Direct `uvicorn src.main:app` remains a development/embedding path;
 it does not receive the managed signal before Uvicorn's connection drain.
 
+The managed entrypoint requires the exact Uvicorn version pinned in `pyproject.toml`
+(currently 0.54.0) and refuses to start on any other. It starts every request in a
+fresh context, so context variables set during startup never leak into requests. If
+application startup fails, the process exits with status 1.
+
 The image runs as UID/GID 10001, using frozen dependencies from `uv.lock` and
 prebuilt Prisma/Node assets. Production mounts writable `/tmp` while keeping the
 root filesystem read-only. Configure shared artifact storage and any persistent
