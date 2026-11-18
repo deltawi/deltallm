@@ -262,16 +262,16 @@ def test_managed_entrypoint_runs_requests_in_a_fresh_context(monkeypatch):
     assert [(config.reset_contextvars, config.ws) for config in recorded] == [(True, "websockets")]
 
 
-async def test_lifespan_context_does_not_leak_into_requests():
+@pytest.mark.parametrize("http", ["httptools", "h11"])
+async def test_startup_context_does_not_leak_into_requests(http):
     from contextvars import ContextVar
 
-    marker: ContextVar[str] = ContextVar("lifespan_marker", default="unset")
+    marker: ContextVar[str] = ContextVar("startup_marker", default="unset")
     seen = []
 
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
             assert (await receive())["type"] == "lifespan.startup"
-            marker.set("lifespan")
             await send({"type": "lifespan.startup.complete"})
             assert (await receive())["type"] == "lifespan.shutdown"
             await send({"type": "lifespan.shutdown.complete"})
@@ -285,19 +285,24 @@ async def test_lifespan_context_does_not_leak_into_requests():
     sock.bind(("127.0.0.1", 0))
     address = sock.getsockname()
     server = ManagedServer(
-        uvicorn.Config(app, lifespan="on", access_log=False, reset_contextvars=True),
+        uvicorn.Config(app, lifespan="on", access_log=False, http=http, reset_contextvars=True),
         lifecycle,
     )
+    # The server task copies this context, so its connection callbacks see the
+    # marker. Only a fresh request context hides it from the application.
+    token = marker.set("startup")
     task = asyncio.create_task(server.serve(sockets=[sock]))
+    marker.reset(token)
     try:
         async with asyncio.timeout(5):
             while not server.started:
                 await asyncio.sleep(0)
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{address[1]}") as client:
                 assert (await client.get("/")).status_code == 200
+                assert (await client.get("/")).status_code == 200
             server.handle_exit(signal.SIGTERM, None)
             await task
-        assert seen == ["unset"]
+        assert seen == ["unset", "unset"]
     finally:
         if not task.done():
             task.cancel()
