@@ -107,9 +107,13 @@ response when more upload bytes arrive, as described in
 [HTTP/1.1 teardown](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6).
 Both supported server parsers keep the request boundary; upload bytes cannot
 become a second request. Invalid-body errors and HTTP/1.0 responses still close
-the connection. A `gateway_draining` rejection also closes the connection. First it
-reads and discards a declared body of 64 KiB or less, for one second at most, so
-that the close cannot erase the 503. The managed shutdown deadline also remains
+the connection. A `gateway_draining` rejection also closes the connection. Before
+it closes, it reads and discards a body of 64 KiB or less that `Content-Length`
+alone declares. This read stops after one second. Then the 503 reaches the client
+if the complete body arrives in that second. A larger, chunked or slower upload
+keeps the previous close behavior, and a connection reset can erase that 503.
+At most 16 discards run at the same time in one process. When all are in use,
+the rejection does not read the body. The managed shutdown deadline also remains
 unchanged. Transport
 buffers remain outside the application byte budget and need the headroom above.
 The [server behavior guide](https://www.uvicorn.org/server-behavior/)

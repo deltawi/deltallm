@@ -39,8 +39,9 @@ dependency I/O. Detailed health and metrics remain internal operational endpoint
 
 After drain starts, new inference and control requests return HTTP 503 with
 `error.code=gateway_draining` and `Retry-After: 1`, without auth, Redis, SQL or
-provider capacity. They read and discard only a declared body of 64 KiB or less,
-for one second at most, so that the connection close cannot erase the 503. The messages API retains its error
+provider capacity. They read only a small body, for one second at most, before
+the connection closes. See [ingress admission](ingress-admission.md#handle-local-rejection)
+for the limits and for the uploads that can still lose the 503. The messages API retains its error
 envelope. Queued admission checks drain again after obtaining a permit. Existing
 requests retain their leases until response cleanup completes.
 

@@ -31,8 +31,28 @@ from src.process_lifecycle import ProcessLifecycle
 # A draining rejection closes the connection. Closing with unread upload bytes
 # makes the kernel reset the socket, and the client can lose the 503. Read a
 # small declared body first; larger, unframed or slow uploads close as before.
+# Slots bound the concurrent reads, so retained bytes stay below
+# DRAINING_DISCARD_SLOTS * DRAINING_DISCARD_MAX_BYTES per process.
 DRAINING_DISCARD_MAX_BYTES = 64 * 1024
 DRAINING_DISCARD_SECONDS = 1.0
+DRAINING_DISCARD_SLOTS = 16
+
+
+class DrainingDiscardSlots:
+    """Non-blocking process-local allocation for draining body discards."""
+
+    def __init__(self, limit: int = DRAINING_DISCARD_SLOTS) -> None:
+        self.limit = limit
+        self.active = 0
+
+    def try_acquire(self) -> bool:
+        if self.active >= self.limit:
+            return False
+        self.active += 1
+        return True
+
+    def release(self) -> None:
+        self.active -= 1
 
 
 class _BufferedBody:
@@ -76,6 +96,7 @@ class _BufferedBody:
 class IngressMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
+        self.draining_discard = DrainingDiscardSlots()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         application = scope.get("app")
@@ -90,7 +111,7 @@ class IngressMiddleware:
             getattr(application, "state", None), "process_lifecycle", None
         )
         if lifecycle is not None and lifecycle.draining and allocation != IngressClass.HEALTH:
-            await _reject(scope, receive, send, 503, DRAINING_CODE)
+            await _reject(scope, receive, send, 503, DRAINING_CODE, discard=self.draining_discard)
             return
         if runtime is None or not runtime.limits.enabled:
             await self.app(scope, receive, send)
@@ -118,7 +139,9 @@ class IngressMiddleware:
         try:
             # A request queued before the signal has not yet been admitted.
             if lifecycle is not None and lifecycle.draining and allocation != IngressClass.HEALTH:
-                await _reject(scope, receive, send, 503, DRAINING_CODE)
+                await _reject(
+                    scope, receive, send, 503, DRAINING_CODE, discard=self.draining_discard
+                )
                 return
             await self._admitted(
                 scope, receive, send, runtime, body, health=allocation == IngressClass.HEALTH
@@ -183,13 +206,19 @@ def _content_length(scope: Scope) -> int | None:
     return int(values[0])
 
 
-async def _discard_small_body(scope: Scope, receive: Receive) -> None:
+def _small_declared_body(scope: Scope) -> bool:
+    # A parser can keep Content-Length beside Transfer-Encoding and use chunked
+    # framing; only a body framed by Content-Length alone has a known size.
+    if any(key.lower() == b"transfer-encoding" for key, _ in scope.get("headers", ())):
+        return False
     try:
         length = _content_length(scope)
     except ValueError:
-        return
-    if length is None or not 0 < length <= DRAINING_DISCARD_MAX_BYTES:
-        return
+        return False
+    return length is not None and 0 < length <= DRAINING_DISCARD_MAX_BYTES
+
+
+async def _discard_small_body(receive: Receive) -> None:
     received = 0
     try:
         async with asyncio.timeout(DRAINING_DISCARD_SECONDS):
@@ -198,16 +227,30 @@ async def _discard_small_body(scope: Scope, receive: Receive) -> None:
                 if message["type"] != "http.request":
                     return
                 received += len(message.get("body", b""))
-                if not message.get("more_body", False):
+                more_body = message.get("more_body", False)
+                del message
+                if not more_body:
                     return
     except TimeoutError:
         return
 
 
-async def _reject(scope: Scope, receive: Receive, send: Send, status: int, code: str) -> None:
+async def _reject(
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    status: int,
+    code: str,
+    *,
+    discard: DrainingDiscardSlots | None = None,
+) -> None:
     allocation = ingress_class(get_route_path(scope), scope.get("method", ""))
-    if code == DRAINING_CODE:
-        await _discard_small_body(scope, receive)
+    # When every slot is in use, reject at once with the previous close behavior.
+    if discard is not None and _small_declared_body(scope) and discard.try_acquire():
+        try:
+            await _discard_small_body(receive)
+        finally:
+            discard.release()
     ingress_rejections.labels(allocation.value, code).inc()
     headers = {"Retry-After": "1"} if status == 503 else {}
     # An immediate close can erase an early response if upload bytes still arrive.

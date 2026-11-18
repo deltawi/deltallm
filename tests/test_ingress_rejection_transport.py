@@ -141,7 +141,7 @@ async def test_draining_rejection_closes_the_connection(version):
     assert headers.get(b"retry-after") == b"1"
 
 
-async def _serve_draining(parser):
+async def _serve_draining(parser, slots=None):
     application = SimpleNamespace(
         state=SimpleNamespace(process_lifecycle=SimpleNamespace(draining=True))
     )
@@ -157,6 +157,8 @@ async def _serve_draining(parser):
         requests.append(scope["path"])
 
     middleware = IngressMiddleware(downstream)
+    if slots is not None:
+        middleware.draining_discard.limit = slots
 
     async def app(scope, receive, send):
         scope["app"] = application
@@ -258,3 +260,56 @@ async def test_draining_rejection_stops_waiting_for_a_slow_small_body(monkeypatc
             assert await reader.read() == b""
     finally:
         await _stop(server, serving, sock, writer)
+
+
+async def _draining_status(sock, head):
+    reader, writer = await asyncio.open_connection(*sock.getsockname())
+    writer.write(head)
+    await writer.drain()
+    status, headers, body = await read_response(reader)
+    writer.close()
+    await asyncio.gather(writer.wait_closed(), return_exceptions=True)
+    return status, headers, json.loads(body)["error"]["code"]
+
+
+async def test_draining_rejection_does_not_wait_for_mixed_framing_with_h11():
+    # h11 keeps both headers and reads the body as chunked.
+    server, serving, sock, requests = await _serve_draining("h11")
+    try:
+        async with asyncio.timeout(0.5):
+            status, headers, code = await _draining_status(
+                sock,
+                b"POST /v1/chat/completions HTTP/1.1\r\nHost: fixture\r\n"
+                b"Transfer-Encoding: chunked\r\nContent-Length: 1\r\n\r\n",
+            )
+        assert (status, headers["connection"], code) == (503, "close", "gateway_draining")
+        assert not requests
+    finally:
+        await _stop(server, serving, sock, None)
+
+
+async def test_draining_rejection_skips_the_discard_when_every_slot_is_in_use(monkeypatch):
+    monkeypatch.setattr("src.middleware.ingress.DRAINING_DISCARD_SECONDS", 3.0)
+    server, serving, sock, requests = await _serve_draining("httptools", slots=1)
+    head = b"POST /v1/chat/completions HTTP/1.1\r\nHost: fixture\r\nContent-Length: 6\r\n\r\n"
+    holder = None
+    try:
+        async with asyncio.timeout(2):
+            # The first partial upload holds the only slot while it waits for its body.
+            holder_reader, holder = await asyncio.open_connection(*sock.getsockname())
+            holder.write(head + b"unu")
+            await holder.drain()
+            while not server.server_state.tasks:
+                await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
+            # A second partial upload gets its response without a discard.
+            async with asyncio.timeout(0.5):
+                status, headers, code = await _draining_status(sock, head + b"unu")
+            assert (status, headers["connection"], code) == (503, "close", "gateway_draining")
+            holder.write(b"sed")
+            await holder.drain()
+            status, headers, body = await read_response(holder_reader)
+            assert status == 503 and json.loads(body)["error"]["code"] == "gateway_draining"
+            assert not requests
+    finally:
+        await _stop(server, serving, sock, holder)
