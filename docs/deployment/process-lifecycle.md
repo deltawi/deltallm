@@ -107,9 +107,16 @@ it does not receive the managed signal before Uvicorn's connection drain.
 The managed entrypoint requires Uvicorn 0.54.0, the version in `uv.lock`. It
 stops at startup when a different version is installed, because it extends
 Uvicorn's drain and lifespan hooks. When application startup or the socket bind
-fails, the process exits with status 1. Uvicorn selects `httptools` for HTTP/1.1,
-`uvloop` for the event loop and the sans-I/O `websockets` implementation for
-WebSocket connections. During drain, an open WebSocket receives close code 1012.
+fails, the process exits with status 1. Uvicorn selects `httptools` for HTTP/1.1
+and `uvloop` for the event loop. For WebSocket connections, the entrypoint selects
+the `websockets` implementation, not the sans-I/O default of Uvicorn 0.54. The
+sans-I/O implementation stops socket reads while the application has a queued
+message. A slow realtime relay then cannot read the client's pong, and the
+keepalive check closes a healthy session with code 1011. Uvicorn logs a
+deprecation warning for the selected implementation at startup. Change this
+selection only when a real-socket test shows that the new implementation keeps
+reading control frames during backpressure. During drain, an open WebSocket
+receives close code 1012.
 Every request starts in a fresh context, so context variables set during startup
 never leak into requests.
 

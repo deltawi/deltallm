@@ -259,7 +259,7 @@ def test_managed_entrypoint_runs_requests_in_a_fresh_context(monkeypatch):
     monkeypatch.setattr(server, "ManagedServer", RecordingServer)
 
     assert server.main(["--port", "0"]) == 0
-    assert [config.reset_contextvars for config in recorded] == [True]
+    assert [(config.reset_contextvars, config.ws) for config in recorded] == [(True, "websockets")]
 
 
 async def test_lifespan_context_does_not_leak_into_requests():
@@ -298,6 +298,66 @@ async def test_lifespan_context_does_not_leak_into_requests():
             server.handle_exit(signal.SIGTERM, None)
             await task
         assert seen == ["unset"]
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        sock.close()
+
+
+async def test_websocket_keepalive_reads_pongs_while_the_application_is_slow():
+    from websockets.asyncio.client import connect
+
+    received = []
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            assert (await receive())["type"] == "lifespan.startup"
+            await send({"type": "lifespan.startup.complete"})
+            assert (await receive())["type"] == "lifespan.shutdown"
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        assert (await receive())["type"] == "websocket.connect"
+        await send({"type": "websocket.accept"})
+        while len(received) < 8:
+            message = await receive()
+            if message["type"] == "websocket.disconnect":
+                return
+            received.append(message["text"])
+            # A slow upstream send keeps later client frames queued.
+            await asyncio.sleep(0.15)
+        await send({"type": "websocket.send", "text": "done"})
+        await send({"type": "websocket.close", "code": 1000})
+
+    lifecycle = ProcessLifecycle(lifecycle_settings())
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    address = sock.getsockname()
+    # The managed entrypoint selects this implementation; keepalive is shortened
+    # so that the queued burst outlives several ping/pong rounds.
+    server = ManagedServer(
+        uvicorn.Config(
+            app,
+            lifespan="on",
+            access_log=False,
+            ws="websockets",
+            ws_ping_interval=0.1,
+            ws_ping_timeout=0.2,
+        ),
+        lifecycle,
+    )
+    task = asyncio.create_task(server.serve(sockets=[sock]))
+    try:
+        async with asyncio.timeout(10):
+            while not server.started:
+                await asyncio.sleep(0)
+            async with connect(f"ws://127.0.0.1:{address[1]}/", ping_interval=None) as client:
+                for index in range(8):
+                    await client.send(f"frame-{index}")
+                assert await client.recv() == "done"
+            server.handle_exit(signal.SIGTERM, None)
+            await task
+        assert received == [f"frame-{index}" for index in range(8)]
     finally:
         if not task.done():
             task.cancel()
