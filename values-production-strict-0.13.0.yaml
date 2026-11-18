@@ -1,0 +1,9 @@
+# Strict production checks. Apply after values-production.yaml and an operator
+# overlay with real providerDomains (docs/deployment/saturation-autoscaling.md).
+# Both switches only add render-time checks; they do not change runtime settings,
+# except that the extended report is mounted and checked again at process start.
+managedLifecycle:
+  production: true
+dependencyCapacity:
+  extended:
+    enabled: true
