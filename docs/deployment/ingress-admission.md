@@ -107,7 +107,10 @@ response when more upload bytes arrive, as described in
 [HTTP/1.1 teardown](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6).
 Both supported server parsers keep the request boundary; upload bytes cannot
 become a second request. Invalid-body errors and HTTP/1.0 responses still close
-the connection. The managed shutdown deadline also remains unchanged. Transport
+the connection. A `gateway_draining` rejection also closes the connection. First it
+reads and discards a declared body of 64 KiB or less, for one second at most, so
+that the close cannot erase the 503. The managed shutdown deadline also remains
+unchanged. Transport
 buffers remain outside the application byte budget and need the headroom above.
 The [server behavior guide](https://www.uvicorn.org/server-behavior/)
 describes body discard and idle connection ownership. Client retries

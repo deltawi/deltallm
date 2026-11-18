@@ -38,8 +38,9 @@ a pod and two successes to restore it. A single failed application sample return
 dependency I/O. Detailed health and metrics remain internal operational endpoints.
 
 After drain starts, new inference and control requests return HTTP 503 with
-`error.code=gateway_draining` and `Retry-After: 1`, before reading their bodies or
-using auth, Redis, SQL or provider capacity. The messages API retains its error
+`error.code=gateway_draining` and `Retry-After: 1`, without auth, Redis, SQL or
+provider capacity. They read and discard only a declared body of 64 KiB or less,
+for one second at most, so that the connection close cannot erase the 503. The messages API retains its error
 envelope. Queued admission checks drain again after obtaining a permit. Existing
 requests retain their leases until response cleanup completes.
 

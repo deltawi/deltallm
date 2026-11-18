@@ -28,6 +28,13 @@ from src.middleware.error_responses import anthropic_error_response
 from src.process_lifecycle import ProcessLifecycle
 
 
+# A draining rejection closes the connection. Closing with unread upload bytes
+# makes the kernel reset the socket, and the client can lose the 503. Read a
+# small declared body first; larger, unframed or slow uploads close as before.
+DRAINING_DISCARD_MAX_BYTES = 64 * 1024
+DRAINING_DISCARD_SECONDS = 1.0
+
+
 class _BufferedBody:
     def __init__(self, runtime: IngressRuntime, allocation: IngressClass) -> None:
         self.runtime = runtime
@@ -176,8 +183,31 @@ def _content_length(scope: Scope) -> int | None:
     return int(values[0])
 
 
+async def _discard_small_body(scope: Scope, receive: Receive) -> None:
+    try:
+        length = _content_length(scope)
+    except ValueError:
+        return
+    if length is None or not 0 < length <= DRAINING_DISCARD_MAX_BYTES:
+        return
+    received = 0
+    try:
+        async with asyncio.timeout(DRAINING_DISCARD_SECONDS):
+            while received <= DRAINING_DISCARD_MAX_BYTES:
+                message = await receive()
+                if message["type"] != "http.request":
+                    return
+                received += len(message.get("body", b""))
+                if not message.get("more_body", False):
+                    return
+    except TimeoutError:
+        return
+
+
 async def _reject(scope: Scope, receive: Receive, send: Send, status: int, code: str) -> None:
     allocation = ingress_class(get_route_path(scope), scope.get("method", ""))
+    if code == DRAINING_CODE:
+        await _discard_small_body(scope, receive)
     ingress_rejections.labels(allocation.value, code).inc()
     headers = {"Retry-After": "1"} if status == 503 else {}
     # An immediate close can erase an early response if upload bytes still arrive.

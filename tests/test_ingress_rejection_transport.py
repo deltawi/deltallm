@@ -3,6 +3,7 @@
 import asyncio
 import json
 import socket
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -138,3 +139,122 @@ async def test_draining_rejection_closes_the_connection(version):
     headers = dict(send.await_args_list[0].args[0]["headers"])
     assert headers.get(b"connection") == b"close"
     assert headers.get(b"retry-after") == b"1"
+
+
+async def _serve_draining(parser):
+    application = SimpleNamespace(
+        state=SimpleNamespace(process_lifecycle=SimpleNamespace(draining=True))
+    )
+    requests = []
+
+    async def downstream(scope, receive, send):
+        if scope["type"] == "lifespan":
+            assert (await receive())["type"] == "lifespan.startup"
+            await send({"type": "lifespan.startup.complete"})
+            assert (await receive())["type"] == "lifespan.shutdown"
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        requests.append(scope["path"])
+
+    middleware = IngressMiddleware(downstream)
+
+    async def app(scope, receive, send):
+        scope["app"] = application
+        await middleware(scope, receive, send)
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    server = uvicorn.Server(uvicorn.Config(app, http=parser, lifespan="on", access_log=False))
+    serving = asyncio.create_task(server.serve(sockets=[sock]))
+    while not server.started:
+        await asyncio.sleep(0)
+    return server, serving, sock, requests
+
+
+async def _stop(server, serving, sock, writer):
+    if writer is not None:
+        writer.close()
+        await asyncio.gather(writer.wait_closed(), return_exceptions=True)
+    server.should_exit = True
+    async with asyncio.timeout(5):
+        await serving
+    sock.close()
+
+
+def _late_body_exchange(address):
+    # A blocking socket leaves the response in the kernel buffer, as a client
+    # does while it is still sending. A reset then discards the response.
+    with socket.create_connection(address, timeout=3) as client:
+        client.sendall(
+            b"POST /v1/chat/completions HTTP/1.1\r\nHost: fixture\r\nContent-Length: 6\r\n\r\n"
+        )
+        # Without the bounded read, the server has closed by now, and these
+        # bytes make the kernel reset the connection before the client reads.
+        time.sleep(0.1)
+        client.sendall(b"unused")
+        time.sleep(0.1)
+        received = b""
+        while chunk := client.recv(65536):
+            received += chunk
+        return received
+
+
+@pytest.mark.parametrize("parser", ["h11", "httptools"])
+async def test_draining_rejection_survives_a_body_that_follows_the_headers(parser):
+    server, serving, sock, requests = await _serve_draining(parser)
+    try:
+        async with asyncio.timeout(5):
+            received = await asyncio.to_thread(_late_body_exchange, sock.getsockname())
+        head, body = received.split(b"\r\n\r\n", 1)
+        lines = head.decode("ascii").split("\r\n")
+        headers = dict(line.lower().split(": ", 1) for line in lines[1:])
+        assert lines[0].split()[1] == "503" and headers["retry-after"] == "1"
+        assert headers["connection"] == "close"
+        assert json.loads(body)["error"]["code"] == "gateway_draining"
+        assert not requests
+    finally:
+        await _stop(server, serving, sock, None)
+
+
+@pytest.mark.parametrize("parser", ["h11", "httptools"])
+@pytest.mark.parametrize("length", [64 * 1024 + 1, None])
+async def test_draining_rejection_does_not_wait_for_a_large_or_unframed_body(parser, length):
+    server, serving, sock, requests = await _serve_draining(parser)
+    writer = None
+    framing = (
+        f"Content-Length: {length}" if length is not None else "Transfer-Encoding: chunked"
+    ).encode()
+    try:
+        # Far below the discard deadline: the rejection never reads the body.
+        async with asyncio.timeout(0.5):
+            reader, writer = await asyncio.open_connection(*sock.getsockname())
+            writer.write(
+                b"POST /v1/chat/completions HTTP/1.1\r\nHost: fixture\r\n" + framing + b"\r\n\r\n"
+            )
+            await writer.drain()
+            status, headers, body = await read_response(reader)
+            assert status == 503 and headers["connection"] == "close"
+            assert json.loads(body)["error"]["code"] == "gateway_draining"
+            assert await reader.read() == b""
+            assert not requests
+    finally:
+        await _stop(server, serving, sock, writer)
+
+
+async def test_draining_rejection_stops_waiting_for_a_slow_small_body(monkeypatch):
+    monkeypatch.setattr("src.middleware.ingress.DRAINING_DISCARD_SECONDS", 0.05)
+    server, serving, sock, requests = await _serve_draining("httptools")
+    writer = None
+    try:
+        async with asyncio.timeout(2):
+            reader, writer = await asyncio.open_connection(*sock.getsockname())
+            writer.write(
+                b"POST /v1/chat/completions HTTP/1.1\r\nHost: fixture\r\nContent-Length: 6\r\n\r\n"
+            )
+            await writer.drain()
+            status, headers, body = await read_response(reader)
+            assert status == 503 and headers["connection"] == "close"
+            assert json.loads(body)["error"]["code"] == "gateway_draining"
+            assert await reader.read() == b""
+    finally:
+        await _stop(server, serving, sock, writer)
