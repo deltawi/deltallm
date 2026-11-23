@@ -1,28 +1,20 @@
-name: Nightly accounting v2 soak
+name: Accounting v2 soak
 
 # Production configuration (accounting v2) under batch and API load on kind,
-# every night on main. See docs/deployment/accounting-v2-acceptance.md.
+# by hand only. It no longer runs every night or on pull requests (2026-11-23).
+# See docs/deployment/accounting-v2-acceptance.md.
 on:
-  schedule:
-    - cron: '30 2 * * *'
   workflow_dispatch:
     inputs:
       batch-items:
         description: Batch items across 12 jobs (0 skips the batch phase)
         default: '20000'
       api-rate:
-        description: Chat requests per second on 2 API pods
-        default: '300'
+        description: Chat requests per second on 2 API pods (300 needs the SOAK_RUNNER larger runner)
+        default: '50'
       api-seconds:
         description: API soak length in seconds (0 skips the API phase)
         default: '1800'
-  pull_request:
-    paths:
-      - tests/performance/run_accounting_soak.py
-      - tests/performance/soak_checks.py
-      - tests/performance/native_batch_load.py
-      - tests/performance/native_fixture.py
-      - .github/workflows/nightly-soak.yml
 
 permissions:
   contents: read
@@ -33,14 +25,11 @@ env:
   UV_FROZEN: "1"
 
 concurrency:
-  # Scheduled, manual and pull request runs each keep their own group, so a
-  # manual run never cancels the nightly one.
-  group: nightly-soak-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: nightly-soak-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   accounting-v2-acceptance:
-    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/native-acceptance.yml
 
   soak:
@@ -75,36 +64,16 @@ jobs:
       - name: Choose the soak profile
         id: profile
         env:
-          EVENT: ${{ github.event_name }}
           BATCH_ITEMS: ${{ inputs.batch-items }}
           API_RATE: ${{ inputs.api-rate }}
           API_SECONDS: ${{ inputs.api-seconds }}
           LARGER_RUNNER: ${{ vars.SOAK_RUNNER }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = pull_request ]; then
-            # Short run that proves the soak itself on a pull request. 4,000 items
-            # put about 1,300 on each batch pod, past one 8 MB receipt store.
-            # At 100 RPS the hosted runner's CPU sat at 96% (p95) and an API pod
-            # missed its liveness probe; 50 RPS still keeps every role busy.
-            rate=100
-            if [ -z "$LARGER_RUNNER" ]; then rate=50; fi
-            args="--batch-items 4000 --batch-timeout 900 --api-rate $rate --api-seconds 120"
-          elif [ "$EVENT" = workflow_dispatch ]; then
-            for value in "$BATCH_ITEMS" "$API_RATE" "$API_SECONDS"; do
-              [[ "$value" =~ ^[0-9]+$ ]] || { echo "Inputs must be whole numbers"; exit 1; }
-            done
-            args="--batch-items $BATCH_ITEMS --api-rate $API_RATE --api-seconds $API_SECONDS"
-          elif [ -z "$LARGER_RUNNER" ]; then
-            # Scheduled run on the 4-vCPU hosted runner. At 300 RPS the generator
-            # dropped 55,000 of 180,000 requests, the gateway shed or timed out
-            # most of the rest and both API pods restarted (nightly 2026-11-07),
-            # so the run measured the runner. Keep the full 20,000-item batch and
-            # the 30-minute API phase at the rate the pull request run proved.
-            args="--api-rate 50"
-          else
-            args=""
-          fi
+          for value in "$BATCH_ITEMS" "$API_RATE" "$API_SECONDS"; do
+            [[ "$value" =~ ^[0-9]+$ ]] || { echo "Inputs must be whole numbers"; exit 1; }
+          done
+          args="--batch-items $BATCH_ITEMS --api-rate $API_RATE --api-seconds $API_SECONDS"
           if [ -z "$LARGER_RUNNER" ]; then
             # On the 4-vCPU hosted runner every pod, Postgres and the load
             # generator share one kind node, and chat p95 measured 0.2 to 0.3 s

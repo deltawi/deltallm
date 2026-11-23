@@ -29,7 +29,7 @@ jobs:
   native-cluster:
     runs-on: ubuntu-latest
     # Pull requests and main pushes call this as advisory: the job still shows its
-    # red result, but it does not fail the CI run. The nightly run fails normally.
+    # red result, but it does not fail the CI run. A manual soak run fails normally.
     continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 100
     steps:
@@ -59,7 +59,7 @@ jobs:
       - name: Install pinned kind
         run: scripts/ci/install_kind.sh
       - name: Exercise fixed replicas, rollout and pod loss on accounting v2
-        # Pull requests skip pod loss; pushes to main and the nightly run it.
+        # Pull requests skip pod loss; pushes to main and manual soak runs run it.
         run: >-
           uv run python -m tests.performance.run_native_acceptance
           --image deltallm-native:candidate

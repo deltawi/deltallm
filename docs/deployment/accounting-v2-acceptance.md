@@ -1,8 +1,8 @@
 ---
-description: CI acceptance and the nightly soak that run the production accounting v2 configuration on kind.
+description: CI acceptance and the on-demand soak that run the production accounting v2 configuration on kind.
 ---
 
-# Accounting v2 acceptance and nightly soak
+# Accounting v2 acceptance and soak
 
 Production runs accounting v2 (`accounting_execution_mode: local_journal`, the
 `values-accounting-native.yaml` bundle). The older capacity and lifecycle jobs
@@ -12,8 +12,8 @@ provider, so provider limits never affect the result.
 
 | Run | When | Workflow | Runner |
 |---|---|---|---|
-| Accounting v2 acceptance | Every pull request or push to main that changes `src/billing`, `src/batch`, `src/db`, `src/metrics`, `src/bootstrap`, the accounting RPC, the config loader, `prisma`, the Helm chart, the `Dockerfile`, `uv.lock` or `tests/performance`, and every night | `native-acceptance.yml` (from `ci.yml` and `nightly-soak.yml`) | `tests/performance/run_native_acceptance.py` |
-| Nightly soak | 02:30 UTC on main, on demand, and in short form on pull requests that change the soak | `nightly-soak.yml` | `tests/performance/run_accounting_soak.py` |
+| Accounting v2 acceptance | Every pull request or push to main that changes `src/billing`, `src/batch`, `src/db`, `src/metrics`, `src/bootstrap`, the accounting RPC, the config loader, `prisma`, the Helm chart, the `Dockerfile`, `uv.lock` or `tests/performance`, and before each manual soak | `native-acceptance.yml` (from `ci.yml` and `nightly-soak.yml`) | `tests/performance/run_native_acceptance.py` |
+| Soak | By hand only. Since 2026-11-23 it no longer runs every night or on pull requests: on the shared 4-vCPU runner it failed most nights on runner speed, not on the gateway | `nightly-soak.yml` | `tests/performance/run_accounting_soak.py` |
 
 Both start from the strict production values, the capacity fixture, and then
 `values-accounting-native.yaml`. Batch is on, with the production scheduler
@@ -70,7 +70,7 @@ once the last step has run, so one red step does not hide the others:
   A graceful rollout must still leave nothing provisional.
 
 Batch volume stays under about 1,100 items per pod, one pod's default receipt
-store. Volume is tested by the nightly soak.
+store. Volume is tested by the soak.
 
 The `accounting-v2-acceptance` artifact keeps a live log of every API and
 accounting pod during the rollout and pod-loss steps under `follow/`, because
@@ -83,13 +83,13 @@ request, but the required `test` check does not depend on it yet. On pull
 requests and pushes to main it runs with `continue-on-error`: a failure shows
 as a red `accounting-v2-acceptance / native-cluster` job, but the CI run itself
 stays green, so a red run on main always means a required check failed. Open the
-job when it runs. The nightly run is not advisory and fails the workflow.
+job when it runs. The run before a manual soak is not advisory and fails the workflow.
 
 Pull requests skip step 3. After the kill, the run waits about 15 minutes for
 the killed pods' reservations to expire, which would double the job. Pushes to
-main and the nightly run all three steps.
+main and manual soak runs run all three steps.
 
-## Nightly soak
+## Soak
 
 One kind node with 2 API pods, 3 batch pods, 2 accounting request pods and
 1 accounting worker. Phases run in this order. Each phase reports on its own,
@@ -112,7 +112,10 @@ logs for 30 days.
 
 ### Run it by hand
 
-From the Actions tab, run **Nightly accounting v2 soak** with other numbers,
+From the Actions tab, run **Accounting v2 soak**. The workflow is disabled in
+Actions, so enable it first (`gh workflow enable nightly-soak.yml`). Before a
+release or after a change to accounting, batch or the database layer is a good
+time. Enter other numbers,
 for example `batch-items` 5000 and `api-seconds` 0 for a batch-only run.
 Locally, from the repository root, with Docker, kind v0.31.0, kubectl and Helm:
 
@@ -146,14 +149,15 @@ Without `SOAK_RUNNER`, the latency gates are 0.5 s for chat and 0.75 s for
 embeddings instead of 50 ms and 0.25 s. On the 4-vCPU runner chat p95 measured
 0.2 to 0.3 s at 100 RPS with no errors, so the strict targets there measure
 the runner. The batch throughput floor is 30 items/s instead of 50, since it
-measured 36 to 54 items/s between runs there. The pull request run sends 50
-chat RPS instead of 100: at 100 RPS the runner's CPU was 96 % busy (p95) and
-an API pod missed its liveness probe. The scheduled nightly run without
-`SOAK_RUNNER` also sends 50 chat RPS, for the full 30 minutes and after the full
-20,000-item batch: at 300 RPS the generator dropped about 30 % of its requests,
-most of the rest were shed or timed out, and both API pods restarted, so the API
-phase failed every night on the runner rather than on the gateway. A manual run
-keeps the rates you enter. Every other check stays the same. Each
+measured 36 to 54 items/s between runs there. The default `api-rate` is 50
+chat RPS: at 100 RPS the runner's CPU was 96 % busy (p95) and an API pod missed
+its liveness probe. Enter 300 only with `SOAK_RUNNER` set: at 300 RPS the
+generator dropped about 30 % of its requests, most of the rest were shed or
+timed out, and both API pods restarted, so the run measured the runner rather
+than the gateway. Even at 50 RPS, a slow hosted runner can make accounting
+database calls miss their 250 ms budget and answer some requests with 503
+`spend_persistence_unavailable`; compare the window's `host_cpu` and p95 with a
+green run before blaming the change. Every other check stays the same. Each
 API window reports `host_cpu`, the busy share of the runner's CPUs, to show
 how loaded it was.
 
