@@ -26,7 +26,7 @@ def test_accounting_v2_acceptance_is_advisory_only_in_ci():
     }
     assert "accounting-v2-acceptance" not in ci["jobs"]["test"]["needs"]
 
-    # The nightly run keeps failing on a red acceptance.
+    # A manual soak run keeps failing on a red acceptance.
     nightly = _load("nightly-soak.yml")
     assert "with" not in nightly["jobs"]["accounting-v2-acceptance"]
 
