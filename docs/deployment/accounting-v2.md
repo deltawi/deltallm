@@ -45,6 +45,10 @@ conflicting records for the same issue independently.
 - Budget exhaustion returns HTTP 429 before dispatch.
 - Capacity, timeout, stale generation, or database uncertainty returns HTTP 503 before
   dispatch.
+- A request that fails before it holds an accounting operation writes no spend row,
+  not even a $0 one. Chat, completions, responses, embeddings, images, audio and
+  rerank count it in `deltallm_optional_request_diagnostics_total` (labels `route`
+  and `reason`) instead.
 - Confirmed success commits the exact charge before a non-stream response or terminal
   stream frame is released.
 - Provider failure or lost acknowledgement after dispatch keeps the remaining

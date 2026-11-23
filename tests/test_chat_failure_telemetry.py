@@ -202,3 +202,51 @@ async def test_legacy_failure_ownership_is_unchanged(
     assert "operation" not in failure_log.await_args.kwargs
     audit.assert_awaited_once()
     diagnostic.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/embeddings",
+        "/v1/images/generations",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/rerank",
+    ],
+)
+async def test_other_routes_skip_the_legacy_row_without_an_operation(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from src.telemetry.request_failures import enqueue_request_failure_log_write
+
+    request, failure_log = _request(accounting_v2=True)
+    request.scope["path"] = path
+    diagnostic = MagicMock()
+    monkeypatch.setattr(
+        "src.telemetry.request_failures.increment_optional_request_diagnostic", diagnostic
+    )
+    await enqueue_request_failure_log_write(request, failure_log(), status_code=503)
+    failure_log.assert_not_awaited()
+    diagnostic.assert_called_once()
+    assert diagnostic.call_args.kwargs["reason"] == "dependency_unavailable"
+    assert diagnostic.call_args.kwargs["route"] != "other"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accounting_v2", [False, True])
+async def test_other_routes_keep_the_failure_row_when_owned(
+    monkeypatch: pytest.MonkeyPatch, accounting_v2: bool
+) -> None:
+    from src.telemetry.request_failures import enqueue_request_failure_log_write
+
+    operation = accounting_operation() if accounting_v2 else None
+    request, failure_log = _request(accounting_v2=accounting_v2, operation=operation)
+    request.scope["path"] = "/v1/embeddings"
+    diagnostic = MagicMock()
+    monkeypatch.setattr(
+        "src.telemetry.request_failures.increment_optional_request_diagnostic", diagnostic
+    )
+    await enqueue_request_failure_log_write(request, failure_log(), status_code=503)
+    failure_log.assert_awaited_once()
+    diagnostic.assert_not_called()

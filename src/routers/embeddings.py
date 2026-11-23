@@ -43,7 +43,11 @@ from src.router.context_policy import RequestTokenDemand, set_request_token_dema
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
-from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.request_failures import (
+    enqueue_request_failure_log_write,
+    enqueue_request_log_write,
+    seed_request_failure_context,
+)
 from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 from src.telemetry.spend_operation import (
     billing_write_context,
@@ -578,7 +582,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         }
         if error_route_meta is not None:
             error_metadata["routing_decision"] = error_route_meta
-        await enqueue_request_log_write(
+        await enqueue_request_failure_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
                 **billing_write_context(request),
@@ -598,6 +602,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 http_status_code=status_code,
                 exc=exc,
             ),
+            status_code=status_code,
         )
         await _emit_embedding_audit_event(
             request=request,
@@ -652,7 +657,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         }
         if error_route_meta is not None:
             error_metadata["routing_decision"] = error_route_meta
-        await enqueue_request_log_write(
+        await enqueue_request_failure_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
                 **billing_write_context(request),
@@ -672,6 +677,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 http_status_code=status_code,
                 exc=exc,
             ),
+            status_code=status_code,
         )
         await _emit_embedding_audit_event(
             request=request,

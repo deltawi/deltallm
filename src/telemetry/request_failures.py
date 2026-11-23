@@ -120,6 +120,25 @@ async def enqueue_request_log_write(
         raise SpendPersistenceUnavailable() from None
 
 
+async def enqueue_request_failure_log_write(
+    request: Request,
+    coro: Coroutine[object, object, None],
+    *,
+    status_code: int,
+) -> None:
+    """Write a failed request's log row, unless accounting v2 never opened an operation.
+
+    In accounting v2 a request that failed before it held an operation (for
+    example, admission refused it) gets a bounded diagnostic counter instead of
+    a $0 legacy spend row, as chat already does.
+    """
+    if uses_optional_accounting_v2_diagnostics(request):
+        coro.close()
+        record_optional_accounting_v2_diagnostic(request, status_code=int(status_code))
+        return
+    await enqueue_request_log_write(request, coro)
+
+
 def _request_log_failure_reason(exc: Exception) -> str:
     if isinstance(exc, AccountingProtocolUnavailable):
         return exc.reason
