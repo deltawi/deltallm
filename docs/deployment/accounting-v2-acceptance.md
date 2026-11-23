@@ -100,8 +100,8 @@ and the run fails if any phase fails.
 | Batch | 12 jobs at once, 20,000 items, chat and embedding jobs alternating | Every job completes, no item fails, at least 50 items/s from first upload to last job done, no full-store refusal |
 | After batch | Idle | Within 5 minutes every tracked gauge returns to its level before load, accounting drains, facts equal completed items, nothing charged twice |
 | Probe | One new 500-item chat job | It completes with no failed item within 120 s, with no pod restarted. This catches state that only a restart would clear. A probe that times out is cancelled, so its retries do not load the API phase |
-| API | 300 chat RPS on 2 API pods for 30 minutes, in 10-minute windows, from an in-cluster generator, plus 10 embedding RPS from the runner | In each window: no 5xx, no transport error, success at least 99.9 %, chat p95 at most 50 ms, and the generator kept its rate |
-| After API | Idle | The same checks as after batch |
+| API | 300 chat RPS on 2 API pods for 30 minutes, in 10-minute windows, from an in-cluster generator, plus 10 embedding RPS from the runner | In each window: no 5xx, no transport error (a request with no HTTP answer), success at least 99.9 %, chat p95 at most 50 ms, and the generator kept its rate |
+| After API | Idle | The same checks as after batch, and no legacy spend row was written (a request that failed before accounting held an operation leaves none) |
 
 The mock provider answers in about a millisecond, so chat p95 is close to the
 gateway overhead.

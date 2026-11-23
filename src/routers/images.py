@@ -38,7 +38,11 @@ from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
-from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.request_failures import (
+    enqueue_request_failure_log_write,
+    enqueue_request_log_write,
+    seed_request_failure_context,
+)
 from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 from src.telemetry.spend_operation import (
     billing_write_context,
@@ -414,7 +418,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             status_code=status_code,
             latency_seconds=perf_counter() - request_start,
         )
-        await enqueue_request_log_write(
+        await enqueue_request_failure_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
                 **billing_write_context(request),
@@ -442,6 +446,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 http_status_code=status_code,
                 exc=exc,
             ),
+            status_code=status_code,
         )
         await emit_audit_event(
             request=request,
@@ -475,7 +480,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             "model"
         )
         status_code = int(getattr(exc, "status_code", 500) or 500)
-        await enqueue_request_log_write(
+        await enqueue_request_failure_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
                 **billing_write_context(request),
@@ -503,6 +508,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 http_status_code=status_code,
                 exc=exc,
             ),
+            status_code=status_code,
         )
         await emit_audit_event(
             request=request,

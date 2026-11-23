@@ -113,7 +113,14 @@ def api_report(**changes):
     ("changes", "failure"),
     [
         ({"status_counts": {"200": 999, "503": 1}, "success_count": 999}, "server_errors"),
-        ({"error_counts": {"ReadTimeout": 1}}, "transport_errors"),
+        (
+            {
+                "status_counts": {"200": 999, "client_error": 1},
+                "success_count": 999,
+                "error_counts": {"ReadTimeout": 1},
+            },
+            "transport_errors",
+        ),
         ({"success_count": 900}, "success_ratio_below_target"),
         ({"latency_seconds": {"p95": 0.08}}, "p95_above_target"),
         ({"latency_seconds": {"p95": None}}, "p95_above_target"),
@@ -123,6 +130,20 @@ def test_api_window_gates(changes, failure) -> None:
     assert checks.api_window(api_report(), max_p95_seconds=0.05)["passed"]
     result = checks.api_window(api_report(**changes), max_p95_seconds=0.05)
     assert failure in result["failures"] and not result["passed"]
+
+
+def test_api_window_counts_a_5xx_once() -> None:
+    result = checks.api_window(
+        api_report(
+            status_counts={"200": 999, "503": 1},
+            success_count=999,
+            error_counts={"spend_persistence_unavailable": 1},
+        ),
+        max_p95_seconds=0.05,
+        min_success_ratio=0.99,
+    )
+    assert result["failures"] == ["server_errors"]
+    assert result["server_errors"] == 1 and result["transport_errors"] == 0
 
 
 def snapshot(facts: int, charge: str, **changes) -> dict:

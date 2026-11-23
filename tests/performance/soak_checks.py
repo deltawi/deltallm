@@ -173,11 +173,13 @@ def api_window(
 ) -> dict[str, object]:
     """One API soak window: no 5xx or transport errors, success ratio and p95 met."""
     statuses: Mapping[str, int] = report.get("status_counts", {})  # type: ignore[assignment]
-    errors: Mapping[str, int] = report.get("error_counts", {})  # type: ignore[assignment]
     server_errors = sum(
         int(count) for status, count in statuses.items() if str(status).startswith("5")
     )
-    transport_errors = sum(int(count) for count in errors.values())
+    # A request with no HTTP answer is counted under "client_error". The
+    # error_counts map also holds the gateway's error codes of 5xx answers,
+    # so counting it here would report every 5xx a second time.
+    transport_errors = int(statuses.get("client_error", 0))
     target = int(report["target_count"])  # type: ignore[arg-type]
     success = int(report["success_count"])  # type: ignore[arg-type]
     ratio = success / target if target else 0.0
