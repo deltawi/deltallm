@@ -16,7 +16,7 @@ asyncpg==0.31.0
     # via deltallm-core-api
 boto3==1.44.0
     # via deltallm-core-api
-botocore==1.44.0
+botocore==1.44.4
     # via
     #   boto3
     #   s3transfer
@@ -43,7 +43,7 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
-httpcore2==2.16.0
+httpcore2==2.16.2
     # via deltallm-core-api
 httptools==0.9.0
     # via uvicorn
